@@ -66,8 +66,10 @@ jobs:
           -p:VersionPrefix=${{ steps.version.outputs.version_prefix }}
 
       - name: Push to NuGet
-        run: >
-          dotnet nuget push "./nupkgs/*.nupkg"
-          --api-key ${{ secrets.NUGET_API_KEY }}
-          --source https://api.nuget.org/v3/index.json
-          --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "./nupkgs/*.nupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
