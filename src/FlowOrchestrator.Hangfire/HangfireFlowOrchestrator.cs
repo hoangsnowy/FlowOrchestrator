@@ -1,0 +1,174 @@
+using System.Text.Json;
+using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Storage;
+using Hangfire;
+using Hangfire.Server;
+using Microsoft.Extensions.Logging;
+
+namespace FlowOrchestrator.Hangfire;
+
+public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireStepRunner
+{
+    private readonly IBackgroundJobClient _backgroundJobClient;
+    private readonly IFlowExecutor _flowExecutor;
+    private readonly IStepExecutor _stepExecutor;
+    private readonly IFlowRunStore _runStore;
+    private readonly IOutputsRepository _outputsRepository;
+    private readonly IExecutionContextAccessor _contextAccessor;
+    private readonly ILogger<HangfireFlowOrchestrator> _logger;
+
+    public HangfireFlowOrchestrator(
+        IBackgroundJobClient backgroundJobClient,
+        IFlowExecutor flowExecutor,
+        IStepExecutor stepExecutor,
+        IFlowRunStore runStore,
+        IOutputsRepository outputsRepository,
+        IExecutionContextAccessor contextAccessor,
+        ILogger<HangfireFlowOrchestrator> logger)
+    {
+        _backgroundJobClient = backgroundJobClient;
+        _flowExecutor = flowExecutor;
+        _stepExecutor = stepExecutor;
+        _runStore = runStore;
+        _outputsRepository = outputsRepository;
+        _contextAccessor = contextAccessor;
+        _logger = logger;
+    }
+
+    // Serializes an object? safely, handling JsonElement values that may be default/undefined
+    // or backed by a disposed JsonDocument, which would otherwise throw InvalidOperationException.
+    private static string? SafeSerialize(object? value)
+    {
+        if (value is null) return null;
+        if (value is JsonElement element)
+            return element.ValueKind == JsonValueKind.Undefined ? null : element.GetRawText();
+        return JsonSerializer.Serialize(value);
+    }
+
+    public async ValueTask<object?> TriggerAsync(ITriggerContext triggerContext, PerformContext? performContext = null)
+    {
+        triggerContext.RunId = triggerContext.RunId == Guid.Empty ? Guid.NewGuid() : triggerContext.RunId;
+        _contextAccessor.CurrentContext = triggerContext;
+
+        try
+        {
+            var triggerDataJson = SafeSerialize(triggerContext.Trigger.Data);
+
+            try
+            {
+                await _runStore.StartRunAsync(
+                    triggerContext.Flow.Id,
+                    triggerContext.Flow.GetType().Name,
+                    triggerContext.RunId,
+                    triggerContext.Trigger.Key,
+                    triggerDataJson,
+                    performContext?.BackgroundJob?.Id).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to track flow run start.");
+            }
+
+            var firstStep = await _flowExecutor.TriggerFlow(triggerContext).ConfigureAwait(false);
+
+            _backgroundJobClient.Enqueue<IHangfireStepRunner>(
+                runner => runner.RunStepAsync(triggerContext, triggerContext.Flow, firstStep, null));
+
+            return null;
+        }
+        finally
+        {
+            _contextAccessor.CurrentContext = null;
+        }
+    }
+
+    public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, PerformContext? performContext = null)
+    {
+        _contextAccessor.CurrentContext = ctx;
+
+        try
+        {
+            string? inputJson = null;
+            try
+            {
+                await _outputsRepository.SaveStepInputAsync(ctx, flow, step).ConfigureAwait(false);
+                inputJson = SafeSerialize(step.Inputs);
+                await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, performContext?.BackgroundJob?.Id)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to track step start.");
+            }
+
+            IStepResult result;
+            try
+            {
+                result = await _stepExecutor.ExecuteAsync(ctx, flow, step).ConfigureAwait(false);
+                await _outputsRepository.SaveStepOutputAsync(ctx, flow, step, result).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Step execution failed for {StepKey}", step.Key);
+                result = new StepResult
+                {
+                    Key = step.Key,
+                    Status = "Failed",
+                    FailedReason = ex.ToString(),
+                    ReThrow = false
+                };
+            }
+
+            try
+            {
+                var outputJson = SafeSerialize(result.Result);
+                await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status, outputJson, result.FailedReason)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to track step completion.");
+            }
+
+            var next = await _flowExecutor.GetNextStep(ctx, flow, step, result).ConfigureAwait(false);
+            if (next is not null)
+            {
+                if (result.DelayNextStep.HasValue)
+                {
+                    _backgroundJobClient.Schedule<IHangfireStepRunner>(
+                        runner => runner.RunStepAsync(ctx, flow, next, null),
+                        result.DelayNextStep.Value);
+                }
+                else
+                {
+                    _backgroundJobClient.Enqueue<IHangfireStepRunner>(
+                        runner => runner.RunStepAsync(ctx, flow, next, null));
+                }
+            }
+            else
+            {
+                try
+                {
+                    await _runStore.CompleteRunAsync(ctx.RunId, result.Status).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to track run completion.");
+                }
+            }
+
+            if (result.ReThrow)
+            {
+                throw new InvalidOperationException(result.FailedReason ?? "Step execution requested rethrow.");
+            }
+
+            return result.Result;
+        }
+        finally
+        {
+            _contextAccessor.CurrentContext = null;
+        }
+    }
+}
+
