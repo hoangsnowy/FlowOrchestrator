@@ -40,8 +40,9 @@ jobs:
             echo "version_prefix=${VERSION}" >> $GITHUB_OUTPUT
             echo "is_preview=false" >> $GITHUB_OUTPUT
           else
+            PREFIX=$(grep -oP '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)
             echo "version_suffix=preview.${{ github.run_number }}" >> $GITHUB_OUTPUT
-            echo "version_prefix=" >> $GITHUB_OUTPUT
+            echo "version_prefix=${PREFIX:-0.1.0}" >> $GITHUB_OUTPUT
             echo "is_preview=true" >> $GITHUB_OUTPUT
           fi
 
@@ -52,6 +53,7 @@ jobs:
           --configuration Release
           --no-build
           --output ./nupkgs
+          -p:VersionPrefix=${{ steps.version.outputs.version_prefix }}
           -p:VersionSuffix=${{ steps.version.outputs.version_suffix }}
 
       - name: Pack (official)
