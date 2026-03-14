@@ -7,6 +7,10 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
+# IDE / editor directories
+.vs/
+.cursor/
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

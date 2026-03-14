@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>FlowOrchestrator.Hangfire</PackageId>
+    <Description>Hangfire integration for FlowOrchestrator workflow engine.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FlowOrchestrator.Hangfire.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Hangfire.Core" Version="1.8.16" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\\FlowOrchestrator.SqlServer\\FlowOrchestrator.SqlServer.csproj" />
+  </ItemGroup>
+
+</Project>

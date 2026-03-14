@@ -1,0 +1,71 @@
+name: Publish NuGet Packages
+
+on:
+  push:
+    branches: [main]
+  create:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            echo "version_suffix=" >> $GITHUB_OUTPUT
+            echo "version_prefix=${VERSION}" >> $GITHUB_OUTPUT
+            echo "is_preview=false" >> $GITHUB_OUTPUT
+          else
+            echo "version_suffix=preview.${{ github.run_number }}" >> $GITHUB_OUTPUT
+            echo "version_prefix=" >> $GITHUB_OUTPUT
+            echo "is_preview=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack (preview)
+        if: steps.version.outputs.is_preview == 'true'
+        run: >
+          dotnet pack
+          --configuration Release
+          --no-build
+          --output ./nupkgs
+          -p:VersionSuffix=${{ steps.version.outputs.version_suffix }}
+
+      - name: Pack (official)
+        if: steps.version.outputs.is_preview == 'false'
+        run: >
+          dotnet pack
+          --configuration Release
+          --no-build
+          --output ./nupkgs
+          -p:VersionPrefix=${{ steps.version.outputs.version_prefix }}
+
+      - name: Push to NuGet
+        run: >
+          dotnet nuget push "./nupkgs/*.nupkg"
+          --api-key ${{ secrets.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

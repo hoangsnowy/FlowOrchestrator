@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <Authors>FlowOrchestrator Contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/hoangsnowy/FlowOrchestrator</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/hoangsnowy/FlowOrchestrator</PackageProjectUrl>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+</Project>

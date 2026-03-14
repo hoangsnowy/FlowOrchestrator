@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Hangfire.AspNetCore" Version="1.8.16" />
+    <PackageReference Include="Hangfire.SqlServer" Version="1.8.16" />
+    <PackageReference Include="Dapper" Version="2.1.35" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\\..\\src\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\\..\\src\\FlowOrchestrator.Hangfire\\FlowOrchestrator.Hangfire.csproj" />
+    <ProjectReference Include="..\\..\\src\\FlowOrchestrator.Dashboard\\FlowOrchestrator.Dashboard.csproj" />
+  </ItemGroup>
+
+</Project>

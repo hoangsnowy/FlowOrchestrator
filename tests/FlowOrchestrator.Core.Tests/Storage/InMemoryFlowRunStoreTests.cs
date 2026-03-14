@@ -1,0 +1,138 @@
+using FlowOrchestrator.Core.Storage;
+using FluentAssertions;
+
+namespace FlowOrchestrator.Core.Tests.Storage;
+
+public class InMemoryFlowRunStoreTests
+{
+    private readonly InMemoryFlowRunStore _sut = new();
+
+    [Fact]
+    public async Task StartRunAsync_CreatesRunningRecord()
+    {
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+
+        var record = await _sut.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+
+        record.Id.Should().Be(runId);
+        record.FlowId.Should().Be(flowId);
+        record.Status.Should().Be("Running");
+    }
+
+    [Fact]
+    public async Task RecordStepStartAsync_CreatesStepRecord()
+    {
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "TestFlow", runId, "manual", null, null);
+
+        await _sut.RecordStepStartAsync(runId, "step1", "LogMessage", "{}", "job1");
+
+        var detail = await _sut.GetRunDetailAsync(runId);
+        detail!.Steps.Should().HaveCount(1);
+        detail.Steps![0].StepKey.Should().Be("step1");
+        detail.Steps[0].Status.Should().Be("Running");
+    }
+
+    [Fact]
+    public async Task RecordStepCompleteAsync_UpdatesStepStatus()
+    {
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "TestFlow", runId, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId, "step1", "LogMessage", null, null);
+
+        await _sut.RecordStepCompleteAsync(runId, "step1", "Succeeded", "{\"result\":1}", null);
+
+        var detail = await _sut.GetRunDetailAsync(runId);
+        detail!.Steps![0].Status.Should().Be("Succeeded");
+        detail.Steps[0].OutputJson.Should().Be("{\"result\":1}");
+        detail.Steps[0].CompletedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CompleteRunAsync_UpdatesRunStatus()
+    {
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "TestFlow", runId, "manual", null, null);
+
+        await _sut.CompleteRunAsync(runId, "Succeeded");
+
+        var detail = await _sut.GetRunDetailAsync(runId);
+        detail!.Status.Should().Be("Succeeded");
+        detail.CompletedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task GetRunsAsync_ReturnsAllRuns()
+    {
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", Guid.NewGuid(), "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow2", Guid.NewGuid(), "manual", null, null);
+
+        var runs = await _sut.GetRunsAsync();
+
+        runs.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GetRunsAsync_FilterByFlowId()
+    {
+        var flowId = Guid.NewGuid();
+        await _sut.StartRunAsync(flowId, "Flow1", Guid.NewGuid(), "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow2", Guid.NewGuid(), "manual", null, null);
+
+        var runs = await _sut.GetRunsAsync(flowId: flowId);
+
+        runs.Should().HaveCount(1);
+        runs[0].FlowId.Should().Be(flowId);
+    }
+
+    [Fact]
+    public async Task GetRunsAsync_SkipAndTake()
+    {
+        for (int i = 0; i < 5; i++)
+            await _sut.StartRunAsync(Guid.NewGuid(), $"Flow{i}", Guid.NewGuid(), "manual", null, null);
+
+        var runs = await _sut.GetRunsAsync(skip: 2, take: 2);
+
+        runs.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GetRunDetailAsync_NonExistentRun_ReturnsNull()
+    {
+        var result = await _sut.GetRunDetailAsync(Guid.NewGuid());
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetStatisticsAsync_ReturnsCorrectCounts()
+    {
+        var flowId = Guid.NewGuid();
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        await _sut.StartRunAsync(flowId, "Flow", runId1, "manual", null, null);
+        await _sut.StartRunAsync(flowId, "Flow", runId2, "manual", null, null);
+        await _sut.CompleteRunAsync(runId1, "Succeeded");
+
+        var stats = await _sut.GetStatisticsAsync();
+
+        stats.ActiveRuns.Should().Be(1);
+        stats.CompletedToday.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetActiveRunsAsync_ReturnsOnlyRunning()
+    {
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow", runId1, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow", runId2, "manual", null, null);
+        await _sut.CompleteRunAsync(runId1, "Succeeded");
+
+        var active = await _sut.GetActiveRunsAsync();
+
+        active.Should().HaveCount(1);
+        active[0].Id.Should().Be(runId2);
+    }
+}

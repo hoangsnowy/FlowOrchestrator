@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RazorLangVersion>8.0</RazorLangVersion>
+    <IsPackable>true</IsPackable>
+    <PackageId>FlowOrchestrator.Dashboard</PackageId>
+    <Description>Embedded web dashboard for FlowOrchestrator workflow engine.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\\FlowOrchestrator.Hangfire\\FlowOrchestrator.Hangfire.csproj" />
+  </ItemGroup>
+
+</Project>

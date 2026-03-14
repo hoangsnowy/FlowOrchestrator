@@ -1,0 +1,20 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.1.2">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>floworchestrator-apphost</UserSecretsId>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\\samples\\FlowOrchestrator.SampleApp\\FlowOrchestrator.SampleApp.csproj" />
+  </ItemGroup>
+
+</Project>

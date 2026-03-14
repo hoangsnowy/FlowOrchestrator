@@ -5,17 +5,6 @@ using FlowOrchestrator.Core.Execution;
 
 namespace FlowOrchestrator.Core.Storage;
 
-public interface IOutputsRepository
-{
-    ValueTask SaveStepOutputAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, IStepResult result);
-    ValueTask SaveTriggerDataAsync(ITriggerContext ctx, IFlowDefinition flow, ITrigger trigger);
-    ValueTask<object?> GetTriggerDataAsync(Guid runId);
-    ValueTask SaveStepInputAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step);
-    ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey);
-    ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step);
-    ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt);
-}
-
 public sealed class InMemoryOutputsRepository : IOutputsRepository
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
@@ -23,9 +12,6 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
     private readonly ConcurrentDictionary<Guid, JsonElement> _triggerData = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), JsonElement> _stepOutputs = new();
 
-    // Converts any object to a self-contained JsonElement.
-    // JsonElement values are cloned so they are independent of their source JsonDocument
-    // (which may be disposed). Default/undefined JsonElement values are treated as null.
     private static JsonElement ToJsonElement(object? value)
     {
         if (value is JsonElement element)
@@ -86,12 +72,3 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
         return ValueTask.CompletedTask;
     }
 }
-
-public sealed class FlowEvent
-{
-    public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
-    public string Type { get; init; } = default!;
-    public string? StepKey { get; init; }
-    public string? Message { get; init; }
-}
-
