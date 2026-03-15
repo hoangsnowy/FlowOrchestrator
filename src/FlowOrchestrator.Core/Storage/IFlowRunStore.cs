@@ -10,4 +10,5 @@ public interface IFlowRunStore
     Task<FlowRunRecord?> GetRunDetailAsync(Guid runId);
     Task<DashboardStatistics> GetStatisticsAsync();
     Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync();
+    Task RetryStepAsync(Guid runId, string stepKey);
 }

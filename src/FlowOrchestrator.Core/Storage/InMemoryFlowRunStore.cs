@@ -108,4 +108,24 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
             .ToList();
         return Task.FromResult(result);
     }
+
+    public Task RetryStepAsync(Guid runId, string stepKey)
+    {
+        if (_steps.TryGetValue((runId, stepKey), out var step))
+        {
+            step.Status = "Running";
+            step.OutputJson = null;
+            step.ErrorMessage = null;
+            step.CompletedAt = null;
+            step.StartedAt = DateTimeOffset.UtcNow;
+        }
+
+        if (_runs.TryGetValue(runId, out var run))
+        {
+            run.Status = "Running";
+            run.CompletedAt = null;
+        }
+
+        return Task.CompletedTask;
+    }
 }

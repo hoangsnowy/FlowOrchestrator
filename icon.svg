@@ -1,0 +1,28 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F8EF7"></stop>
+      <stop offset="100%" stop-color="#7B4DFF"></stop>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="110" fill="#0f172a"></rect>
+
+  <!-- Flow circle -->
+  <circle cx="256" cy="256" r="140" stroke="url(#grad)" stroke-width="10" fill="none" stroke-dasharray="10 10"></circle>
+
+  <!-- Nodes -->
+  <circle cx="256" cy="110" r="18" fill="#4F8EF7"></circle>
+  <circle cx="402" cy="256" r="18" fill="#7B4DFF"></circle>
+  <circle cx="256" cy="402" r="18" fill="#4F8EF7"></circle>
+  <circle cx="110" cy="256" r="18" fill="#7B4DFF"></circle>
+
+  <!-- Center orchestrator -->
+  <circle cx="256" cy="256" r="40" fill="url(#grad)"></circle>
+
+  <!-- Flow lines -->
+  <line x1="256" y1="150" x2="256" y2="216" stroke="#94a3b8" stroke-width="6"></line>
+  <line x1="362" y1="256" x2="296" y2="256" stroke="#94a3b8" stroke-width="6"></line>
+  <line x1="256" y1="296" x2="256" y2="362" stroke="#94a3b8" stroke-width="6"></line>
+  <line x1="150" y1="256" x2="216" y2="256" stroke="#94a3b8" stroke-width="6"></line>
+</svg>

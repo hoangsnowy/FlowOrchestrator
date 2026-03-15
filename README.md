@@ -8,7 +8,7 @@ FlowOrchestrator is an open-source .NET library that lets you **orchestrate work
 
 - **Flow**
   A flow is a workflow definition, described by a **JSON manifest**:
-  - Triggers: how a flow starts (e.g. manual, timer, HTTP, message).
+  - Triggers: how a flow starts (manual, cron schedule, etc.).
   - Steps: ordered actions (validate order, process payment, send email, etc.).
   - Dependencies: `runAfter` decides which step runs after which and for which statuses.
 
@@ -32,15 +32,18 @@ FlowOrchestrator is an open-source .NET library that lets you **orchestrate work
 - **Background processing (`FlowOrchestrator.Hangfire`)**
   - `IHangfireFlowTrigger`: entry point when a trigger fires; enqueues the first step.
   - `IHangfireStepRunner`: Hangfire job that executes a single step and enqueues the next.
-  - `FlowSyncHostedService`: on startup, syncs code-defined flows into `IFlowStore`.
+  - `RetryStepAsync`: re-enqueues a failed step, resetting its state and resuming the flow from that point.
+  - `TriggerByScheduleAsync`: used by Hangfire recurring jobs to fire Cron triggers on schedule.
+  - `FlowSyncHostedService`: on startup, syncs code-defined flows into `IFlowStore` and registers Hangfire `RecurringJob` entries for any `Cron` triggers.
+  - `IRecurringTriggerSync`: syncs recurring jobs when a flow is enabled/disabled at runtime.
   - `AddFlow<T>()`: register code-defined flows into the DI container and flow catalog.
 
 - **Dashboard (`FlowOrchestrator.Dashboard`)**
-  - Built-in HTML/JS SPA served at `/flows` with sidebar navigation.
+  - Built-in HTML/JS SPA served at `/flows` with Hangfire-style light UI and sidebar navigation.
   - **Overview** page: stats cards (registered flows, active runs, completed/failed today).
   - **Flows** page: catalog of all registered flows with manifest viewer, triggers, steps, DAG graph, enable/disable, trigger button.
-  - **Runs** page: filterable run list with step timeline detail view.
-  - REST API endpoints for flow CRUD, triggering, and run monitoring.
+  - **Runs** page: filterable run list with step timeline detail view. Failed steps show a **Retry** button to re-run from that step.
+  - REST API endpoints for flow CRUD, triggering, run monitoring, and step retry.
 
 ---
 
@@ -110,21 +113,30 @@ Open `http://localhost:5201/flows` to access the built-in dashboard.
 
 ### Pages
 
-- **Overview**: Summary stats — registered flows, active runs, completed/failed today. Quick links to recent flows and runs.
+- **Overview**: Summary stats — registered flows, active runs, completed/failed today, scheduled jobs count. Quick links to recent flows and runs.
 - **Flows**: Catalog of all registered flows. Click any flow to see:
   - Manifest details (ID, name, version, status)
   - Steps table (key, type, inputs, runAfter dependencies)
   - Triggers table
+  - **Schedule** tab showing recurring jobs for the flow with next/last execution, cron expression editing, trigger now, and pause controls
   - DAG visualization (step dependency graph rendered as SVG)
   - Raw JSON manifest viewer
   - Enable/disable toggle and trigger button
-- **Runs**: Filterable run list (by flow, by status). Click a run to see the step-by-step timeline with timing, outputs, and errors.
+- **Runs**: Filterable run list (by flow, by status). Click a run to see the step-by-step timeline with timing, outputs, and errors. Failed steps show a **Retry** button inline.
+- **Scheduled**: Dedicated page listing all Hangfire recurring jobs with flow name, trigger key, cron expression, next/last execution, and last status. Actions: trigger immediately, pause, and inline cron expression editing.
 
 ### Triggering a flow from the dashboard
 
 1. Go to **Flows** → click a flow card.
 2. Click the **Trigger** button.
 3. Switch to the **Runs** page to monitor execution.
+
+### Retrying a failed step
+
+1. Go to **Runs** → click the run that contains the failed step.
+2. In the step timeline, click the **Retry** button next to the failed step.
+3. Confirm the dialog — the step is re-enqueued via Hangfire and the run status resets to **Running**.
+4. Downstream steps continue normally if the retried step succeeds.
 
 ---
 
@@ -161,6 +173,25 @@ GET http://localhost:5201/flows/api/runs/active
 GET http://localhost:5201/flows/api/runs/stats
 ```
 
+### 5.4 Trigger via webhook (for external clients)
+
+```http
+POST http://localhost:5201/flows/api/webhook/{flowId}
+Content-Type: application/json
+X-Webhook-Key: your-secret-key   # Required only if webhookSecret is configured
+
+{ "orderId": "123", "customerId": "abc" }
+```
+
+Or by slug (when `webhookSlug` is set in the trigger inputs):
+
+```http
+POST http://localhost:5201/flows/api/webhook/order-webhook
+Content-Type: application/json
+
+{}
+```
+
 ---
 
 ## 6. Writing your own flow
@@ -176,7 +207,12 @@ public sealed class MyFlow : IFlowDefinition
     {
         Triggers = new FlowTriggerCollection
         {
-            ["manual"] = new TriggerMetadata { Type = "Manual" }
+            ["manual"] = new TriggerMetadata { Type = "Manual" },
+            ["nightly"] = new TriggerMetadata
+            {
+                Type = "Cron",
+                Inputs = new Dictionary<string, object?> { ["cronExpression"] = "0 2 * * *" }
+            }
         },
         Steps = new StepCollection
         {
@@ -194,6 +230,18 @@ public sealed class MyFlow : IFlowDefinition
     };
 }
 ```
+
+**Trigger types:**
+
+| Type | Description | Required inputs |
+|------|-------------|-----------------|
+| `Manual` | Triggered by dashboard button or API call | None |
+| `Cron` | Runs on a recurring schedule via Hangfire `RecurringJob` | `cronExpression` (Hangfire cron syntax, e.g. `*/5 * * * *`) |
+| `Webhook` | Triggered by external HTTP POST (e.g. customer webhook) | Optional: `webhookSlug` (URL path), `webhookSecret` (for `X-Webhook-Key` validation) |
+
+Cron triggers are automatically registered as Hangfire recurring jobs on startup. Disabling a flow via the dashboard removes its recurring jobs; re-enabling restores them.
+
+**Webhook trigger:** Use `POST /flows/api/webhook/{flowId}` or `POST /flows/api/webhook/{slug}` to trigger from external systems. If `webhookSecret` is set in the trigger inputs, clients must send `X-Webhook-Key: <secret>` or `Authorization: Bearer <secret>`. The dashboard shows the webhook URL and a Copy button in the Triggers tab.
 
 ### 6.2 Implement step handlers
 
@@ -236,12 +284,19 @@ All endpoints are served under the base path configured in `MapFlowDashboard(bas
 | `POST` | `/flows/api/flows/{id}/enable` | Enable a flow |
 | `POST` | `/flows/api/flows/{id}/disable` | Disable a flow |
 | `POST` | `/flows/api/flows/{id}/trigger` | Trigger a flow (creates a new run via Hangfire) |
+| `POST` | `/flows/api/webhook/{idOrSlug}` | Webhook endpoint: trigger by flow ID or slug. Optional `X-Webhook-Key` header when `webhookSecret` is configured |
 | `GET` | `/flows/api/handlers` | List registered step handler types |
 | `GET` | `/flows/api/runs` | List runs (`?flowId=`, `?skip=`, `?take=`) |
 | `GET` | `/flows/api/runs/active` | List currently running flows |
 | `GET` | `/flows/api/runs/stats` | Dashboard statistics |
 | `GET` | `/flows/api/runs/{id}` | Run detail with steps |
 | `GET` | `/flows/api/runs/{id}/steps` | Steps for a specific run |
+| `POST` | `/flows/api/runs/{id}/steps/{stepKey}/retry` | Retry a failed step (re-enqueues via Hangfire) |
+| `GET` | `/flows/api/schedules` | List all recurring jobs with status |
+| `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
+| `POST` | `/flows/api/schedules/{jobId}/pause` | Pause (remove) a recurring job |
+| `POST` | `/flows/api/schedules/{jobId}/resume` | Resume a paused recurring job |
+| `PUT` | `/flows/api/schedules/{jobId}/cron` | Update cron expression (`{ "cronExpression": "..." }`) |
 | `GET` | `/hangfire` | Hangfire job dashboard |
 
 ---

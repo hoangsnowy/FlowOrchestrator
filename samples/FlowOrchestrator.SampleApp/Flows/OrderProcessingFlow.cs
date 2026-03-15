@@ -10,7 +10,16 @@ public sealed class OrderProcessingFlow : IFlowDefinition
     {
         Triggers = new FlowTriggerCollection
         {
-            ["manual"] = new TriggerMetadata { Type = "Manual" }
+            ["manual"] = new TriggerMetadata { Type = "Manual" },
+            ["webhook"] = new TriggerMetadata
+            {
+                Type = "Webhook",
+                Inputs = new Dictionary<string, object?>
+                {
+                    ["webhookSlug"] = "order-webhook"
+                    // Optional: ["webhookSecret"] = "your-secret-key" for X-Webhook-Key validation
+                }
+            }
         },
         Steps = new StepCollection
         {

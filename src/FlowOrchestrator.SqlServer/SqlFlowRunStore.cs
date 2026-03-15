@@ -103,6 +103,20 @@ public sealed class SqlFlowRunStore : IFlowRunStore
         return rows.AsList();
     }
 
+    public async Task RetryStepAsync(Guid runId, string stepKey)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.ExecuteAsync("""
+            UPDATE FlowSteps
+            SET Status = 'Running', OutputJson = NULL, ErrorMessage = NULL, CompletedAt = NULL, StartedAt = SYSDATETIMEOFFSET()
+            WHERE RunId = @RunId AND StepKey = @StepKey
+            """, new { RunId = runId, StepKey = stepKey });
+
+        await conn.ExecuteAsync(
+            "UPDATE FlowRuns SET Status = 'Running', CompletedAt = NULL WHERE Id = @Id",
+            new { Id = runId });
+    }
+
     private static async Task<FlowRunRecord?> GetRunCoreAsync(SqlConnection conn, Guid runId)
     {
         return await conn.QuerySingleOrDefaultAsync<FlowRunRecord>(
