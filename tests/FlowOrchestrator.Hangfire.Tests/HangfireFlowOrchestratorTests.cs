@@ -18,10 +18,11 @@ public class HangfireFlowOrchestratorTests
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
+    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
     private readonly ILogger<HangfireFlowOrchestrator> _logger = Substitute.For<ILogger<HangfireFlowOrchestrator>>();
 
     private HangfireFlowOrchestrator CreateSut() =>
-        new(_jobClient, _flowExecutor, _stepExecutor, _runStore, _outputsRepo, _ctxAccessor, _logger);
+        new(_jobClient, _flowExecutor, _stepExecutor, _runStore, _outputsRepo, _ctxAccessor, _flowRepo, _logger);
 
     private static IFlowDefinition CreateFlow()
     {

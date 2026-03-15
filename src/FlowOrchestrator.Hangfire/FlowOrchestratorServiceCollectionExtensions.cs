@@ -44,6 +44,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
 
         services.AddTransient<IHangfireFlowTrigger, HangfireFlowOrchestrator>();
         services.AddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();
+        services.AddSingleton<IRecurringTriggerSync, RecurringTriggerSync>();
 
         services.AddStepHandler<ForEachStepHandler>("ForEach");
 

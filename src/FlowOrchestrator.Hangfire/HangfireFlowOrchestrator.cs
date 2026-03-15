@@ -16,6 +16,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepository;
     private readonly IExecutionContextAccessor _contextAccessor;
+    private readonly IFlowRepository _flowRepository;
     private readonly ILogger<HangfireFlowOrchestrator> _logger;
 
     public HangfireFlowOrchestrator(
@@ -25,6 +26,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         IFlowRunStore runStore,
         IOutputsRepository outputsRepository,
         IExecutionContextAccessor contextAccessor,
+        IFlowRepository flowRepository,
         ILogger<HangfireFlowOrchestrator> logger)
     {
         _backgroundJobClient = backgroundJobClient;
@@ -33,6 +35,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         _runStore = runStore;
         _outputsRepository = outputsRepository;
         _contextAccessor = contextAccessor;
+        _flowRepository = flowRepository;
         _logger = logger;
     }
 
@@ -169,6 +172,45 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         {
             _contextAccessor.CurrentContext = null;
         }
+    }
+
+    public async ValueTask<object?> TriggerByScheduleAsync(Guid flowId, string triggerKey, PerformContext? performContext = null)
+    {
+        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
+        var flow = flows.FirstOrDefault(f => f.Id == flowId)
+            ?? throw new InvalidOperationException($"Flow {flowId} not found.");
+
+        var ctx = new TriggerContext
+        {
+            RunId = Guid.NewGuid(),
+            Flow = flow,
+            Trigger = new Trigger(triggerKey, "Cron", null)
+        };
+
+        return await TriggerAsync(ctx, performContext).ConfigureAwait(false);
+    }
+
+    public async ValueTask<object?> RetryStepAsync(Guid flowId, Guid runId, string stepKey, PerformContext? performContext = null)
+    {
+        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
+        var flow = flows.FirstOrDefault(f => f.Id == flowId)
+            ?? throw new InvalidOperationException($"Flow {flowId} not found.");
+
+        var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
+            ?? throw new InvalidOperationException($"Step '{stepKey}' not found in flow manifest.");
+
+        await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
+
+        var step = new StepInstance(stepKey, stepMeta.Type)
+        {
+            RunId = runId,
+            ScheduledTime = DateTimeOffset.UtcNow,
+            Inputs = new Dictionary<string, object?>(stepMeta.Inputs)
+        };
+
+        var ctx = new Core.Execution.ExecutionContext { RunId = runId };
+
+        return await RunStepAsync(ctx, flow, step, performContext).ConfigureAwait(false);
     }
 }
 

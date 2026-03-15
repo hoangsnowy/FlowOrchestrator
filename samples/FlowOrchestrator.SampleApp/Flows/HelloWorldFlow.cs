@@ -10,7 +10,12 @@ public sealed class HelloWorldFlow : IFlowDefinition
     {
         Triggers = new FlowTriggerCollection
         {
-            ["manual"] = new TriggerMetadata { Type = "Manual" }
+            ["manual"] = new TriggerMetadata { Type = "Manual" },
+            ["scheduled"] = new TriggerMetadata
+            {
+                Type = "Cron",
+                Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/1 * * * *" }
+            }
         },
         Steps = new StepCollection
         {
