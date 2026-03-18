@@ -56,7 +56,7 @@ internal sealed class FlowSyncHostedService : IHostedService
         {
             var jobId = $"flow-{flow.Id}-{triggerKey}";
 
-            if (!string.Equals(trigger.Type, "Cron", StringComparison.OrdinalIgnoreCase))
+            if (trigger.Type != Core.Abstractions.TriggerType.Cron)
                 continue;
 
             if (!isEnabled

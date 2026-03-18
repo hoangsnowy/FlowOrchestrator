@@ -121,7 +121,7 @@ public class FlowSyncHostedServiceTests
             {
                 ["scheduled"] = new TriggerMetadata
                 {
-                    Type = "Cron",
+                    Type = TriggerType.Cron,
                     Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
                 }
             },
@@ -163,7 +163,7 @@ public class FlowSyncHostedServiceTests
             {
                 ["scheduled"] = new TriggerMetadata
                 {
-                    Type = "Cron",
+                    Type = TriggerType.Cron,
                     Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
                 }
             },

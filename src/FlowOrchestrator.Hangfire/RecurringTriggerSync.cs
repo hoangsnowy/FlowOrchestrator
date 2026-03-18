@@ -1,3 +1,4 @@
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 using Hangfire;
 using Microsoft.Extensions.Logging;
@@ -30,7 +31,7 @@ internal sealed class RecurringTriggerSync : IRecurringTriggerSync
         {
             var jobId = $"flow-{flow.Id}-{triggerKey}";
 
-            if (!string.Equals(trigger.Type, "Cron", StringComparison.OrdinalIgnoreCase))
+            if (trigger.Type != TriggerType.Cron)
                 continue;
 
             if (!isEnabled

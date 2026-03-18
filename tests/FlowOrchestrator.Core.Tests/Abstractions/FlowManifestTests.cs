@@ -21,7 +21,7 @@ public class FlowManifestTests
         {
             Triggers = new FlowTriggerCollection
             {
-                ["manual"] = new TriggerMetadata { Type = "Manual" }
+                ["manual"] = new TriggerMetadata { Type = TriggerType.Manual }
             },
             Steps = new StepCollection
             {
@@ -46,9 +46,9 @@ public class FlowManifestTests
     [Fact]
     public void TriggerMetadata_DefaultProperties()
     {
-        var trigger = new TriggerMetadata { Type = "Manual" };
+        var trigger = new TriggerMetadata { Type = TriggerType.Manual };
 
-        trigger.Type.Should().Be("Manual");
+        trigger.Type.Should().Be(TriggerType.Manual);
         trigger.Inputs.Should().BeEmpty();
     }
 }

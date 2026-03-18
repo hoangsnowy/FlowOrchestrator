@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
@@ -104,7 +105,7 @@ public static class DashboardServiceCollectionExtensions
         });
 
         // Webhook endpoint: POST /flows/api/webhook/{idOrSlug}
-        // - idOrSlug = flow GUID: use first Webhook or Manual trigger
+        // - idOrSlug = flow GUID: use first Webhook trigger (only Webhook has external URL)
         // - idOrSlug = slug: lookup flow by webhookSlug in Webhook trigger Inputs
         // - If trigger has webhookSecret in Inputs, require X-Webhook-Key header to match
         endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug) =>
@@ -112,7 +113,6 @@ public static class DashboardServiceCollectionExtensions
             var flows = (await repo.GetAllFlowsAsync()).ToList();
             Core.Abstractions.IFlowDefinition? flow = null;
             string? triggerKey = null;
-            string? triggerType = null;
             string? expectedSecret = null;
 
             if (Guid.TryParse(idOrSlug, out var flowId))
@@ -121,14 +121,13 @@ public static class DashboardServiceCollectionExtensions
                 if (flow is not null)
                 {
                     var webhookTrigger = flow.Manifest.Triggers.FirstOrDefault(t =>
-                        string.Equals(t.Value.Type, "Webhook", StringComparison.OrdinalIgnoreCase));
-                    var manualTrigger = flow.Manifest.Triggers.FirstOrDefault(t =>
-                        string.Equals(t.Value.Type, "Manual", StringComparison.OrdinalIgnoreCase));
-                    var chosen = webhookTrigger.Key is not null ? webhookTrigger : manualTrigger;
-                    triggerKey = chosen.Key;
-                    triggerType = chosen.Value?.Type ?? "Manual";
-                    if (chosen.Value?.Inputs.TryGetValue("webhookSecret", out var secretObj) == true && secretObj is string s)
-                        expectedSecret = s;
+                        t.Value.Type == TriggerType.Webhook);
+                    if (webhookTrigger.Key is not null)
+                    {
+                        triggerKey = webhookTrigger.Key;
+                        if (webhookTrigger.Value?.Inputs.TryGetValue("webhookSecret", out var secretObj) == true && secretObj is string s)
+                            expectedSecret = s;
+                    }
                 }
             }
             else
@@ -137,14 +136,13 @@ public static class DashboardServiceCollectionExtensions
                 {
                     foreach (var (key, meta) in f.Manifest.Triggers)
                     {
-                        if (!string.Equals(meta.Type, "Webhook", StringComparison.OrdinalIgnoreCase))
+                        if (meta.Type != TriggerType.Webhook)
                             continue;
                         if (meta.Inputs.TryGetValue("webhookSlug", out var slugObj) && slugObj is string slug
                             && string.Equals(slug, idOrSlug, StringComparison.OrdinalIgnoreCase))
                         {
                             flow = f;
                             triggerKey = key;
-                            triggerType = meta.Type;
                             if (meta.Inputs.TryGetValue("webhookSecret", out var secretObj) && secretObj is string sec)
                                 expectedSecret = sec;
                             break;
@@ -191,7 +189,7 @@ public static class DashboardServiceCollectionExtensions
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger(triggerKey, triggerType ?? "Webhook", body)
+                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), body)
             };
             BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerAsync(ctx, null));
             await http.Response.WriteAsJsonAsync(new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
@@ -282,7 +280,7 @@ public static class DashboardServiceCollectionExtensions
             var flows = await store.GetAllAsync();
             var flowLookup = flows.ToDictionary(f => f.Id);
 
-            var result = recurringJobs
+            var activeJobs = recurringJobs
                 .Where(j => j.Id.StartsWith("flow-"))
                 .Select(j =>
                 {
@@ -305,27 +303,61 @@ public static class DashboardServiceCollectionExtensions
                 })
                 .ToList();
 
+            var pausedJobs = PausedJobsStore.GetAll().Select(p => new
+            {
+                jobId = p.JobId,
+                flowId = p.FlowId,
+                flowName = p.FlowName,
+                triggerKey = p.TriggerKey,
+                cron = p.Cron,
+                nextExecution = (DateTime?)null,
+                lastExecution = (DateTime?)null,
+                lastJobId = "",
+                lastJobState = "Paused",
+                timeZoneId = "",
+                paused = true
+            });
+
+            var result = activeJobs.Concat(pausedJobs).ToList();
             await http.Response.WriteAsJsonAsync(result);
         });
 
-        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/trigger", (HttpContext http, IRecurringJobManager manager, string jobId) =>
+        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/trigger", async (HttpContext http, IRecurringJobManager manager, string jobId) =>
         {
             try
             {
+                if (PausedJobsStore.TryGet(jobId, out var paused))
+                {
+                    BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerByScheduleAsync(paused.FlowId, paused.TriggerKey, null));
+                    await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' triggered." });
+                    return;
+                }
                 manager.Trigger(jobId);
-                return http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' triggered." });
+                await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' triggered." });
             }
             catch (Exception ex)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return http.Response.WriteAsJsonAsync(new { error = ex.Message });
+                await http.Response.WriteAsJsonAsync(new { error = ex.Message });
             }
         });
 
-        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/pause", (HttpContext http, IRecurringJobManager manager, string jobId) =>
+        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/pause", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
         {
+            if (!ParseJobId(jobId, out var flowId, out var triggerKey))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await http.Response.WriteAsJsonAsync(new { error = "Invalid job ID format." });
+                return;
+            }
+
+            var flow = await store.GetByIdAsync(flowId);
+            var flowName = flow?.Name ?? "Unknown";
+            var cron = flow?.ManifestJson is not null ? ExtractCronExpression(flow.ManifestJson, triggerKey) ?? "" : "";
+
+            PausedJobsStore.Add(jobId, flowId, flowName, triggerKey, cron);
             manager.RemoveIfExists(jobId);
-            return http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' paused." });
+            await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' paused." });
         });
 
         endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
@@ -353,6 +385,7 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            PausedJobsStore.Remove(jobId);
             var fid = flowId;
             var key = triggerKey;
             manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), cronExpr);
@@ -409,11 +442,11 @@ public static class DashboardServiceCollectionExtensions
         if (!jobId.StartsWith("flow-")) return false;
 
         var withoutPrefix = jobId["flow-".Length..];
-        var dashIndex = withoutPrefix.IndexOf('-');
-        if (dashIndex < 0) return false;
+        // GUID format: 8-4-4-4-12 = 36 chars, then '-' then triggerKey
+        if (withoutPrefix.Length < 38) return false;
 
-        var guidPart = withoutPrefix[..dashIndex];
-        triggerKey = withoutPrefix[(dashIndex + 1)..];
+        var guidPart = withoutPrefix[..36];
+        triggerKey = withoutPrefix[37..];
 
         return Guid.TryParse(guidPart, out flowId) && !string.IsNullOrEmpty(triggerKey);
     }
@@ -466,5 +499,23 @@ public static class DashboardServiceCollectionExtensions
         dict[triggersKey] = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(triggers));
 
         return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(dict));
+    }
+
+    private static class PausedJobsStore
+    {
+        private static readonly ConcurrentDictionary<string, PausedJobInfo> _store = new();
+
+        public static void Add(string jobId, Guid flowId, string flowName, string triggerKey, string cron)
+        {
+            _store[jobId] = new PausedJobInfo(jobId, flowId, flowName, triggerKey, cron);
+        }
+
+        public static void Remove(string jobId) => _store.TryRemove(jobId, out _);
+
+        public static bool TryGet(string jobId, out PausedJobInfo info) => _store.TryGetValue(jobId, out info!);
+
+        public static IEnumerable<PausedJobInfo> GetAll() => _store.Values;
+
+        public record PausedJobInfo(string JobId, Guid FlowId, string FlowName, string TriggerKey, string Cron);
     }
 }

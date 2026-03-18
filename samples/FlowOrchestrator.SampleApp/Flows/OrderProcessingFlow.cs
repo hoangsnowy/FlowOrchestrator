@@ -10,14 +10,14 @@ public sealed class OrderProcessingFlow : IFlowDefinition
     {
         Triggers = new FlowTriggerCollection
         {
-            ["manual"] = new TriggerMetadata { Type = "Manual" },
+            ["manual"] = new TriggerMetadata { Type = TriggerType.Manual },
             ["webhook"] = new TriggerMetadata
             {
-                Type = "Webhook",
+                Type = TriggerType.Webhook,
                 Inputs = new Dictionary<string, object?>
                 {
-                    ["webhookSlug"] = "order-webhook"
-                    // Optional: ["webhookSecret"] = "your-secret-key" for X-Webhook-Key validation
+                    ["webhookSlug"] = "order-webhook",
+                    ["webhookSecret"] = "your-secret-key"
                 }
             }
         },
