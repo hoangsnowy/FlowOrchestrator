@@ -29,10 +29,20 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
                 break;
         }
 
+        if (result is IStepResult stepResult)
+        {
+            if (string.IsNullOrWhiteSpace(stepResult.Key))
+            {
+                stepResult.Key = step.Key;
+            }
+
+            return stepResult;
+        }
+
         return new StepResult
         {
             Key = step.Key,
-            Status = "Succeeded",
+            Status = StepStatus.Succeeded,
             Result = result
         };
     }

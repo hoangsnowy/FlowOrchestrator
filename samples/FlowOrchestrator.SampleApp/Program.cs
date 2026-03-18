@@ -29,6 +29,7 @@ builder.Services.AddFlowOrchestrator(options =>
     options.UseHangfire();
     options.AddFlow<HelloWorldFlow>();
     options.AddFlow<OrderProcessingFlow>();
+    options.AddFlow<PollingDemoFlow>();
 });
 
 builder.Services.AddStepHandler<LogMessageStepHandler>("LogMessage");
@@ -45,7 +46,7 @@ builder.Services.AddHttpClient("ExternalApi", client =>
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
-builder.Services.AddFlowDashboard();
+builder.Services.AddFlowDashboard(builder.Configuration);
 
 var app = builder.Build();
 

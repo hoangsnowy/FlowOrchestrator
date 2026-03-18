@@ -71,7 +71,7 @@ public class StepCollectionTests
         var step2 = new StepMetadata
         {
             Type = "B",
-            RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } }
+            RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
         };
         var collection = new StepCollection
         {
@@ -98,7 +98,7 @@ public class StepCollectionTests
         var step2 = new StepMetadata
         {
             Type = "B",
-            RunAfter = new RunAfterCollection { ["other"] = new[] { "Succeeded" } }
+            RunAfter = new RunAfterCollection { ["other"] = new[] { StepStatus.Succeeded } }
         };
         var collection = new StepCollection
         {

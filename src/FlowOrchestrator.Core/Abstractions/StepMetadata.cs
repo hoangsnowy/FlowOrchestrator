@@ -12,7 +12,7 @@ public class StepMetadata
 
     public IDictionary<string, object?> Inputs { get; set; } = new Dictionary<string, object?>();
 
-    public virtual bool ShouldExecute(string precedingStepKey, string status)
+    public virtual bool ShouldExecute(string precedingStepKey, StepStatus status)
     {
         if (RunAfter.Count == 0)
         {
@@ -24,6 +24,6 @@ public class StepMetadata
             return false;
         }
 
-        return allowedStatuses.Contains(status, StringComparer.OrdinalIgnoreCase);
+        return allowedStatuses.Contains(status);
     }
 }

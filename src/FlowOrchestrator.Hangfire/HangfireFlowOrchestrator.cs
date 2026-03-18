@@ -117,7 +117,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
                 result = new StepResult
                 {
                     Key = step.Key,
-                    Status = "Failed",
+                    Status = StepStatus.Failed,
                     FailedReason = ex.ToString(),
                     ReThrow = false
                 };
@@ -126,12 +126,23 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
             try
             {
                 var outputJson = SafeSerialize(result.Result);
-                await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status, outputJson, result.FailedReason)
+                await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to track step completion.");
+            }
+
+            if (result.Status == StepStatus.Pending)
+            {
+                var retryDelay = result.DelayNextStep ?? TimeSpan.FromSeconds(10);
+
+                _backgroundJobClient.Schedule<IHangfireStepRunner>(
+                    runner => runner.RunStepAsync(ctx, flow, step, null),
+                    retryDelay);
+
+                return result.Result;
             }
 
             var next = await _flowExecutor.GetNextStep(ctx, flow, step, result).ConfigureAwait(false);
@@ -153,7 +164,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
             {
                 try
                 {
-                    await _runStore.CompleteRunAsync(ctx.RunId, result.Status).ConfigureAwait(false);
+                    await _runStore.CompleteRunAsync(ctx.RunId, result.Status.ToString()).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

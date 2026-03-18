@@ -145,7 +145,7 @@ public class HangfireFlowOrchestratorTests
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
-        var stepResult = new StepResult { Key = "step1", Status = "Succeeded", Result = "ok" };
+        var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded, Result = "ok" };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
@@ -162,7 +162,7 @@ public class HangfireFlowOrchestratorTests
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
-        var stepResult = new StepResult { Key = "step1", Status = "Succeeded" };
+        var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
@@ -180,12 +180,41 @@ public class HangfireFlowOrchestratorTests
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var nextStep = new StepInstance("step2", "B") { RunId = ctx.RunId };
 
-        var stepResult = new StepResult { Key = "step1", Status = "Succeeded" };
+        var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(nextStep);
 
         await sut.RunStepAsync(ctx, flow, step);
 
+        await _runStore.DidNotReceive().CompleteRunAsync(Arg.Any<Guid>(), Arg.Any<string>());
+        _jobClient.ReceivedCalls().Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task RunStepAsync_PendingStatus_ReschedulesCurrentStep()
+    {
+        var sut = CreateSut();
+        var flow = CreateFlow();
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
+
+        var stepResult = new StepResult
+        {
+            Key = "step1",
+            Status = StepStatus.Pending,
+            DelayNextStep = TimeSpan.FromSeconds(3)
+        };
+        _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
+
+        await sut.RunStepAsync(ctx, flow, step);
+
+        await _runStore.Received(1).RecordStepCompleteAsync(
+            ctx.RunId, "step1", "Pending", Arg.Any<string?>(), Arg.Any<string?>());
+        await _flowExecutor.DidNotReceive().GetNextStep(
+            Arg.Any<IExecutionContext>(),
+            Arg.Any<IFlowDefinition>(),
+            Arg.Any<IStepInstance>(),
+            Arg.Any<IStepResult>());
         await _runStore.DidNotReceive().CompleteRunAsync(Arg.Any<Guid>(), Arg.Any<string>());
         _jobClient.ReceivedCalls().Should().NotBeEmpty();
     }
@@ -215,7 +244,7 @@ public class HangfireFlowOrchestratorTests
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
-        var stepResult = new StepResult { Key = "step1", Status = "Failed", ReThrow = true, FailedReason = "critical" };
+        var stepResult = new StepResult { Key = "step1", Status = StepStatus.Failed, ReThrow = true, FailedReason = "critical" };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 

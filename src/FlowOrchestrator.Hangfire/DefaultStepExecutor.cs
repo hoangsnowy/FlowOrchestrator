@@ -28,7 +28,7 @@ internal sealed class DefaultStepExecutor : IStepExecutor
             return new StepResult
             {
                 Key = step.Key,
-                Status = "Skipped",
+                Status = StepStatus.Skipped,
                 FailedReason = "Step metadata not found."
             };
         }
@@ -41,7 +41,7 @@ internal sealed class DefaultStepExecutor : IStepExecutor
             return new StepResult
             {
                 Key = step.Key,
-                Status = "Skipped",
+                Status = StepStatus.Skipped,
                 FailedReason = $"No handler registered for type '{metadata.Type}'."
             };
         }

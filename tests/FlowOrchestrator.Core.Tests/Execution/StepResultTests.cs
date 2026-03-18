@@ -1,3 +1,4 @@
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FluentAssertions;
 
@@ -10,7 +11,7 @@ public class StepResultTests
     {
         var result = new StepResult();
 
-        result.Status.Should().Be("Succeeded");
+        result.Status.Should().Be(StepStatus.Succeeded);
     }
 
     [Fact]
@@ -36,7 +37,7 @@ public class StepResultTests
         var result = new StepResult
         {
             Key = "step1",
-            Status = "Failed",
+            Status = StepStatus.Failed,
             Result = new { data = 42 },
             FailedReason = "Something went wrong",
             ReThrow = true,
@@ -44,7 +45,7 @@ public class StepResultTests
         };
 
         result.Key.Should().Be("step1");
-        result.Status.Should().Be("Failed");
+        result.Status.Should().Be(StepStatus.Failed);
         result.Result.Should().NotBeNull();
         result.FailedReason.Should().Be("Something went wrong");
         result.ReThrow.Should().BeTrue();

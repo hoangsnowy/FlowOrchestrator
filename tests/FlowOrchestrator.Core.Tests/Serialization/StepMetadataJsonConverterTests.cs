@@ -25,7 +25,7 @@ public class StepMetadataJsonConverterTests
         result.Should().BeOfType<StepMetadata>().And.NotBeOfType<LoopStepMetadata>();
         result!.Type.Should().Be("LogMessage");
         result.RunAfter.Should().ContainKey("step0");
-        result.RunAfter["step0"].Should().Contain("Succeeded");
+        result.RunAfter["step0"].Should().Contain(StepStatus.Succeeded);
         result.Inputs.Should().ContainKey("message");
     }
 
@@ -61,7 +61,7 @@ public class StepMetadataJsonConverterTests
         var step = new StepMetadata
         {
             Type = "LogMessage",
-            RunAfter = new RunAfterCollection { ["step0"] = new[] { "Succeeded" } },
+            RunAfter = new RunAfterCollection { ["step0"] = new[] { StepStatus.Succeeded } },
             Inputs = new Dictionary<string, object?> { ["message"] = "hello" }
         };
 
@@ -78,7 +78,7 @@ public class StepMetadataJsonConverterTests
         var original = new StepMetadata
         {
             Type = "QueryDatabase",
-            RunAfter = new RunAfterCollection { ["prev"] = new[] { "Succeeded", "Failed" } },
+            RunAfter = new RunAfterCollection { ["prev"] = new[] { StepStatus.Succeeded, StepStatus.Failed } },
             Inputs = new Dictionary<string, object?> { ["sql"] = "SELECT 1", ["timeout"] = 30 }
         };
 
@@ -88,7 +88,7 @@ public class StepMetadataJsonConverterTests
         deserialized.Should().NotBeNull();
         deserialized!.Type.Should().Be(original.Type);
         deserialized.RunAfter.Should().ContainKey("prev");
-        deserialized.RunAfter["prev"].Should().BeEquivalentTo(new[] { "Succeeded", "Failed" });
+        deserialized.RunAfter["prev"].Should().BeEquivalentTo(new[] { StepStatus.Succeeded, StepStatus.Failed });
     }
 
     [Fact]
