@@ -65,7 +65,16 @@ jobs:
           --output ./nupkgs
           -p:VersionPrefix=${{ steps.version.outputs.version_prefix }}
 
-      - name: Push to NuGet
+      - name: Push to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push "./nupkgs/*.nupkg" \
+            --api-key "$GITHUB_TOKEN" \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --skip-duplicate
+
+      - name: Push to NuGet.org
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
