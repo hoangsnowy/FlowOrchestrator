@@ -44,7 +44,7 @@ public class FlowExecutorTests
             ["step2"] = new StepMetadata
             {
                 Type = "Save",
-                RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } }
+                RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
             }
         };
         var flow = CreateFlow(steps);
@@ -66,7 +66,7 @@ public class FlowExecutorTests
             ["step1"] = new StepMetadata
             {
                 Type = "A",
-                RunAfter = new RunAfterCollection { ["step0"] = new[] { "Succeeded" } }
+                RunAfter = new RunAfterCollection { ["step0"] = new[] { StepStatus.Succeeded } }
             }
         };
         var flow = CreateFlow(steps);
@@ -87,14 +87,14 @@ public class FlowExecutorTests
             ["step2"] = new StepMetadata
             {
                 Type = "B",
-                RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } },
+                RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } },
                 Inputs = new Dictionary<string, object?> { ["key"] = "val" }
             }
         };
         var flow = CreateFlow(steps);
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
-        var result = new StepResult { Key = "step1", Status = "Succeeded" };
+        var result = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
 
         var next = await _sut.GetNextStep(ctx, flow, currentStep, result);
 
@@ -114,7 +114,7 @@ public class FlowExecutorTests
         var flow = CreateFlow(steps);
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
-        var result = new StepResult { Key = "step1", Status = "Succeeded" };
+        var result = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
 
         var next = await _sut.GetNextStep(ctx, flow, currentStep, result);
 
@@ -130,13 +130,13 @@ public class FlowExecutorTests
             ["step2"] = new StepMetadata
             {
                 Type = "B",
-                RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } }
+                RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
             }
         };
         var flow = CreateFlow(steps);
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
-        var result = new StepResult { Key = "step1", Status = "Failed" };
+        var result = new StepResult { Key = "step1", Status = StepStatus.Failed };
 
         var next = await _sut.GetNextStep(ctx, flow, currentStep, result);
 

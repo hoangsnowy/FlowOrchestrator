@@ -29,23 +29,27 @@ public sealed class OrderProcessingFlow : IFlowDefinition
                 Inputs = new Dictionary<string, object?>
                 {
                     ["sql"] = "SELECT TOP 10 Id, CustomerName, Total FROM Orders WHERE Status = @Status",
-                    ["parameters"] = new Dictionary<string, object?> { ["Status"] = "Pending" }
+                    ["parameters"] = new Dictionary<string, object?> { ["Status"] = OrderStatus.Pending.ToString() }
                 }
             },
             ["enrich_data"] = new StepMetadata
             {
                 Type = "CallExternalApi",
-                RunAfter = new RunAfterCollection { ["fetch_orders"] = ["Succeeded"] },
+                RunAfter = new RunAfterCollection { ["fetch_orders"] = [StepStatus.Succeeded] },
                 Inputs = new Dictionary<string, object?>
                 {
                     ["method"] = "GET",
-                    ["path"] = "/posts/1"
+                    ["path"] = "/posts/1",
+                    ["pollEnabled"] = true,
+                    ["pollIntervalSeconds"] = 10,
+                    ["pollTimeoutSeconds"] = 120,
+                    ["pollConditionPath"] = "id"
                 }
             },
             ["save_result"] = new StepMetadata
             {
                 Type = "SaveResult",
-                RunAfter = new RunAfterCollection { ["enrich_data"] = ["Succeeded"] },
+                RunAfter = new RunAfterCollection { ["enrich_data"] = [StepStatus.Succeeded] },
                 Inputs = new Dictionary<string, object?>
                 {
                     ["table"] = "ProcessedResults"

@@ -1,5 +1,5 @@
 namespace FlowOrchestrator.Core.Abstractions;
 
-public sealed class RunAfterCollection : Dictionary<string, string[]>
+public sealed class RunAfterCollection : Dictionary<string, StepStatus[]>
 {
 }

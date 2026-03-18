@@ -27,7 +27,7 @@ public sealed class HelloWorldFlow : IFlowDefinition
             ["step2"] = new StepMetadata
             {
                 Type = "LogMessage",
-                RunAfter = new RunAfterCollection { ["step1"] = ["Succeeded"] },
+                RunAfter = new RunAfterCollection { ["step1"] = [StepStatus.Succeeded] },
                 Inputs = new Dictionary<string, object?> { ["message"] = "Hello from step 2 – workflow complete!" }
             }
         }

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
@@ -9,7 +11,9 @@ using Hangfire.Storage;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace FlowOrchestrator.Dashboard;
 
@@ -17,14 +21,48 @@ public static class DashboardServiceCollectionExtensions
 {
     public static IServiceCollection AddFlowDashboard(this IServiceCollection services)
     {
+        services.AddOptions<FlowDashboardOptions>();
+        return services;
+    }
+
+    public static IServiceCollection AddFlowDashboard(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        string sectionName = FlowDashboardOptions.DefaultSectionName)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddFlowDashboard();
+        services.Configure<FlowDashboardOptions>(configuration.GetSection(sectionName));
+        return services;
+    }
+
+    public static IServiceCollection AddFlowDashboard(
+        this IServiceCollection services,
+        Action<FlowDashboardOptions> configureOptions)
+    {
+        ArgumentNullException.ThrowIfNull(configureOptions);
+
+        services.AddFlowDashboard();
+        services.Configure(configureOptions);
         return services;
     }
 
     public static IEndpointRouteBuilder MapFlowDashboard(this IEndpointRouteBuilder endpoints, string basePath = "/flows")
     {
+        var options = endpoints.ServiceProvider
+                          .GetService<IOptions<FlowDashboardOptions>>()?.Value
+                      ?? new FlowDashboardOptions();
+        var group = endpoints.MapGroup(basePath);
+
+        if (options.BasicAuth.IsEnabled)
+        {
+            group.AddEndpointFilter(new FlowDashboardBasicAuthFilter(options.BasicAuth));
+        }
+
         var html = DashboardHtml.Render(basePath);
 
-        endpoints.MapGet(basePath, (HttpContext http) =>
+        group.MapGet("", (HttpContext http) =>
         {
             http.Response.ContentType = "text/html; charset=utf-8";
             return http.Response.WriteAsync(html);
@@ -32,13 +70,13 @@ public static class DashboardServiceCollectionExtensions
 
         // ── Flow catalog endpoints ──
 
-        endpoints.MapGet($"{basePath}/api/flows", async (HttpContext http, IFlowStore store) =>
+        group.MapGet("/api/flows", async (HttpContext http, IFlowStore store) =>
         {
             var flows = await store.GetAllAsync();
             await http.Response.WriteAsJsonAsync(flows);
         });
 
-        endpoints.MapGet($"{basePath}/api/flows/{{id:guid}}", async (HttpContext http, IFlowStore store, Guid id) =>
+        group.MapGet("/api/flows/{id:guid}", async (HttpContext http, IFlowStore store, Guid id) =>
         {
             var flow = await store.GetByIdAsync(id);
             if (flow is null)
@@ -49,7 +87,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(flow);
         });
 
-        endpoints.MapPost($"{basePath}/api/flows/{{id:guid}}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
+        group.MapPost("/api/flows/{id:guid}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
         {
             try
             {
@@ -63,7 +101,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        endpoints.MapPost($"{basePath}/api/flows/{{id:guid}}/disable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
+        group.MapPost("/api/flows/{id:guid}/disable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
         {
             try
             {
@@ -77,7 +115,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        endpoints.MapPost($"{basePath}/api/flows/{{id:guid}}/trigger", async (HttpContext http, IFlowRepository repo, Guid id) =>
+        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, IFlowRepository repo, Guid id) =>
         {
             var flows = await repo.GetAllFlowsAsync();
             var flow = flows.FirstOrDefault(f => f.Id == id);
@@ -195,7 +233,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         });
 
-        endpoints.MapGet($"{basePath}/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
+        group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
         {
             var list = handlers.Select(h => new { type = h.Type }).ToList();
             return http.Response.WriteAsJsonAsync(list);
@@ -203,7 +241,7 @@ public static class DashboardServiceCollectionExtensions
 
         // ── Run monitoring endpoints ──
 
-        endpoints.MapGet($"{basePath}/api/runs", async (HttpContext http, IFlowRunStore store) =>
+        group.MapGet("/api/runs", async (HttpContext http, IFlowRunStore store) =>
         {
             var query = http.Request.Query;
             Guid? flowId = query.TryGetValue("flowId", out var flowIdValues) && Guid.TryParse(flowIdValues, out var fid) ? fid : null;
@@ -214,19 +252,19 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(runs);
         });
 
-        endpoints.MapGet($"{basePath}/api/runs/active", async (HttpContext http, IFlowRunStore store) =>
+        group.MapGet("/api/runs/active", async (HttpContext http, IFlowRunStore store) =>
         {
             var runs = await store.GetActiveRunsAsync();
             await http.Response.WriteAsJsonAsync(runs);
         });
 
-        endpoints.MapGet($"{basePath}/api/runs/stats", async (HttpContext http, IFlowRunStore store) =>
+        group.MapGet("/api/runs/stats", async (HttpContext http, IFlowRunStore store) =>
         {
             var stats = await store.GetStatisticsAsync();
             await http.Response.WriteAsJsonAsync(stats);
         });
 
-        endpoints.MapGet($"{basePath}/api/runs/{{id:guid}}", async (HttpContext http, IFlowRunStore store, Guid id) =>
+        group.MapGet("/api/runs/{id:guid}", async (HttpContext http, IFlowRunStore store, Guid id) =>
         {
             var run = await store.GetRunDetailAsync(id);
             if (run is null)
@@ -237,7 +275,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(run);
         });
 
-        endpoints.MapGet($"{basePath}/api/runs/{{id:guid}}/steps", async (HttpContext http, IFlowRunStore store, Guid id) =>
+        group.MapGet("/api/runs/{id:guid}/steps", async (HttpContext http, IFlowRunStore store, Guid id) =>
         {
             var run = await store.GetRunDetailAsync(id);
             if (run is null)
@@ -248,7 +286,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(run.Steps ?? []);
         });
 
-        endpoints.MapPost($"{basePath}/api/runs/{{runId:guid}}/steps/{{stepKey}}/retry", async (HttpContext http, IFlowRunStore store, Guid runId, string stepKey) =>
+        group.MapPost("/api/runs/{runId:guid}/steps/{stepKey}/retry", async (HttpContext http, IFlowRunStore store, Guid runId, string stepKey) =>
         {
             var run = await store.GetRunDetailAsync(runId);
             if (run is null)
@@ -272,7 +310,7 @@ public static class DashboardServiceCollectionExtensions
 
         // ── Schedule management endpoints ──
 
-        endpoints.MapGet($"{basePath}/api/schedules", async (HttpContext http, IFlowStore store) =>
+        group.MapGet("/api/schedules", async (HttpContext http, IFlowStore store) =>
         {
             using var connection = JobStorage.Current.GetConnection();
             var recurringJobs = connection.GetRecurringJobs();
@@ -322,7 +360,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(result);
         });
 
-        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/trigger", async (HttpContext http, IRecurringJobManager manager, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/trigger", async (HttpContext http, IRecurringJobManager manager, string jobId) =>
         {
             try
             {
@@ -342,7 +380,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/pause", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/pause", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -360,7 +398,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' paused." });
         });
 
-        endpoints.MapPost($"{basePath}/api/schedules/{{jobId}}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -392,7 +430,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
         });
 
-        endpoints.MapPut($"{basePath}/api/schedules/{{jobId}}/cron", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
+        group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -432,6 +470,79 @@ public static class DashboardServiceCollectionExtensions
         });
 
         return endpoints;
+    }
+
+    private sealed class FlowDashboardBasicAuthFilter(FlowDashboardBasicAuthOptions options) : IEndpointFilter
+    {
+        public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            if (IsAuthorized(context.HttpContext, options))
+            {
+                return next(context);
+            }
+
+            var realm = string.IsNullOrWhiteSpace(options.Realm)
+                ? "FlowOrchestrator Dashboard"
+                : options.Realm.Replace("\"", string.Empty, StringComparison.Ordinal);
+
+            context.HttpContext.Response.Headers.WWWAuthenticate = $"Basic realm=\"{realm}\", charset=\"UTF-8\"";
+            return ValueTask.FromResult<object?>(Results.Unauthorized());
+        }
+    }
+
+    private static bool IsAuthorized(HttpContext http, FlowDashboardBasicAuthOptions options)
+    {
+        if (!options.IsEnabled)
+        {
+            return true;
+        }
+
+        if (!http.Request.Headers.TryGetValue("Authorization", out var authHeaders))
+        {
+            return false;
+        }
+
+        const string basicPrefix = "Basic ";
+        var headerValue = authHeaders.ToString();
+        if (!headerValue.StartsWith(basicPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var encoded = headerValue[basicPrefix.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(encoded))
+        {
+            return false;
+        }
+
+        string userAndPassword;
+        try
+        {
+            var decodedBytes = Convert.FromBase64String(encoded);
+            userAndPassword = Encoding.UTF8.GetString(decodedBytes);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        var separatorIndex = userAndPassword.IndexOf(':');
+        if (separatorIndex <= 0)
+        {
+            return false;
+        }
+
+        var username = userAndPassword[..separatorIndex];
+        var password = userAndPassword[(separatorIndex + 1)..];
+        return SecureEquals(username, options.Username!) &&
+               SecureEquals(password, options.Password!);
+    }
+
+    private static bool SecureEquals(string left, string right)
+    {
+        var leftBytes = Encoding.UTF8.GetBytes(left);
+        var rightBytes = Encoding.UTF8.GetBytes(right);
+        return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 
     private static bool ParseJobId(string jobId, out Guid flowId, out string triggerKey)

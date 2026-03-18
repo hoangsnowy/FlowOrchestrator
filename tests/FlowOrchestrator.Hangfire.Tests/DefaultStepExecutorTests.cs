@@ -35,7 +35,7 @@ public class DefaultStepExecutorTests
 
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be("Skipped");
+        result.Status.Should().Be(StepStatus.Skipped);
         result.FailedReason.Should().Contain("not found");
     }
 
@@ -53,7 +53,7 @@ public class DefaultStepExecutorTests
 
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be("Skipped");
+        result.Status.Should().Be(StepStatus.Skipped);
         result.FailedReason.Should().Contain("No handler");
     }
 
@@ -71,13 +71,13 @@ public class DefaultStepExecutorTests
         var handlerMeta = Substitute.For<IStepHandlerMetadata>();
         handlerMeta.Type.Returns("LogMessage");
         handlerMeta.ExecuteAsync(_serviceProvider, ctx, flow, step)
-            .Returns(new StepResult { Key = "step1", Status = "Succeeded", Result = "done" });
+            .Returns(new StepResult { Key = "step1", Status = StepStatus.Succeeded, Result = "done" });
 
         var executor = CreateExecutor(handlerMeta);
 
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be("Succeeded");
+        result.Status.Should().Be(StepStatus.Succeeded);
         result.Key.Should().Be("step1");
         await handlerMeta.Received(1).ExecuteAsync(_serviceProvider, ctx, flow, step);
     }
@@ -96,7 +96,7 @@ public class DefaultStepExecutorTests
         var handlerMeta = Substitute.For<IStepHandlerMetadata>();
         handlerMeta.Type.Returns("LogMessage");
         handlerMeta.ExecuteAsync(default!, default!, default!, default!)
-            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = "Succeeded" });
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
 
         var executor = CreateExecutor(handlerMeta);
 
@@ -119,12 +119,12 @@ public class DefaultStepExecutorTests
         var handlerMeta = Substitute.For<IStepHandlerMetadata>();
         handlerMeta.Type.Returns("LogMessage");
         handlerMeta.ExecuteAsync(default!, default!, default!, default!)
-            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = "Succeeded" });
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
 
         var executor = CreateExecutor(handlerMeta);
 
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be("Succeeded");
+        result.Status.Should().Be(StepStatus.Succeeded);
     }
 }

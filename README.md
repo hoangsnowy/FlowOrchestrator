@@ -93,9 +93,18 @@ From the Aspire dashboard you can:
 {
   "ConnectionStrings": {
     "FlowOrchestrator": "Server=(localdb)\\mssqllocaldb;Database=FlowOrchestrator;Trusted_Connection=True;TrustServerCertificate=True"
+  },
+  "FlowDashboard": {
+    "BasicAuth": {
+      "Username": "admin",
+      "Password": "change-me",
+      "Realm": "FlowOrchestrator Dashboard"
+    }
   }
 }
 ```
+
+`FlowDashboard:BasicAuth` is optional. Leave `Username`/`Password` empty to disable dashboard auth.
 
 2. Run the app:
 
@@ -110,6 +119,8 @@ The app starts on `http://localhost:5201` by default.
 ## 4. Using the dashboard
 
 Open `http://localhost:5201/flows` to access the built-in dashboard.
+If `FlowDashboard:BasicAuth` is configured, the browser will prompt for HTTP Basic credentials.
+Webhook endpoint (`/flows/api/webhook/{idOrSlug}`) is intentionally not protected by dashboard basic auth; use `webhookSecret` for webhook security.
 
 ### Pages
 
@@ -130,6 +141,15 @@ Open `http://localhost:5201/flows` to access the built-in dashboard.
 1. Go to **Flows** → click a flow card.
 2. Click the **Trigger** button.
 3. Switch to the **Runs** page to monitor execution.
+
+### Polling demo flow
+
+`PollingDemoFlow` (`00000000-0000-0000-0000-000000000003`) demonstrates real polling behavior using `CallExternalApi`:
+- `pollEnabled = true`
+- `pollMinAttempts = 3` (forces at least 3 poll attempts before success)
+- `pollIntervalSeconds = 5`
+
+This lets you observe **Pending -> Pending -> Succeeded** progression in the Runs timeline.
 
 ### Retrying a failed step
 

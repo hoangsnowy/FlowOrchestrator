@@ -10,7 +10,7 @@ public class StepMetadataTests
     {
         var step = new StepMetadata { Type = "A", RunAfter = new RunAfterCollection() };
 
-        step.ShouldExecute("anyStep", "Succeeded").Should().BeTrue();
+        step.ShouldExecute("anyStep", StepStatus.Succeeded).Should().BeTrue();
     }
 
     [Fact]
@@ -19,11 +19,11 @@ public class StepMetadataTests
         var step = new StepMetadata
         {
             Type = "B",
-            RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded", "Failed" } }
+            RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded, StepStatus.Failed } }
         };
 
-        step.ShouldExecute("step1", "Succeeded").Should().BeTrue();
-        step.ShouldExecute("step1", "Failed").Should().BeTrue();
+        step.ShouldExecute("step1", StepStatus.Succeeded).Should().BeTrue();
+        step.ShouldExecute("step1", StepStatus.Failed).Should().BeTrue();
     }
 
     [Fact]
@@ -32,10 +32,10 @@ public class StepMetadataTests
         var step = new StepMetadata
         {
             Type = "B",
-            RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } }
+            RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
         };
 
-        step.ShouldExecute("step1", "Failed").Should().BeFalse();
+        step.ShouldExecute("step1", StepStatus.Failed).Should().BeFalse();
     }
 
     [Fact]
@@ -44,23 +44,10 @@ public class StepMetadataTests
         var step = new StepMetadata
         {
             Type = "B",
-            RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } }
+            RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
         };
 
-        step.ShouldExecute("step2", "Succeeded").Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldExecute_CaseInsensitiveStatusMatch()
-    {
-        var step = new StepMetadata
-        {
-            Type = "B",
-            RunAfter = new RunAfterCollection { ["step1"] = new[] { "Succeeded" } }
-        };
-
-        step.ShouldExecute("step1", "succeeded").Should().BeTrue();
-        step.ShouldExecute("step1", "SUCCEEDED").Should().BeTrue();
+        step.ShouldExecute("step2", StepStatus.Succeeded).Should().BeFalse();
     }
 
     [Fact]
