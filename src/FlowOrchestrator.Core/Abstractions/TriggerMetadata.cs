@@ -1,7 +1,10 @@
+using System.Text.Json.Serialization;
+
 namespace FlowOrchestrator.Core.Abstractions;
 
 public sealed class TriggerMetadata
 {
-    public string Type { get; set; } = default!;
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public TriggerType Type { get; set; }
     public IDictionary<string, object?> Inputs { get; set; } = new Dictionary<string, object?>();
 }

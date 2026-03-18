@@ -167,6 +167,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .btn-sm-warning{background:var(--warn);color:#fff;border-color:var(--warn)}.btn-sm-warning:hover{background:#ec971f}
 .btn-sm-success{background:var(--success);color:#fff;border-color:var(--success)}.btn-sm-success:hover{background:#4cae4c}
 .btn-sm-ghost{background:var(--surface);color:var(--text-dim);border:1px solid var(--border)}.btn-sm-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.btn-sm-trigger{background:var(--surface);color:#8b5cf6;border:1px solid #a78bfa}.btn-sm-trigger:hover{background:#f5f3ff;border-color:#8b5cf6}
 .cron-input{font-family:'JetBrains Mono',monospace;font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:3px;width:140px;outline:none}
 .cron-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(51,122,183,.15)}
 .cron-cell{display:flex;align-items:center;gap:6px}
@@ -457,15 +458,24 @@ function renderFlowDetail() {
     $('fd-steps').innerHTML = '<div class="empty-msg">No steps defined in manifest.</div>';
   }
 
-  // Triggers tab
+  // Triggers tab - only Webhook trigger type has external URL for integration
   if (m && m.triggers && Object.keys(m.triggers).length > 0) {
     let rows = '';
-    const hasWebhookOrManual = Object.values(m.triggers).some(t => { const ty = (t.type||'').toLowerCase(); return ty === 'webhook' || ty === 'manual'; });
+    let triggerRowIdx = 0;
+    const hasWebhook = Object.values(m.triggers).some(t => { const ty = (t.type||'').toLowerCase(); return ty === 'webhook'; });
     for (const [key, trigger] of Object.entries(m.triggers)) {
-      const inputs = trigger.inputs ? Object.entries(trigger.inputs).map(([k,v]) => esc(k)+': '+esc(JSON.stringify(v))).join('<br>') : '\u2014';
+      const inputParts = trigger.inputs ? Object.entries(trigger.inputs).map(([k, v]) => {
+        if (k === 'webhookSecret' && typeof v === 'string') {
+          const id = 'ws-' + triggerRowIdx;
+          return esc(k) + ': <span id="' + id + '" data-secret="' + esc(v) + '">\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022</span> <button class="btn-sm btn-sm-ghost" onclick="toggleWebhookSecret(\'' + id + '\', this)">Show</button>';
+        }
+        return esc(k) + ': ' + esc(JSON.stringify(v));
+      }) : [];
+      const inputs = inputParts.length ? inputParts.join('<br>') : '\u2014';
+      triggerRowIdx++;
       const isWebhook = trigger.type && trigger.type.toLowerCase() === 'webhook';
       let urlCell = '';
-      if (isWebhook || (trigger.type && trigger.type.toLowerCase() === 'manual')) {
+      if (isWebhook) {
         const webhookBase = window.location.origin + '{{BASE_PATH}}' + '/api/webhook/';
         const urlByFlowId = webhookBase + selectedFlowDetail.id;
         urlCell = '<div class="webhook-url-cell"><code class="mono" style="font-size:11px">'+esc(urlByFlowId)+'</code><button class="btn btn-sm btn-sm-ghost" data-url="'+esc(urlByFlowId)+'" onclick="copyWebhookUrl(this.dataset.url)" title="Copy URL">Copy</button></div>';
@@ -473,7 +483,7 @@ function renderFlowDetail() {
       rows += '<tr><td class="mono" style="color:var(--accent)">'+esc(key)+'</td><td><span class="badge '+(isWebhook?'badge-cron':'')+'" style="'+(isWebhook?'background:#eef4fa;color:var(--accent);border:1px solid #c5ddf0':'background:var(--success-bg);color:var(--success-text)')+'">'+esc(trigger.type)+'</span></td><td class="mono" style="font-size:11px">'+inputs+'</td><td>'+urlCell+'</td></tr>';
     }
     let webhookSection = '';
-    if (hasWebhookOrManual) {
+    if (hasWebhook) {
       const webhookBase = window.location.origin + '{{BASE_PATH}}' + '/api/webhook/';
       const urlByFlowId = webhookBase + selectedFlowDetail.id;
       webhookSection = '<div class="webhook-section" style="margin-top:16px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)"><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-dim)">Webhook URL (for external clients)</div><div class="cron-cell" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><code class="mono" style="font-size:12px;flex:1;min-width:200px;word-break:break-all">'+esc(urlByFlowId)+'</code><button class="btn btn-sm btn-sm-primary" data-url="'+esc(urlByFlowId)+'" onclick="copyWebhookUrl(this.dataset.url)">Copy URL</button></div><div style="font-size:11px;color:var(--text-dim);margin-top:6px">POST JSON body to trigger. Use <code>X-Webhook-Key</code> header if webhookSecret is configured.</div></div>';
@@ -596,6 +606,21 @@ function copyWebhookUrl(url) {
   navigator.clipboard.writeText(url).then(() => alert('Webhook URL copied to clipboard.')).catch(() => alert('Copy failed.'));
 }
 
+function toggleWebhookSecret(cellId, btn) {
+  const cell = document.getElementById(cellId);
+  if (!cell || !btn) return;
+  const secret = cell.getAttribute('data-secret');
+  if (cell.dataset.visible === 'true') {
+    cell.textContent = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+    cell.dataset.visible = 'false';
+    btn.textContent = 'Show';
+  } else {
+    cell.textContent = secret;
+    cell.dataset.visible = 'true';
+    btn.textContent = 'Hide';
+  }
+}
+
 // Runs
 async function loadRuns() {
   try {
@@ -701,16 +726,15 @@ function renderScheduleTable(jobs, forFlow) {
     html += '<tr>';
     if (!forFlow) html += '<td style="font-weight:600">'+esc(j.flowName)+'</td>';
     html += '<td class="mono" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--accent)">'+esc(j.triggerKey)+'</td>'
-      +'<td><div class="cron-cell" id="cron-cell-'+esc(j.jobId)+'">'
-      +'<span class="badge-cron">'+esc(j.cron)+'</span>'
-      +'<button class="btn-sm btn-sm-ghost" onclick="startEditCron(\''+esc(j.jobId)+'\',\''+esc(j.cron)+'\')">&#9998;</button>'
-      +'</div></td>'
+      +'<td><span class="badge-cron">'+esc(j.cron)+'</span></td>'
       +'<td style="font-size:12px;color:var(--text-dim)">'+fmtDate(j.nextExecution)+'</td>'
       +'<td style="font-size:12px;color:var(--text-dim)">'+fmtDate(j.lastExecution)+'</td>'
       +'<td>'+scheduleBadge(j.lastJobState)+'</td>'
       +'<td><div class="schedule-actions">'
-      +'<button class="btn-sm btn-sm-primary" onclick="triggerScheduledJob(\''+esc(j.jobId)+'\')" title="Trigger now">&#9654;</button>'
-      +'<button class="btn-sm btn-sm-warning" onclick="pauseScheduledJob(\''+esc(j.jobId)+'\')" title="Remove recurring job">&#10074;&#10074;</button>'
+      +'<button class="btn-sm btn-sm-trigger" onclick="triggerScheduledJob(\''+esc(j.jobId)+'\')" title="Trigger now">&#9889;</button>'
+      +(j.paused
+        ?'<button class="btn-sm btn-sm-success" onclick="resumeScheduledJob(\''+esc(j.jobId)+'\')" title="Resume">&#9654;</button>'
+        :'<button class="btn-sm btn-sm-warning" onclick="pauseScheduledJob(\''+esc(j.jobId)+'\')" title="Pause">&#10074;&#10074;</button>')
       +'</div></td></tr>';
   }
   return html + '</tbody></table>';
@@ -750,7 +774,7 @@ async function triggerScheduledJob(jobId) {
 }
 
 async function pauseScheduledJob(jobId) {
-  if (!confirm('Pause scheduled job "'+jobId+'"? This removes the recurring job from Hangfire.')) return;
+  if (!confirm('Pause scheduled job? You can resume it later.')) return;
   try {
     const res = await fetch(BASE+'/schedules/'+encodeURIComponent(jobId)+'/pause', {method:'POST'});
     const data = await res.json();
@@ -770,42 +794,6 @@ async function resumeScheduledJob(jobId) {
       if (selectedFlowDetail) await loadFlowSchedule();
     } else { alert(data.error || 'Resume failed.'); }
   } catch(e) { alert('Failed to resume: '+e.message); }
-}
-
-function startEditCron(jobId, currentCron) {
-  const cell = $('cron-cell-'+jobId);
-  if (!cell) return;
-  cell.innerHTML =
-    '<input class="cron-input" id="cron-edit-'+jobId+'" value="'+esc(currentCron)+'" onkeydown="if(event.key===\'Enter\')saveCron(\''+esc(jobId)+'\');if(event.key===\'Escape\')cancelEditCron(\''+esc(jobId)+'\',\''+esc(currentCron)+'\')" />'
-    +'<button class="btn-sm btn-sm-success" onclick="saveCron(\''+esc(jobId)+'\')">&#10003;</button>'
-    +'<button class="btn-sm btn-sm-ghost" onclick="cancelEditCron(\''+esc(jobId)+'\',\''+esc(currentCron)+'\')">&#10005;</button>';
-  $('cron-edit-'+jobId).focus();
-}
-
-function cancelEditCron(jobId, oldCron) {
-  const cell = $('cron-cell-'+jobId);
-  if (!cell) return;
-  cell.innerHTML =
-    '<span class="badge-cron">'+esc(oldCron)+'</span>'
-    +'<button class="btn-sm btn-sm-ghost" onclick="startEditCron(\''+esc(jobId)+'\',\''+esc(oldCron)+'\')">&#9998;</button>';
-}
-
-async function saveCron(jobId) {
-  const input = $('cron-edit-'+jobId);
-  if (!input) return;
-  const newCron = input.value.trim();
-  if (!newCron) { alert('Cron expression cannot be empty.'); return; }
-  try {
-    const res = await fetch(BASE+'/schedules/'+encodeURIComponent(jobId)+'/cron', {
-      method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({cronExpression: newCron})
-    });
-    const data = await res.json();
-    if (data.success) {
-      await loadScheduled();
-      if (selectedFlowDetail) await loadFlowSchedule();
-    } else { alert(data.error || 'Update failed.'); }
-  } catch(e) { alert('Failed to update cron: '+e.message); }
 }
 
 // Refresh logic
