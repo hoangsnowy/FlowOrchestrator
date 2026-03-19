@@ -59,14 +59,34 @@ public sealed class SqlFlowRunStore : IFlowRunStore
 
     public async Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        await using var conn = new SqlConnection(_connectionString);
-        var sql = "SELECT Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, CompletedAt FROM FlowRuns";
-        if (flowId.HasValue)
-            sql += " WHERE FlowId = @FlowId";
-        sql += " ORDER BY StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY";
+        var page = await GetRunsPageAsync(flowId, null, skip, take);
+        return page.Runs;
+    }
 
-        var rows = await conn.QueryAsync<FlowRunRecord>(sql, new { FlowId = flowId, Skip = skip, Take = take });
-        return rows.AsList();
+    public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+        Guid? flowId = null,
+        string? status = null,
+        int skip = 0,
+        int take = 50)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var whereClauses = new List<string>();
+        if (flowId.HasValue)
+            whereClauses.Add("FlowId = @FlowId");
+        if (!string.IsNullOrWhiteSpace(status))
+            whereClauses.Add("Status = @Status");
+
+        var whereSql = whereClauses.Count > 0 ? $" WHERE {string.Join(" AND ", whereClauses)}" : string.Empty;
+        var countSql = $"SELECT COUNT(*) FROM FlowRuns{whereSql}";
+        var pageSql = "SELECT Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, CompletedAt FROM FlowRuns"
+            + whereSql
+            + " ORDER BY StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY";
+
+        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take };
+        var totalCount = await conn.ExecuteScalarAsync<int>(countSql, parameters);
+        var rows = await conn.QueryAsync<FlowRunRecord>(pageSql, parameters);
+
+        return (rows.AsList(), totalCount);
     }
 
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)

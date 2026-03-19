@@ -116,7 +116,15 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .filter-select:focus,.filter-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(51,122,183,.15)}
 .filter-select option{background:var(--surface)}
 .runs-split{display:flex;gap:0;flex:1;overflow:hidden;min-height:0}
-.runs-list-col{width:380px;border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;background:var(--surface)}
+.runs-list-col{width:380px;border-right:1px solid var(--border);overflow:hidden;flex-shrink:0;background:var(--surface);display:flex;flex-direction:column}
+.runs-list{flex:1;overflow-y:auto;min-height:0}
+.runs-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-top:1px solid var(--border);background:var(--surface2)}
+.runs-page-info{font-size:11px;color:var(--text-dim)}
+.runs-page-controls{display:flex;align-items:center;gap:6px}
+.runs-page-index{font-size:11px;color:var(--text-dim);min-width:68px;text-align:center}
+.btn-page{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer}
+.btn-page:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn-page:disabled{opacity:.45;cursor:not-allowed}
 .runs-detail-col{flex:1;overflow-y:auto;background:var(--surface2)}
 .run-item{padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:flex-start;gap:10px;transition:background .15s}
 .run-item:hover{background:var(--accent-light)}.run-item.active{background:var(--accent-light);border-left:3px solid var(--accent)}
@@ -271,8 +279,8 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
     <div class="page-header">
       <div class="page-title">Runs</div>
       <div class="runs-filters">
-        <select class="filter-select" id="runs-filter-flow" onchange="loadRuns()"><option value="">All Flows</option></select>
-        <select class="filter-select" id="runs-filter-status" onchange="filterRuns()">
+        <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()"><option value="">All Flows</option></select>
+        <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()">
           <option value="">All Statuses</option>
           <option value="Running">Running</option>
           <option value="Succeeded">Succeeded</option>
@@ -281,7 +289,10 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
       </div>
     </div>
     <div class="runs-split">
-      <div class="runs-list-col" id="runs-list"></div>
+      <div class="runs-list-col">
+        <div class="runs-list" id="runs-list"></div>
+        <div class="runs-pagination" id="runs-pagination"></div>
+      </div>
       <div class="runs-detail-col" id="runs-detail">
         <div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>
       </div>
@@ -307,6 +318,9 @@ const BASE = '{{BASE_PATH}}/api';
 let currentPage = 'overview';
 let allFlows = [];
 let allRuns = [];
+let runsTotal = 0;
+let runsPage = 1;
+const runsPageSize = 20;
 let selectedRunId = null;
 let selectedFlowDetail = null;
 
@@ -622,35 +636,93 @@ function toggleWebhookSecret(cellId, btn) {
 }
 
 // Runs
-async function loadRuns() {
-  try {
-    const flowFilter = $('runs-filter-flow').value;
-    let url = BASE+'/runs?take=100';
-    if (flowFilter) url += '&flowId='+flowFilter;
-    allRuns = await fetchJSON(url);
-    filterRuns();
-  } catch(e) { console.error('Runs load error', e); }
+function renderRunDetailEmpty() {
+  $('runs-detail').innerHTML = '<div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>';
 }
 
-function filterRuns() {
-  const statusFilter = $('runs-filter-status').value;
-  let filtered = allRuns;
-  if (statusFilter) filtered = filtered.filter(r => r.status === statusFilter);
+function onRunsFilterChange() {
+  runsPage = 1;
+  selectedRunId = null;
+  renderRunDetailEmpty();
+  loadRuns();
+}
 
-  $('runs-list').innerHTML = filtered.length === 0
+async function changeRunsPage(delta) {
+  const maxPage = Math.max(1, Math.ceil(runsTotal / runsPageSize));
+  const nextPage = runsPage + delta;
+  if (nextPage < 1 || nextPage > maxPage) return;
+
+  runsPage = nextPage;
+  selectedRunId = null;
+  renderRunDetailEmpty();
+  await loadRuns();
+}
+
+function renderRunsPagination() {
+  const maxPage = Math.max(1, Math.ceil(runsTotal / runsPageSize));
+  const hasRuns = runsTotal > 0;
+  const start = hasRuns ? ((runsPage - 1) * runsPageSize) + 1 : 0;
+  const end = hasRuns ? Math.min(runsPage * runsPageSize, runsTotal) : 0;
+
+  $('runs-pagination').innerHTML =
+    '<div class="runs-page-info">'+(hasRuns ? ('Showing '+start+'-'+end+' of '+runsTotal) : 'No runs')+'</div>'
+    +'<div class="runs-page-controls">'
+    +'<button class="btn-page" onclick="changeRunsPage(-1)"'+(runsPage<=1?' disabled':'')+'>Prev</button>'
+    +'<span class="runs-page-index">Page '+runsPage+'/'+maxPage+'</span>'
+    +'<button class="btn-page" onclick="changeRunsPage(1)"'+(runsPage>=maxPage || !hasRuns?' disabled':'')+'>Next</button>'
+    +'</div>';
+}
+
+function renderRuns() {
+  $('runs-list').innerHTML = allRuns.length === 0
     ? '<div class="empty-msg">No runs found.</div>'
-    : filtered.map(r =>
+    : allRuns.map(r =>
       '<div class="run-item '+(r.id===selectedRunId?'active':'')+'" onclick="selectRun(\''+r.id+'\')">'
       +'<div class="status-dot '+r.status+'"></div>'
       +'<div class="run-info"><div class="run-id">'+r.id.slice(0,8)+'\u2026</div>'
       +'<div class="run-meta">'+esc(r.flowName||'Unknown')+' \u00b7 '+fmtDate(r.startedAt)+'</div></div>'
       +'<span class="run-status-badge badge-'+r.status.toLowerCase()+'">'+r.status+'</span></div>'
     ).join('');
+
+  renderRunsPagination();
+
+  if (allRuns.length === 0) {
+    renderRunDetailEmpty();
+  }
+}
+
+async function loadRuns() {
+  try {
+    const flowFilter = $('runs-filter-flow').value;
+    const statusFilter = $('runs-filter-status').value;
+    const skip = (runsPage - 1) * runsPageSize;
+    let url = BASE+'/runs?includeTotal=true&take='+runsPageSize+'&skip='+skip;
+    if (flowFilter) url += '&flowId='+encodeURIComponent(flowFilter);
+    if (statusFilter) url += '&status='+encodeURIComponent(statusFilter);
+
+    const page = await fetchJSON(url);
+    allRuns = Array.isArray(page.items) ? page.items : [];
+    runsTotal = typeof page.total === 'number' ? page.total : allRuns.length;
+
+    const maxPage = Math.max(1, Math.ceil(runsTotal / runsPageSize));
+    if (runsTotal > 0 && runsPage > maxPage) {
+      runsPage = maxPage;
+      await loadRuns();
+      return;
+    }
+
+    if (selectedRunId && !allRuns.some(r => r.id === selectedRunId)) {
+      selectedRunId = null;
+      renderRunDetailEmpty();
+    }
+
+    renderRuns();
+  } catch(e) { console.error('Runs load error', e); }
 }
 
 async function selectRun(id) {
   selectedRunId = id;
-  filterRuns();
+  renderRuns();
   try {
     const run = await fetchJSON(BASE+'/runs/'+id);
     const steps = run.steps || [];

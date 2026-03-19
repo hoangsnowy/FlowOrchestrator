@@ -98,6 +98,26 @@ public class InMemoryFlowRunStoreTests
     }
 
     [Fact]
+    public async Task GetRunsPageAsync_FiltersByStatus_AndReturnsTotal()
+    {
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        var runId3 = Guid.NewGuid();
+
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", runId1, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow2", runId2, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow3", runId3, "manual", null, null);
+        await _sut.CompleteRunAsync(runId1, "Succeeded");
+        await _sut.CompleteRunAsync(runId2, "Succeeded");
+
+        var page = await _sut.GetRunsPageAsync(status: "Succeeded", skip: 0, take: 1);
+
+        page.TotalCount.Should().Be(2);
+        page.Runs.Should().HaveCount(1);
+        page.Runs[0].Status.Should().Be("Succeeded");
+    }
+
+    [Fact]
     public async Task GetRunDetailAsync_NonExistentRun_ReturnsNull()
     {
         var result = await _sut.GetRunDetailAsync(Guid.NewGuid());
