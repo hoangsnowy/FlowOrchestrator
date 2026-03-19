@@ -60,9 +60,7 @@ internal sealed class FlowSyncHostedService : IHostedService
                 continue;
 
             if (!isEnabled
-                || !trigger.Inputs.TryGetValue("cronExpression", out var cronObj)
-                || cronObj is not string cronExpression
-                || string.IsNullOrWhiteSpace(cronExpression))
+                || !trigger.TryGetCronExpression(out var cronExpression))
             {
                 _recurringJobManager.RemoveIfExists(jobId);
                 _logger.LogInformation("Removed recurring job {JobId} (disabled or missing cron).", jobId);

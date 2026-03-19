@@ -245,8 +245,31 @@ public static class DashboardServiceCollectionExtensions
         {
             var query = http.Request.Query;
             Guid? flowId = query.TryGetValue("flowId", out var flowIdValues) && Guid.TryParse(flowIdValues, out var fid) ? fid : null;
+            string? status = query.TryGetValue("status", out var statusValues) ? statusValues.ToString() : null;
             int skip = query.TryGetValue("skip", out var skipValues) && int.TryParse(skipValues, out var s) ? s : 0;
             int take = query.TryGetValue("take", out var takeValues) && int.TryParse(takeValues, out var t) ? t : 50;
+            bool includeTotal = query.TryGetValue("includeTotal", out var includeTotalValues)
+                && bool.TryParse(includeTotalValues, out var includeTotalParsed)
+                && includeTotalParsed;
+
+            if (includeTotal || !string.IsNullOrWhiteSpace(status))
+            {
+                var page = await store.GetRunsPageAsync(flowId, status, skip, take);
+                if (includeTotal)
+                {
+                    await http.Response.WriteAsJsonAsync(new
+                    {
+                        items = page.Runs,
+                        total = page.TotalCount,
+                        skip,
+                        take
+                    });
+                    return;
+                }
+
+                await http.Response.WriteAsJsonAsync(page.Runs);
+                return;
+            }
 
             var runs = await store.GetRunsAsync(flowId, skip, take);
             await http.Response.WriteAsJsonAsync(runs);

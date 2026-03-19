@@ -63,14 +63,23 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
 
     public Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        var query = _runs.Values.AsEnumerable();
-        if (flowId.HasValue)
-            query = query.Where(r => r.FlowId == flowId.Value);
-        IReadOnlyList<FlowRunRecord> result = query
+        IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null)
             .OrderByDescending(r => r.StartedAt)
             .Skip(skip).Take(take)
             .ToList();
         return Task.FromResult(result);
+    }
+
+    public Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+        Guid? flowId = null,
+        string? status = null,
+        int skip = 0,
+        int take = 50)
+    {
+        var filtered = ApplyRunsFilter(flowId, status).OrderByDescending(r => r.StartedAt).ToList();
+        var totalCount = filtered.Count;
+        IReadOnlyList<FlowRunRecord> runs = filtered.Skip(skip).Take(take).ToList();
+        return Task.FromResult((runs, totalCount));
     }
 
     public Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
@@ -127,5 +136,18 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         }
 
         return Task.CompletedTask;
+    }
+
+    private IEnumerable<FlowRunRecord> ApplyRunsFilter(Guid? flowId, string? status)
+    {
+        var query = _runs.Values.AsEnumerable();
+
+        if (flowId.HasValue)
+            query = query.Where(r => r.FlowId == flowId.Value);
+
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(r => string.Equals(r.Status, status, StringComparison.OrdinalIgnoreCase));
+
+        return query;
     }
 }
