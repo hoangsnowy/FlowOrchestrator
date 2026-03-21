@@ -63,7 +63,7 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
 
     public Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null)
+        IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null, null)
             .OrderByDescending(r => r.StartedAt)
             .Skip(skip).Take(take)
             .ToList();
@@ -74,9 +74,10 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         Guid? flowId = null,
         string? status = null,
         int skip = 0,
-        int take = 50)
+        int take = 50,
+        string? search = null)
     {
-        var filtered = ApplyRunsFilter(flowId, status).OrderByDescending(r => r.StartedAt).ToList();
+        var filtered = ApplyRunsFilter(flowId, status, search).OrderByDescending(r => r.StartedAt).ToList();
         var totalCount = filtered.Count;
         IReadOnlyList<FlowRunRecord> runs = filtered.Skip(skip).Take(take).ToList();
         return Task.FromResult((runs, totalCount));
@@ -138,7 +139,7 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         return Task.CompletedTask;
     }
 
-    private IEnumerable<FlowRunRecord> ApplyRunsFilter(Guid? flowId, string? status)
+    private IEnumerable<FlowRunRecord> ApplyRunsFilter(Guid? flowId, string? status, string? search)
     {
         var query = _runs.Values.AsEnumerable();
 
@@ -148,6 +149,34 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(r => string.Equals(r.Status, status, StringComparison.OrdinalIgnoreCase));
 
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            query = query.Where(r => MatchesRunSearch(r, search));
+        }
+
         return query;
+    }
+
+    private bool MatchesRunSearch(FlowRunRecord run, string search)
+    {
+        if (ContainsIgnoreCase(run.Id.ToString(), search)
+            || ContainsIgnoreCase(run.FlowName, search)
+            || ContainsIgnoreCase(run.TriggerKey, search)
+            || ContainsIgnoreCase(run.Status, search)
+            || ContainsIgnoreCase(run.BackgroundJobId, search))
+        {
+            return true;
+        }
+
+        return _steps.Values.Any(s =>
+            s.RunId == run.Id
+            && (ContainsIgnoreCase(s.StepKey, search)
+                || ContainsIgnoreCase(s.ErrorMessage, search)
+                || ContainsIgnoreCase(s.OutputJson, search)));
+    }
+
+    private static bool ContainsIgnoreCase(string? value, string search)
+    {
+        return !string.IsNullOrEmpty(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
 }

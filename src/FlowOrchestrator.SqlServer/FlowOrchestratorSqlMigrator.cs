@@ -65,8 +65,6 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
                 [StartedAt]       DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
                 [CompletedAt]     DATETIMEOFFSET   NULL
             );
-            CREATE INDEX IX_FlowRuns_FlowId ON [FlowRuns]([FlowId]);
-            CREATE INDEX IX_FlowRuns_Status ON [FlowRuns]([Status]);
         END
 
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowSteps')
@@ -84,6 +82,33 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
                 [CompletedAt]  DATETIMEOFFSET   NULL,
                 CONSTRAINT PK_FlowSteps PRIMARY KEY ([RunId], [StepKey])
             );
+        END
+
+        IF EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowRuns')
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_FlowId' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+                CREATE INDEX IX_FlowRuns_FlowId ON [FlowRuns]([FlowId]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_Status' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+                CREATE INDEX IX_FlowRuns_Status ON [FlowRuns]([Status]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_StartedAt' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+                CREATE INDEX IX_FlowRuns_StartedAt ON [FlowRuns]([StartedAt] DESC)
+                INCLUDE ([FlowId], [FlowName], [Status], [TriggerKey], [BackgroundJobId], [CompletedAt]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_FlowId_Status_StartedAt' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+                CREATE INDEX IX_FlowRuns_FlowId_Status_StartedAt ON [FlowRuns]([FlowId], [Status], [StartedAt] DESC)
+                INCLUDE ([FlowName], [TriggerKey], [BackgroundJobId], [CompletedAt]);
+        END
+
+        IF EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowSteps')
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_RunId_StartedAt' AND object_id = OBJECT_ID(N'[FlowSteps]'))
+                CREATE INDEX IX_FlowSteps_RunId_StartedAt ON [FlowSteps]([RunId], [StartedAt])
+                INCLUDE ([StepKey], [StepType], [Status], [JobId], [CompletedAt]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_StepKey_RunId' AND object_id = OBJECT_ID(N'[FlowSteps]'))
+                CREATE INDEX IX_FlowSteps_StepKey_RunId ON [FlowSteps]([StepKey], [RunId]);
         END
         """;
 }

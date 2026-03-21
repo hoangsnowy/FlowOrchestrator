@@ -8,6 +8,7 @@ public sealed class FlowRunRecord
     public string Status { get; set; } = default!;
     public string? TriggerKey { get; set; }
     public string? TriggerDataJson { get; set; }
+    public IReadOnlyDictionary<string, string>? TriggerHeaders { get; set; }
     public string? BackgroundJobId { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

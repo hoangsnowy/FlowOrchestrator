@@ -118,6 +118,100 @@ public class InMemoryFlowRunStoreTests
     }
 
     [Fact]
+    public async Task GetRunsPageAsync_SearchesByRunFields()
+    {
+        var targetRunId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "OrderPipeline", targetRunId, "manual-order", null, "bg-job-1001");
+        await _sut.StartRunAsync(Guid.NewGuid(), "EmailPipeline", Guid.NewGuid(), "manual-email", null, "bg-job-1002");
+
+        var page = await _sut.GetRunsPageAsync(search: "job-1001");
+
+        page.TotalCount.Should().Be(1);
+        page.Runs.Should().ContainSingle();
+        page.Runs[0].Id.Should().Be(targetRunId);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_SearchesByStepKey()
+    {
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", runId1, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow2", runId2, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId1, "validateOrder", "ValidateOrder", null, null);
+        await _sut.RecordStepStartAsync(runId2, "sendEmail", "SendEmail", null, null);
+
+        var page = await _sut.GetRunsPageAsync(search: "validate");
+
+        page.TotalCount.Should().Be(1);
+        page.Runs.Should().ContainSingle();
+        page.Runs[0].Id.Should().Be(runId1);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_SearchesByStepErrorMessage()
+    {
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", runId1, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow2", runId2, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId1, "payment", "Payment", null, null);
+        await _sut.RecordStepStartAsync(runId2, "notify", "Notify", null, null);
+        await _sut.RecordStepCompleteAsync(runId1, "payment", "Failed", null, "Payment timeout on gateway");
+        await _sut.RecordStepCompleteAsync(runId2, "notify", "Failed", null, "Template rendering failed");
+
+        var page = await _sut.GetRunsPageAsync(search: "timeout");
+
+        page.TotalCount.Should().Be(1);
+        page.Runs.Should().ContainSingle();
+        page.Runs[0].Id.Should().Be(runId1);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_SearchesByStepOutputJson()
+    {
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", runId1, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow2", runId2, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId1, "payment", "Payment", null, null);
+        await _sut.RecordStepStartAsync(runId2, "notify", "Notify", null, null);
+        await _sut.RecordStepCompleteAsync(runId1, "payment", "Succeeded", "{\"transactionId\":\"tx-7788\"}", null);
+        await _sut.RecordStepCompleteAsync(runId2, "notify", "Succeeded", "{\"message\":\"ok\"}", null);
+
+        var page = await _sut.GetRunsPageAsync(search: "tx-7788");
+
+        page.TotalCount.Should().Be(1);
+        page.Runs.Should().ContainSingle();
+        page.Runs[0].Id.Should().Be(runId1);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_CombinesFlowStatusSearchAndPagination()
+    {
+        var targetFlowId = Guid.NewGuid();
+        var runId1 = Guid.NewGuid();
+        var runId2 = Guid.NewGuid();
+        var runId3 = Guid.NewGuid();
+        await _sut.StartRunAsync(targetFlowId, "FlowA", runId1, "manual", null, null);
+        await _sut.StartRunAsync(targetFlowId, "FlowA", runId2, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "FlowB", runId3, "manual", null, null);
+        await _sut.CompleteRunAsync(runId1, "Succeeded");
+        await _sut.CompleteRunAsync(runId2, "Failed");
+        await _sut.CompleteRunAsync(runId3, "Failed");
+        await _sut.RecordStepStartAsync(runId2, "process", "Process", null, null);
+        await _sut.RecordStepStartAsync(runId3, "process", "Process", null, null);
+        await _sut.RecordStepCompleteAsync(runId2, "process", "Failed", null, "fatal error on flow A");
+        await _sut.RecordStepCompleteAsync(runId3, "process", "Failed", null, "fatal error on flow B");
+
+        var page = await _sut.GetRunsPageAsync(flowId: targetFlowId, status: "Failed", skip: 0, take: 1, search: "fatal");
+
+        page.TotalCount.Should().Be(1);
+        page.Runs.Should().ContainSingle();
+        page.Runs[0].Id.Should().Be(runId2);
+    }
+
+    [Fact]
     public async Task GetRunDetailAsync_NonExistentRun_ReturnsNull()
     {
         var result = await _sut.GetRunDetailAsync(Guid.NewGuid());

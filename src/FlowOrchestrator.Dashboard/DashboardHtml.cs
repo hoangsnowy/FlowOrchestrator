@@ -1,11 +1,55 @@
+using System.Net;
+
 namespace FlowOrchestrator.Dashboard;
 
 internal static class DashboardHtml
 {
-    public static string Render(string basePath)
+    public static string Render(string basePath, FlowDashboardBrandingOptions? branding = null)
     {
         var bp = basePath.TrimEnd('/');
-        return Template.Replace("{{BASE_PATH}}", bp);
+        var options = branding ?? new FlowDashboardBrandingOptions();
+        var title = string.IsNullOrWhiteSpace(options.Title) ? "FlowOrchestrator Dashboard" : options.Title;
+        var pageTitle = WebUtility.HtmlEncode(title);
+        var subtitle = string.IsNullOrWhiteSpace(options.Subtitle) ? "Dashboard" : options.Subtitle;
+        var sidebarSubtitle = WebUtility.HtmlEncode(subtitle);
+        var logoHtml = BuildLogoHtml(options.LogoUrl);
+
+        return Template
+            .Replace("{{BASE_PATH}}", bp, StringComparison.Ordinal)
+            .Replace("{{PAGE_TITLE}}", pageTitle, StringComparison.Ordinal)
+            .Replace("{{BRAND_TITLE}}", pageTitle, StringComparison.Ordinal)
+            .Replace("{{BRAND_SUBTITLE}}", sidebarSubtitle, StringComparison.Ordinal)
+            .Replace("{{BRAND_LOGO}}", logoHtml, StringComparison.Ordinal);
+    }
+
+    private static string BuildLogoHtml(string? logoUrl)
+    {
+        if (string.IsNullOrWhiteSpace(logoUrl))
+        {
+            return "&#9889;";
+        }
+
+        var value = logoUrl.Trim();
+        if (value.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "&#9889;";
+        }
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out var absoluteUri))
+        {
+            var allowed = string.Equals(absoluteUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(absoluteUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+            if (!allowed)
+            {
+                return "&#9889;";
+            }
+        }
+        else if (!Uri.TryCreate(value, UriKind.Relative, out _))
+        {
+            return "&#9889;";
+        }
+
+        return $"<img src=\"{WebUtility.HtmlEncode(value)}\" alt=\"logo\" onerror=\"this.onerror=null;this.parentElement.innerHTML='&#9889;';\" />";
     }
 
     private const string Template = """
@@ -14,7 +58,7 @@ internal static class DashboardHtml
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>FlowOrchestrator Dashboard</title>
+<title>{{PAGE_TITLE}}</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
 :root{--bg:#f4f4f5;--surface:#fff;--surface2:#f9fafb;--border:#e5e7eb;--border-dark:#d1d5db;--accent:#337ab7;--accent-hover:#286090;--accent-light:#eef4fa;--warn:#f0ad4e;--warn-bg:#fcf8e3;--warn-border:#faebcc;--warn-text:#8a6d3b;--danger:#d9534f;--danger-bg:#f2dede;--danger-border:#ebccd1;--danger-text:#a94442;--success:#5cb85c;--success-bg:#dff0d8;--success-border:#d6e9c6;--success-text:#3c763d;--muted:#6b7280;--text:#1f2937;--text-dim:#6b7280;--text-light:#9ca3af;--sidebar-w:220px;--radius:4px}
@@ -28,6 +72,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .sidebar{width:var(--sidebar-w);background:#2d3e50;display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:10}
 .sidebar-brand{padding:16px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
 .sidebar-brand .logo{width:30px;height:30px;background:var(--accent);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;color:#fff}
+.sidebar-brand .logo img{width:100%;height:100%;object-fit:cover;border-radius:4px;display:block}
 .sidebar-brand h1{font-size:13px;font-weight:700;color:#fff;line-height:1.3}
 .sidebar-brand span{display:block;font-size:10px;font-weight:400;color:rgba(255,255,255,.5);margin-top:1px}
 .sidebar-nav{flex:1;padding:8px 0}
@@ -111,10 +156,11 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .json-viewer{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto;line-height:1.6}
 
 /* Runs */
-.runs-filters{display:flex;gap:8px;flex-wrap:wrap}
+.runs-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}
 .filter-select,.filter-input{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;color:var(--text);font-size:12px;font-family:inherit;outline:none}
 .filter-select:focus,.filter-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(51,122,183,.15)}
 .filter-select option{background:var(--surface)}
+.runs-search{width:340px;max-width:48vw;min-height:34px;padding:7px 12px;font-size:13px}
 .runs-split{display:flex;gap:0;flex:1;overflow:hidden;min-height:0}
 .runs-list-col{width:380px;border-right:1px solid var(--border);overflow:hidden;flex-shrink:0;background:var(--surface);display:flex;flex-direction:column}
 .runs-list{flex:1;overflow-y:auto;min-height:0}
@@ -157,6 +203,10 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .step-timing{margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap}
 .step-error{margin-top:6px;padding:8px 10px;background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--danger-text);word-break:break-all}
 .step-output{margin-top:6px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);word-break:break-all;max-height:80px;overflow-y:auto}
+.step-detail{margin-top:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2)}
+.step-detail-title{font-size:11px;font-weight:600;color:var(--text);padding:7px 10px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);background:var(--surface)}
+.step-detail-body{padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto;color:var(--text)}
+.step-detail.step-detail-error .step-detail-body{background:var(--danger-bg);color:var(--danger-text)}
 .step-actions{margin-top:6px;display:flex;gap:6px}
 .badge-cron{background:#eef4fa;color:var(--accent);border:1px solid #c5ddf0;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px}
 .badge-paused{background:#f3f4f6;color:var(--text-dim);border:1px solid #e5e7eb}
@@ -189,8 +239,8 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 <!-- Sidebar -->
 <aside class="sidebar">
   <div class="sidebar-brand">
-    <div class="logo">&#9889;</div>
-    <h1>FlowOrchestrator<span>Dashboard</span></h1>
+    <div class="logo">{{BRAND_LOGO}}</div>
+    <h1>{{BRAND_TITLE}}<span>{{BRAND_SUBTITLE}}</span></h1>
   </div>
   <nav class="sidebar-nav">
     <div class="nav-item active" data-page="overview" onclick="navigate('overview')">
@@ -210,7 +260,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
       Scheduled
     </div>
   </nav>
-  <div class="sidebar-footer"><span class="pulse-dot"></span> Auto-refresh 3s</div>
+  <div class="sidebar-footer"><span class="pulse-dot"></span> Auto-refresh 10s</div>
 </aside>
 
 <div class="main-area">
@@ -279,6 +329,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
     <div class="page-header">
       <div class="page-title">Runs</div>
       <div class="runs-filters">
+        <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)"/>
         <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()"><option value="">All Flows</option></select>
         <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()">
           <option value="">All Statuses</option>
@@ -321,6 +372,7 @@ let allRuns = [];
 let runsTotal = 0;
 let runsPage = 1;
 const runsPageSize = 20;
+let runsSearchDebounceTimer = null;
 let selectedRunId = null;
 let selectedFlowDetail = null;
 
@@ -330,6 +382,43 @@ function fmt(iso) { if (!iso) return '\u2014'; return new Date(iso).toLocaleTime
 function fmtDate(iso) { if (!iso) return '\u2014'; const d=new Date(iso); return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour12:false}); }
 function duration(s,e) { if(!s) return ''; const ms=(e?new Date(e):new Date())-new Date(s); return ms<1000?ms+'ms':(ms/1000).toFixed(1)+'s'; }
 function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function prettyJson(raw) {
+  if (raw === null || raw === undefined) return '\u2014';
+  if (typeof raw === 'object') return esc(JSON.stringify(raw, null, 2));
+
+  const text = String(raw);
+  if (!text.trim()) return '\u2014';
+
+  try {
+    return esc(JSON.stringify(JSON.parse(text), null, 2));
+  } catch {
+    return esc(text);
+  }
+}
+function renderDetailPanel(title, raw, openByDefault, variant) {
+  if (raw === null || raw === undefined) return '';
+  if (typeof raw === 'string' && !raw.trim()) return '';
+  if (typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length === 0) return '';
+
+  const cssClass = variant ? ' step-detail-' + variant : '';
+  return '<div class="step-detail' + cssClass + '">'
+    + '<div class="step-detail-title">' + esc(title) + '</div>'
+    + '<div class="step-detail-body">' + prettyJson(raw) + '</div>'
+    + '</div>';
+}
+function renderRunTriggerPanels(run) {
+  const dataPanel = renderDetailPanel('Trigger Data', run.triggerDataJson, false, null);
+  const headersPanel = renderDetailPanel('Trigger Headers', run.triggerHeaders, false, null);
+  if (!dataPanel && !headersPanel) return '';
+
+  return '<div style="margin-bottom:10px">' + dataPanel + headersPanel + '</div>';
+}
+function renderStepDebugPanels(step) {
+  const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
+  const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
+  const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
+  return inputPanel + outputPanel + errorPanel;
+}
 function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
 
 function navigate(page) {
@@ -640,11 +729,36 @@ function renderRunDetailEmpty() {
   $('runs-detail').innerHTML = '<div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>';
 }
 
+function isRunsAutoRefreshBlocked() {
+  if (runsPage > 1) return true;
+  const list = $('runs-list');
+  const detail = $('runs-detail');
+  return (list && list.scrollTop > 24) || (detail && detail.scrollTop > 24);
+}
+
 function onRunsFilterChange() {
   runsPage = 1;
   selectedRunId = null;
   renderRunDetailEmpty();
   loadRuns();
+}
+
+function onRunsSearchInput() {
+  if (runsSearchDebounceTimer) {
+    clearTimeout(runsSearchDebounceTimer);
+  }
+
+  runsSearchDebounceTimer = setTimeout(() => {
+    onRunsFilterChange();
+  }, 300);
+}
+
+function onRunsSearchKeydown(event) {
+  if (event.key !== 'Enter') return;
+  if (runsSearchDebounceTimer) {
+    clearTimeout(runsSearchDebounceTimer);
+  }
+  onRunsFilterChange();
 }
 
 async function changeRunsPage(delta) {
@@ -673,8 +787,11 @@ function renderRunsPagination() {
     +'</div>';
 }
 
-function renderRuns() {
-  $('runs-list').innerHTML = allRuns.length === 0
+function renderRuns(preserveScroll) {
+  const runsListEl = $('runs-list');
+  const listScrollTop = preserveScroll ? runsListEl.scrollTop : 0;
+
+  runsListEl.innerHTML = allRuns.length === 0
     ? '<div class="empty-msg">No runs found.</div>'
     : allRuns.map(r =>
       '<div class="run-item '+(r.id===selectedRunId?'active':'')+'" onclick="selectRun(\''+r.id+'\')">'
@@ -684,6 +801,10 @@ function renderRuns() {
       +'<span class="run-status-badge badge-'+r.status.toLowerCase()+'">'+r.status+'</span></div>'
     ).join('');
 
+  if (preserveScroll) {
+    runsListEl.scrollTop = listScrollTop;
+  }
+
   renderRunsPagination();
 
   if (allRuns.length === 0) {
@@ -691,14 +812,16 @@ function renderRuns() {
   }
 }
 
-async function loadRuns() {
+async function loadRuns(preserveScroll) {
   try {
     const flowFilter = $('runs-filter-flow').value;
     const statusFilter = $('runs-filter-status').value;
+    const searchFilter = $('runs-filter-search').value.trim();
     const skip = (runsPage - 1) * runsPageSize;
     let url = BASE+'/runs?includeTotal=true&take='+runsPageSize+'&skip='+skip;
     if (flowFilter) url += '&flowId='+encodeURIComponent(flowFilter);
     if (statusFilter) url += '&status='+encodeURIComponent(statusFilter);
+    if (searchFilter) url += '&search='+encodeURIComponent(searchFilter);
 
     const page = await fetchJSON(url);
     allRuns = Array.isArray(page.items) ? page.items : [];
@@ -707,7 +830,7 @@ async function loadRuns() {
     const maxPage = Math.max(1, Math.ceil(runsTotal / runsPageSize));
     if (runsTotal > 0 && runsPage > maxPage) {
       runsPage = maxPage;
-      await loadRuns();
+      await loadRuns(preserveScroll);
       return;
     }
 
@@ -716,13 +839,15 @@ async function loadRuns() {
       renderRunDetailEmpty();
     }
 
-    renderRuns();
+    renderRuns(preserveScroll);
   } catch(e) { console.error('Runs load error', e); }
 }
 
-async function selectRun(id) {
+async function selectRun(id, preserveScroll) {
+  const detailEl = $('runs-detail');
+  const detailScrollTop = preserveScroll && detailEl ? detailEl.scrollTop : 0;
   selectedRunId = id;
-  renderRuns();
+  renderRuns(preserveScroll);
   try {
     const run = await fetchJSON(BASE+'/runs/'+id);
     const steps = run.steps || [];
@@ -737,9 +862,13 @@ async function selectRun(id) {
       +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
       +'</div></div>'
       +'<div style="padding:16px 18px">'
+      +renderRunTriggerPanels(run)
       +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
       +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
       +'</div>';
+    if (preserveScroll) {
+      $('runs-detail').scrollTop = detailScrollTop;
+    }
   } catch(e) { console.error('Run detail error', e); }
 }
 
@@ -757,8 +886,7 @@ function renderTimeline(steps, runId) {
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
       +'</div></div>'
       +'<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'
-      +(s.errorMessage?'<div class="step-error">\u26a0 '+esc(s.errorMessage)+'</div>':'')
-      +(s.outputJson?'<div class="step-output">\u2192 '+esc(s.outputJson)+'</div>':'')
+      +renderStepDebugPanels(s)
       +'</div></div>';
   }
   return html + '</div>';
@@ -874,14 +1002,15 @@ async function refresh() {
     if (currentPage === 'overview') await loadOverview();
     if (currentPage === 'flows') await loadFlows();
     if (currentPage === 'runs') {
-      await loadRuns();
-      if (selectedRunId) await selectRun(selectedRunId);
+      if (isRunsAutoRefreshBlocked()) return;
+      await loadRuns(true);
+      if (selectedRunId) await selectRun(selectedRunId, true);
     }
     if (currentPage === 'scheduled') await loadScheduled();
   } catch(e) {}
 }
 
-setInterval(refresh, 3000);
+setInterval(refresh, 10000);
 refresh();
 </script>
 </body>

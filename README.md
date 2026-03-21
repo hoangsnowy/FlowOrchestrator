@@ -102,6 +102,11 @@ From the Aspire dashboard you can:
     "FlowOrchestrator": "Server=(localdb)\\mssqllocaldb;Database=FlowOrchestrator;Trusted_Connection=True;TrustServerCertificate=True"
   },
   "FlowDashboard": {
+    "Branding": {
+      "Title": "FlowOrchestrator",
+      "Subtitle": "FlowRUN",
+      "LogoUrl": "/icon.png"
+    },
     "BasicAuth": {
       "Username": "admin",
       "Password": "change-me",
@@ -111,6 +116,7 @@ From the Aspire dashboard you can:
 }
 ```
 
+`FlowDashboard:Branding` is optional. If `LogoUrl` is empty or invalid, dashboard falls back to the default logo icon.
 `FlowDashboard:BasicAuth` is optional. Leave `Username`/`Password` empty to disable dashboard auth.
 
 2. Run the app:
@@ -141,7 +147,7 @@ Manual trigger and webhook endpoints capture request body plus non-sensitive hea
   - DAG visualization (step dependency graph rendered as SVG)
   - Raw JSON manifest viewer
   - Enable/disable toggle and trigger button
-- **Runs**: Filterable run list (by flow, by status). Click a run to see the step-by-step timeline with timing, outputs, and errors. Failed steps show a **Retry** button inline.
+- **Runs**: Filterable run list (by flow, by status, by search text). Search supports run fields (`id`, `flowName`, `triggerKey`, `status`, `backgroundJobId`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to see the step-by-step timeline with timing, outputs, and errors. Failed steps show a **Retry** button inline.
 - **Scheduled**: Dedicated page listing all Hangfire recurring jobs with flow name, trigger key, cron expression, next/last execution, and last status. Actions: trigger immediately, pause, and inline cron expression editing.
 
 ### Triggering a flow from the dashboard
@@ -197,6 +203,7 @@ GET http://localhost:5201/flows/api/runs/{runId}
 ```http
 GET http://localhost:5201/flows/api/runs
 GET http://localhost:5201/flows/api/runs?flowId={flowId}
+GET http://localhost:5201/flows/api/runs?status=Failed&search=timeout&includeTotal=true&skip=0&take=20
 GET http://localhost:5201/flows/api/runs/active
 GET http://localhost:5201/flows/api/runs/stats
 ```
@@ -338,7 +345,7 @@ All endpoints are served under the base path configured in `MapFlowDashboard(bas
 | `POST` | `/flows/api/flows/{id}/trigger` | Trigger a flow (creates a new run via Hangfire) |
 | `POST` | `/flows/api/webhook/{idOrSlug}` | Webhook endpoint: trigger by flow ID or slug. Optional `X-Webhook-Key` header when `webhookSecret` is configured |
 | `GET` | `/flows/api/handlers` | List registered step handler types |
-| `GET` | `/flows/api/runs` | List runs (`?flowId=`, `?skip=`, `?take=`) |
+| `GET` | `/flows/api/runs` | List runs (`?flowId=`, `?status=`, `?search=`, `?includeTotal=`, `?skip=`, `?take=`) |
 | `GET` | `/flows/api/runs/active` | List currently running flows |
 | `GET` | `/flows/api/runs/stats` | Dashboard statistics |
 | `GET` | `/flows/api/runs/{id}` | Run detail with steps |

@@ -96,7 +96,8 @@ public sealed class CallExternalApiStep : IStepHandler
             Key = step.Key,
             Status = StepStatus.Pending,
             DelayNextStep = TimeSpan.FromSeconds(intervalSeconds),
-            Result = result
+            
+             = result
         };
     }
 
