@@ -5,4 +5,5 @@ public interface ITrigger
     string Key { get; }
     string Type { get; }
     object? Data { get; }
+    IReadOnlyDictionary<string, string>? Headers { get; }
 }

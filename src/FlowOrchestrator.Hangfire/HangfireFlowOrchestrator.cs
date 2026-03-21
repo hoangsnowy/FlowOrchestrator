@@ -51,27 +51,34 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 
     private async ValueTask EnsureTriggerDataAsync(IExecutionContext ctx)
     {
-        if (ctx.TriggerData is not null)
+        // Prefer the repository as the authoritative source. When RunStepAsync is
+        // invoked as a Hangfire background job, ctx.TriggerData may have been
+        // corrupted during Hangfire (de)serialization (e.g. JsonElement → JObject),
+        // so a non-null value on ctx is not a reliable signal that the data is valid.
+        var fromRepo = await _outputsRepository.GetTriggerDataAsync(ctx.RunId).ConfigureAwait(false);
+        if (fromRepo is not null)
         {
-            return;
+            ctx.TriggerData = fromRepo;
         }
-
-        if (ctx is ITriggerContext triggerContext && triggerContext.Trigger is not null)
+        else if (ctx.TriggerData is null)
         {
-            ctx.TriggerData = triggerContext.Trigger.Data;
-            if (ctx.TriggerData is not null)
+            if (ctx is ITriggerContext triggerContext && triggerContext.Trigger is not null)
             {
-                return;
+                ctx.TriggerData = triggerContext.Trigger.Data;
             }
         }
 
-        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(ctx.RunId).ConfigureAwait(false);
+        if (ctx.TriggerHeaders is null)
+        {
+            ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(ctx.RunId).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask<object?> TriggerAsync(ITriggerContext triggerContext, PerformContext? performContext = null)
     {
         triggerContext.RunId = triggerContext.RunId == Guid.Empty ? Guid.NewGuid() : triggerContext.RunId;
         triggerContext.TriggerData = triggerContext.Trigger.Data;
+        triggerContext.TriggerHeaders = triggerContext.Trigger.Headers;
         _contextAccessor.CurrentContext = triggerContext;
 
         try

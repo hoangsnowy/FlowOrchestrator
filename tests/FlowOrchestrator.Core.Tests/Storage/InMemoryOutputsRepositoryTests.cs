@@ -40,6 +40,26 @@ public class InMemoryOutputsRepositoryTests
     }
 
     [Fact]
+    public async Task SaveAndGetTriggerHeaders_RoundTrip()
+    {
+        var flow = CreateFlow();
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Correlation-Id"] = "corr-123",
+            ["Content-Type"] = "application/json"
+        };
+        var trigger = new Trigger("manual", "Manual", new { foo = "bar" }, headers);
+        var ctx = new TriggerContext { RunId = Guid.NewGuid(), Flow = flow, Trigger = trigger };
+
+        await _sut.SaveTriggerHeadersAsync(ctx, flow, trigger);
+        var result = await _sut.GetTriggerHeadersAsync(ctx.RunId);
+
+        result.Should().NotBeNull();
+        result!["X-Correlation-Id"].Should().Be("corr-123");
+        result["content-type"].Should().Be("application/json");
+    }
+
+    [Fact]
     public async Task SaveAndGetStepOutput_RoundTrip()
     {
         var flow = CreateFlow();

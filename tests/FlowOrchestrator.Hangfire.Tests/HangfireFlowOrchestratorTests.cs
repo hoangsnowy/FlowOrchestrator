@@ -205,6 +205,34 @@ public class HangfireFlowOrchestratorTests
     }
 
     [Fact]
+    public async Task RunStepAsync_LoadsTriggerHeadersFromRepository_WhenMissingOnContext()
+    {
+        var sut = CreateSut();
+        var flow = CreateFlow();
+        var runId = Guid.NewGuid();
+        var triggerHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Request-Id"] = "req-777"
+        };
+        var ctx = new Core.Execution.ExecutionContext { RunId = runId };
+        var step = new StepInstance("step1", "LogMessage") { RunId = runId };
+        IExecutionContext? capturedContext = null;
+
+        _outputsRepo.GetTriggerDataAsync(runId).Returns((object?)null);
+        _outputsRepo.GetTriggerHeadersAsync(runId).Returns(triggerHeaders);
+
+        var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
+        _stepExecutor.ExecuteAsync(Arg.Do<IExecutionContext>(c => capturedContext = c), flow, step).Returns(stepResult);
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
+
+        await sut.RunStepAsync(ctx, flow, step);
+
+        await _outputsRepo.Received(1).GetTriggerHeadersAsync(runId);
+        capturedContext.Should().NotBeNull();
+        capturedContext!.TriggerHeaders.Should().BeSameAs(triggerHeaders);
+    }
+
+    [Fact]
     public async Task RunStepAsync_CompletesRunWhenNoNextStep()
     {
         var sut = CreateSut();

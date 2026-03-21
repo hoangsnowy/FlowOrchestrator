@@ -24,9 +24,9 @@ public class FlowExecutorTests
         return flow;
     }
 
-    private static ITriggerContext CreateTriggerContext(IFlowDefinition flow)
+    private static ITriggerContext CreateTriggerContext(IFlowDefinition flow, IReadOnlyDictionary<string, string>? headers = null)
     {
-        var trigger = new Trigger("manual", "Manual", new { source = "test" });
+        var trigger = new Trigger("manual", "Manual", new { source = "test" }, headers);
         return new TriggerContext
         {
             RunId = Guid.NewGuid(),
@@ -38,6 +38,10 @@ public class FlowExecutorTests
     [Fact]
     public async Task TriggerFlow_FindsEntryStep_WithNoRunAfter()
     {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Correlation-Id"] = "corr-1"
+        };
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage", RunAfter = new RunAfterCollection() },
@@ -48,7 +52,7 @@ public class FlowExecutorTests
             }
         };
         var flow = CreateFlow(steps);
-        var ctx = CreateTriggerContext(flow);
+        var ctx = CreateTriggerContext(flow, headers);
 
         var result = await _sut.TriggerFlow(ctx);
 
@@ -56,8 +60,11 @@ public class FlowExecutorTests
         result.Type.Should().Be("LogMessage");
         result.RunId.Should().Be(ctx.RunId);
         ctx.TriggerData.Should().BeSameAs(ctx.Trigger.Data);
+        ctx.TriggerHeaders.Should().BeSameAs(headers);
         result.TriggerData.Should().BeSameAs(ctx.TriggerData);
+        result.TriggerHeaders.Should().BeSameAs(headers);
         await _outputsRepo.Received(1).SaveTriggerDataAsync(ctx, flow, ctx.Trigger);
+        await _outputsRepo.Received(1).SaveTriggerHeadersAsync(ctx, flow, ctx.Trigger);
     }
 
     [Fact]
@@ -95,7 +102,11 @@ public class FlowExecutorTests
         };
         var flow = CreateFlow(steps);
         var triggerData = new { source = "trigger" };
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerData = triggerData };
+        var triggerHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Request-Id"] = "req-123"
+        };
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerData = triggerData, TriggerHeaders = triggerHeaders };
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var result = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
 
@@ -106,6 +117,7 @@ public class FlowExecutorTests
         next.Type.Should().Be("B");
         next.RunId.Should().Be(ctx.RunId);
         next.TriggerData.Should().BeSameAs(triggerData);
+        next.TriggerHeaders.Should().BeSameAs(triggerHeaders);
     }
 
     [Fact]
