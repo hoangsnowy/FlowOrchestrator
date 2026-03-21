@@ -1,9 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 
 namespace FlowOrchestrator.Hangfire.Tests;
@@ -266,5 +269,198 @@ public class DefaultStepExecutorTests
             .ToDictionary(p => p.Name, p => p.Value.GetString(), StringComparer.OrdinalIgnoreCase);
         headerMap["X-Correlation-Id"].Should().Be("corr-1");
         headerMap["Content-Type"].Should().Be("application/json");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InputContainsUndefinedJsonElement_ResolvesToNull()
+    {
+        var steps = new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "LogMessage" }
+        };
+        var flow = CreateFlow(steps);
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("step1", "LogMessage")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["payload"] = default(JsonElement)
+            }
+        };
+
+        var handlerMeta = Substitute.For<IStepHandlerMetadata>();
+        handlerMeta.Type.Returns("LogMessage");
+        handlerMeta.ExecuteAsync(default!, default!, default!, default!)
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
+
+        var executor = CreateExecutor(handlerMeta);
+
+        var result = await executor.ExecuteAsync(ctx, flow, step);
+
+        result.Status.Should().Be(StepStatus.Succeeded);
+        step.Inputs["payload"].Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_GenericHandler_CoercesStringValuesToTypedProperties()
+    {
+        CoercionTypedHandler.Reset();
+
+        var services = new ServiceCollection();
+        services.AddStepHandler<CoercionTypedHandler>("CoercionTypedHandler");
+        var serviceProvider = services.BuildServiceProvider();
+
+        var flow = CreateFlow(new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "CoercionTypedHandler" }
+        });
+
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("step1", "CoercionTypedHandler")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["pollEnabled"] = JsonSerializer.Deserialize<JsonElement>("\"true\""),
+                ["pollIntervalSeconds"] = JsonSerializer.Deserialize<JsonElement>("\"5\""),
+                ["__pollAttempt"] = JsonSerializer.Deserialize<JsonElement>("\"2\"")
+            }
+        };
+
+        var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+
+        var result = await executor.ExecuteAsync(ctx, flow, step);
+
+        result.Status.Should().Be(StepStatus.Succeeded);
+        CoercionTypedHandler.LastInput.Should().NotBeNull();
+        CoercionTypedHandler.LastInput!.PollEnabled.Should().BeTrue();
+        CoercionTypedHandler.LastInput.PollIntervalSeconds.Should().Be(5);
+        CoercionTypedHandler.LastInput.PollAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_GenericHandler_BindsStrongTypedInput()
+    {
+        GenericTypedHandler.Reset();
+
+        var services = new ServiceCollection();
+        services.AddStepHandler<GenericTypedHandler>("TypedHandler");
+        var serviceProvider = services.BuildServiceProvider();
+
+        var flow = CreateFlow(new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "TypedHandler" }
+        });
+
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("step1", "TypedHandler")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["jobId"] = "JOB-123",
+                ["attempt"] = 4
+            }
+        };
+
+        var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+
+        var result = await executor.ExecuteAsync(ctx, flow, step);
+
+        result.Status.Should().Be(StepStatus.Succeeded);
+        result.Result.Should().Be("JOB-123:4");
+        GenericTypedHandler.ExecutionCount.Should().Be(1);
+        GenericTypedHandler.LastInput.Should().NotBeNull();
+        GenericTypedHandler.LastInput!.JobId.Should().Be("JOB-123");
+        GenericTypedHandler.LastInput.Attempt.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_GenericHandler_InputDeserializeFailure_ReturnsFailedResult()
+    {
+        GenericTypedHandler.Reset();
+
+        var services = new ServiceCollection();
+        services.AddStepHandler<GenericTypedHandler>("TypedHandler");
+        var serviceProvider = services.BuildServiceProvider();
+
+        var flow = CreateFlow(new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "TypedHandler" }
+        });
+
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("step1", "TypedHandler")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["jobId"] = "JOB-123",
+                ["attempt"] = "not-a-number"
+            }
+        };
+
+        var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+
+        var result = await executor.ExecuteAsync(ctx, flow, step);
+
+        result.Status.Should().Be(StepStatus.Failed);
+        result.FailedReason.Should().Contain("Failed to deserialize inputs");
+        result.FailedReason.Should().Contain("step1");
+        GenericTypedHandler.ExecutionCount.Should().Be(0);
+    }
+
+    private sealed class GenericTypedHandler : IStepHandler<GenericTypedInput>
+    {
+        public static int ExecutionCount { get; private set; }
+        public static GenericTypedInput? LastInput { get; private set; }
+
+        public ValueTask<object?> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance<GenericTypedInput> step)
+        {
+            ExecutionCount++;
+            LastInput = step.Inputs;
+            return ValueTask.FromResult<object?>($"{step.Inputs.JobId}:{step.Inputs.Attempt}");
+        }
+
+        public static void Reset()
+        {
+            ExecutionCount = 0;
+            LastInput = null;
+        }
+    }
+
+    private sealed class GenericTypedInput
+    {
+        public string JobId { get; set; } = string.Empty;
+        public int Attempt { get; set; }
+    }
+
+    private sealed class CoercionTypedHandler : IStepHandler<CoercionTypedInput>
+    {
+        public static CoercionTypedInput? LastInput { get; private set; }
+
+        public ValueTask<object?> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance<CoercionTypedInput> step)
+        {
+            LastInput = step.Inputs;
+            return ValueTask.FromResult<object?>(new StepResult { Key = step.Key, Status = StepStatus.Succeeded });
+        }
+
+        public static void Reset()
+        {
+            LastInput = null;
+        }
+    }
+
+    private sealed class CoercionTypedInput
+    {
+        public bool PollEnabled { get; set; }
+        public int PollIntervalSeconds { get; set; }
+
+        [JsonPropertyName("__pollAttempt")]
+        public int? PollAttempt { get; set; }
     }
 }

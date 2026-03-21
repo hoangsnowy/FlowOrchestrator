@@ -37,6 +37,7 @@ builder.Services.AddStepHandler<LogMessageStepHandler>("LogMessage");
 builder.Services.AddStepHandler<QueryDatabaseStep>("QueryDatabase");
 builder.Services.AddStepHandler<CallExternalApiStep>("CallExternalApi");
 builder.Services.AddStepHandler<SaveResultStep>("SaveResult");
+builder.Services.AddStepHandler<SerializeProbeStep>("SerializeProbe");
 
 builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
 builder.Services.AddHostedService(sp =>

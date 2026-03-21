@@ -80,8 +80,16 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .nav-item:hover{color:#fff;background:rgba(255,255,255,.05)}
 .nav-item.active{color:#fff;border-left-color:var(--accent);background:rgba(255,255,255,.1)}
 .nav-item svg{width:16px;height:16px;flex-shrink:0}
-.sidebar-footer{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(255,255,255,.4)}
-.pulse-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s infinite}
+.sidebar-footer{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(255,255,255,.4)}
+.refresh-row{display:flex;align-items:center;gap:8px}
+.refresh-label{color:rgba(255,255,255,.65)}
+.refresh-toggle{display:flex;align-items:center;gap:6px;color:rgba(255,255,255,.75);cursor:pointer;user-select:none}
+.refresh-toggle input{accent-color:var(--accent)}
+.refresh-select{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-radius:4px;padding:2px 6px;color:#fff;font-size:10px;font-family:'JetBrains Mono',monospace;outline:none}
+.refresh-select:disabled{opacity:.45;cursor:not-allowed}
+.refresh-select option{background:#2d3e50;color:#fff}
+.refresh-status{color:rgba(255,255,255,.45)}
+.pulse-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s infinite;transition:opacity .15s}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 .main-area{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;min-height:100vh}
@@ -260,7 +268,26 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
       Scheduled
     </div>
   </nav>
-  <div class="sidebar-footer"><span class="pulse-dot"></span> Auto-refresh 10s</div>
+  <div class="sidebar-footer">
+    <div class="refresh-row">
+      <span class="pulse-dot" id="refresh-pulse"></span>
+      <span class="refresh-label">Auto-refresh</span>
+    </div>
+    <div class="refresh-row">
+      <label class="refresh-toggle" for="auto-refresh-enabled">
+        <input id="auto-refresh-enabled" type="checkbox" checked onchange="onAutoRefreshEnabledChange()"/>
+        On
+      </label>
+      <select class="refresh-select" id="auto-refresh-seconds" onchange="onAutoRefreshIntervalChange()">
+        <option value="5">5s</option>
+        <option value="10">10s</option>
+        <option value="15">15s</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+      </select>
+    </div>
+    <div class="refresh-status" id="refresh-status">Every 5s</div>
+  </div>
 </aside>
 
 <div class="main-area">
@@ -375,6 +402,13 @@ const runsPageSize = 20;
 let runsSearchDebounceTimer = null;
 let selectedRunId = null;
 let selectedFlowDetail = null;
+const autoRefreshStorageEnabledKey = 'flow-dashboard:auto-refresh-enabled';
+const autoRefreshStorageSecondsKey = 'flow-dashboard:auto-refresh-seconds';
+const autoRefreshDefaultSeconds = 5;
+const autoRefreshAllowedSeconds = [5, 10, 15, 30, 60];
+let autoRefreshEnabled = true;
+let autoRefreshSeconds = autoRefreshDefaultSeconds;
+let autoRefreshTimer = null;
 
 function $(id) { return document.getElementById(id); }
 async function fetchJSON(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.statusText); return r.json(); }
@@ -420,6 +454,92 @@ function renderStepDebugPanels(step) {
   return inputPanel + outputPanel + errorPanel;
 }
 function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
+
+function normalizeAutoRefreshSeconds(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return autoRefreshDefaultSeconds;
+  return autoRefreshAllowedSeconds.includes(parsed) ? parsed : autoRefreshDefaultSeconds;
+}
+
+function readAutoRefreshEnabled() {
+  try {
+    const stored = localStorage.getItem(autoRefreshStorageEnabledKey);
+    if (stored === null) return true;
+    return stored !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+function readAutoRefreshSeconds() {
+  try {
+    const stored = localStorage.getItem(autoRefreshStorageSecondsKey);
+    if (!stored) return autoRefreshDefaultSeconds;
+    return normalizeAutoRefreshSeconds(stored);
+  } catch {
+    return autoRefreshDefaultSeconds;
+  }
+}
+
+function persistAutoRefreshSettings() {
+  try {
+    localStorage.setItem(autoRefreshStorageEnabledKey, autoRefreshEnabled ? 'true' : 'false');
+    localStorage.setItem(autoRefreshStorageSecondsKey, String(autoRefreshSeconds));
+  } catch {}
+}
+
+function updateAutoRefreshUI() {
+  const enabledEl = $('auto-refresh-enabled');
+  const secondsEl = $('auto-refresh-seconds');
+  const statusEl = $('refresh-status');
+  const pulseEl = $('refresh-pulse');
+
+  if (enabledEl) enabledEl.checked = autoRefreshEnabled;
+  if (secondsEl) {
+    secondsEl.value = String(autoRefreshSeconds);
+    secondsEl.disabled = !autoRefreshEnabled;
+  }
+  if (statusEl) {
+    statusEl.textContent = autoRefreshEnabled ? ('Every ' + autoRefreshSeconds + 's') : 'Paused';
+  }
+  if (pulseEl) {
+    pulseEl.style.animationPlayState = autoRefreshEnabled ? 'running' : 'paused';
+    pulseEl.style.opacity = autoRefreshEnabled ? '1' : '.35';
+  }
+}
+
+function restartAutoRefreshTimer() {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (!autoRefreshEnabled) return;
+  autoRefreshTimer = setInterval(refresh, autoRefreshSeconds * 1000);
+}
+
+function initAutoRefreshSettings() {
+  autoRefreshEnabled = readAutoRefreshEnabled();
+  autoRefreshSeconds = readAutoRefreshSeconds();
+  updateAutoRefreshUI();
+  restartAutoRefreshTimer();
+}
+
+function onAutoRefreshEnabledChange() {
+  const enabledEl = $('auto-refresh-enabled');
+  autoRefreshEnabled = !!(enabledEl && enabledEl.checked);
+  persistAutoRefreshSettings();
+  updateAutoRefreshUI();
+  restartAutoRefreshTimer();
+  if (autoRefreshEnabled) refresh();
+}
+
+function onAutoRefreshIntervalChange() {
+  const secondsEl = $('auto-refresh-seconds');
+  autoRefreshSeconds = normalizeAutoRefreshSeconds(secondsEl ? secondsEl.value : autoRefreshDefaultSeconds);
+  persistAutoRefreshSettings();
+  updateAutoRefreshUI();
+  restartAutoRefreshTimer();
+}
 
 function navigate(page) {
   currentPage = page;
@@ -1010,7 +1130,7 @@ async function refresh() {
   } catch(e) {}
 }
 
-setInterval(refresh, 10000);
+initAutoRefreshSettings();
 refresh();
 </script>
 </body>

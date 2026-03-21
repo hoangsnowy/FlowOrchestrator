@@ -11,7 +11,7 @@ namespace FlowOrchestrator.SampleApp.Steps;
 /// Demonstrates accessing outputs from earlier steps in the flow.
 /// Inputs: table (string)
 /// </summary>
-public sealed class SaveResultStep : IStepHandler
+public sealed class SaveResultStep : IStepHandler<SaveResultStepInput>
 {
     private readonly DbConnectionFactory _dbFactory;
     private readonly IOutputsRepository _outputsRepository;
@@ -27,18 +27,18 @@ public sealed class SaveResultStep : IStepHandler
         _logger = logger;
     }
 
-    public async ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    public async ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance<SaveResultStepInput> step)
     {
-        var table = step.Inputs.TryGetValue("table", out var t) ? t?.ToString() ?? "Results" : "Results";
+        var table = string.IsNullOrWhiteSpace(step.Inputs.Table) ? "Results" : step.Inputs.Table;
 
-        var fetchOutput = await _outputsRepository.GetStepOutputAsync(ctx.RunId, "fetch_orders").ConfigureAwait(false);
-        var apiOutput = await _outputsRepository.GetStepOutputAsync(ctx.RunId, "enrich_data").ConfigureAwait(false);
+        var fetchOutput = await _outputsRepository.GetStepOutputAsync<JsonElement>(ctx.RunId, "fetch_orders").ConfigureAwait(false);
+        var apiOutput = await _outputsRepository.GetStepOutputAsync<JsonElement>(ctx.RunId, "enrich_data").ConfigureAwait(false);
 
-        var summary = new
+        var summary = new SaveResultSummary
         {
             RunId = ctx.RunId,
-            FetchedOrders = fetchOutput is JsonElement fe ? fe.GetRawText() : fetchOutput?.ToString(),
-            ApiResponse = apiOutput is JsonElement ae ? ae.GetRawText() : apiOutput?.ToString(),
+            FetchedOrders = ToRawJson(fetchOutput),
+            ApiResponse = ToRawJson(apiOutput),
             ProcessedAt = DateTimeOffset.UtcNow
         };
 
@@ -62,6 +62,30 @@ public sealed class SaveResultStep : IStepHandler
             _logger.LogWarning(ex, "[SaveResult] Could not save to {Table} (table may not exist in sample DB)", table);
         }
 
-        return summary;
+        return new StepResult<SaveResultSummary>
+        {
+            Key = step.Key,
+            Value = summary
+        };
     }
+
+    private static string? ToRawJson(JsonElement value)
+    {
+        return value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+            ? null
+            : value.GetRawText();
+    }
+}
+
+public sealed class SaveResultStepInput
+{
+    public string? Table { get; set; }
+}
+
+public sealed class SaveResultSummary
+{
+    public Guid RunId { get; set; }
+    public string? FetchedOrders { get; set; }
+    public string? ApiResponse { get; set; }
+    public DateTimeOffset ProcessedAt { get; set; }
 }
