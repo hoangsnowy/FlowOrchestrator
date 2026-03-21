@@ -14,6 +14,7 @@ public sealed class FlowExecutor : IFlowExecutor
 
     public async ValueTask<IStepInstance> TriggerFlow(ITriggerContext context)
     {
+        context.TriggerData = context.Trigger.Data;
         await _outputsRepository.SaveTriggerDataAsync(context, context.Flow, context.Trigger).ConfigureAwait(false);
 
         var steps = context.Flow.Manifest.Steps;
@@ -29,6 +30,7 @@ public sealed class FlowExecutor : IFlowExecutor
         {
             RunId = context.RunId,
             PrincipalId = context.PrincipalId,
+            TriggerData = context.TriggerData,
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?>(first.Value.Inputs)
         };
@@ -56,6 +58,7 @@ public sealed class FlowExecutor : IFlowExecutor
         {
             RunId = context.RunId,
             PrincipalId = context.PrincipalId,
+            TriggerData = context.TriggerData,
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?>(nextMetadata.Inputs)
         };

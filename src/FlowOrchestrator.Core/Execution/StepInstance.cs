@@ -10,6 +10,7 @@ public sealed class StepInstance : IStepInstance
 
     public Guid RunId { get; set; }
     public string? PrincipalId { get; set; }
+    public object? TriggerData { get; set; }
     public DateTimeOffset ScheduledTime { get; set; }
     public string Type { get; set; }
     public string Key { get; }

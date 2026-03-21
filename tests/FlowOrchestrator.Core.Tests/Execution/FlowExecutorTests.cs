@@ -55,6 +55,8 @@ public class FlowExecutorTests
         result.Key.Should().Be("step1");
         result.Type.Should().Be("LogMessage");
         result.RunId.Should().Be(ctx.RunId);
+        ctx.TriggerData.Should().BeSameAs(ctx.Trigger.Data);
+        result.TriggerData.Should().BeSameAs(ctx.TriggerData);
         await _outputsRepo.Received(1).SaveTriggerDataAsync(ctx, flow, ctx.Trigger);
     }
 
@@ -92,7 +94,8 @@ public class FlowExecutorTests
             }
         };
         var flow = CreateFlow(steps);
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var triggerData = new { source = "trigger" };
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerData = triggerData };
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var result = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
 
@@ -102,6 +105,7 @@ public class FlowExecutorTests
         next!.Key.Should().Be("step2");
         next.Type.Should().Be("B");
         next.RunId.Should().Be(ctx.RunId);
+        next.TriggerData.Should().BeSameAs(triggerData);
     }
 
     [Fact]

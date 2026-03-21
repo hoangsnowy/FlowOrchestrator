@@ -49,9 +49,29 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         return JsonSerializer.Serialize(value);
     }
 
+    private async ValueTask EnsureTriggerDataAsync(IExecutionContext ctx)
+    {
+        if (ctx.TriggerData is not null)
+        {
+            return;
+        }
+
+        if (ctx is ITriggerContext triggerContext && triggerContext.Trigger is not null)
+        {
+            ctx.TriggerData = triggerContext.Trigger.Data;
+            if (ctx.TriggerData is not null)
+            {
+                return;
+            }
+        }
+
+        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(ctx.RunId).ConfigureAwait(false);
+    }
+
     public async ValueTask<object?> TriggerAsync(ITriggerContext triggerContext, PerformContext? performContext = null)
     {
         triggerContext.RunId = triggerContext.RunId == Guid.Empty ? Guid.NewGuid() : triggerContext.RunId;
+        triggerContext.TriggerData = triggerContext.Trigger.Data;
         _contextAccessor.CurrentContext = triggerContext;
 
         try
@@ -88,6 +108,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 
     public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, PerformContext? performContext = null)
     {
+        await EnsureTriggerDataAsync(ctx).ConfigureAwait(false);
         _contextAccessor.CurrentContext = ctx;
 
         try
@@ -220,6 +241,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         };
 
         var ctx = new Core.Execution.ExecutionContext { RunId = runId };
+        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
 
         return await RunStepAsync(ctx, flow, step, performContext).ConfigureAwait(false);
     }

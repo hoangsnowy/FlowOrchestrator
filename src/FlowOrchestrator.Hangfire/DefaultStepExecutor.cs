@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
@@ -6,6 +7,8 @@ namespace FlowOrchestrator.Hangfire;
 
 internal sealed class DefaultStepExecutor : IStepExecutor
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly IEnumerable<IStepHandlerMetadata> _handlerMetadata;
     private readonly IServiceProvider _serviceProvider;
     private readonly IOutputsRepository _outputsRepository;
@@ -33,6 +36,7 @@ internal sealed class DefaultStepExecutor : IStepExecutor
             };
         }
 
+        step.Inputs = ResolveInputs(step.Inputs, context.TriggerData);
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
 
         var handler = _handlerMetadata.FirstOrDefault(h => string.Equals(h.Type, metadata.Type, StringComparison.OrdinalIgnoreCase));
@@ -47,5 +51,164 @@ internal sealed class DefaultStepExecutor : IStepExecutor
         }
 
         return await handler.ExecuteAsync(_serviceProvider, context, flow, step).ConfigureAwait(false);
+    }
+
+    private static IDictionary<string, object?> ResolveInputs(IDictionary<string, object?> inputs, object? triggerData)
+    {
+        if (inputs.Count == 0)
+        {
+            return inputs;
+        }
+
+        var resolved = new Dictionary<string, object?>(inputs.Count);
+        foreach (var (key, value) in inputs)
+        {
+            resolved[key] = ResolveValue(value, triggerData);
+        }
+
+        return resolved;
+    }
+
+    private static object? ResolveValue(object? value, object? triggerData)
+    {
+        switch (value)
+        {
+            case null:
+                return null;
+            case string s:
+                return TryResolveTriggerBodyExpression(s, triggerData, out var resolvedExpression)
+                    ? resolvedExpression
+                    : s;
+            case JsonElement element:
+                return ResolveJsonElement(element, triggerData);
+            case IDictionary<string, object?> dict:
+                return ResolveInputs(dict, triggerData);
+            case IEnumerable<object?> sequence:
+                return sequence.Select(item => ResolveValue(item, triggerData)).ToArray();
+            default:
+                return value;
+        }
+    }
+
+    private static object? ResolveJsonElement(JsonElement element, object? triggerData)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var stringValue = element.GetString();
+            if (TryResolveTriggerBodyExpression(stringValue, triggerData, out var resolvedExpression))
+            {
+                return resolvedExpression;
+            }
+
+            return element.Clone();
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var objectValue = JsonSerializer.Deserialize<Dictionary<string, object?>>(element.GetRawText(), _jsonOptions)
+                              ?? new Dictionary<string, object?>();
+            return ResolveInputs(objectValue, triggerData);
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var arrayValue = JsonSerializer.Deserialize<List<object?>>(element.GetRawText(), _jsonOptions)
+                             ?? [];
+            return arrayValue.Select(item => ResolveValue(item, triggerData)).ToArray();
+        }
+
+        return element.Clone();
+    }
+
+    private static bool TryResolveTriggerBodyExpression(string? expression, object? triggerData, out object? resolved)
+    {
+        resolved = null;
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return false;
+        }
+
+        const string prefix = "@triggerBody()";
+        var trimmed = expression.Trim();
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var remainder = trimmed[prefix.Length..].Trim();
+        if (string.IsNullOrEmpty(remainder))
+        {
+            resolved = triggerData is null ? null : ToJsonElement(triggerData);
+            return true;
+        }
+
+        if (remainder.StartsWith("?.", StringComparison.Ordinal))
+        {
+            remainder = remainder[2..];
+        }
+        else if (remainder.StartsWith(".", StringComparison.Ordinal))
+        {
+            remainder = remainder[1..];
+        }
+        else
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(remainder) || triggerData is null)
+        {
+            resolved = null;
+            return true;
+        }
+
+        var payload = ToJsonElement(triggerData);
+        if (TryResolvePath(payload, remainder, out var target))
+        {
+            resolved = target;
+            return true;
+        }
+
+        resolved = null;
+        return true;
+    }
+
+    private static JsonElement ToJsonElement(object value)
+    {
+        if (value is JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.Undefined
+                ? JsonSerializer.SerializeToElement<object?>(null, _jsonOptions)
+                : element.Clone();
+        }
+
+        return JsonSerializer.SerializeToElement(value, value.GetType(), _jsonOptions);
+    }
+
+    private static bool TryResolvePath(JsonElement payload, string path, out JsonElement target)
+    {
+        target = payload;
+        var normalizedPath = path.Replace("[", ".", StringComparison.Ordinal).Replace("]", string.Empty, StringComparison.Ordinal);
+
+        foreach (var segment in normalizedPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (target.ValueKind == JsonValueKind.Object && target.TryGetProperty(segment, out var objectValue))
+            {
+                target = objectValue;
+                continue;
+            }
+
+            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index))
+            {
+                if (index >= 0 && index < target.GetArrayLength())
+                {
+                    target = target[index];
+                    continue;
+                }
+            }
+
+            return false;
+        }
+
+        return true;
     }
 }
