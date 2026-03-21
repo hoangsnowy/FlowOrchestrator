@@ -30,6 +30,7 @@ builder.Services.AddFlowOrchestrator(options =>
     options.AddFlow<HelloWorldFlow>();
     options.AddFlow<OrderProcessingFlow>();
     options.AddFlow<PollingDemoFlow>();
+    options.AddFlow<WebhookTriggerBodyTestFlow>();
 });
 
 builder.Services.AddStepHandler<LogMessageStepHandler>("LogMessage");

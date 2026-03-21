@@ -115,6 +115,32 @@ public class HangfireFlowOrchestratorTests
     }
 
     [Fact]
+    public async Task TriggerAsync_PopulatesTriggerDataOnContext()
+    {
+        var sut = CreateSut();
+        var flow = CreateFlow();
+        var firstStep = new StepInstance("step1", "LogMessage") { RunId = Guid.NewGuid() };
+        var payload = new { orderId = "ORD-1" };
+
+        _flowExecutor.TriggerFlow(Arg.Any<ITriggerContext>()).Returns(firstStep);
+        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+            .ReturnsForAnyArgs(new FlowRunRecord());
+
+        var ctx = new TriggerContext
+        {
+            RunId = Guid.NewGuid(),
+            Flow = flow,
+            Trigger = new Trigger("manual", "Manual", payload)
+        };
+
+        await sut.TriggerAsync(ctx);
+
+        ctx.TriggerData.Should().BeSameAs(payload);
+        await _flowExecutor.Received(1).TriggerFlow(
+            Arg.Is<ITriggerContext>(c => ReferenceEquals(c.TriggerData, payload)));
+    }
+
+    [Fact]
     public async Task TriggerAsync_ClearsContextAccessor()
     {
         var sut = CreateSut();
@@ -152,6 +178,30 @@ public class HangfireFlowOrchestratorTests
         await sut.RunStepAsync(ctx, flow, step);
 
         await _outputsRepo.Received(1).SaveStepOutputAsync(ctx, flow, step, stepResult);
+    }
+
+    [Fact]
+    public async Task RunStepAsync_LoadsTriggerDataFromRepository_WhenMissingOnContext()
+    {
+        var sut = CreateSut();
+        var flow = CreateFlow();
+        var runId = Guid.NewGuid();
+        var triggerData = new { orderId = "123" };
+        var ctx = new Core.Execution.ExecutionContext { RunId = runId };
+        var step = new StepInstance("step1", "LogMessage") { RunId = runId };
+        IExecutionContext? capturedContext = null;
+
+        _outputsRepo.GetTriggerDataAsync(runId).Returns(triggerData);
+
+        var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
+        _stepExecutor.ExecuteAsync(Arg.Do<IExecutionContext>(c => capturedContext = c), flow, step).Returns(stepResult);
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
+
+        await sut.RunStepAsync(ctx, flow, step);
+
+        await _outputsRepo.Received(1).GetTriggerDataAsync(runId);
+        capturedContext.Should().NotBeNull();
+        capturedContext!.TriggerData.Should().BeSameAs(triggerData);
     }
 
     [Fact]

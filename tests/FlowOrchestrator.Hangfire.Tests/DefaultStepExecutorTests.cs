@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
@@ -126,5 +127,70 @@ public class DefaultStepExecutorTests
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
         result.Status.Should().Be(StepStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ResolvesStandaloneTriggerBodyExpression()
+    {
+        var steps = new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "LogMessage" }
+        };
+        var flow = CreateFlow(steps);
+        var triggerData = new { orderId = "ORD-1", total = 100 };
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerData = triggerData };
+        var step = new StepInstance("step1", "LogMessage")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?> { ["payload"] = "@triggerBody()" }
+        };
+
+        var handlerMeta = Substitute.For<IStepHandlerMetadata>();
+        handlerMeta.Type.Returns("LogMessage");
+        handlerMeta.ExecuteAsync(default!, default!, default!, default!)
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
+
+        var executor = CreateExecutor(handlerMeta);
+
+        await executor.ExecuteAsync(ctx, flow, step);
+
+        step.Inputs.Should().ContainKey("payload");
+        step.Inputs["payload"].Should().BeOfType<JsonElement>();
+        var payload = (JsonElement)step.Inputs["payload"]!;
+        payload.ValueKind.Should().Be(JsonValueKind.Object);
+        payload.GetProperty("orderId").GetString().Should().Be("ORD-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ResolvesStandaloneTriggerBodyExpression_FromJsonElementString()
+    {
+        var steps = new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "LogMessage" }
+        };
+        var flow = CreateFlow(steps);
+        var triggerData = JsonSerializer.Deserialize<JsonElement>("{\"orderId\":\"ORD-2\",\"items\":[1,2]}");
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerData = triggerData };
+        var step = new StepInstance("step1", "LogMessage")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["payload"] = JsonSerializer.Deserialize<JsonElement>("\"@triggerBody()\"")
+            }
+        };
+
+        var handlerMeta = Substitute.For<IStepHandlerMetadata>();
+        handlerMeta.Type.Returns("LogMessage");
+        handlerMeta.ExecuteAsync(default!, default!, default!, default!)
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
+
+        var executor = CreateExecutor(handlerMeta);
+
+        await executor.ExecuteAsync(ctx, flow, step);
+
+        step.Inputs["payload"].Should().BeOfType<JsonElement>();
+        var payload = (JsonElement)step.Inputs["payload"]!;
+        payload.GetProperty("orderId").GetString().Should().Be("ORD-2");
     }
 }
