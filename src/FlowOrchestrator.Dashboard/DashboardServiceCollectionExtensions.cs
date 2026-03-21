@@ -19,6 +19,13 @@ namespace FlowOrchestrator.Dashboard;
 
 public static class DashboardServiceCollectionExtensions
 {
+    // Headers excluded from trigger capture: sensitive auth/session headers and low-level transport headers
+    private static readonly HashSet<string> _sensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "Cookie", "Set-Cookie",
+        "X-Webhook-Key", "Proxy-Authorization",
+        "Connection", "Transfer-Encoding", "Upgrade", "Content-Length"
+    };
     public static IServiceCollection AddFlowDashboard(this IServiceCollection services)
     {
         services.AddOptions<FlowDashboardOptions>();
@@ -115,7 +122,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, IFlowRepository repo, Guid id) =>
+        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, IFlowRepository repo, Guid id, IHangfireFlowTrigger flowTrigger) =>
         {
             var flows = await repo.GetAllFlowsAsync();
             var flow = flows.FirstOrDefault(f => f.Id == id);
@@ -126,19 +133,25 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            object? body = null;
-            if (http.Request.ContentLength > 0)
+            var (isValidBody, body) = await TryReadJsonBodyAsync(http.Request);
+            if (!isValidBody)
             {
-                body = await JsonSerializer.DeserializeAsync<object>(http.Request.Body);
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await http.Response.WriteAsJsonAsync(new { error = "Invalid JSON payload." });
+                return;
             }
+
+            var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
+                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             var ctx = new TriggerContext
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger("manual", "Manual", body)
+                Trigger = new Trigger("manual", "Manual", body, headers)
             };
-            BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerAsync(ctx, null));
+            await flowTrigger.TriggerAsync(ctx);
             await http.Response.WriteAsJsonAsync(new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered." });
         });
 
@@ -146,7 +159,7 @@ public static class DashboardServiceCollectionExtensions
         // - idOrSlug = flow GUID: use first Webhook trigger (only Webhook has external URL)
         // - idOrSlug = slug: lookup flow by webhookSlug in Webhook trigger Inputs
         // - If trigger has webhookSecret in Inputs, require X-Webhook-Key header to match
-        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug) =>
+        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug, IHangfireFlowTrigger flowTrigger) =>
         {
             var flows = (await repo.GetAllFlowsAsync()).ToList();
             Core.Abstractions.IFlowDefinition? flow = null;
@@ -217,19 +230,25 @@ public static class DashboardServiceCollectionExtensions
                 }
             }
 
-            object? body = null;
-            if (http.Request.ContentLength > 0)
+            var (isValidBody, body) = await TryReadJsonBodyAsync(http.Request);
+            if (!isValidBody)
             {
-                body = await JsonSerializer.DeserializeAsync<object>(http.Request.Body);
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await http.Response.WriteAsJsonAsync(new { error = "Invalid JSON payload." });
+                return;
             }
+
+            var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
+                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             var ctx = new TriggerContext
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), body)
+                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), body, headers)
             };
-            BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerAsync(ctx, null));
+            await flowTrigger.TriggerAsync(ctx);
             await http.Response.WriteAsJsonAsync(new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         });
 
@@ -493,6 +512,40 @@ public static class DashboardServiceCollectionExtensions
         });
 
         return endpoints;
+    }
+
+    private static async ValueTask<(bool IsValidBody, object? Body)> TryReadJsonBodyAsync(HttpRequest request)
+    {
+        if (request.ContentLength == 0)
+        {
+            return (true, null);
+        }
+
+        try
+        {
+            if (request.ContentLength is > 0)
+            {
+                var body = await JsonSerializer.DeserializeAsync<object>(request.Body);
+                return (true, body);
+            }
+
+            // Content-Length may be null for chunked requests. Buffer once so we can
+            // treat empty payload as "no body" instead of throwing JSON parse errors.
+            using var buffered = new MemoryStream();
+            await request.Body.CopyToAsync(buffered);
+            if (buffered.Length == 0)
+            {
+                return (true, null);
+            }
+
+            buffered.Position = 0;
+            var chunkedBody = await JsonSerializer.DeserializeAsync<object>(buffered);
+            return (true, chunkedBody);
+        }
+        catch (JsonException)
+        {
+            return (false, null);
+        }
     }
 
     private sealed class FlowDashboardBasicAuthFilter(FlowDashboardBasicAuthOptions options) : IEndpointFilter

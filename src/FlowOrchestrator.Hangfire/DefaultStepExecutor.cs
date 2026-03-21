@@ -36,7 +36,7 @@ internal sealed class DefaultStepExecutor : IStepExecutor
             };
         }
 
-        step.Inputs = ResolveInputs(step.Inputs, context.TriggerData);
+        step.Inputs = ResolveInputs(step.Inputs, context.TriggerData, context.TriggerHeaders);
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
 
         var handler = _handlerMetadata.FirstOrDefault(h => string.Equals(h.Type, metadata.Type, StringComparison.OrdinalIgnoreCase));
@@ -53,7 +53,7 @@ internal sealed class DefaultStepExecutor : IStepExecutor
         return await handler.ExecuteAsync(_serviceProvider, context, flow, step).ConfigureAwait(false);
     }
 
-    private static IDictionary<string, object?> ResolveInputs(IDictionary<string, object?> inputs, object? triggerData)
+    private static IDictionary<string, object?> ResolveInputs(IDictionary<string, object?> inputs, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)
     {
         if (inputs.Count == 0)
         {
@@ -63,43 +63,44 @@ internal sealed class DefaultStepExecutor : IStepExecutor
         var resolved = new Dictionary<string, object?>(inputs.Count);
         foreach (var (key, value) in inputs)
         {
-            resolved[key] = ResolveValue(value, triggerData);
+            resolved[key] = ResolveValue(value, triggerData, triggerHeaders);
         }
 
         return resolved;
     }
 
-    private static object? ResolveValue(object? value, object? triggerData)
+    private static object? ResolveValue(object? value, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)
     {
         switch (value)
         {
             case null:
                 return null;
             case string s:
-                return TryResolveTriggerBodyExpression(s, triggerData, out var resolvedExpression)
-                    ? resolvedExpression
-                    : s;
+                if (TryResolveTriggerBodyExpression(s, triggerData, out var resolvedBody))
+                    return resolvedBody;
+                if (TryResolveTriggerHeadersExpression(s, triggerHeaders, out var resolvedHeader))
+                    return resolvedHeader;
+                return s;
             case JsonElement element:
-                return ResolveJsonElement(element, triggerData);
+                return ResolveJsonElement(element, triggerData, triggerHeaders);
             case IDictionary<string, object?> dict:
-                return ResolveInputs(dict, triggerData);
+                return ResolveInputs(dict, triggerData, triggerHeaders);
             case IEnumerable<object?> sequence:
-                return sequence.Select(item => ResolveValue(item, triggerData)).ToArray();
+                return sequence.Select(item => ResolveValue(item, triggerData, triggerHeaders)).ToArray();
             default:
                 return value;
         }
     }
 
-    private static object? ResolveJsonElement(JsonElement element, object? triggerData)
+    private static object? ResolveJsonElement(JsonElement element, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)
     {
         if (element.ValueKind == JsonValueKind.String)
         {
             var stringValue = element.GetString();
-            if (TryResolveTriggerBodyExpression(stringValue, triggerData, out var resolvedExpression))
-            {
-                return resolvedExpression;
-            }
-
+            if (TryResolveTriggerBodyExpression(stringValue, triggerData, out var resolvedBody))
+                return resolvedBody;
+            if (TryResolveTriggerHeadersExpression(stringValue, triggerHeaders, out var resolvedHeader))
+                return resolvedHeader;
             return element.Clone();
         }
 
@@ -107,14 +108,14 @@ internal sealed class DefaultStepExecutor : IStepExecutor
         {
             var objectValue = JsonSerializer.Deserialize<Dictionary<string, object?>>(element.GetRawText(), _jsonOptions)
                               ?? new Dictionary<string, object?>();
-            return ResolveInputs(objectValue, triggerData);
+            return ResolveInputs(objectValue, triggerData, triggerHeaders);
         }
 
         if (element.ValueKind == JsonValueKind.Array)
         {
             var arrayValue = JsonSerializer.Deserialize<List<object?>>(element.GetRawText(), _jsonOptions)
                              ?? [];
-            return arrayValue.Select(item => ResolveValue(item, triggerData)).ToArray();
+            return arrayValue.Select(item => ResolveValue(item, triggerData, triggerHeaders)).ToArray();
         }
 
         return element.Clone();
@@ -170,6 +171,40 @@ internal sealed class DefaultStepExecutor : IStepExecutor
 
         resolved = null;
         return true;
+    }
+
+    private static bool TryResolveTriggerHeadersExpression(string? expression, IReadOnlyDictionary<string, string>? headers, out object? resolved)
+    {
+        resolved = null;
+        if (string.IsNullOrWhiteSpace(expression))
+            return false;
+
+        const string prefix = "@triggerHeaders()";
+        var trimmed = expression.Trim();
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var remainder = trimmed[prefix.Length..].Trim();
+        if (string.IsNullOrEmpty(remainder))
+        {
+            resolved = headers is null ? null : ToJsonElement(headers);
+            return true;
+        }
+
+        // Support ['Header-Name'] and ["Header-Name"] notation for headers with dashes
+        string? headerName = null;
+        if (remainder.StartsWith("['", StringComparison.Ordinal) && remainder.EndsWith("']", StringComparison.Ordinal))
+            headerName = remainder[2..^2];
+        else if (remainder.StartsWith("[\"", StringComparison.Ordinal) && remainder.EndsWith("\"]", StringComparison.Ordinal))
+            headerName = remainder[2..^2];
+
+        if (headerName is not null)
+        {
+            resolved = headers is not null && headers.TryGetValue(headerName, out var val) ? val : null;
+            return true;
+        }
+
+        return false;
     }
 
     private static JsonElement ToJsonElement(object value)

@@ -193,4 +193,78 @@ public class DefaultStepExecutorTests
         var payload = (JsonElement)step.Inputs["payload"]!;
         payload.GetProperty("orderId").GetString().Should().Be("ORD-2");
     }
+
+    [Fact]
+    public async Task ExecuteAsync_ResolvesTriggerHeadersExpression_ForSpecificHeader()
+    {
+        var steps = new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "LogMessage" }
+        };
+        var flow = CreateFlow(steps);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Request-Id"] = "req-42"
+        };
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerHeaders = headers };
+        var step = new StepInstance("step1", "LogMessage")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["requestId"] = "@triggerHeaders()['X-Request-Id']"
+            }
+        };
+
+        var handlerMeta = Substitute.For<IStepHandlerMetadata>();
+        handlerMeta.Type.Returns("LogMessage");
+        handlerMeta.ExecuteAsync(default!, default!, default!, default!)
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
+
+        var executor = CreateExecutor(handlerMeta);
+
+        await executor.ExecuteAsync(ctx, flow, step);
+
+        step.Inputs["requestId"].Should().Be("req-42");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ResolvesTriggerHeadersExpression_ForAllHeaders()
+    {
+        var steps = new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "LogMessage" }
+        };
+        var flow = CreateFlow(steps);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Correlation-Id"] = "corr-1",
+            ["Content-Type"] = "application/json"
+        };
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid(), TriggerHeaders = headers };
+        var step = new StepInstance("step1", "LogMessage")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["headers"] = JsonSerializer.Deserialize<JsonElement>("\"@triggerHeaders()\"")
+            }
+        };
+
+        var handlerMeta = Substitute.For<IStepHandlerMetadata>();
+        handlerMeta.Type.Returns("LogMessage");
+        handlerMeta.ExecuteAsync(default!, default!, default!, default!)
+            .ReturnsForAnyArgs(new StepResult { Key = "step1", Status = StepStatus.Succeeded });
+
+        var executor = CreateExecutor(handlerMeta);
+
+        await executor.ExecuteAsync(ctx, flow, step);
+
+        step.Inputs["headers"].Should().BeOfType<JsonElement>();
+        var headersElement = (JsonElement)step.Inputs["headers"]!;
+        var headerMap = headersElement.EnumerateObject()
+            .ToDictionary(p => p.Name, p => p.Value.GetString(), StringComparer.OrdinalIgnoreCase);
+        headerMap["X-Correlation-Id"].Should().Be("corr-1");
+        headerMap["Content-Type"].Should().Be("application/json");
+    }
 }

@@ -10,6 +10,7 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ConcurrentDictionary<Guid, JsonElement> _triggerData = new();
+    private readonly ConcurrentDictionary<Guid, IReadOnlyDictionary<string, string>> _triggerHeaders = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), JsonElement> _stepOutputs = new();
 
     private static JsonElement ToJsonElement(object? value)
@@ -44,6 +45,21 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
         }
 
         return ValueTask.FromResult<object?>(null);
+    }
+
+    public ValueTask SaveTriggerHeadersAsync(ITriggerContext ctx, IFlowDefinition flow, ITrigger trigger)
+    {
+        if (trigger.Headers is not null)
+        {
+            _triggerHeaders[ctx.RunId] = trigger.Headers;
+        }
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<IReadOnlyDictionary<string, string>?> GetTriggerHeadersAsync(Guid runId)
+    {
+        _triggerHeaders.TryGetValue(runId, out var headers);
+        return ValueTask.FromResult<IReadOnlyDictionary<string, string>?>(headers);
     }
 
     public ValueTask SaveStepInputAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)

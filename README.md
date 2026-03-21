@@ -4,6 +4,13 @@ FlowOrchestrator is an open-source .NET library that lets you **orchestrate work
 
 ---
 
+## Compatibility
+
+- NuGet packages (`FlowOrchestrator.Core`, `FlowOrchestrator.Hangfire`, `FlowOrchestrator.SqlServer`, `FlowOrchestrator.Dashboard`) target: `net8.0`, `net9.0`, `net10.0`.
+- Demo projects (`FlowOrchestrator.SampleApp`, `FlowOrchestrator.AppHost`) currently run on `net8.0`.
+
+---
+
 ## 1. High-level design
 
 - **Flow**
@@ -16,12 +23,12 @@ FlowOrchestrator is an open-source .NET library that lets you **orchestrate work
   Each step has:
   - `type`: logical name (e.g. `ValidateOrder`, `ProcessPayment`).
   - `runAfter`: declarative dependencies on previous steps and their statuses.
-  - `inputs`: expressions referencing trigger/body or previous step outputs.
+  - `inputs`: expressions referencing trigger body/headers or previous step outputs.
 
 - **Execution engine (`FlowOrchestrator.Core`)**
   - `IFlowExecutor`: decides which step to run next.
   - `IStepExecutor`: resolves inputs, invokes the right handler, stores outputs.
-  - `IOutputsRepository`: stores trigger data, step inputs/outputs, events.
+  - `IOutputsRepository`: stores trigger data/headers, step inputs/outputs, events.
   - `IFlowStore` / `IFlowRunStore`: abstractions for persistence of flows and run history.
   - `IFlowRepository`: in-memory registry of code-defined `IFlowDefinition` instances.
 
@@ -121,6 +128,7 @@ The app starts on `http://localhost:5201` by default.
 Open `http://localhost:5201/flows` to access the built-in dashboard.
 If `FlowDashboard:BasicAuth` is configured, the browser will prompt for HTTP Basic credentials.
 Webhook endpoint (`/flows/api/webhook/{idOrSlug}`) is intentionally not protected by dashboard basic auth; use `webhookSecret` for webhook security.
+Manual trigger and webhook endpoints capture request body plus non-sensitive headers for input expressions (see section 5.5).
 
 ### Pages
 
@@ -212,6 +220,26 @@ Content-Type: application/json
 {}
 ```
 
+### 5.5 Trigger expression reference (`inputs`)
+
+`FlowOrchestrator.Hangfire` supports trigger expressions in step inputs:
+
+```json
+{
+  "orderId": "@triggerBody()?.orderId",
+  "requestId": "@triggerHeaders()['X-Request-Id']",
+  "allHeaders": "@triggerHeaders()"
+}
+```
+
+- `@triggerBody()` returns the full trigger payload as JSON.
+- `@triggerBody()?.path.to.value` returns a specific value from trigger payload.
+- `@triggerHeaders()` returns all captured trigger headers as JSON object.
+- `@triggerHeaders()['Header-Name']` (or `["Header-Name"]`) returns a specific header value.
+
+Captured headers are case-insensitive and exclude sensitive/transport headers:
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Webhook-Key`, `Connection`, `Transfer-Encoding`, `Upgrade`, `Content-Length`.
+
 ---
 
 ## 6. Writing your own flow
@@ -239,7 +267,11 @@ public sealed class MyFlow : IFlowDefinition
             ["validateOrder"] = new StepMetadata
             {
                 Type = "ValidateOrder",
-                Inputs = new Dictionary<string, object?> { ["orderId"] = "@triggerBody()?.orderId" }
+                Inputs = new Dictionary<string, object?>
+                {
+                    ["orderId"] = "@triggerBody()?.orderId",
+                    ["requestId"] = "@triggerHeaders()['X-Request-Id']"
+                }
             },
             ["processPayment"] = new StepMetadata
             {
@@ -257,11 +289,11 @@ public sealed class MyFlow : IFlowDefinition
 |------|-------------|-----------------|
 | `Manual` | Triggered by dashboard button or API call | None |
 | `Cron` | Runs on a recurring schedule via Hangfire `RecurringJob` | `cronExpression` (Hangfire cron syntax, e.g. `*/5 * * * *`) |
-| `Webhook` | Triggered by external HTTP POST (e.g. customer webhook) | Optional: `webhookSlug` (URL path), `webhookSecret` (for `X-Webhook-Key` validation) |
+| `Webhook` | Triggered by external HTTP POST (e.g. customer webhook) | Optional: `webhookSlug` (URL path), `webhookSecret` (for `X-Webhook-Key` validation). Trigger body and non-sensitive headers are available via expressions |
 
 Cron triggers are automatically registered as Hangfire recurring jobs on startup. Disabling a flow via the dashboard removes its recurring jobs; re-enabling restores them.
 
-**Webhook trigger:** Use `POST /flows/api/webhook/{flowId}` or `POST /flows/api/webhook/{slug}` to trigger from external systems. If `webhookSecret` is set in the trigger inputs, clients must send `X-Webhook-Key: <secret>` or `Authorization: Bearer <secret>`. The dashboard shows the webhook URL and a Copy button in the Triggers tab.
+**Webhook trigger:** Use `POST /flows/api/webhook/{flowId}` or `POST /flows/api/webhook/{slug}` to trigger from external systems. If `webhookSecret` is set in the trigger inputs, clients must send `X-Webhook-Key: <secret>` or `Authorization: Bearer <secret>`. The dashboard shows the webhook URL and a Copy button in the Triggers tab. `X-Webhook-Key` and other sensitive headers are intentionally excluded from captured trigger headers.
 
 ### 6.2 Implement step handlers
 
