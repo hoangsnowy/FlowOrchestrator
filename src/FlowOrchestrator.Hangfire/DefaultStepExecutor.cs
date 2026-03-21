@@ -94,6 +94,11 @@ internal sealed class DefaultStepExecutor : IStepExecutor
 
     private static object? ResolveJsonElement(JsonElement element, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)
     {
+        if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
         if (element.ValueKind == JsonValueKind.String)
         {
             var stringValue = element.GetString();
@@ -101,7 +106,7 @@ internal sealed class DefaultStepExecutor : IStepExecutor
                 return resolvedBody;
             if (TryResolveTriggerHeadersExpression(stringValue, triggerHeaders, out var resolvedHeader))
                 return resolvedHeader;
-            return element.Clone();
+            return CloneOrNull(element);
         }
 
         if (element.ValueKind == JsonValueKind.Object)
@@ -118,7 +123,23 @@ internal sealed class DefaultStepExecutor : IStepExecutor
             return arrayValue.Select(item => ResolveValue(item, triggerData, triggerHeaders)).ToArray();
         }
 
-        return element.Clone();
+        return CloneOrNull(element);
+    }
+
+    private static JsonElement? CloneOrNull(JsonElement element)
+    {
+        try
+        {
+            return element.Clone();
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static bool TryResolveTriggerBodyExpression(string? expression, object? triggerData, out object? resolved)

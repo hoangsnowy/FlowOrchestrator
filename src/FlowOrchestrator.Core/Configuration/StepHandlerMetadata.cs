@@ -1,5 +1,8 @@
+using System.Reflection;
+using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FlowOrchestrator.Core.Configuration;
@@ -7,6 +10,15 @@ namespace FlowOrchestrator.Core.Configuration;
 internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
     where THandler : class
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static readonly MethodInfo _invokeGenericHandlerMethod = typeof(StepHandlerMetadata<THandler>)
+        .GetMethod(nameof(InvokeGenericHandlerAsync), BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException($"Could not locate method '{nameof(InvokeGenericHandlerAsync)}'.");
+
     public StepHandlerMetadata(string type)
     {
         Type = type;
@@ -25,7 +37,7 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
                 result = await typedHandler.ExecuteAsync(ctx, flow, step).ConfigureAwait(false);
                 break;
             default:
-                result = null;
+                result = await ExecuteGenericHandlerAsync(handler, ctx, flow, step).ConfigureAwait(false);
                 break;
         }
 
@@ -45,5 +57,147 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
             Status = StepStatus.Succeeded,
             Result = result
         };
+    }
+
+    private static async ValueTask<object?> ExecuteGenericHandlerAsync(object handler, IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    {
+        var genericHandlerInterface = handler
+            .GetType()
+            .GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IStepHandler<>));
+
+        if (genericHandlerInterface is null)
+        {
+            return null;
+        }
+
+        var inputType = genericHandlerInterface.GetGenericArguments()[0];
+        var invokeMethod = _invokeGenericHandlerMethod.MakeGenericMethod(inputType);
+        var invocation = invokeMethod.Invoke(null, [handler, ctx, flow, step]);
+        if (invocation is not ValueTask<object?> valueTask)
+        {
+            throw new InvalidOperationException($"Expected '{nameof(ValueTask<object>)}' from generic handler invocation.");
+        }
+
+        return await valueTask.ConfigureAwait(false);
+    }
+
+    private static async ValueTask<object?> InvokeGenericHandlerAsync<TInput>(object handler, IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    {
+        var typedHandler = (IStepHandler<TInput>)handler;
+        TInput? typedInput;
+
+        try
+        {
+            typedInput = JsonValueConversion.Deserialize<TInput>(step.Inputs, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            return new StepResult
+            {
+                Key = step.Key,
+                Status = StepStatus.Failed,
+                FailedReason = $"Failed to deserialize inputs for step '{step.Key}' (type '{step.Type}') to '{typeof(TInput).FullName}': {ex.Message}"
+            };
+        }
+
+        var typedStep = new TypedStepInstanceAdapter<TInput>(step, typedInput!);
+        var result = await typedHandler.ExecuteAsync(ctx, flow, typedStep).ConfigureAwait(false);
+        typedStep.SyncInputsToInner(_jsonOptions);
+        return result;
+    }
+}
+
+internal sealed class TypedStepInstanceAdapter<TInput> : IStepInstance<TInput>
+{
+    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly IStepInstance _inner;
+
+    public TypedStepInstanceAdapter(IStepInstance inner, TInput inputs)
+    {
+        _inner = inner;
+        Inputs = inputs;
+    }
+
+    public Guid RunId
+    {
+        get => _inner.RunId;
+        set => _inner.RunId = value;
+    }
+
+    public string? PrincipalId
+    {
+        get => _inner.PrincipalId;
+        set => _inner.PrincipalId = value;
+    }
+
+    public object? TriggerData
+    {
+        get => _inner.TriggerData;
+        set => _inner.TriggerData = value;
+    }
+
+    public IReadOnlyDictionary<string, string>? TriggerHeaders
+    {
+        get => _inner.TriggerHeaders;
+        set => _inner.TriggerHeaders = value;
+    }
+
+    public DateTimeOffset ScheduledTime
+    {
+        get => _inner.ScheduledTime;
+        set => _inner.ScheduledTime = value;
+    }
+
+    public string Type
+    {
+        get => _inner.Type;
+        set => _inner.Type = value;
+    }
+
+    public string Key => _inner.Key;
+
+    public TInput Inputs { get; set; }
+
+    public int Index
+    {
+        get => _inner.Index;
+        set => _inner.Index = value;
+    }
+
+    public bool ScopeMoveNext
+    {
+        get => _inner.ScopeMoveNext;
+        set => _inner.ScopeMoveNext = value;
+    }
+
+    internal void SyncInputsToInner(JsonSerializerOptions? options = null)
+    {
+        if (Inputs is IDictionary<string, object?> dict)
+        {
+            _inner.Inputs = new Dictionary<string, object?>(dict);
+            return;
+        }
+
+        if (Inputs is null)
+        {
+            _inner.Inputs = new Dictionary<string, object?>();
+            return;
+        }
+
+        var serializerOptions = options ?? _jsonOptions;
+        var serialized = JsonSerializer.SerializeToElement(Inputs, Inputs.GetType(), serializerOptions);
+        if (serialized.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var converted = JsonSerializer.Deserialize<Dictionary<string, object?>>(serialized.GetRawText(), serializerOptions)
+            ?? new Dictionary<string, object?>();
+        _inner.Inputs = converted;
     }
 }

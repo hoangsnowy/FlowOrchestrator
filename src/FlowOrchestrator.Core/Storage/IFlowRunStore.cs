@@ -7,7 +7,7 @@ public interface IFlowRunStore
     Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage);
     Task CompleteRunAsync(Guid runId, string status);
     Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50);
-    Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(Guid? flowId = null, string? status = null, int skip = 0, int take = 50);
+    Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(Guid? flowId = null, string? status = null, int skip = 0, int take = 50, string? search = null);
     Task<FlowRunRecord?> GetRunDetailAsync(Guid runId);
     Task<DashboardStatistics> GetStatisticsAsync();
     Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync();

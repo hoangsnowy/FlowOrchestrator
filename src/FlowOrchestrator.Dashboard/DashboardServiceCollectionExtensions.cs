@@ -67,7 +67,7 @@ public static class DashboardServiceCollectionExtensions
             group.AddEndpointFilter(new FlowDashboardBasicAuthFilter(options.BasicAuth));
         }
 
-        var html = DashboardHtml.Render(basePath);
+        var html = DashboardHtml.Render(basePath, options.Branding);
 
         group.MapGet("", (HttpContext http) =>
         {
@@ -265,15 +265,16 @@ public static class DashboardServiceCollectionExtensions
             var query = http.Request.Query;
             Guid? flowId = query.TryGetValue("flowId", out var flowIdValues) && Guid.TryParse(flowIdValues, out var fid) ? fid : null;
             string? status = query.TryGetValue("status", out var statusValues) ? statusValues.ToString() : null;
+            string? search = query.TryGetValue("search", out var searchValues) ? searchValues.ToString() : null;
             int skip = query.TryGetValue("skip", out var skipValues) && int.TryParse(skipValues, out var s) ? s : 0;
             int take = query.TryGetValue("take", out var takeValues) && int.TryParse(takeValues, out var t) ? t : 50;
             bool includeTotal = query.TryGetValue("includeTotal", out var includeTotalValues)
                 && bool.TryParse(includeTotalValues, out var includeTotalParsed)
                 && includeTotalParsed;
 
-            if (includeTotal || !string.IsNullOrWhiteSpace(status))
+            if (includeTotal || !string.IsNullOrWhiteSpace(status) || !string.IsNullOrWhiteSpace(search))
             {
-                var page = await store.GetRunsPageAsync(flowId, status, skip, take);
+                var page = await store.GetRunsPageAsync(flowId, status, skip, take, search);
                 if (includeTotal)
                 {
                     await http.Response.WriteAsJsonAsync(new
@@ -306,7 +307,7 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(stats);
         });
 
-        group.MapGet("/api/runs/{id:guid}", async (HttpContext http, IFlowRunStore store, Guid id) =>
+        group.MapGet("/api/runs/{id:guid}", async (HttpContext http, IFlowRunStore store, IOutputsRepository outputsRepository, Guid id) =>
         {
             var run = await store.GetRunDetailAsync(id);
             if (run is null)
@@ -314,6 +315,8 @@ public static class DashboardServiceCollectionExtensions
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
+
+            run.TriggerHeaders = await outputsRepository.GetTriggerHeadersAsync(id);
             await http.Response.WriteAsJsonAsync(run);
         });
 

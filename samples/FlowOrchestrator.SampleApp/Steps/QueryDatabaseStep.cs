@@ -10,7 +10,7 @@ namespace FlowOrchestrator.SampleApp.Steps;
 /// Inputs: sql (string), parameters (optional dictionary)
 /// Output: list of rows as dictionaries
 /// </summary>
-public sealed class QueryDatabaseStep : IStepHandler
+public sealed class QueryDatabaseStep : IStepHandler<QueryDatabaseStepInput>
 {
     private readonly DbConnectionFactory _dbFactory;
     private readonly ILogger<QueryDatabaseStep> _logger;
@@ -21,37 +21,38 @@ public sealed class QueryDatabaseStep : IStepHandler
         _logger = logger;
     }
 
-    public async ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    public async ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance<QueryDatabaseStepInput> step)
     {
-        var sql = step.Inputs.TryGetValue("sql", out var s) ? s?.ToString() : null;
+        var sql = step.Inputs.Sql;
         if (string.IsNullOrWhiteSpace(sql))
+        {
             throw new ArgumentException("Input 'sql' is required for QueryDatabase step.");
+        }
 
         var parameters = new DynamicParameters();
-        if (step.Inputs.TryGetValue("parameters", out var p) && p is not null)
+        if (step.Inputs.Parameters is not null)
         {
-            var dict = p switch
+            foreach (var kvp in step.Inputs.Parameters)
             {
-                JsonElement je => JsonSerializer.Deserialize<Dictionary<string, object?>>(je.GetRawText()),
-                IDictionary<string, object?> d => d,
-                _ => null
-            };
-
-            if (dict is not null)
-            {
-                foreach (var kvp in dict)
-                    parameters.Add(kvp.Key, UnboxJsonElement(kvp.Value));
+                parameters.Add(kvp.Key, UnboxJsonElement(kvp.Value));
             }
         }
 
         _logger.LogInformation("[QueryDatabase] RunId={RunId} Executing: {Sql}", ctx.RunId, sql);
 
         using var connection = _dbFactory.Create();
-        var rows = (await connection.QueryAsync(sql, parameters).ConfigureAwait(false)).AsList();
+        var rows = (await connection.QueryAsync(sql, parameters).ConfigureAwait(false))
+            .Select(row => row as IDictionary<string, object?> ?? new Dictionary<string, object?>())
+            .Select(row => row.ToDictionary(kvp => kvp.Key, kvp => UnboxJsonElement(kvp.Value)))
+            .ToList();
 
         _logger.LogInformation("[QueryDatabase] RunId={RunId} Returned {Count} rows", ctx.RunId, rows.Count);
 
-        return rows;
+        return new StepResult<IReadOnlyList<Dictionary<string, object?>>>
+        {
+            Key = step.Key,
+            Value = rows
+        };
     }
 
     private static object? UnboxJsonElement(object? value) => value switch
@@ -63,4 +64,10 @@ public sealed class QueryDatabaseStep : IStepHandler
         JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined } => null,
         _ => value
     };
+}
+
+public sealed class QueryDatabaseStepInput
+{
+    public string? Sql { get; set; }
+    public Dictionary<string, object?>? Parameters { get; set; }
 }

@@ -59,7 +59,7 @@ public sealed class SqlFlowRunStore : IFlowRunStore
 
     public async Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        var page = await GetRunsPageAsync(flowId, null, skip, take);
+        var page = await GetRunsPageAsync(flowId, null, skip, take, null);
         return page.Runs;
     }
 
@@ -67,22 +67,47 @@ public sealed class SqlFlowRunStore : IFlowRunStore
         Guid? flowId = null,
         string? status = null,
         int skip = 0,
-        int take = 50)
+        int take = 50,
+        string? search = null)
     {
         await using var conn = new SqlConnection(_connectionString);
         var whereClauses = new List<string>();
         if (flowId.HasValue)
-            whereClauses.Add("FlowId = @FlowId");
+            whereClauses.Add("fr.FlowId = @FlowId");
         if (!string.IsNullOrWhiteSpace(status))
-            whereClauses.Add("Status = @Status");
+            whereClauses.Add("fr.Status = @Status");
+        var searchLike = (string?)null;
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            searchLike = $"%{EscapeLikePattern(search)}%";
+            whereClauses.Add("""
+                (
+                    CAST(fr.Id AS NVARCHAR(36)) LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.FlowName, '') LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.TriggerKey, '') LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.Status, '') LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.BackgroundJobId, '') LIKE @SearchLike ESCAPE '\'
+                    OR EXISTS (
+                        SELECT 1
+                        FROM FlowSteps AS fs
+                        WHERE fs.RunId = fr.Id
+                          AND (
+                                ISNULL(fs.StepKey, '') LIKE @SearchLike ESCAPE '\'
+                                OR ISNULL(fs.ErrorMessage, '') LIKE @SearchLike ESCAPE '\'
+                                OR ISNULL(fs.OutputJson, '') LIKE @SearchLike ESCAPE '\'
+                              )
+                    )
+                )
+                """);
+        }
 
         var whereSql = whereClauses.Count > 0 ? $" WHERE {string.Join(" AND ", whereClauses)}" : string.Empty;
-        var countSql = $"SELECT COUNT(*) FROM FlowRuns{whereSql}";
-        var pageSql = "SELECT Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, CompletedAt FROM FlowRuns"
+        var countSql = $"SELECT COUNT(*) FROM FlowRuns AS fr{whereSql}";
+        var pageSql = "SELECT fr.Id, fr.FlowId, fr.FlowName, fr.Status, fr.TriggerKey, fr.TriggerDataJson, fr.BackgroundJobId, fr.StartedAt, fr.CompletedAt FROM FlowRuns AS fr"
             + whereSql
-            + " ORDER BY StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY";
+            + " ORDER BY fr.StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY";
 
-        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take };
+        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike };
         var totalCount = await conn.ExecuteScalarAsync<int>(countSql, parameters);
         var rows = await conn.QueryAsync<FlowRunRecord>(pageSql, parameters);
 
@@ -142,5 +167,14 @@ public sealed class SqlFlowRunStore : IFlowRunStore
         return await conn.QuerySingleOrDefaultAsync<FlowRunRecord>(
             "SELECT Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, CompletedAt FROM FlowRuns WHERE Id = @Id",
             new { Id = runId });
+    }
+
+    private static string EscapeLikePattern(string value)
+    {
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal)
+            .Replace("[", "\\[", StringComparison.Ordinal);
     }
 }

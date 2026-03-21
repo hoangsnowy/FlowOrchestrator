@@ -1,25 +1,23 @@
 using System.Globalization;
 using System.Text.Json;
-using FlowOrchestrator.Core.Abstractions;
 
 namespace FlowOrchestrator.SampleApp.Steps;
 
 internal static class PollConditionEvaluator
 {
-    public static bool IsMatched(JsonElement payload, IDictionary<string, object?> inputs)
+    public static bool IsMatched(JsonElement payload, string? conditionPath, object? expectedValue)
     {
-        var conditionPath = inputs.TryGetString("pollConditionPath", out var path) ? path : null;
         if (!TryResolvePath(payload, conditionPath, out var target))
         {
             return false;
         }
 
-        if (!inputs.TryGetValue("pollConditionEquals", out var expected))
+        if (expectedValue is null)
         {
             return HasData(target);
         }
 
-        return string.Equals(Normalize(target), Normalize(expected), StringComparison.OrdinalIgnoreCase);
+        return string.Equals(Normalize(target), Normalize(expectedValue), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryResolvePath(JsonElement payload, string? path, out JsonElement target)

@@ -29,13 +29,23 @@ public sealed class WebhookTriggerBodyTestFlow : IFlowDefinition
                     ["message"] = "@triggerBody()"
                 }
             },
-            ["log_order_id"] = new StepMetadata
+            ["serialize_probe"] = new StepMetadata
             {
-                Type = "LogMessage",
+                Type = "SerializeProbe",
                 RunAfter = new RunAfterCollection { ["log_full_payload"] = [StepStatus.Succeeded] },
                 Inputs = new Dictionary<string, object?>
                 {
-                    ["message"] = "@triggerBody()?.orderId"
+                    ["payload"] = "@triggerBody()",
+                    ["indented"] = true
+                }
+            },
+            ["log_payload_id"] = new StepMetadata
+            {
+                Type = "LogMessage",
+                RunAfter = new RunAfterCollection { ["serialize_probe"] = [StepStatus.Succeeded] },
+                Inputs = new Dictionary<string, object?>
+                {
+                    ["message"] = "@triggerBody()?.payload.id"
                 }
             }
         }
