@@ -28,14 +28,34 @@ public sealed class SqlFlowRunStore : IFlowRunStore
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.ExecuteAsync("""
+            BEGIN TRANSACTION;
+
+            DECLARE @AttemptNo INT;
+            SELECT @AttemptNo = ISNULL(MAX(AttemptNo), 0) + 1
+            FROM FlowStepAttempts WITH (UPDLOCK, HOLDLOCK)
+            WHERE RunId = @RunId AND StepKey = @StepKey;
+
+            INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, InputJson, JobId, StartedAt)
+            VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET());
+
             MERGE FlowSteps AS target
             USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
             ON target.RunId = source.RunId AND target.StepKey = source.StepKey
             WHEN MATCHED THEN
-                UPDATE SET StepType = @StepType, InputJson = @InputJson, JobId = @JobId, Status = 'Running', StartedAt = SYSDATETIMEOFFSET(), CompletedAt = NULL
+                UPDATE SET
+                    StepType = @StepType,
+                    InputJson = @InputJson,
+                    OutputJson = NULL,
+                    ErrorMessage = NULL,
+                    JobId = @JobId,
+                    Status = 'Running',
+                    StartedAt = SYSDATETIMEOFFSET(),
+                    CompletedAt = NULL
             WHEN NOT MATCHED THEN
                 INSERT (RunId, StepKey, StepType, Status, InputJson, JobId, StartedAt)
                 VALUES (@RunId, @StepKey, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET());
+
+            COMMIT TRANSACTION;
             """, new { RunId = runId, StepKey = stepKey, StepType = stepType, InputJson = inputJson, JobId = jobId });
     }
 
@@ -43,9 +63,26 @@ public sealed class SqlFlowRunStore : IFlowRunStore
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.ExecuteAsync("""
+            BEGIN TRANSACTION;
+
             UPDATE FlowSteps
             SET Status = @Status, OutputJson = @OutputJson, ErrorMessage = @ErrorMessage, CompletedAt = SYSDATETIMEOFFSET()
             WHERE RunId = @RunId AND StepKey = @StepKey
+
+            UPDATE attempts
+            SET Status = @Status, OutputJson = @OutputJson, ErrorMessage = @ErrorMessage, CompletedAt = SYSDATETIMEOFFSET()
+            FROM FlowStepAttempts AS attempts
+            INNER JOIN (
+                SELECT TOP (1) RunId, StepKey, AttemptNo
+                FROM FlowStepAttempts
+                WHERE RunId = @RunId AND StepKey = @StepKey
+                ORDER BY AttemptNo DESC
+            ) AS latest
+                ON latest.RunId = attempts.RunId
+               AND latest.StepKey = attempts.StepKey
+               AND latest.AttemptNo = attempts.AttemptNo
+
+            COMMIT TRANSACTION;
             """, new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage });
     }
 
@@ -97,6 +134,16 @@ public sealed class SqlFlowRunStore : IFlowRunStore
                                 OR ISNULL(fs.OutputJson, '') LIKE @SearchLike ESCAPE '\'
                               )
                     )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM FlowStepAttempts AS fsa
+                        WHERE fsa.RunId = fr.Id
+                          AND (
+                                ISNULL(fsa.StepKey, '') LIKE @SearchLike ESCAPE '\'
+                                OR ISNULL(fsa.ErrorMessage, '') LIKE @SearchLike ESCAPE '\'
+                                OR ISNULL(fsa.OutputJson, '') LIKE @SearchLike ESCAPE '\'
+                              )
+                    )
                 )
                 """);
         }
@@ -120,10 +167,18 @@ public sealed class SqlFlowRunStore : IFlowRunStore
         var run = await GetRunCoreAsync(conn, runId);
         if (run is null) return null;
 
-        var steps = await conn.QueryAsync<FlowStepRecord>(
+        var steps = (await conn.QueryAsync<FlowStepRecord>(
             "SELECT RunId, StepKey, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt FROM FlowSteps WHERE RunId = @RunId ORDER BY StartedAt",
-            new { RunId = runId });
-        run.Steps = steps.AsList();
+            new { RunId = runId }))
+            .AsList();
+
+        var attempts = (await conn.QueryAsync<FlowStepAttemptRecord>(
+            "SELECT RunId, StepKey, AttemptNo AS Attempt, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt FROM FlowStepAttempts WHERE RunId = @RunId ORDER BY StepKey, AttemptNo",
+            new { RunId = runId })
+            ).AsList();
+
+        PopulateStepAttempts(steps, attempts);
+        run.Steps = steps;
         return run;
     }
 
@@ -167,6 +222,42 @@ public sealed class SqlFlowRunStore : IFlowRunStore
         return await conn.QuerySingleOrDefaultAsync<FlowRunRecord>(
             "SELECT Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, CompletedAt FROM FlowRuns WHERE Id = @Id",
             new { Id = runId });
+    }
+
+    private static void PopulateStepAttempts(IReadOnlyList<FlowStepRecord> steps, IReadOnlyList<FlowStepAttemptRecord> attempts)
+    {
+        var attemptsLookup = attempts
+            .GroupBy(a => a.StepKey, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<FlowStepAttemptRecord>)g.OrderBy(a => a.Attempt).ToList(), StringComparer.Ordinal);
+
+        foreach (var step in steps)
+        {
+            if (!attemptsLookup.TryGetValue(step.StepKey, out var stepAttempts) || stepAttempts.Count == 0)
+            {
+                stepAttempts = [CreateSyntheticAttempt(step)];
+            }
+
+            step.Attempts = stepAttempts;
+            step.AttemptCount = stepAttempts.Count;
+        }
+    }
+
+    private static FlowStepAttemptRecord CreateSyntheticAttempt(FlowStepRecord step)
+    {
+        return new FlowStepAttemptRecord
+        {
+            RunId = step.RunId,
+            StepKey = step.StepKey,
+            Attempt = 1,
+            StepType = step.StepType,
+            Status = step.Status,
+            InputJson = step.InputJson,
+            OutputJson = step.OutputJson,
+            ErrorMessage = step.ErrorMessage,
+            JobId = step.JobId,
+            StartedAt = step.StartedAt,
+            CompletedAt = step.CompletedAt
+        };
     }
 
     private static string EscapeLikePattern(string value)

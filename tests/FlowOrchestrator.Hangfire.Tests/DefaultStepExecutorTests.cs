@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FlowOrchestrator.Core.Abstractions;
@@ -341,6 +342,43 @@ public class DefaultStepExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_GenericHandler_SyncsMutatedInputsBackToStep()
+    {
+        var services = new ServiceCollection();
+        services.AddStepHandler<PollStateMutatingHandler>("PollStateMutatingHandler");
+        var serviceProvider = services.BuildServiceProvider();
+
+        var flow = CreateFlow(new StepCollection
+        {
+            ["step1"] = new StepMetadata { Type = "PollStateMutatingHandler" }
+        });
+
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("step1", "PollStateMutatingHandler")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["pollEnabled"] = true,
+                ["pollIntervalSeconds"] = 5,
+                ["pollTimeoutSeconds"] = 30,
+                ["pollMinAttempts"] = 1
+            }
+        };
+
+        var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+
+        var result = await executor.ExecuteAsync(ctx, flow, step);
+
+        result.Status.Should().Be(StepStatus.Pending);
+        step.Inputs.Should().ContainKey("__pollAttempt");
+        step.Inputs.Should().ContainKey("__pollStartedAtUtc");
+        ReadInt(step.Inputs["__pollAttempt"]).Should().Be(5);
+        ReadString(step.Inputs["__pollStartedAtUtc"]).Should().Be(PollStateMutatingHandler.NextStartedAtUtc);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_GenericHandler_BindsStrongTypedInput()
     {
         GenericTypedHandler.Reset();
@@ -462,5 +500,58 @@ public class DefaultStepExecutorTests
 
         [JsonPropertyName("__pollAttempt")]
         public int? PollAttempt { get; set; }
+    }
+
+    private sealed class PollStateMutatingHandler : IStepHandler<PollStateMutatingInput>
+    {
+        internal const string NextStartedAtUtc = "2026-01-02T03:04:05.0000000+00:00";
+
+        public ValueTask<object?> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance<PollStateMutatingInput> step)
+        {
+            step.Inputs.PollAttempt = 5;
+            step.Inputs.PollStartedAtUtc = NextStartedAtUtc;
+            return ValueTask.FromResult<object?>(new StepResult
+            {
+                Key = step.Key,
+                Status = StepStatus.Pending,
+                DelayNextStep = TimeSpan.FromSeconds(5)
+            });
+        }
+    }
+
+    private sealed class PollStateMutatingInput
+    {
+        public bool PollEnabled { get; set; }
+        public int PollIntervalSeconds { get; set; }
+        public int PollTimeoutSeconds { get; set; }
+        public int PollMinAttempts { get; set; }
+
+        [JsonPropertyName("__pollStartedAtUtc")]
+        public string? PollStartedAtUtc { get; set; }
+
+        [JsonPropertyName("__pollAttempt")]
+        public int? PollAttempt { get; set; }
+    }
+
+    private static int ReadInt(object? value)
+    {
+        return value switch
+        {
+            int i => i,
+            JsonElement { ValueKind: JsonValueKind.Number } json => json.GetInt32(),
+            JsonElement { ValueKind: JsonValueKind.String } json => int.Parse(json.GetString()!, CultureInfo.InvariantCulture),
+            _ => throw new InvalidOperationException($"Cannot convert value '{value}' to int.")
+        };
+    }
+
+    private static string? ReadString(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } json => json.GetString(),
+            _ => throw new InvalidOperationException($"Cannot convert value '{value}' to string.")
+        };
     }
 }

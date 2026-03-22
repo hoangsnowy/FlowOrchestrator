@@ -156,14 +156,50 @@ Manual trigger and webhook endpoints capture request body plus non-sensitive hea
 2. Click the **Trigger** button.
 3. Switch to the **Runs** page to monitor execution.
 
+### Reusable polling step handler
+
+`FlowOrchestrator.Core` provides a reusable polling abstraction for step handlers:
+- `PollableStepHandler<TInput>` handles retry scheduling (`Pending` + `DelayNextStep`), timeout, min-attempt checks, and poll-state reset.
+- `IPollableInput` defines polling contract fields used by the base handler.
+
+```csharp
+public sealed class CheckJobStatusStep : PollableStepHandler<CheckJobStatusInput>
+{
+    protected override async ValueTask<(JsonElement Result, bool IsJson)> FetchAsync(
+        IExecutionContext ctx, IFlowDefinition flow, IStepInstance<CheckJobStatusInput> step)
+    {
+        var payload = await CallExternalServiceAsync(step.Inputs.JobId);
+        return (payload, true);
+    }
+}
+
+public sealed class CheckJobStatusInput : IPollableInput
+{
+    public string JobId { get; set; } = string.Empty;
+    public bool PollEnabled { get; set; }
+    public int PollIntervalSeconds { get; set; } = 10;
+    public int PollTimeoutSeconds { get; set; } = 300;
+    public int PollMinAttempts { get; set; } = 1;
+    public string? PollConditionPath { get; set; }
+    public object? PollConditionEquals { get; set; }
+
+    [JsonPropertyName("__pollStartedAtUtc")]
+    public string? PollStartedAtUtc { get; set; }
+
+    [JsonPropertyName("__pollAttempt")]
+    public int? PollAttempt { get; set; }
+}
+```
+
 ### Polling demo flow
 
-`PollingDemoFlow` (`00000000-0000-0000-0000-000000000003`) demonstrates real polling behavior using `CallExternalApi`:
+`PollingDemoFlow` (`00000000-0000-0000-0000-000000000003`) demonstrates this abstraction through `CallExternalApiStep : PollableStepHandler<CallExternalApiStepInput>`:
 - `pollEnabled = true`
 - `pollMinAttempts = 3` (forces at least 3 poll attempts before success)
 - `pollIntervalSeconds = 5`
 
 This lets you observe **Pending -> Pending -> Succeeded** progression in the Runs timeline.
+Run detail also shows an attempt badge (for retries/polls) and a `Step Attempts` panel with per-attempt input/output/status history.
 
 ### Retrying a failed step
 
