@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FlowOrchestrator.Core.Abstractions;
@@ -12,7 +11,7 @@ namespace FlowOrchestrator.SampleApp.Steps;
 /// Poll inputs (optional): pollEnabled, pollIntervalSeconds, pollTimeoutSeconds, pollConditionPath, pollConditionEquals, pollMinAttempts
 /// Output: deserialized JSON response
 /// </summary>
-public sealed class CallExternalApiStep : IStepHandler<CallExternalApiStepInput>
+public sealed class CallExternalApiStep : PollableStepHandler<CallExternalApiStepInput>
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<CallExternalApiStep> _logger;
@@ -23,7 +22,8 @@ public sealed class CallExternalApiStep : IStepHandler<CallExternalApiStepInput>
         _logger = logger;
     }
 
-    public async ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance<CallExternalApiStepInput> step)
+    protected override async ValueTask<(JsonElement Result, bool IsJson)> FetchAsync(
+        IExecutionContext ctx, IFlowDefinition flow, IStepInstance<CallExternalApiStepInput> step)
     {
         var input = step.Inputs;
         var method = string.IsNullOrWhiteSpace(input.Method) ? "GET" : input.Method;
@@ -56,101 +56,7 @@ public sealed class CallExternalApiStep : IStepHandler<CallExternalApiStepInput>
                 GetBodyPreview(responseBody));
         }
 
-        if (!input.PollEnabled)
-        {
-            return new StepResult<JsonElement>
-            {
-                Key = step.Key,
-                Value = result
-            };
-        }
-
-        if (!parsedAsJson && !string.IsNullOrWhiteSpace(input.PollConditionPath))
-        {
-            ResetPollState(input);
-            return new StepResult<JsonElement>
-            {
-                Key = step.Key,
-                Status = StepStatus.Failed,
-                FailedReason = "Polling with 'pollConditionPath' requires JSON response body, but API returned non-JSON content.",
-                Value = result
-            };
-        }
-
-        var intervalSeconds = Math.Max(1, input.PollIntervalSeconds);
-        var timeoutSeconds = Math.Max(intervalSeconds, input.PollTimeoutSeconds);
-        var minAttempts = Math.Max(1, input.PollMinAttempts);
-        var pollStartedAt = GetPollStartedAt(input);
-        var currentAttempt = IncrementPollAttempt(input);
-
-        if (currentAttempt >= minAttempts && PollConditionEvaluator.IsMatched(result, input.PollConditionPath, input.PollConditionEquals))
-        {
-            ResetPollState(input);
-            _logger.LogInformation(
-                "[CallExternalApi] RunId={RunId} Polling condition matched at attempt {Attempt}. Continue flow.",
-                ctx.RunId,
-                currentAttempt);
-            return new StepResult<JsonElement>
-            {
-                Key = step.Key,
-                Value = result
-            };
-        }
-
-        var elapsed = DateTimeOffset.UtcNow - pollStartedAt;
-        if (elapsed >= TimeSpan.FromSeconds(timeoutSeconds))
-        {
-            ResetPollState(input);
-            return new StepResult<JsonElement>
-            {
-                Key = step.Key,
-                Status = StepStatus.Failed,
-                FailedReason = $"Polling timed out after {timeoutSeconds} seconds.",
-                Value = result
-            };
-        }
-
-        _logger.LogInformation(
-            "[CallExternalApi] RunId={RunId} Polling condition not met at attempt {Attempt}/{MinAttempts}. Retry in {Delay}s.",
-            ctx.RunId,
-            currentAttempt,
-            minAttempts,
-            intervalSeconds);
-
-        return new StepResult<JsonElement>
-        {
-            Key = step.Key,
-            Status = StepStatus.Pending,
-            DelayNextStep = TimeSpan.FromSeconds(intervalSeconds),
-            Value = result
-        };
-    }
-
-    private static DateTimeOffset GetPollStartedAt(CallExternalApiStepInput input)
-    {
-        if (!string.IsNullOrWhiteSpace(input.PollStartedAtUtc)
-            && DateTimeOffset.TryParse(input.PollStartedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-        {
-            return parsed;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        input.PollStartedAtUtc = now.ToString("O", CultureInfo.InvariantCulture);
-        return now;
-    }
-
-    private static int IncrementPollAttempt(CallExternalApiStepInput input)
-    {
-        var next = (input.PollAttempt ?? 0) + 1;
-        input.PollAttempt = next;
-
-        return next;
-    }
-
-    private static void ResetPollState(CallExternalApiStepInput input)
-    {
-        input.PollStartedAtUtc = null;
-        input.PollAttempt = null;
+        return (result, parsedAsJson);
     }
 
     private static JsonElement ParseResponsePayload(string responseBody, string? mediaType, out bool parsedAsJson)
@@ -222,7 +128,7 @@ public sealed class CallExternalApiStep : IStepHandler<CallExternalApiStepInput>
     }
 }
 
-public sealed class CallExternalApiStepInput
+public sealed class CallExternalApiStepInput : IPollableInput
 {
     public string Method { get; set; } = "GET";
     public string Path { get; set; } = "/";
@@ -232,6 +138,7 @@ public sealed class CallExternalApiStepInput
     public int PollIntervalSeconds { get; set; } = 10;
     public int PollTimeoutSeconds { get; set; } = 300;
     public int PollMinAttempts { get; set; } = 1;
+
     public string? PollConditionPath { get; set; }
     public object? PollConditionEquals { get; set; }
 

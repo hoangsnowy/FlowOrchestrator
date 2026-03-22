@@ -6,6 +6,8 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
 {
     private readonly ConcurrentDictionary<Guid, FlowRunRecord> _runs = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowStepRecord> _steps = new();
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey, int Attempt), FlowStepAttemptRecord> _stepAttempts = new();
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
 
     public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId)
     {
@@ -26,28 +28,65 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
 
     public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
     {
-        _steps[(runId, stepKey)] = new FlowStepRecord
+        var key = (runId, stepKey);
+        var attempt = _stepAttemptCounters.AddOrUpdate(key, 1, static (_, current) => current + 1);
+        var startedAt = DateTimeOffset.UtcNow;
+
+        _stepAttempts[(runId, stepKey, attempt)] = new FlowStepAttemptRecord
+        {
+            RunId = runId,
+            StepKey = stepKey,
+            Attempt = attempt,
+            StepType = stepType,
+            Status = "Running",
+            InputJson = inputJson,
+            JobId = jobId,
+            StartedAt = startedAt
+        };
+
+        _steps[key] = new FlowStepRecord
         {
             RunId = runId,
             StepKey = stepKey,
             StepType = stepType,
             InputJson = inputJson,
+            OutputJson = null,
+            ErrorMessage = null,
             JobId = jobId,
             Status = "Running",
-            StartedAt = DateTimeOffset.UtcNow
+            StartedAt = startedAt,
+            CompletedAt = null,
+            AttemptCount = attempt
         };
+
         return Task.CompletedTask;
     }
 
     public Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
     {
+        var completedAt = DateTimeOffset.UtcNow;
+
         if (_steps.TryGetValue((runId, stepKey), out var step))
         {
             step.Status = status;
             step.OutputJson = outputJson;
             step.ErrorMessage = errorMessage;
-            step.CompletedAt = DateTimeOffset.UtcNow;
+            step.CompletedAt = completedAt;
         }
+
+        var latestAttempt = _stepAttempts.Values
+            .Where(a => a.RunId == runId && string.Equals(a.StepKey, stepKey, StringComparison.Ordinal))
+            .OrderByDescending(a => a.Attempt)
+            .FirstOrDefault();
+
+        if (latestAttempt is not null)
+        {
+            latestAttempt.Status = status;
+            latestAttempt.OutputJson = outputJson;
+            latestAttempt.ErrorMessage = errorMessage;
+            latestAttempt.CompletedAt = completedAt;
+        }
+
         return Task.CompletedTask;
     }
 
@@ -91,7 +130,30 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         var steps = _steps.Values
             .Where(s => s.RunId == runId)
             .OrderBy(s => s.StartedAt)
+            .Select(CloneStepRecord)
             .ToList();
+
+        var attempts = _stepAttempts.Values
+            .Where(a => a.RunId == runId)
+            .OrderBy(a => a.StartedAt)
+            .ThenBy(a => a.Attempt)
+            .Select(CloneStepAttemptRecord)
+            .ToList();
+
+        var attemptsLookup = attempts
+            .GroupBy(a => a.StepKey, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<FlowStepAttemptRecord>)g.OrderBy(a => a.Attempt).ToList(), StringComparer.Ordinal);
+
+        foreach (var step in steps)
+        {
+            if (!attemptsLookup.TryGetValue(step.StepKey, out var stepAttempts) || stepAttempts.Count == 0)
+            {
+                stepAttempts = [CreateSyntheticAttempt(step)];
+            }
+
+            step.Attempts = stepAttempts;
+            step.AttemptCount = stepAttempts.Count;
+        }
 
         run.Steps = steps;
         return Task.FromResult<FlowRunRecord?>(run);
@@ -168,15 +230,80 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
             return true;
         }
 
-        return _steps.Values.Any(s =>
+        var stepMatch = _steps.Values.Any(s =>
             s.RunId == run.Id
             && (ContainsIgnoreCase(s.StepKey, search)
                 || ContainsIgnoreCase(s.ErrorMessage, search)
                 || ContainsIgnoreCase(s.OutputJson, search)));
+
+        if (stepMatch)
+        {
+            return true;
+        }
+
+        return _stepAttempts.Values.Any(a =>
+            a.RunId == run.Id
+            && (ContainsIgnoreCase(a.StepKey, search)
+                || ContainsIgnoreCase(a.ErrorMessage, search)
+                || ContainsIgnoreCase(a.OutputJson, search)));
     }
 
     private static bool ContainsIgnoreCase(string? value, string search)
     {
         return !string.IsNullOrEmpty(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static FlowStepRecord CloneStepRecord(FlowStepRecord step)
+    {
+        return new FlowStepRecord
+        {
+            RunId = step.RunId,
+            StepKey = step.StepKey,
+            StepType = step.StepType,
+            Status = step.Status,
+            InputJson = step.InputJson,
+            OutputJson = step.OutputJson,
+            ErrorMessage = step.ErrorMessage,
+            JobId = step.JobId,
+            StartedAt = step.StartedAt,
+            CompletedAt = step.CompletedAt,
+            AttemptCount = step.AttemptCount
+        };
+    }
+
+    private static FlowStepAttemptRecord CloneStepAttemptRecord(FlowStepAttemptRecord attempt)
+    {
+        return new FlowStepAttemptRecord
+        {
+            RunId = attempt.RunId,
+            StepKey = attempt.StepKey,
+            Attempt = attempt.Attempt,
+            StepType = attempt.StepType,
+            Status = attempt.Status,
+            InputJson = attempt.InputJson,
+            OutputJson = attempt.OutputJson,
+            ErrorMessage = attempt.ErrorMessage,
+            JobId = attempt.JobId,
+            StartedAt = attempt.StartedAt,
+            CompletedAt = attempt.CompletedAt
+        };
+    }
+
+    private static FlowStepAttemptRecord CreateSyntheticAttempt(FlowStepRecord step)
+    {
+        return new FlowStepAttemptRecord
+        {
+            RunId = step.RunId,
+            StepKey = step.StepKey,
+            Attempt = 1,
+            StepType = step.StepType,
+            Status = step.Status,
+            InputJson = step.InputJson,
+            OutputJson = step.OutputJson,
+            ErrorMessage = step.ErrorMessage,
+            JobId = step.JobId,
+            StartedAt = step.StartedAt,
+            CompletedAt = step.CompletedAt
+        };
     }
 }

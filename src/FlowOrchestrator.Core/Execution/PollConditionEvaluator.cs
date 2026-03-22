@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-namespace FlowOrchestrator.SampleApp.Steps;
+namespace FlowOrchestrator.Core.Execution;
 
 internal static class PollConditionEvaluator
 {
@@ -74,7 +74,6 @@ internal static class PollConditionEvaluator
         JsonValueKind.String => value.GetString() ?? string.Empty,
         JsonValueKind.True => bool.TrueString,
         JsonValueKind.False => bool.FalseString,
-        JsonValueKind.Number => value.GetRawText(),
         _ => value.GetRawText()
     };
 }

@@ -32,6 +32,9 @@ public class InMemoryFlowRunStoreTests
         detail!.Steps.Should().HaveCount(1);
         detail.Steps![0].StepKey.Should().Be("step1");
         detail.Steps[0].Status.Should().Be("Running");
+        detail.Steps[0].AttemptCount.Should().Be(1);
+        detail.Steps[0].Attempts.Should().HaveCount(1);
+        detail.Steps[0].Attempts![0].Attempt.Should().Be(1);
     }
 
     [Fact]
@@ -47,6 +50,32 @@ public class InMemoryFlowRunStoreTests
         detail!.Steps![0].Status.Should().Be("Succeeded");
         detail.Steps[0].OutputJson.Should().Be("{\"result\":1}");
         detail.Steps[0].CompletedAt.Should().NotBeNull();
+        detail.Steps[0].AttemptCount.Should().Be(1);
+        detail.Steps[0].Attempts.Should().HaveCount(1);
+        detail.Steps[0].Attempts![0].Status.Should().Be("Succeeded");
+    }
+
+    [Fact]
+    public async Task RecordStepStartAsync_MultipleStarts_CreatesAttemptHistory()
+    {
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "TestFlow", runId, "manual", null, null);
+
+        await _sut.RecordStepStartAsync(runId, "step1", "CallExternalApi", "{\"attempt\":1}", "job-1");
+        await _sut.RecordStepCompleteAsync(runId, "step1", "Pending", "{\"status\":\"processing\"}", null);
+        await _sut.RecordStepStartAsync(runId, "step1", "CallExternalApi", "{\"attempt\":2}", "job-2");
+        await _sut.RecordStepCompleteAsync(runId, "step1", "Succeeded", "{\"status\":\"done\"}", null);
+
+        var detail = await _sut.GetRunDetailAsync(runId);
+        detail!.Steps.Should().ContainSingle();
+        detail.Steps![0].Status.Should().Be("Succeeded");
+        detail.Steps[0].AttemptCount.Should().Be(2);
+        detail.Steps[0].Attempts.Should().HaveCount(2);
+        var attempts = detail.Steps[0].Attempts!;
+        attempts[0].Attempt.Should().Be(1);
+        attempts[0].Status.Should().Be("Pending");
+        attempts[1].Attempt.Should().Be(2);
+        attempts[1].Status.Should().Be("Succeeded");
     }
 
     [Fact]
@@ -165,6 +194,23 @@ public class InMemoryFlowRunStoreTests
         page.TotalCount.Should().Be(1);
         page.Runs.Should().ContainSingle();
         page.Runs[0].Id.Should().Be(runId1);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_SearchesByAttemptHistoryErrorMessage()
+    {
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", runId, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId, "payment", "Payment", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "payment", "Pending", null, "Gateway timeout on first attempt");
+        await _sut.RecordStepStartAsync(runId, "payment", "Payment", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "payment", "Succeeded", "{\"ok\":true}", null);
+
+        var page = await _sut.GetRunsPageAsync(search: "timeout on first");
+
+        page.TotalCount.Should().Be(1);
+        page.Runs.Should().ContainSingle();
+        page.Runs[0].Id.Should().Be(runId);
     }
 
     [Fact]

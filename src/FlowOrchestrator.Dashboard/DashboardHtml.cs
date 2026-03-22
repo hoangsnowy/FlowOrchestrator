@@ -447,11 +447,26 @@ function renderRunTriggerPanels(run) {
 
   return '<div style="margin-bottom:10px">' + dataPanel + headersPanel + '</div>';
 }
+function getStepAttemptCount(step) {
+  if (typeof step.attemptCount === 'number' && Number.isFinite(step.attemptCount) && step.attemptCount > 0) {
+    return step.attemptCount;
+  }
+
+  if (Array.isArray(step.attempts) && step.attempts.length > 0) {
+    return step.attempts.length;
+  }
+
+  return 1;
+}
 function renderStepDebugPanels(step) {
+  const attemptCount = getStepAttemptCount(step);
+  const attemptsPanel = attemptCount > 1
+    ? renderDetailPanel('Step Attempts', step.attempts, false, null)
+    : '';
   const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
   const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
-  return inputPanel + outputPanel + errorPanel;
+  return attemptsPanel + inputPanel + outputPanel + errorPanel;
 }
 function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
 
@@ -997,12 +1012,14 @@ function renderTimeline(steps, runId) {
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i], last = i===steps.length-1;
     const icon = ({Succeeded:'\u2713',Failed:'\u2715',Running:'\u25cf'})[s.status]||'\u25cb';
+    const attemptCount = getStepAttemptCount(s);
     html += '<div class="step-node"><div class="step-connector">'
       +'<div class="step-circle '+s.status+'">'+icon+'</div>'
       +'<div class="step-line '+(s.status==='Succeeded'?'done':'')+' '+(last?'last':'')+'"></div></div>'
       +'<div class="step-card '+s.status+'">'
       +'<div class="step-card-header"><div><div class="step-key">'+esc(s.stepKey)+'</div><div class="step-type">'+esc(s.stepType)+'</div></div>'
       +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+s.status+'</span>'
+      +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
       +'</div></div>'
       +'<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'

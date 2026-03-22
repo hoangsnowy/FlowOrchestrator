@@ -1,9 +1,10 @@
 namespace FlowOrchestrator.Core.Storage;
 
-public sealed class FlowStepRecord
+public sealed class FlowStepAttemptRecord
 {
     public Guid RunId { get; set; }
     public string StepKey { get; set; } = default!;
+    public int Attempt { get; set; }
     public string StepType { get; set; } = default!;
     public string Status { get; set; } = default!;
     public string? InputJson { get; set; }
@@ -12,6 +13,4 @@ public sealed class FlowStepRecord
     public string? JobId { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
-    public int AttemptCount { get; set; }
-    public IReadOnlyList<FlowStepAttemptRecord>? Attempts { get; set; }
 }
