@@ -10,6 +10,7 @@ public static class SqlServerServiceCollectionExtensions
     {
         services.AddSingleton<IFlowStore>(_ => new SqlFlowStore(connectionString));
         services.AddSingleton<IFlowRunStore>(_ => new SqlFlowRunStore(connectionString));
+        services.AddSingleton<IOutputsRepository>(_ => new SqlOutputsRepository(connectionString));
         services.AddHostedService(sp => new FlowOrchestratorSqlMigrator(connectionString, sp.GetRequiredService<ILogger<FlowOrchestratorSqlMigrator>>()));
         return services;
     }

@@ -138,5 +138,16 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowStepAttempts_RunId_StepKey_AttemptNo' AND object_id = OBJECT_ID(N'[FlowStepAttempts]'))
                 CREATE INDEX IX_FlowStepAttempts_RunId_StepKey_AttemptNo ON [FlowStepAttempts]([RunId], [StepKey], [AttemptNo]);
         END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowOutputs')
+        BEGIN
+            CREATE TABLE [FlowOutputs] (
+                [RunId]      UNIQUEIDENTIFIER NOT NULL,
+                [Key]        NVARCHAR(256)    NOT NULL,
+                [ValueJson]  NVARCHAR(MAX)    NULL,
+                [CreatedAt]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+                CONSTRAINT PK_FlowOutputs PRIMARY KEY ([RunId], [Key])
+            );
+        END
         """;
 }

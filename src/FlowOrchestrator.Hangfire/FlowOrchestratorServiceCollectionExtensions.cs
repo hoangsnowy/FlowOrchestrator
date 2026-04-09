@@ -17,7 +17,6 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.Options);
 
         services.AddScoped<IExecutionContextAccessor, ExecutionContextAccessor>();
-        services.AddSingleton<IOutputsRepository, InMemoryOutputsRepository>();
 
         if (!string.IsNullOrEmpty(builder.Options.ConnectionString))
         {
@@ -27,6 +26,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         {
             services.AddSingleton<IFlowStore, InMemoryFlowStore>();
             services.AddSingleton<IFlowRunStore, InMemoryFlowRunStore>();
+            services.AddSingleton<IOutputsRepository, InMemoryOutputsRepository>();
         }
 
         services.AddSingleton<IFlowRepository>(sp =>
