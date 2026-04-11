@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd 'd:/Github/FlowOrchestrator-' && dotnet build --nologo -v q 2>&1 | tail -5"
+          }
+        ]
+      }
+    ]
+  }
+}
