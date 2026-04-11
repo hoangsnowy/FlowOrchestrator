@@ -204,6 +204,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .step-line{width:2px;flex:1;min-height:12px;background:var(--border)}.step-line.done{background:var(--success)}.step-line.last{display:none}
 .step-card{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;margin-left:8px}
 .step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}
+.step-card.step-target{outline:2px solid var(--accent);outline-offset:2px;background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .step-card-header{display:flex;align-items:center;justify-content:space-between}
 .step-key{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text)}.step-type{font-size:12px;color:var(--text-dim);margin-top:1px}
 .step-badge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:3px;text-transform:uppercase}
@@ -401,6 +402,7 @@ let runsPage = 1;
 const runsPageSize = 20;
 let runsSearchDebounceTimer = null;
 let selectedRunId = null;
+let selectedStepKey = null;
 let selectedFlowDetail = null;
 const autoRefreshStorageEnabledKey = 'flow-dashboard:auto-refresh-enabled';
 const autoRefreshStorageSecondsKey = 'flow-dashboard:auto-refresh-seconds';
@@ -556,13 +558,23 @@ function onAutoRefreshIntervalChange() {
   restartAutoRefreshTimer();
 }
 
-function navigate(page) {
+function _navigate(page) {
   currentPage = page;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   $('page-'+page).classList.add('active');
   document.querySelector('[data-page="'+page+'"]').classList.add('active');
   refresh();
+}
+
+function navigate(page) {
+  if (page !== 'runs') { selectedRunId = null; selectedStepKey = null; }
+  if (page === 'runs' && !location.hash.startsWith('#/runs/')) {
+    history.replaceState(null, '', '#/runs');
+  } else if (page !== 'runs') {
+    history.replaceState(null, '', '#/'+page);
+  }
+  _navigate(page);
 }
 
 // Overview
@@ -594,7 +606,7 @@ async function loadOverview() {
       ? '<div class="empty-msg">No runs recorded yet.</div>'
       : '<table class="recent-table"><thead><tr><th>Run</th><th>Flow</th><th>Status</th><th>Started</th></tr></thead><tbody>'
         + runs.map(r =>
-          '<tr style="cursor:pointer" onclick="navigate(\'runs\');setTimeout(function(){selectRun(\''+r.id+'\')},100)">'
+          '<tr style="cursor:pointer" onclick="history.replaceState(null,\'\',\'#/runs/'+r.id+'\');applyRoute(parseHash())">'
           +'<td style="font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--accent)">'+r.id.slice(0,8)+'\u2026</td>'
           +'<td>'+esc(r.flowName||'')+'</td><td>'+statusBadge(r.status)+'</td><td style="font-size:12px;color:var(--text-dim)">'+fmtDate(r.startedAt)+'</td></tr>'
         ).join('')+'</tbody></table>';
@@ -844,6 +856,33 @@ function copyWebhookUrl(url) {
   navigator.clipboard.writeText(url).then(() => alert('Webhook URL copied to clipboard.')).catch(() => alert('Copy failed.'));
 }
 
+function copyRunLink(runId) {
+  const url = location.origin + location.pathname + '#/runs/' + runId;
+  navigator.clipboard.writeText(url).then(() => showToast('Run link copied!')).catch(() => alert('Copy failed'));
+}
+
+function copyStepLink(runId, stepKey) {
+  const url = location.origin + location.pathname + '#/runs/' + runId + '/steps/' + encodeURIComponent(stepKey);
+  navigator.clipboard.writeText(url).then(() => showToast('Step link copied!')).catch(() => alert('Copy failed'));
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#2d3e50;color:#fff;padding:8px 18px;border-radius:4px;font-size:13px;z-index:9999;transition:opacity .4s';
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity='0'; setTimeout(() => t.remove(), 400); }, 1800);
+}
+
+function scrollToStep(stepKey) {
+  const node = document.querySelector('.step-node[data-step-key="'+stepKey.replace(/"/g, '&quot;')+'"]');
+  if (!node) return;
+  const card = node.querySelector('.step-card');
+  if (card) card.classList.add('step-target');
+  node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => { if (card) card.classList.remove('step-target'); }, 4000);
+}
+
 function toggleWebhookSecret(cellId, btn) {
   const cell = document.getElementById(cellId);
   if (!cell || !btn) return;
@@ -874,6 +913,8 @@ function isRunsAutoRefreshBlocked() {
 function onRunsFilterChange() {
   runsPage = 1;
   selectedRunId = null;
+  selectedStepKey = null;
+  history.replaceState(null, '', '#/runs');
   renderRunDetailEmpty();
   loadRuns();
 }
@@ -903,6 +944,8 @@ async function changeRunsPage(delta) {
 
   runsPage = nextPage;
   selectedRunId = null;
+  selectedStepKey = null;
+  history.replaceState(null, '', '#/runs');
   renderRunDetailEmpty();
   await loadRuns();
 }
@@ -978,17 +1021,26 @@ async function loadRuns(preserveScroll) {
   } catch(e) { console.error('Runs load error', e); }
 }
 
-async function selectRun(id, preserveScroll) {
+async function selectRun(id, preserveScroll, targetStepKey) {
+  const newHash = targetStepKey
+    ? '#/runs/'+id+'/steps/'+encodeURIComponent(targetStepKey)
+    : '#/runs/'+id;
+  if (location.hash !== newHash) history.replaceState(null, '', newHash);
+
+  selectedRunId = id;
+  selectedStepKey = targetStepKey || null;
+  renderRuns(preserveScroll);
   const detailEl = $('runs-detail');
   const detailScrollTop = preserveScroll && detailEl ? detailEl.scrollTop : 0;
-  selectedRunId = id;
-  renderRuns(preserveScroll);
   try {
     const run = await fetchJSON(BASE+'/runs/'+id);
     const steps = run.steps || [];
     $('runs-detail').innerHTML =
       '<div class="detail-header">'
-      +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px">Run Detail \u00b7 '+statusBadge(run.status)+'</div>'
+      +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">'
+      +'<span>Run Detail \u00b7 '+statusBadge(run.status)+'</span>'
+      +'<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="copyRunLink(\''+run.id+'\')" title="Copy shareable link">\uD83D\uDD17 Copy link</button>'
+      +'</div>'
       +'<div class="detail-runid">'+run.id+'</div>'
       +'<div style="font-size:12px;color:var(--text-dim);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
       +'<span>Flow: <b style="color:var(--text)">'+esc(run.flowName||'\u2014')+'</b></span>'
@@ -1001,9 +1053,8 @@ async function selectRun(id, preserveScroll) {
       +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
       +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
       +'</div>';
-    if (preserveScroll) {
-      $('runs-detail').scrollTop = detailScrollTop;
-    }
+    if (preserveScroll) $('runs-detail').scrollTop = detailScrollTop;
+    if (selectedStepKey) scrollToStep(selectedStepKey);
   } catch(e) { console.error('Run detail error', e); }
 }
 
@@ -1013,7 +1064,7 @@ function renderTimeline(steps, runId) {
     const s = steps[i], last = i===steps.length-1;
     const icon = ({Succeeded:'\u2713',Failed:'\u2715',Running:'\u25cf'})[s.status]||'\u25cb';
     const attemptCount = getStepAttemptCount(s);
-    html += '<div class="step-node"><div class="step-connector">'
+    html += '<div class="step-node" data-step-key="'+esc(s.stepKey)+'"><div class="step-connector">'
       +'<div class="step-circle '+s.status+'">'+icon+'</div>'
       +'<div class="step-line '+(s.status==='Succeeded'?'done':'')+' '+(last?'last':'')+'"></div></div>'
       +'<div class="step-card '+s.status+'">'
@@ -1021,6 +1072,7 @@ function renderTimeline(steps, runId) {
       +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+s.status+'</span>'
       +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
+      +'<button class="btn btn-ghost" style="font-size:10px;padding:2px 8px" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link">\uD83D\uDD17</button>'
       +'</div></div>'
       +'<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'
       +renderStepDebugPanels(s)
@@ -1141,14 +1193,42 @@ async function refresh() {
     if (currentPage === 'runs') {
       if (isRunsAutoRefreshBlocked()) return;
       await loadRuns(true);
-      if (selectedRunId) await selectRun(selectedRunId, true);
+      if (selectedRunId) await selectRun(selectedRunId, true, selectedStepKey);
     }
     if (currentPage === 'scheduled') await loadScheduled();
   } catch(e) {}
 }
 
+function parseHash() {
+  const hash = location.hash || '';
+  if (!hash || hash === '#' || hash === '#/') return { page: 'overview', runId: null, stepKey: null };
+  const path = hash.startsWith('#/') ? hash.slice(2) : hash.slice(1);
+  const parts = path.split('/');
+  const page = ['overview','flows','runs','scheduled'].includes(parts[0]) ? parts[0] : 'overview';
+  if (page !== 'runs') return { page, runId: null, stepKey: null };
+  const runId = parts[1] || null;
+  const stepKey = (parts[2] === 'steps' && parts[3]) ? decodeURIComponent(parts[3]) : null;
+  return { page, runId, stepKey };
+}
+
+async function applyRoute(route) {
+  _navigate(route.page);
+  if (route.page === 'runs' && route.runId) {
+    await loadRuns(false);
+    await selectRun(route.runId, false, route.stepKey);
+  }
+}
+
+function initRouting() {
+  window.addEventListener('hashchange', () => { applyRoute(parseHash()); });
+  const r = parseHash();
+  if (r.page !== 'overview' || r.runId) applyRoute(r);
+}
+
 initAutoRefreshSettings();
-refresh();
+initRouting();
+const _initialRoute = parseHash();
+if (!_initialRoute.runId && _initialRoute.page === 'overview') refresh();
 </script>
 </body>
 </html>
