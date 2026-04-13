@@ -56,3 +56,6 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Claude Code — local permissions (machine-specific, not shared)
+.claude/settings.local.json

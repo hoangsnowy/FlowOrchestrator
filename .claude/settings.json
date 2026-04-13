@@ -1,4 +1,8 @@
 {
+  "permissions": {
+    "allow": ["Bash(*)", "Edit(*)", "Write(*)", "Read(*)", "Glob(*)", "Grep(*)", "Agent(*)", "WebFetch(*)", "WebSearch(*)", "TodoWrite(*)", "NotebookEdit(*)"],
+    "deny": []
+  },
   "hooks": {
     "PostToolUse": [
       {
@@ -6,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd 'd:/Github/FlowOrchestrator-' && dotnet build --nologo -v q 2>&1 | tail -5"
+            "command": "dotnet build --nologo -v q 2>&1 | tail -5"
           }
         ]
       }
