@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"private const string Template\\\\|}\\\\s*$\" \"d:/Github/FlowOrchestrator-/src/FlowOrchestrator.Dashboard/DashboardHtml.cs\")"
+    ]
+  }
+}

@@ -169,8 +169,12 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .filter-select:focus,.filter-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(51,122,183,.15)}
 .filter-select option{background:var(--surface)}
 .runs-search{width:340px;max-width:48vw;min-height:34px;padding:7px 12px;font-size:13px}
-.runs-split{display:flex;gap:0;flex:1;overflow:hidden;min-height:0}
-.runs-list-col{width:380px;border-right:1px solid var(--border);overflow:hidden;flex-shrink:0;background:var(--surface);display:flex;flex-direction:column}
+.runs-list-panel{display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0}
+.runs-list-panel.hide{display:none}
+.runs-detail-panel{display:none;flex-direction:column;flex:1;overflow:hidden;min-height:0}
+.runs-detail-panel.show{display:flex}
+.runs-detail-back{padding:8px 18px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.runs-detail-panel #runs-detail{flex:1;overflow-y:auto;background:var(--surface2)}
 .runs-list{flex:1;overflow-y:auto;min-height:0}
 .runs-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-top:1px solid var(--border);background:var(--surface2)}
 .runs-page-info{font-size:11px;color:var(--text-dim)}
@@ -179,15 +183,18 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .btn-page{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer}
 .btn-page:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 .btn-page:disabled{opacity:.45;cursor:not-allowed}
-.runs-detail-col{flex:1;overflow-y:auto;background:var(--surface2)}
-.run-item{padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:flex-start;gap:10px;transition:background .15s}
-.run-item:hover{background:var(--accent-light)}.run-item.active{background:var(--accent-light);border-left:3px solid var(--accent)}
-.status-dot{width:10px;height:10px;border-radius:50%;margin-top:4px;flex-shrink:0}
-.status-dot.Running{background:var(--warn);animation:pulse 1.5s infinite}.status-dot.Succeeded{background:var(--success)}.status-dot.Failed{background:var(--danger)}
-.run-info{flex:1;min-width:0}
-.run-id{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.run-meta{font-size:12px;color:var(--text-dim);margin-top:2px}
+.runs-table{width:100%;border-collapse:collapse;background:var(--surface)}
+.runs-table th{text-align:left;padding:8px 14px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border);background:var(--surface2);white-space:nowrap}
+.runs-table td{padding:10px 14px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+.runs-table tr:hover td{background:var(--accent-light);cursor:pointer}
+.runs-table tr.run-row-active td{background:var(--accent-light)}
+.runs-table tr.run-row-active td:first-child{border-left:3px solid var(--accent)}
+.run-id-cell{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);white-space:nowrap}
+.run-duration-cell{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-dim);white-space:nowrap}
+.run-trigger-cell{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .run-status-badge{font-size:10px;font-weight:600;padding:2px 6px;border-radius:3px;text-transform:uppercase;flex-shrink:0}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;vertical-align:middle;margin-right:6px}
+.status-dot.Running{background:var(--warn);animation:pulse 1.5s infinite}.status-dot.Succeeded{background:var(--success)}.status-dot.Failed{background:var(--danger)}
 
 .detail-empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:var(--text-dim);min-height:300px}.detail-empty .icon{font-size:40px;opacity:.3}
 .detail-header{padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface)}
@@ -213,7 +220,8 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .step-error{margin-top:6px;padding:8px 10px;background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--danger-text);word-break:break-all}
 .step-output{margin-top:6px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);word-break:break-all;max-height:80px;overflow-y:auto}
 .step-detail{margin-top:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2)}
-.step-detail-title{font-size:11px;font-weight:600;color:var(--text);padding:7px 10px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);background:var(--surface)}
+.step-detail-title{font-size:11px;font-weight:600;color:var(--text);padding:7px 10px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:space-between}
+.copy-panel-btn{background:none;border:none;cursor:pointer;font-size:13px;color:var(--text-dim);padding:0 2px;line-height:1;opacity:.55;transition:opacity .15s}.copy-panel-btn:hover{opacity:1;color:var(--accent)}
 .step-detail-body{padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto;color:var(--text)}
 .step-detail.step-detail-error .step-detail-body{background:var(--danger-bg);color:var(--danger-text)}
 .step-actions{margin-top:6px;display:flex;gap:6px}
@@ -354,25 +362,28 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
   <!-- Runs Page -->
   <div class="page" id="page-runs">
-    <div class="page-header">
-      <div class="page-title">Runs</div>
-      <div class="runs-filters">
-        <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)"/>
-        <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()"><option value="">All Flows</option></select>
-        <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()">
-          <option value="">All Statuses</option>
-          <option value="Running">Running</option>
-          <option value="Succeeded">Succeeded</option>
-          <option value="Failed">Failed</option>
-        </select>
+    <div id="runs-list-panel" class="runs-list-panel">
+      <div class="page-header">
+        <div class="page-title">Runs</div>
+        <div class="runs-filters">
+          <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)"/>
+          <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()"><option value="">All Flows</option></select>
+          <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()">
+            <option value="">All Statuses</option>
+            <option value="Running">Running</option>
+            <option value="Succeeded">Succeeded</option>
+            <option value="Failed">Failed</option>
+          </select>
+        </div>
       </div>
+      <div class="runs-list" id="runs-list"></div>
+      <div class="runs-pagination" id="runs-pagination"></div>
     </div>
-    <div class="runs-split">
-      <div class="runs-list-col">
-        <div class="runs-list" id="runs-list"></div>
-        <div class="runs-pagination" id="runs-pagination"></div>
+    <div id="runs-detail-panel" class="runs-detail-panel">
+      <div class="runs-detail-back">
+        <div class="back-btn" onclick="backToRunsList()">&#8592; Back to Runs</div>
       </div>
-      <div class="runs-detail-col" id="runs-detail">
+      <div id="runs-detail">
         <div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>
       </div>
     </div>
@@ -403,6 +414,7 @@ const runsPageSize = 20;
 let runsSearchDebounceTimer = null;
 let selectedRunId = null;
 let selectedStepKey = null;
+let runsView = 'list'; // 'list' | 'detail'
 let selectedFlowDetail = null;
 const autoRefreshStorageEnabledKey = 'flow-dashboard:auto-refresh-enabled';
 const autoRefreshStorageSecondsKey = 'flow-dashboard:auto-refresh-seconds';
@@ -438,7 +450,7 @@ function renderDetailPanel(title, raw, openByDefault, variant) {
 
   const cssClass = variant ? ' step-detail-' + variant : '';
   return '<div class="step-detail' + cssClass + '">'
-    + '<div class="step-detail-title">' + esc(title) + '</div>'
+    + '<div class="step-detail-title"><span>' + esc(title) + '</span><button class="copy-panel-btn" onclick="copyPanelContent(this)" title="Copy to clipboard">\u2398</button></div>'
     + '<div class="step-detail-body">' + prettyJson(raw) + '</div>'
     + '</div>';
 }
@@ -569,9 +581,12 @@ function _navigate(page) {
 
 function navigate(page) {
   if (page !== 'runs') { selectedRunId = null; selectedStepKey = null; }
-  if (page === 'runs' && !location.hash.startsWith('#/runs/')) {
+  if (page === 'runs') {
+    selectedRunId = null;
+    selectedStepKey = null;
+    showRunsListView();
     history.replaceState(null, '', '#/runs');
-  } else if (page !== 'runs') {
+  } else {
     history.replaceState(null, '', '#/'+page);
   }
   _navigate(page);
@@ -866,6 +881,12 @@ function copyStepLink(runId, stepKey) {
   navigator.clipboard.writeText(url).then(() => showToast('Step link copied!')).catch(() => alert('Copy failed'));
 }
 
+function copyPanelContent(btn) {
+  const body = btn.closest('.step-detail').querySelector('.step-detail-body');
+  const text = body ? body.textContent : '';
+  navigator.clipboard.writeText(text).then(() => showToast('Copied!')).catch(() => alert('Copy failed'));
+}
+
 function showToast(msg) {
   const t = document.createElement('div');
   t.textContent = msg;
@@ -903,11 +924,30 @@ function renderRunDetailEmpty() {
   $('runs-detail').innerHTML = '<div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>';
 }
 
+function showRunsListView() {
+  runsView = 'list';
+  $('runs-list-panel').classList.remove('hide');
+  $('runs-detail-panel').classList.remove('show');
+}
+
+function showRunsDetailView() {
+  runsView = 'detail';
+  $('runs-list-panel').classList.add('hide');
+  $('runs-detail-panel').classList.add('show');
+}
+
+async function backToRunsList() {
+  selectedRunId = null;
+  selectedStepKey = null;
+  history.replaceState(null, '', '#/runs');
+  showRunsListView();
+  if (allRuns.length === 0) await loadRuns();
+  else renderRuns();
+}
+
 function isRunsAutoRefreshBlocked() {
-  if (runsPage > 1) return true;
   const list = $('runs-list');
-  const detail = $('runs-detail');
-  return (list && list.scrollTop > 24) || (detail && detail.scrollTop > 24);
+  return (list && list.scrollTop > 24);
 }
 
 function onRunsFilterChange() {
@@ -943,10 +983,6 @@ async function changeRunsPage(delta) {
   if (nextPage < 1 || nextPage > maxPage) return;
 
   runsPage = nextPage;
-  selectedRunId = null;
-  selectedStepKey = null;
-  history.replaceState(null, '', '#/runs');
-  renderRunDetailEmpty();
   await loadRuns();
 }
 
@@ -971,23 +1007,29 @@ function renderRuns(preserveScroll) {
 
   runsListEl.innerHTML = allRuns.length === 0
     ? '<div class="empty-msg">No runs found.</div>'
-    : allRuns.map(r =>
-      '<div class="run-item '+(r.id===selectedRunId?'active':'')+'" onclick="selectRun(\''+r.id+'\')">'
-      +'<div class="status-dot '+r.status+'"></div>'
-      +'<div class="run-info"><div class="run-id">'+r.id.slice(0,8)+'\u2026</div>'
-      +'<div class="run-meta">'+esc(r.flowName||'Unknown')+' \u00b7 '+fmtDate(r.startedAt)+'</div></div>'
-      +'<span class="run-status-badge badge-'+r.status.toLowerCase()+'">'+r.status+'</span></div>'
-    ).join('');
+    : '<table class="runs-table"><thead><tr>'
+      +'<th>Status</th><th>Run ID</th><th>Flow</th><th>Trigger</th><th>Started</th><th>Duration</th>'
+      +'</tr></thead><tbody>'
+      + allRuns.map(r => {
+        const active = r.id === selectedRunId ? 'run-row-active' : '';
+        const trigger = r.triggerKey ? esc(r.triggerKey) : '<span style="color:var(--text-light)">—</span>';
+        const dur = duration(r.startedAt, r.completedAt);
+        return '<tr class="'+active+'" onclick="selectRun(\''+r.id+'\')">'
+          +'<td><span class="run-status-badge badge-'+r.status.toLowerCase()+'">'+r.status+'</span></td>'
+          +'<td class="run-id-cell">'+r.id.slice(0,8)+'\u2026</td>'
+          +'<td>'+esc(r.flowName||'Unknown')+'</td>'
+          +'<td class="run-trigger-cell" title="'+esc(r.triggerKey||'')+'">'+trigger+'</td>'
+          +'<td style="font-size:12px;color:var(--text-dim);white-space:nowrap">'+fmtDate(r.startedAt)+'</td>'
+          +'<td class="run-duration-cell">'+(dur||'—')+'</td>'
+          +'</tr>';
+      }).join('')
+      +'</tbody></table>';
 
   if (preserveScroll) {
     runsListEl.scrollTop = listScrollTop;
   }
 
   renderRunsPagination();
-
-  if (allRuns.length === 0) {
-    renderRunDetailEmpty();
-  }
 }
 
 async function loadRuns(preserveScroll) {
@@ -1012,11 +1054,6 @@ async function loadRuns(preserveScroll) {
       return;
     }
 
-    if (selectedRunId && !allRuns.some(r => r.id === selectedRunId)) {
-      selectedRunId = null;
-      renderRunDetailEmpty();
-    }
-
     renderRuns(preserveScroll);
   } catch(e) { console.error('Runs load error', e); }
 }
@@ -1029,7 +1066,7 @@ async function selectRun(id, preserveScroll, targetStepKey) {
 
   selectedRunId = id;
   selectedStepKey = targetStepKey || null;
-  renderRuns(preserveScroll);
+  showRunsDetailView();
   const detailEl = $('runs-detail');
   const detailScrollTop = preserveScroll && detailEl ? detailEl.scrollTop : 0;
   try {
@@ -1191,9 +1228,11 @@ async function refresh() {
     if (currentPage === 'overview') await loadOverview();
     if (currentPage === 'flows') await loadFlows();
     if (currentPage === 'runs') {
-      if (isRunsAutoRefreshBlocked()) return;
-      await loadRuns(true);
-      if (selectedRunId) await selectRun(selectedRunId, true, selectedStepKey);
+      if (runsView === 'detail' && selectedRunId) {
+        await selectRun(selectedRunId, true, selectedStepKey);
+      } else if (!isRunsAutoRefreshBlocked()) {
+        await loadRuns(true);
+      }
     }
     if (currentPage === 'scheduled') await loadScheduled();
   } catch(e) {}
@@ -1213,9 +1252,13 @@ function parseHash() {
 
 async function applyRoute(route) {
   _navigate(route.page);
-  if (route.page === 'runs' && route.runId) {
-    await loadRuns(false);
-    await selectRun(route.runId, false, route.stepKey);
+  if (route.page === 'runs') {
+    if (route.runId) {
+      await selectRun(route.runId, false, route.stepKey);
+    } else {
+      showRunsListView();
+      await loadRuns(false);
+    }
   }
 }
 
