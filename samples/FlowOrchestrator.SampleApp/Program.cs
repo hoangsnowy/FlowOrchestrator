@@ -23,16 +23,28 @@ builder.Services.AddHangfire(config => config
 
 builder.Services.AddHangfireServer();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OrderHub Sample — Four flows covering the full e-commerce lifecycle:
+//
+//   HelloWorldFlow        — minimal cron-scheduled health-check (start here)
+//   OrderFulfillmentFlow  — fetch pending orders → call WMS API (with polling) → save results
+//   ShipmentTrackingFlow  — poll a carrier tracking API until shipment is confirmed
+//   PaymentEventFlow      — receive payment gateway webhooks → extract payment data
+//
+// Each flow maps to a real business scenario so you can see how the pieces
+// (triggers, steps, expressions, polling, webhooks) fit together end-to-end.
+// ─────────────────────────────────────────────────────────────────────────────
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseSqlServer(connectionString);
     options.UseHangfire();
     options.AddFlow<HelloWorldFlow>();
-    options.AddFlow<OrderProcessingFlow>();
-    options.AddFlow<PollingDemoFlow>();
-    options.AddFlow<WebhookTriggerBodyTestFlow>();
+    options.AddFlow<OrderFulfillmentFlow>();
+    options.AddFlow<ShipmentTrackingFlow>();
+    options.AddFlow<PaymentEventFlow>();
 });
 
+// Step handler registrations — the "type" string must match the Type in flow manifests.
 builder.Services.AddStepHandler<LogMessageStepHandler>("LogMessage");
 builder.Services.AddStepHandler<QueryDatabaseStep>("QueryDatabase");
 builder.Services.AddStepHandler<CallExternalApiStep>("CallExternalApi");
@@ -56,6 +68,6 @@ app.UseStaticFiles();
 app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");
 
-app.MapGet("/", () => "FlowOrchestrator.SampleApp is running. Visit /flows for the dashboard.");
+app.MapGet("/", () => "OrderHub (FlowOrchestrator.SampleApp) is running. Visit /flows for the dashboard.");
 
 app.Run();
