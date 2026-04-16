@@ -1,100 +1,423 @@
 ## FlowOrchestrator
 
-FlowOrchestrator is an open-source .NET library that lets you **orchestrate workflows / background jobs from a declarative JSON manifest**, executed on **Hangfire**, with **SQL persistence** and a **built-in dashboard** to configure and monitor flows.
+FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by **Hangfire**, persisted in **SQL Server**, and monitored via a **built-in dashboard**.
+
+**Features at a glance:**
+- Define flows as plain C# classes — no YAML, no JSON files to maintain
+- Three trigger types: Manual (dashboard/API), Cron (recurring schedule), Webhook (external HTTP POST)
+- `runAfter` dependency graph — steps execute when their predecessors reach specific statuses
+- `@triggerBody()` / `@triggerHeaders()` expressions — bind trigger payload fields to step inputs at runtime
+- `PollableStepHandler<T>` — built-in retry-with-backoff for steps that wait on external systems
+- `ForEach` loop steps — iterate over collections and fan out parallel/sequential child steps
+- Full SQL run history — step-by-step timeline, input/output capture, attempt tracking
+- Retry button — re-enqueue any failed step from the dashboard without restarting the whole run
+- Optional Basic Auth on the dashboard; webhook secret validation via `X-Webhook-Key`
 
 ---
 
 ## Compatibility
 
-- NuGet packages (`FlowOrchestrator.Core`, `FlowOrchestrator.Hangfire`, `FlowOrchestrator.SqlServer`, `FlowOrchestrator.Dashboard`) target: `net8.0`, `net9.0`, `net10.0`.
-- Demo projects (`FlowOrchestrator.SampleApp`, `FlowOrchestrator.AppHost`) currently run on `net8.0`.
+NuGet packages (`FlowOrchestrator.Core`, `.Hangfire`, `.SqlServer`, `.Dashboard`) target: **`net8.0`**, **`net9.0`**, **`net10.0`**.
 
 ---
 
-## 1. High-level design
+## 1. Install
 
-- **Flow**
-  A flow is a workflow definition, described by a **JSON manifest**:
-  - Triggers: how a flow starts (manual, cron schedule, etc.).
-  - Steps: ordered actions (validate order, process payment, send email, etc.).
-  - Dependencies: `runAfter` decides which step runs after which and for which statuses.
-
-- **Step**
-  Each step has:
-  - `type`: logical name (e.g. `ValidateOrder`, `ProcessPayment`).
-  - `runAfter`: declarative dependencies on previous steps and their statuses.
-  - `inputs`: expressions referencing trigger body/headers or previous step outputs.
-
-- **Execution engine (`FlowOrchestrator.Core`)**
-  - `IFlowExecutor`: decides which step to run next.
-  - `IStepExecutor`: resolves inputs, invokes the right handler, stores outputs.
-  - `IOutputsRepository`: stores trigger data/headers, step inputs/outputs, events.
-  - `IFlowStore` / `IFlowRunStore`: abstractions for persistence of flows and run history.
-  - `IFlowRepository`: in-memory registry of code-defined `IFlowDefinition` instances.
-
-- **SQL persistence (`FlowOrchestrator.SqlServer`)**
-  - `SqlFlowStore` / `SqlFlowRunStore`: Dapper-based implementations against SQL Server.
-  - `FlowOrchestratorSqlMigrator`: auto-creates `FlowDefinitions`, `FlowRuns`, `FlowSteps` tables on startup.
-
-- **Background processing (`FlowOrchestrator.Hangfire`)**
-  - `IHangfireFlowTrigger`: entry point when a trigger fires; enqueues the first step.
-  - `IHangfireStepRunner`: Hangfire job that executes a single step and enqueues the next.
-  - `RetryStepAsync`: re-enqueues a failed step, resetting its state and resuming the flow from that point.
-  - `TriggerByScheduleAsync`: used by Hangfire recurring jobs to fire Cron triggers on schedule.
-  - `FlowSyncHostedService`: on startup, syncs code-defined flows into `IFlowStore` and registers Hangfire `RecurringJob` entries for any `Cron` triggers.
-  - `IRecurringTriggerSync`: syncs recurring jobs when a flow is enabled/disabled at runtime.
-  - `AddFlow<T>()`: register code-defined flows into the DI container and flow catalog.
-
-- **Dashboard (`FlowOrchestrator.Dashboard`)**
-  - Built-in HTML/JS SPA served at `/flows` with Hangfire-style light UI and sidebar navigation.
-  - **Overview** page: stats cards (registered flows, active runs, completed/failed today).
-  - **Flows** page: catalog of all registered flows with manifest viewer, triggers, steps, DAG graph, enable/disable, trigger button.
-  - **Runs** page: filterable run list with step timeline detail view. Failed steps show a **Retry** button to re-run from that step.
-  - REST API endpoints for flow CRUD, triggering, run monitoring, and step retry.
-
----
-
-## 2. Solution layout
-
+```bash
+dotnet add package FlowOrchestrator.Core
+dotnet add package FlowOrchestrator.Hangfire
+dotnet add package FlowOrchestrator.SqlServer
+dotnet add package FlowOrchestrator.Dashboard
 ```
-src/
-  FlowOrchestrator.Core        – abstractions, execution engine, storage interfaces
-  FlowOrchestrator.Hangfire    – Hangfire bridge + DI extensions + flow registration
-  FlowOrchestrator.SqlServer   – Dapper-based SQL Server persistence (FlowStore, FlowRunStore)
-  FlowOrchestrator.Dashboard   – REST API + built-in HTML/JS dashboard SPA
 
-samples/
-  FlowOrchestrator.SampleApp   – runnable ASP.NET Core demo app
-
-FlowOrchestrator.AppHost/      – .NET Aspire host (SQL container + SampleApp)
+Hangfire itself must also be installed:
+```bash
+dotnet add package Hangfire.Core
+dotnet add package Hangfire.SqlServer
+dotnet add package Hangfire.AspNetCore
 ```
 
 ---
 
-## 3. Running the solution
+## 2. Quick Start
 
-### Option A – Via .NET Aspire (recommended, requires Docker)
+```csharp
+// Program.cs — minimal wiring
+builder.Services.AddHangfire(c => c.UseSqlServerStorage(connectionString));
+builder.Services.AddHangfireServer();
+
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connectionString);  // SQL persistence + auto-migration
+    options.UseHangfire();                   // Hangfire job bridge
+    options.AddFlow<OrderFulfillmentFlow>(); // Register your flow(s)
+});
+
+builder.Services.AddStepHandler<FetchOrdersStep>("FetchOrders");
+builder.Services.AddStepHandler<SubmitToWmsStep>("SubmitToWms");
+
+builder.Services.AddFlowDashboard(builder.Configuration); // Optional dashboard
+
+app.UseHangfireDashboard("/hangfire");
+app.MapFlowDashboard("/flows");  // Dashboard at /flows
+```
+
+```csharp
+// OrderFulfillmentFlow.cs — a code-defined flow manifest
+public sealed class OrderFulfillmentFlow : IFlowDefinition
+{
+    public Guid Id { get; } = new Guid("a1b2c3d4-...");  // fixed GUID, never NewGuid()
+    public string Version => "1.0";
+    public FlowManifest Manifest { get; set; } = new FlowManifest
+    {
+        Triggers = new FlowTriggerCollection
+        {
+            ["manual"]  = new TriggerMetadata { Type = TriggerType.Manual },
+            ["webhook"] = new TriggerMetadata
+            {
+                Type = TriggerType.Webhook,
+                Inputs = new Dictionary<string, object?> { ["webhookSlug"] = "order-fulfillment" }
+            }
+        },
+        Steps = new StepCollection
+        {
+            ["fetch_orders"] = new StepMetadata
+            {
+                Type = "FetchOrders",
+                Inputs = new Dictionary<string, object?> { ["status"] = "Pending" }
+            },
+            ["submit_to_wms"] = new StepMetadata
+            {
+                Type = "SubmitToWms",
+                RunAfter = new RunAfterCollection { ["fetch_orders"] = [StepStatus.Succeeded] }
+            }
+        }
+    };
+}
+```
+
+---
+
+## 3. Core Concepts
+
+### Flow
+
+A **Flow** is a named, versioned workflow definition that holds:
+- **Triggers** — how the flow starts: `Manual`, `Cron`, or `Webhook`
+- **Steps** — an ordered DAG of work units connected via `runAfter` declarations
+
+Flows are C# classes that implement `IFlowDefinition`. They are registered at startup via `options.AddFlow<T>()`, synced to the database (so the dashboard can discover them), and survive app restarts without creating duplicate records — as long as the `Id` GUID is fixed.
+
+### Step
+
+Each step has:
+- `Type` — a logical string name that maps to a registered `IStepHandler`
+- `RunAfter` — declares which previous steps must reach which statuses before this step executes
+- `Inputs` — a dictionary of static values or [trigger expressions](#6-expression-reference)
+
+Steps are executed by Hangfire background jobs — one Hangfire job per step. If a step fails, the run stops at that point. The dashboard **Retry** button re-enqueues the failed step without restarting the whole run.
+
+### RunId
+
+Each time a flow is triggered, a new `RunId` (GUID) is generated. All trigger data, step inputs, step outputs, and events are stored keyed by `RunId`. The dashboard **Runs** page lists and filters runs by status, flow, or full-text search.
+
+### Trigger types
+
+| Type | How to start | Required inputs |
+|------|-------------|-----------------|
+| `TriggerType.Manual` | Dashboard button or `POST /flows/api/flows/{id}/trigger` | None |
+| `TriggerType.Cron` | Hangfire recurring job on a cron schedule | `cronExpression` (Hangfire cron syntax, e.g. `"0 2 * * *"`) |
+| `TriggerType.Webhook` | External `POST /flows/api/webhook/{slug}` | `webhookSlug` (URL path segment); optional `webhookSecret` (validated via `X-Webhook-Key` header) |
+
+Cron triggers are registered as Hangfire `RecurringJob` entries on startup. Disabling a flow in the dashboard removes its recurring jobs; re-enabling restores them.
+
+### Step statuses
+
+| Status | Meaning |
+|--------|---------|
+| `Pending` | Waiting to be enqueued (or polling — see below) |
+| `Running` | Hangfire job is executing |
+| `Succeeded` | Handler returned successfully |
+| `Failed` | Handler threw an exception or returned a failed result |
+| `Skipped` | Skipped because a prerequisite did not reach the required status |
+
+---
+
+## 4. Defining Flows
+
+### 4.1 Flow definition skeleton
+
+```csharp
+public sealed class MyFlow : IFlowDefinition
+{
+    // ⚠ Always use a fixed GUID literal — never Guid.NewGuid().
+    // Guid.NewGuid() would create a new DB row on every restart.
+    public Guid Id { get; } = new Guid("00000000-0000-0000-0000-000000000001");
+    public string Version => "1.0";
+    public FlowManifest Manifest { get; set; } = new FlowManifest
+    {
+        Triggers = new FlowTriggerCollection { /* ... */ },
+        Steps    = new StepCollection      { /* ... */ }
+    };
+}
+```
+
+### 4.2 Trigger examples
+
+**Manual only:**
+```csharp
+["manual"] = new TriggerMetadata { Type = TriggerType.Manual }
+```
+
+**Cron (every day at 2 AM UTC):**
+```csharp
+["nightly"] = new TriggerMetadata
+{
+    Type = TriggerType.Cron,
+    Inputs = new Dictionary<string, object?> { ["cronExpression"] = "0 2 * * *" }
+}
+```
+
+**Webhook with secret:**
+```csharp
+["payment_gateway"] = new TriggerMetadata
+{
+    Type = TriggerType.Webhook,
+    Inputs = new Dictionary<string, object?>
+    {
+        ["webhookSlug"]   = "payment-event",
+        ["webhookSecret"] = "your-secret-key"   // client must send X-Webhook-Key: your-secret-key
+    }
+}
+```
+
+### 4.3 Step dependencies (`runAfter`)
+
+`RunAfter` maps a predecessor step key to the set of statuses that allow this step to execute:
+
+```csharp
+// Run only when validate_order succeeded:
+["process_payment"] = new StepMetadata
+{
+    Type = "ProcessPayment",
+    RunAfter = new RunAfterCollection { ["validate_order"] = [StepStatus.Succeeded] }
+}
+
+// Run on either success OR failure of process_payment (e.g. a cleanup step):
+["send_notification"] = new StepMetadata
+{
+    Type = "SendNotification",
+    RunAfter = new RunAfterCollection
+    {
+        ["process_payment"] = [StepStatus.Succeeded, StepStatus.Failed]
+    }
+}
+```
+
+Steps with no `RunAfter` are treated as the flow's initial step (the first step to execute after trigger).
+
+### 4.4 ForEach loop steps
+
+Use `LoopStepMetadata` to iterate over a collection and run nested steps for each item:
+
+```csharp
+["process_each_order"] = new LoopStepMetadata
+{
+    Type = "ForEach",
+    ForEach = "@triggerBody()?.orders",  // expression or array
+    ConcurrencyLimit = 3,                // max parallel child executions
+    Steps = new StepCollection
+    {
+        ["validate_item"] = new StepMetadata { Type = "ValidateOrder" }
+    }
+}
+```
+
+Each iteration is enqueued as a separate Hangfire job. The `Index` property is available inside the child step handler via `step.Index`.
+
+---
+
+## 5. Step Handlers
+
+### 5.1 Plain handler (`IStepHandler<TInput>`)
+
+```csharp
+// Input class — fields are deserialized from the step's Inputs dictionary at runtime
+public sealed class ValidateOrderInput
+{
+    public string OrderId { get; set; } = string.Empty;
+    public string RequestId { get; set; } = string.Empty;
+}
+
+// Handler class
+public sealed class ValidateOrderHandler : IStepHandler<ValidateOrderInput>
+{
+    public async ValueTask<object?> ExecuteAsync(
+        IExecutionContext context,
+        IFlowDefinition flow,
+        IStepInstance<ValidateOrderInput> step)
+    {
+        var orderId = step.Inputs.OrderId;  // resolved from expression or static value
+        // ... validate ...
+        return new { valid = true, orderId };
+    }
+}
+```
+
+Register in DI:
+```csharp
+builder.Services.AddStepHandler<ValidateOrderHandler>("ValidateOrder");
+```
+
+Reference from a flow manifest:
+```csharp
+["validate_order"] = new StepMetadata
+{
+    Type = "ValidateOrder",
+    Inputs = new Dictionary<string, object?>
+    {
+        ["orderId"]   = "@triggerBody()?.orderId",
+        ["requestId"] = "@triggerHeaders()['X-Request-Id']"
+    }
+}
+```
+
+### 5.2 Accessing current run context from DI
+
+Inject `IExecutionContextAccessor` to read the current `RunId` and trigger data from anywhere in the DI graph (e.g. in a repository class called by your handler):
+
+```csharp
+public sealed class MyHandler : IStepHandler<MyInput>
+{
+    private readonly IExecutionContextAccessor _contextAccessor;
+    private readonly IOutputsRepository _outputs;
+
+    public MyHandler(IExecutionContextAccessor contextAccessor, IOutputsRepository outputs)
+    {
+        _contextAccessor = contextAccessor;
+        _outputs = outputs;
+    }
+
+    public async ValueTask<object?> ExecuteAsync(
+        IExecutionContext context, IFlowDefinition flow, IStepInstance<MyInput> step)
+    {
+        var runId = _contextAccessor.Context!.RunId;
+        var previousOutput = await _outputs.GetStepOutputAsync(runId, "previous_step_key");
+        // ...
+    }
+}
+```
+
+### 5.3 Pollable handler (`PollableStepHandler<TInput>`)
+
+For steps that wait on an external system to complete an async operation (e.g. a batch job, a payment confirmation, a carrier status update), extend `PollableStepHandler<TInput>`:
+
+```csharp
+public sealed class CheckJobStatusInput : IPollableInput
+{
+    public string JobId { get; set; } = string.Empty;
+
+    // Polling contract — configure via step Inputs in the manifest
+    public bool PollEnabled { get; set; }
+    public int PollIntervalSeconds { get; set; } = 10;
+    public int PollTimeoutSeconds { get; set; } = 300;
+    public int PollMinAttempts { get; set; } = 1;
+    public string? PollConditionPath { get; set; }
+    public object? PollConditionEquals { get; set; }
+
+    // Internal poll state — persisted between attempts (do not rename these properties)
+    [JsonPropertyName("__pollStartedAtUtc")]
+    public string? PollStartedAtUtc { get; set; }
+
+    [JsonPropertyName("__pollAttempt")]
+    public int? PollAttempt { get; set; }
+}
+
+public sealed class CheckJobStatusHandler : PollableStepHandler<CheckJobStatusInput>
+{
+    private readonly IHttpClientFactory _http;
+    public CheckJobStatusHandler(IHttpClientFactory http) => _http = http;
+
+    // Called on each poll attempt. Return the raw JSON from the external system.
+    protected override async ValueTask<(JsonElement Result, bool IsJson)> FetchAsync(
+        IExecutionContext context,
+        IFlowDefinition flow,
+        IStepInstance<CheckJobStatusInput> step)
+    {
+        var client = _http.CreateClient("ExternalApi");
+        var json = await client.GetStringAsync($"/jobs/{step.Inputs.JobId}");
+        return (JsonDocument.Parse(json).RootElement, true);
+    }
+}
+```
+
+Configure polling via the manifest:
+```csharp
+["check_job_status"] = new StepMetadata
+{
+    Type = "CheckJobStatus",
+    Inputs = new Dictionary<string, object?>
+    {
+        ["jobId"]                = "@triggerBody()?.jobId",
+        ["pollEnabled"]          = true,
+        ["pollIntervalSeconds"]  = 10,
+        ["pollTimeoutSeconds"]   = 300,
+        ["pollMinAttempts"]      = 1,
+        ["pollConditionPath"]    = "status",      // navigate the JSON response
+        ["pollConditionEquals"]  = "completed"    // succeed when status == "completed"
+    }
+}
+```
+
+`PollableStepHandler` manages automatically:
+- Tracking `PollAttempt` and `PollStartedAtUtc` in the persisted step inputs
+- Returning `StepStatus.Pending` + `DelayNextStep` when the condition is not yet met
+- Returning `StepStatus.Failed` when `PollTimeoutSeconds` is exceeded
+- Evaluating `PollConditionPath` (dot-notation JSON path) against the response
+
+---
+
+## 6. Expression Reference
+
+Step `Inputs` values that start with `@` are evaluated at runtime against the current trigger data.
+
+| Expression | Returns |
+|---|---|
+| `@triggerBody()` | Full trigger payload (`JsonElement`) |
+| `@triggerBody()?.field` | A top-level field from the payload (null-safe) |
+| `@triggerBody()?.nested.child` | Nested field with dot notation |
+| `@triggerBody()?.items[0].name` | Array element access |
+| `@triggerHeaders()` | All captured trigger headers as a dictionary |
+| `@triggerHeaders()['X-Request-Id']` | A specific header value (case-insensitive) |
+
+Expressions can appear as any string value in the `Inputs` dictionary. Non-matching strings are passed through as-is.
+
+**Excluded headers** (never captured): `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Webhook-Key`, `Connection`, `Transfer-Encoding`, `Upgrade`, `Content-Length`.
+
+---
+
+## 7. Running the Sample App
+
+The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates four flows that model an e-commerce order lifecycle:
+
+| Flow | ID | Triggers | Demonstrates |
+|---|---|---|---|
+| `HelloWorldFlow` | `...0001` | Manual, Cron every minute | Minimal sequential steps |
+| `OrderFulfillmentFlow` | `...0002` | Manual, Webhook `/order-fulfillment` | DB query → polling API → save result |
+| `ShipmentTrackingFlow` | `...0003` | Manual | Polling pattern (Pending → Pending → Succeeded) |
+| `PaymentEventFlow` | `...0004` | Webhook `/payment-event` | `@triggerBody()` expression extraction |
+
+### Option A — Via .NET Aspire (recommended, requires Docker Desktop)
 
 ```powershell
 dotnet run --project .\FlowOrchestrator.AppHost\FlowOrchestrator.AppHost.csproj
 ```
 
-Aspire will:
-- Spin up a **SQL Server 2022** container automatically.
-- Start **FlowOrchestrator.SampleApp** and inject the connection string.
-- Open the **Aspire dashboard** at `http://localhost:18888` (no login required in dev mode).
+Aspire spins up a **SQL Server 2022** container and starts the sample app with the connection string injected automatically. Open the **Aspire dashboard** at `http://localhost:18888` (no login in dev mode) to see resource health and the sample app URL.
 
-From the Aspire dashboard you can:
-- See resource health (SQL container, web app).
-- Click the URL of `flow-orchestrator-web` to open the app.
+### Option B — Local (no Docker, using LocalDB)
 
-> **Prerequisites:** Docker Desktop must be running before launching the Aspire host.
-
----
-
-### Option B – Local (no Docker, using LocalDB)
-
-1. Add the connection string to `samples/FlowOrchestrator.SampleApp/appsettings.Development.json`:
+1. Add `appsettings.Development.json` in `samples/FlowOrchestrator.SampleApp/`:
 
 ```json
 {
@@ -103,299 +426,225 @@ From the Aspire dashboard you can:
   },
   "FlowDashboard": {
     "Branding": {
-      "Title": "FlowOrchestrator",
-      "Subtitle": "FlowRUN",
-      "LogoUrl": "/icon.png"
+      "Title": "OrderHub",
+      "Subtitle": "Powered by FlowOrchestrator"
     },
     "BasicAuth": {
       "Username": "admin",
       "Password": "change-me",
-      "Realm": "FlowOrchestrator Dashboard"
+      "Realm": "OrderHub Dashboard"
     }
   }
 }
 ```
 
-`FlowDashboard:Branding` is optional. If `LogoUrl` is empty or invalid, dashboard falls back to the default logo icon.
-`FlowDashboard:BasicAuth` is optional. Leave `Username`/`Password` empty to disable dashboard auth.
+`BasicAuth` is optional — omit `Username`/`Password` to disable dashboard auth.
 
-2. Run the app:
+2. Run:
 
 ```powershell
 dotnet run --project .\samples\FlowOrchestrator.SampleApp\FlowOrchestrator.SampleApp.csproj
 ```
 
-The app starts on `http://localhost:5201` by default.
+The app starts on `http://localhost:5201` by default. Open `http://localhost:5201/flows` for the dashboard.
 
 ---
 
-## 4. Using the dashboard
+## 8. Dashboard Guide
 
-Open `http://localhost:5201/flows` to access the built-in dashboard.
-If `FlowDashboard:BasicAuth` is configured, the browser will prompt for HTTP Basic credentials.
-Webhook endpoint (`/flows/api/webhook/{idOrSlug}`) is intentionally not protected by dashboard basic auth; use `webhookSecret` for webhook security.
-Manual trigger and webhook endpoints capture request body plus non-sensitive headers for input expressions (see section 5.5).
+Open `http://localhost:5201/flows` (or your configured base path) to access the dashboard.
 
 ### Pages
 
-- **Overview**: Summary stats — registered flows, active runs, completed/failed today, scheduled jobs count. Quick links to recent flows and runs.
-- **Flows**: Catalog of all registered flows. Click any flow to see:
-  - Manifest details (ID, name, version, status)
-  - Steps table (key, type, inputs, runAfter dependencies)
-  - Triggers table
-  - **Schedule** tab showing recurring jobs for the flow with next/last execution, cron expression editing, trigger now, and pause controls
-  - DAG visualization (step dependency graph rendered as SVG)
-  - Raw JSON manifest viewer
-  - Enable/disable toggle and trigger button
-- **Runs**: Filterable run list (by flow, by status, by search text). Search supports run fields (`id`, `flowName`, `triggerKey`, `status`, `backgroundJobId`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to see the step-by-step timeline with timing, outputs, and errors. Failed steps show a **Retry** button inline.
-- **Scheduled**: Dedicated page listing all Hangfire recurring jobs with flow name, trigger key, cron expression, next/last execution, and last status. Actions: trigger immediately, pause, and inline cron expression editing.
+**Overview** — Stats cards (registered flows, active runs, completed/failed today, scheduled jobs). Quick links to recent flows and runs.
 
-### Triggering a flow from the dashboard
+**Flows** — Catalog of all registered flows. Click any flow to see:
+- Manifest details (ID, name, version, enabled/disabled status)
+- Steps table (key, type, inputs, runAfter dependencies)
+- Triggers table with webhook URL and a **Copy** button
+- **Schedule** tab: recurring cron jobs with next/last execution, inline cron expression editor, pause/resume, and trigger-now controls
+- DAG graph (step dependency graph rendered as SVG)
+- Raw JSON manifest viewer
+- **Enable/Disable** toggle and **Trigger** button
 
+**Runs** — Filterable run list (by flow, status, or free-text search). Search matches run fields (`id`, `flowName`, `status`, `triggerKey`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to see the step-by-step timeline with timing, inputs, outputs, and errors. Failed steps show a **Retry** button — clicking it re-enqueues the step via Hangfire and resets the run status to **Running**.
+
+**Scheduled** — Dedicated page for Hangfire recurring jobs: flow name, trigger key, cron expression, next/last execution, last status. Actions: trigger immediately, pause, resume, and inline cron expression editing.
+
+### Triggering flows for testing
+
+**From the dashboard:**
 1. Go to **Flows** → click a flow card.
-2. Click the **Trigger** button.
-3. Switch to the **Runs** page to monitor execution.
+2. Click **Trigger** (optionally paste a JSON body).
+3. Switch to **Runs** to monitor execution.
 
-### Reusable polling step handler
+**Via the REST API:**
+```http
+POST http://localhost:5201/flows/api/flows/00000000-0000-0000-0000-000000000002/trigger
+Content-Type: application/json
 
-`FlowOrchestrator.Core` provides a reusable polling abstraction for step handlers:
-- `PollableStepHandler<TInput>` handles retry scheduling (`Pending` + `DelayNextStep`), timeout, min-attempt checks, and poll-state reset.
-- `IPollableInput` defines polling contract fields used by the base handler.
+{ "note": "manual test run" }
+```
 
-```csharp
-public sealed class CheckJobStatusStep : PollableStepHandler<CheckJobStatusInput>
+**Via webhook (PaymentEventFlow):**
+```http
+POST http://localhost:5201/flows/api/webhook/payment-event
+Content-Type: application/json
+
 {
-    protected override async ValueTask<(JsonElement Result, bool IsJson)> FetchAsync(
-        IExecutionContext ctx, IFlowDefinition flow, IStepInstance<CheckJobStatusInput> step)
-    {
-        var payload = await CallExternalServiceAsync(step.Inputs.JobId);
-        return (payload, true);
-    }
-}
-
-public sealed class CheckJobStatusInput : IPollableInput
-{
-    public string JobId { get; set; } = string.Empty;
-    public bool PollEnabled { get; set; }
-    public int PollIntervalSeconds { get; set; } = 10;
-    public int PollTimeoutSeconds { get; set; } = 300;
-    public int PollMinAttempts { get; set; } = 1;
-    public string? PollConditionPath { get; set; }
-    public object? PollConditionEquals { get; set; }
-
-    [JsonPropertyName("__pollStartedAtUtc")]
-    public string? PollStartedAtUtc { get; set; }
-
-    [JsonPropertyName("__pollAttempt")]
-    public int? PollAttempt { get; set; }
+  "payload": { "id": "pay_abc123", "orderId": "ord_456", "amount": 99.99, "status": "confirmed" },
+  "event": "payment.confirmed",
+  "timestamp": "2026-04-16T10:00:00Z"
 }
 ```
 
-### Polling demo flow
-
-`PollingDemoFlow` (`00000000-0000-0000-0000-000000000003`) demonstrates this abstraction through `CallExternalApiStep : PollableStepHandler<CallExternalApiStepInput>`:
-- `pollEnabled = true`
-- `pollMinAttempts = 3` (forces at least 3 poll attempts before success)
-- `pollIntervalSeconds = 5`
-
-This lets you observe **Pending -> Pending -> Succeeded** progression in the Runs timeline.
-Run detail also shows an attempt badge (for retries/polls) and a `Step Attempts` panel with per-attempt input/output/status history.
-
-### Retrying a failed step
-
-1. Go to **Runs** → click the run that contains the failed step.
-2. In the step timeline, click the **Retry** button next to the failed step.
-3. Confirm the dialog — the step is re-enqueued via Hangfire and the run status resets to **Running**.
-4. Downstream steps continue normally if the retried step succeeds.
-
----
-
-## 5. Testing a workflow via API
-
-### 5.1 Trigger a flow by ID
-
+**Via webhook with secret (OrderFulfillmentFlow):**
 ```http
-POST http://localhost:5201/flows/api/flows/{flowId}/trigger
+POST http://localhost:5201/flows/api/webhook/order-fulfillment
 Content-Type: application/json
+X-Webhook-Key: your-secret-key
 
 {}
 ```
 
-PowerShell:
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri "http://localhost:5201/flows/api/flows/00000000-0000-0000-0000-000000000001/trigger" `
-  -ContentType "application/json" -Body '{}'
-```
-
-### 5.2 Inspect the run
-
-```http
-GET http://localhost:5201/flows/api/runs/{runId}
-```
-
-### 5.3 List and filter runs
-
-```http
-GET http://localhost:5201/flows/api/runs
-GET http://localhost:5201/flows/api/runs?flowId={flowId}
-GET http://localhost:5201/flows/api/runs?status=Failed&search=timeout&includeTotal=true&skip=0&take=20
-GET http://localhost:5201/flows/api/runs/active
-GET http://localhost:5201/flows/api/runs/stats
-```
-
-### 5.4 Trigger via webhook (for external clients)
-
-```http
-POST http://localhost:5201/flows/api/webhook/{flowId}
-Content-Type: application/json
-X-Webhook-Key: your-secret-key   # Required only if webhookSecret is configured
-
-{ "orderId": "123", "customerId": "abc" }
-```
-
-Or by slug (when `webhookSlug` is set in the trigger inputs):
-
-```http
-POST http://localhost:5201/flows/api/webhook/order-webhook
-Content-Type: application/json
-
-{}
-```
-
-### 5.5 Trigger expression reference (`inputs`)
-
-`FlowOrchestrator.Hangfire` supports trigger expressions in step inputs:
-
-```json
-{
-  "orderId": "@triggerBody()?.orderId",
-  "requestId": "@triggerHeaders()['X-Request-Id']",
-  "allHeaders": "@triggerHeaders()"
-}
-```
-
-- `@triggerBody()` returns the full trigger payload as JSON.
-- `@triggerBody()?.path.to.value` returns a specific value from trigger payload.
-- `@triggerHeaders()` returns all captured trigger headers as JSON object.
-- `@triggerHeaders()['Header-Name']` (or `["Header-Name"]`) returns a specific header value.
-
-Captured headers are case-insensitive and exclude sensitive/transport headers:
-`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Webhook-Key`, `Connection`, `Transfer-Encoding`, `Upgrade`, `Content-Length`.
-
 ---
 
-## 6. Writing your own flow
+## 9. REST API Reference
 
-### 6.1 Define a flow
-
-```csharp
-public sealed class MyFlow : IFlowDefinition
-{
-    public Guid Id { get; } = Guid.NewGuid();
-    public string Version => "1.0";
-    public FlowManifest Manifest { get; set; } = new FlowManifest
-    {
-        Triggers = new FlowTriggerCollection
-        {
-            ["manual"] = new TriggerMetadata { Type = "Manual" },
-            ["nightly"] = new TriggerMetadata
-            {
-                Type = "Cron",
-                Inputs = new Dictionary<string, object?> { ["cronExpression"] = "0 2 * * *" }
-            }
-        },
-        Steps = new StepCollection
-        {
-            ["validateOrder"] = new StepMetadata
-            {
-                Type = "ValidateOrder",
-                Inputs = new Dictionary<string, object?>
-                {
-                    ["orderId"] = "@triggerBody()?.orderId",
-                    ["requestId"] = "@triggerHeaders()['X-Request-Id']"
-                }
-            },
-            ["processPayment"] = new StepMetadata
-            {
-                Type = "ProcessPayment",
-                RunAfter = new RunAfterCollection { ["validateOrder"] = ["Succeeded"] }
-            }
-        }
-    };
-}
-```
-
-**Trigger types:**
-
-| Type | Description | Required inputs |
-|------|-------------|-----------------|
-| `Manual` | Triggered by dashboard button or API call | None |
-| `Cron` | Runs on a recurring schedule via Hangfire `RecurringJob` | `cronExpression` (Hangfire cron syntax, e.g. `*/5 * * * *`) |
-| `Webhook` | Triggered by external HTTP POST (e.g. customer webhook) | Optional: `webhookSlug` (URL path), `webhookSecret` (for `X-Webhook-Key` validation). Trigger body and non-sensitive headers are available via expressions |
-
-Cron triggers are automatically registered as Hangfire recurring jobs on startup. Disabling a flow via the dashboard removes its recurring jobs; re-enabling restores them.
-
-**Webhook trigger:** Use `POST /flows/api/webhook/{flowId}` or `POST /flows/api/webhook/{slug}` to trigger from external systems. If `webhookSecret` is set in the trigger inputs, clients must send `X-Webhook-Key: <secret>` or `Authorization: Bearer <secret>`. The dashboard shows the webhook URL and a Copy button in the Triggers tab. `X-Webhook-Key` and other sensitive headers are intentionally excluded from captured trigger headers.
-
-### 6.2 Implement step handlers
-
-```csharp
-public sealed class ValidateOrderHandler : IStepHandler
-{
-    public ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
-    {
-        return ValueTask.FromResult<object?>(new { valid = true });
-    }
-}
-```
-
-### 6.3 Register in DI
-
-```csharp
-builder.Services.AddFlowOrchestrator(options =>
-{
-    options.UseSqlServer(connectionString);
-    options.UseHangfire();
-    options.AddFlow<MyFlow>();
-});
-
-builder.Services.AddStepHandler<ValidateOrderHandler>("ValidateOrder");
-builder.Services.AddStepHandler<ProcessPaymentHandler>("ProcessPayment");
-```
-
-Flows registered via `AddFlow<T>()` are automatically synced to `IFlowStore` (SQL) on startup and appear in the dashboard's Flows catalog.
-
----
-
-## 7. Dashboard API reference
-
-All endpoints are served under the base path configured in `MapFlowDashboard(basePath)` (default: `/flows`).
+All endpoints are under the base path configured in `MapFlowDashboard(basePath)` (default: `/flows`).
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/flows/api/flows` | List all registered flow definitions |
-| `GET` | `/flows/api/flows/{id}` | Get a single flow definition (with manifest) |
-| `POST` | `/flows/api/flows/{id}/enable` | Enable a flow |
-| `POST` | `/flows/api/flows/{id}/disable` | Disable a flow |
-| `POST` | `/flows/api/flows/{id}/trigger` | Trigger a flow (creates a new run via Hangfire) |
-| `POST` | `/flows/api/webhook/{idOrSlug}` | Webhook endpoint: trigger by flow ID or slug. Optional `X-Webhook-Key` header when `webhookSecret` is configured |
-| `GET` | `/flows/api/handlers` | List registered step handler types |
-| `GET` | `/flows/api/runs` | List runs (`?flowId=`, `?status=`, `?search=`, `?includeTotal=`, `?skip=`, `?take=`) |
+| `GET` | `/flows/api/flows/{id}` | Get flow definition (with manifest) |
+| `POST` | `/flows/api/flows/{id}/enable` | Enable flow (restores cron recurring jobs) |
+| `POST` | `/flows/api/flows/{id}/disable` | Disable flow (removes cron recurring jobs) |
+| `POST` | `/flows/api/flows/{id}/trigger` | Manually trigger a flow run |
+| `POST` | `/flows/api/webhook/{idOrSlug}` | Webhook endpoint: trigger by flow ID or slug |
+| `GET` | `/flows/api/handlers` | List registered step handler type names |
+| `GET` | `/flows/api/runs` | List runs (`?flowId=`, `?status=`, `?search=`, `?skip=`, `?take=`, `?includeTotal=`) |
 | `GET` | `/flows/api/runs/active` | List currently running flows |
 | `GET` | `/flows/api/runs/stats` | Dashboard statistics |
-| `GET` | `/flows/api/runs/{id}` | Run detail with steps |
-| `GET` | `/flows/api/runs/{id}/steps` | Steps for a specific run |
-| `POST` | `/flows/api/runs/{id}/steps/{stepKey}/retry` | Retry a failed step (re-enqueues via Hangfire) |
-| `GET` | `/flows/api/schedules` | List all recurring jobs with status |
+| `GET` | `/flows/api/runs/{id}` | Run detail with trigger headers |
+| `GET` | `/flows/api/runs/{id}/steps` | Step details for a run |
+| `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
+| `GET` | `/flows/api/schedules` | List recurring jobs with status |
 | `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
-| `POST` | `/flows/api/schedules/{jobId}/pause` | Pause (remove) a recurring job |
+| `POST` | `/flows/api/schedules/{jobId}/pause` | Pause a recurring job |
 | `POST` | `/flows/api/schedules/{jobId}/resume` | Resume a paused recurring job |
 | `PUT` | `/flows/api/schedules/{jobId}/cron` | Update cron expression (`{ "cronExpression": "..." }`) |
-| `GET` | `/hangfire` | Hangfire job dashboard |
+| `GET` | `/hangfire` | Hangfire job queue dashboard |
 
 ---
 
-## 8. License
+## 10. Architecture
 
-The project is licensed under the **MIT License** (see the `LICENSE` file in the repo).
+```
+┌────────────────────────────────────────────────────────────────┐
+│                       Your ASP.NET Core app                    │
+│  AddFlowOrchestrator()   AddStepHandler<T>()   MapFlowDashboard│
+└───────────┬────────────────────────┬──────────────────────┬────┘
+            │                        │                      │
+   ┌────────▼────────┐    ┌──────────▼──────────┐  ┌───────▼──────────┐
+   │ FlowOrchestrator│    │  FlowOrchestrator    │  │  FlowOrchestrator│
+   │    .Hangfire    │    │    .SqlServer        │  │   .Dashboard     │
+   │                 │    │                      │  │                  │
+   │  HangfireFlow   │    │  SqlFlowStore        │  │  REST API        │
+   │  Orchestrator   │    │  SqlFlowRunStore     │  │  SPA at /flows   │
+   │  DefaultStep    │    │  SqlOutputsRepo      │  │  Basic Auth      │
+   │  Executor       │    │  SqlMigrator         │  │  Webhook endpt   │
+   │  ForEachStep    │    └──────────┬───────────┘  └──────────────────┘
+   │  Handler        │               │ Dapper / SQL Server
+   │  FlowSync       │    ┌──────────▼───────────┐
+   │  HostedService  │    │  FlowOrchestrator    │
+   └────────┬────────┘    │      .Core           │
+            │ Hangfire     │                      │
+   ┌────────▼────────┐    │  IFlowDefinition     │
+   │  Hangfire Jobs  │    │  IStepHandler<T>     │
+   │  (SQL Server)   │    │  PollableStep        │
+   └─────────────────┘    │  Handler<T>          │
+                          │  IFlowExecutor       │
+                          │  IFlowStore          │
+                          │  IFlowRunStore       │
+                          │  IOutputsRepository  │
+                          └──────────────────────┘
+```
+
+### Layer overview
+
+**`FlowOrchestrator.Core`** — Framework-agnostic abstractions and execution engine.
+- `IFlowDefinition`, `FlowManifest`, `StepCollection`, `TriggerMetadata` — flow DSL
+- `IFlowExecutor` — step ordering: determines which step to run next given `runAfter` conditions
+- `IStepExecutor` / `IStepHandler<T>` — step execution and output capture
+- `PollableStepHandler<T>` — base class for polling-based steps
+- `IFlowStore` / `IFlowRunStore` / `IOutputsRepository` — storage abstractions (swap freely)
+- In-memory implementations for testing / lightweight scenarios
+
+**`FlowOrchestrator.Hangfire`** — Hangfire integration layer.
+- `HangfireFlowOrchestrator` — `TriggerAsync` (creates run, enqueues first step), `RunStepAsync` (executes one step, enqueues next), `RetryStepAsync`
+- `DefaultStepExecutor` — resolves `@triggerBody()` / `@triggerHeaders()` expressions, finds and calls the matching `IStepHandler`
+- `ForEachStepHandler` — built-in handler for `LoopStepMetadata` — fans out child step jobs
+- `FlowSyncHostedService` — on startup: syncs code-defined flows to `IFlowStore`, registers Hangfire recurring jobs for Cron triggers
+- `RecurringTriggerSync` — keeps Hangfire recurring jobs in sync when flows are enabled/disabled at runtime
+
+**`FlowOrchestrator.SqlServer`** — Dapper-based SQL Server persistence.
+- `SqlFlowStore`, `SqlFlowRunStore`, `SqlOutputsRepository`
+- `FlowOrchestratorSqlMigrator` — `IHostedService` that auto-creates tables on startup:
+  `FlowDefinitions`, `FlowRuns`, `FlowSteps`, `FlowStepAttempts`, `FlowOutputs`
+
+**`FlowOrchestrator.Dashboard`** — Built-in monitoring UI and REST API.
+- Minimal API endpoints for flow catalog, triggering, run history, retry, schedules
+- Embedded single-page application (HTML/JS/CSS) served at the configured base path
+- Optional Basic Auth middleware; webhook endpoint uses a separate `webhookSecret`
+
+### Execution flow (step-by-step)
+
+1. A trigger fires (dashboard button, cron schedule, or webhook POST).
+2. `HangfireFlowOrchestrator.TriggerAsync` generates a `RunId`, saves trigger data and headers, calls `IFlowExecutor.TriggerFlow()` to get the first step, and enqueues it as a Hangfire job.
+3. Hangfire fires `RunStepAsync` → `DefaultStepExecutor` resolves input expressions, dispatches to the matching `IStepHandler`, and persists the output.
+4. `IFlowExecutor.GetNextStep()` evaluates `runAfter` conditions. If satisfied → enqueues the next step. If all steps are complete → marks the run as Succeeded/Failed.
+5. On failure → the run stops. The dashboard **Retry** button calls `RetryStepAsync`, which resets the step state and re-enqueues from that point.
+6. For polling steps → if `FetchAsync` returns a result where the condition is not yet met, `PollableStepHandler` returns `Pending` + `DelayNextStep`. Hangfire schedules the re-run after the delay.
+
+### Swapping storage
+
+Register your own implementations of `IFlowStore`, `IFlowRunStore`, and `IOutputsRepository` directly on `options.Services` (skip `UseSqlServer()`):
+
+```csharp
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseHangfire();
+    options.AddFlow<MyFlow>();
+    // Custom storage:
+    options.Services.AddSingleton<IFlowStore, MyRedisFlowStore>();
+    options.Services.AddSingleton<IFlowRunStore, MyRedisFlowRunStore>();
+    options.Services.AddSingleton<IOutputsRepository, MyRedisOutputsRepository>();
+});
+```
+
+---
+
+## 11. Solution Layout
+
+```
+src/
+  FlowOrchestrator.Core          Core abstractions, execution engine, in-memory stores
+  FlowOrchestrator.Hangfire      Hangfire bridge, DI extensions, built-in step handlers
+  FlowOrchestrator.SqlServer     Dapper/SQL Server persistence + auto-migrator
+  FlowOrchestrator.Dashboard     REST API + embedded HTML/JS dashboard SPA
+
+samples/
+  FlowOrchestrator.SampleApp     Runnable ASP.NET Core demo (OrderHub scenario)
+
+FlowOrchestrator.AppHost/        .NET Aspire host (SQL Server container + SampleApp)
+
+tests/
+  FlowOrchestrator.Core.Tests    Unit tests (xUnit + FluentAssertions + NSubstitute)
+  FlowOrchestrator.Hangfire.Tests
+```
+
+---
+
+## 12. License
+
+MIT — see the `LICENSE` file.
