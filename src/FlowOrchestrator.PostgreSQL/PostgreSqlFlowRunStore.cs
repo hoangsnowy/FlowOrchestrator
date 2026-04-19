@@ -1,11 +1,20 @@
 using System.Data;
 using Dapper;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 using Npgsql;
 
 namespace FlowOrchestrator.PostgreSQL;
 
-public sealed class PostgreSqlFlowRunStore : IFlowRunStore
+/// <summary>
+/// Dapper-based PostgreSQL implementation of all run storage interfaces.
+/// Uses PostgreSQL's <c>INSERT ... ON CONFLICT DO NOTHING</c> for atomic step claim deduplication.
+/// </summary>
+public sealed class PostgreSqlFlowRunStore :
+    IFlowRunStore,
+    IFlowRunRuntimeStore,
+    IFlowRunControlStore,
+    IFlowRetentionStore
 {
     private readonly string _connectionString;
 
@@ -263,6 +272,246 @@ public sealed class PostgreSqlFlowRunStore : IFlowRunStore
             new { Id = runId });
     }
 
+    public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(string StepKey, string Status)>(
+            """
+            SELECT step_key AS "StepKey", status AS "Status"
+            FROM flow_steps
+            WHERE run_id = @RunId
+            """,
+            new { RunId = runId });
+
+        return rows.ToDictionary(
+            x => x.StepKey,
+            x => ParseStepStatus(x.Status),
+            StringComparer.Ordinal);
+    }
+
+    public async Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<string>(
+            "SELECT step_key FROM flow_step_claims WHERE run_id = @RunId",
+            new { RunId = runId });
+
+        return rows.AsList();
+    }
+
+    public async Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            INSERT INTO flow_step_claims (run_id, step_key, claimed_at)
+            VALUES (@RunId, @StepKey, NOW())
+            ON CONFLICT (run_id, step_key) DO NOTHING
+            """,
+            new { RunId = runId, StepKey = stepKey });
+
+        return affected > 0;
+    }
+
+    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
+    {
+        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
+        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+    }
+
+    public async Task<string?> GetRunStatusAsync(Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<string?>(
+            "SELECT status FROM flow_runs WHERE id = @Id",
+            new { Id = runId });
+    }
+
+    public async Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            """
+            INSERT INTO flow_run_controls
+                (run_id, flow_id, trigger_key, idempotency_key, timeout_at_utc, cancel_requested)
+            VALUES
+                (@RunId, @FlowId, @TriggerKey, @IdempotencyKey, @TimeoutAtUtc, FALSE)
+            ON CONFLICT (run_id) DO UPDATE SET
+                flow_id = EXCLUDED.flow_id,
+                trigger_key = EXCLUDED.trigger_key,
+                idempotency_key = EXCLUDED.idempotency_key,
+                timeout_at_utc = EXCLUDED.timeout_at_utc
+            """,
+            new
+            {
+                RunId = runId,
+                FlowId = flowId,
+                TriggerKey = triggerKey,
+                IdempotencyKey = idempotencyKey,
+                TimeoutAtUtc = timeoutAtUtc
+            });
+    }
+
+    public async Task<FlowRunControlRecord?> GetRunControlAsync(Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        return await conn.QuerySingleOrDefaultAsync<FlowRunControlRecord>(
+            """
+            SELECT
+                run_id AS "RunId",
+                flow_id AS "FlowId",
+                trigger_key AS "TriggerKey",
+                idempotency_key AS "IdempotencyKey",
+                timeout_at_utc AS "TimeoutAtUtc",
+                cancel_requested AS "CancelRequested",
+                cancel_reason AS "CancelReason",
+                cancel_requested_at_utc AS "CancelRequestedAtUtc",
+                timed_out_at_utc AS "TimedOutAtUtc"
+            FROM flow_run_controls
+            WHERE run_id = @RunId
+            """,
+            new { RunId = runId });
+    }
+
+    public async Task<bool> RequestCancelAsync(Guid runId, string? reason)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE flow_run_controls
+            SET cancel_requested = TRUE,
+                cancel_reason = @Reason,
+                cancel_requested_at_utc = COALESCE(cancel_requested_at_utc, NOW())
+            WHERE run_id = @RunId
+              AND cancel_requested = FALSE
+            """,
+            new { RunId = runId, Reason = reason });
+
+        return affected > 0;
+    }
+
+    public async Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE flow_run_controls
+            SET timed_out_at_utc = COALESCE(timed_out_at_utc, NOW()),
+                cancel_requested = TRUE,
+                cancel_reason = COALESCE(@Reason, cancel_reason, 'Run timed out.'),
+                cancel_requested_at_utc = COALESCE(cancel_requested_at_utc, NOW())
+            WHERE run_id = @RunId
+            """,
+            new { RunId = runId, Reason = reason });
+
+        return affected > 0;
+    }
+
+    public async Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+
+        return await conn.ExecuteScalarAsync<Guid?>(
+            """
+            SELECT run_id
+            FROM flow_idempotency_keys
+            WHERE flow_id = @FlowId
+              AND trigger_key = @TriggerKey
+              AND idempotency_key = @IdempotencyKey
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = normalizedTriggerKey,
+                IdempotencyKey = normalizedIdempotencyKey
+            });
+    }
+
+    public async Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+
+        var affected = await conn.ExecuteAsync(
+            """
+            INSERT INTO flow_idempotency_keys (flow_id, trigger_key, idempotency_key, run_id, created_at_utc)
+            VALUES (@FlowId, @TriggerKey, @IdempotencyKey, @RunId, NOW())
+            ON CONFLICT (flow_id, trigger_key, idempotency_key) DO NOTHING
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = normalizedTriggerKey,
+                IdempotencyKey = normalizedIdempotencyKey,
+                RunId = runId
+            });
+
+        return affected > 0;
+    }
+
+    public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await conn.ExecuteAsync(
+            """
+            DELETE FROM flow_step_claims fsc
+            USING flow_runs fr
+            WHERE fr.id = fsc.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_run_controls frc
+            USING flow_runs fr
+            WHERE fr.id = frc.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_idempotency_keys fik
+            USING flow_runs fr
+            WHERE fr.id = fik.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_outputs fo
+            USING flow_runs fr
+            WHERE fr.id = fo.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_events fe
+            USING flow_runs fr
+            WHERE fr.id = fe.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_step_attempts fsa
+            USING flow_runs fr
+            WHERE fr.id = fsa.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_steps fs
+            USING flow_runs fr
+            WHERE fr.id = fs.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_runs
+            WHERE completed_at IS NOT NULL
+              AND completed_at < @CutoffUtc;
+            """,
+            new { CutoffUtc = cutoffUtc },
+            tx).ConfigureAwait(false);
+
+        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<FlowRunRecord?> GetRunCoreAsync(NpgsqlConnection conn, Guid runId)
     {
         return await conn.QuerySingleOrDefaultAsync<FlowRunRecord>(
@@ -317,5 +566,15 @@ public sealed class PostgreSqlFlowRunStore : IFlowRunStore
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal);
+    }
+
+    private static StepStatus ParseStepStatus(string status)
+    {
+        if (Enum.TryParse<StepStatus>(status, ignoreCase: true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return StepStatus.Failed;
     }
 }

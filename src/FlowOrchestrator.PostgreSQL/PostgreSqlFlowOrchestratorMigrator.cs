@@ -4,6 +4,12 @@ using Npgsql;
 
 namespace FlowOrchestrator.PostgreSQL;
 
+/// <summary>
+/// Hosted service that runs idempotent PostgreSQL schema migrations at startup.
+/// Creates the <c>flow_definitions</c>, <c>flow_runs</c>, <c>flow_steps</c>,
+/// <c>flow_step_attempts</c>, <c>flow_outputs</c>, and related tables if they do not already exist.
+/// Safe to run on every startup — all statements use <c>IF NOT EXISTS</c> guards.
+/// </summary>
 public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
 {
     private readonly string _connectionString;
@@ -96,6 +102,57 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
             value_json TEXT         NULL,
             created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             PRIMARY KEY (run_id, key)
+        );
+
+        CREATE TABLE IF NOT EXISTS flow_step_claims (
+            run_id     UUID         NOT NULL,
+            step_key   VARCHAR(256) NOT NULL,
+            claimed_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (run_id, step_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS flow_run_controls (
+            run_id                  UUID         NOT NULL PRIMARY KEY,
+            flow_id                 UUID         NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+            trigger_key             VARCHAR(256) NOT NULL DEFAULT '',
+            idempotency_key         VARCHAR(256) NULL,
+            timeout_at_utc          TIMESTAMPTZ  NULL,
+            cancel_requested        BOOLEAN      NOT NULL DEFAULT FALSE,
+            cancel_reason           TEXT         NULL,
+            cancel_requested_at_utc TIMESTAMPTZ  NULL,
+            timed_out_at_utc        TIMESTAMPTZ  NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS flow_idempotency_keys (
+            flow_id          UUID         NOT NULL,
+            trigger_key      VARCHAR(256) NOT NULL,
+            idempotency_key  VARCHAR(256) NOT NULL,
+            run_id           UUID         NOT NULL,
+            created_at_utc   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (flow_id, trigger_key, idempotency_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_flow_idempotency_keys_run_id ON flow_idempotency_keys (run_id);
+
+        CREATE TABLE IF NOT EXISTS flow_events (
+            sequence      BIGSERIAL    PRIMARY KEY,
+            run_id        UUID         NOT NULL,
+            timestamp_utc TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            type          VARCHAR(128) NOT NULL,
+            step_key      VARCHAR(256) NULL,
+            message       TEXT         NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_flow_events_run_id_sequence ON flow_events (run_id, sequence);
+
+        CREATE TABLE IF NOT EXISTS flow_schedule_states (
+            job_id         VARCHAR(256) NOT NULL PRIMARY KEY,
+            flow_id        UUID         NOT NULL,
+            flow_name      VARCHAR(256) NOT NULL DEFAULT '',
+            trigger_key    VARCHAR(256) NOT NULL,
+            is_paused      BOOLEAN      NOT NULL DEFAULT FALSE,
+            cron_override  VARCHAR(128) NULL,
+            updated_at_utc TIMESTAMPTZ  NOT NULL DEFAULT NOW()
         );
 
         CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id ON flow_runs (flow_id);

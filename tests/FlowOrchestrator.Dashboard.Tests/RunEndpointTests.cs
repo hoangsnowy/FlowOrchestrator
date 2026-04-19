@@ -128,6 +128,46 @@ public sealed class RunEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task GET_api_runs_events_returns_200()
+    {
+        var runId = Guid.NewGuid();
+        _server.EventReader.GetRunEventsAsync(runId, 0, 200)
+            .Returns([new FlowEventRecord { RunId = runId, Sequence = 1, Type = "step.started" }]);
+
+        var response = await _client.GetAsync($"/flows/api/runs/{runId}/events");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("step.started");
+    }
+
+    [Fact]
+    public async Task GET_api_runs_control_returns_200()
+    {
+        var runId = Guid.NewGuid();
+        _server.RunControlStore.GetRunControlAsync(runId)
+            .Returns(new FlowRunControlRecord { RunId = runId, TriggerKey = "manual" });
+
+        var response = await _client.GetAsync($"/flows/api/runs/{runId}/control");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task POST_runs_cancel_returns_200_and_requests_cancel()
+    {
+        var runId = Guid.NewGuid();
+        _server.FlowRunStore.GetRunDetailAsync(runId)
+            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+        _server.RunControlStore.RequestCancelAsync(runId, Arg.Any<string?>()).Returns(true);
+
+        var response = await _client.PostAsync($"/flows/api/runs/{runId}/cancel", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        await _server.RunControlStore.Received(1).RequestCancelAsync(runId, Arg.Any<string?>());
+    }
+
+    [Fact]
     public async Task POST_retry_returns_404_when_run_not_found()
     {
         _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);

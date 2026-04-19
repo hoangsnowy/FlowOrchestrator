@@ -7,17 +7,25 @@ Before writing any code, ask the user (or infer from context):
 - **Target project location** — new project under `src/FlowOrchestrator.{Backend}/` or add to an existing project
 - **Connection/config** — what configuration the backend needs (connection string, endpoint URL, etc.)
 
-## The three interfaces to implement
+## Interfaces to implement
 
-All three live in `FlowOrchestrator.Core`:
+All live in `FlowOrchestrator.Core`. Read each interface file before writing any implementation.
 
+### Required (always)
 | Interface | File | Responsibility |
 |---|---|---|
 | `IFlowStore` | `src/FlowOrchestrator.Core/Storage/IFlowStore.cs` | CRUD for `FlowDefinitionRecord` (flow catalog) |
-| `IFlowRunStore` | `src/FlowOrchestrator.Core/Storage/IFlowRunStore.cs` | Run lifecycle: start, record step, complete, list, retry |
-| `IOutputsRepository` | `src/FlowOrchestrator.Core/Storage/IOutputsRepository.cs` | Trigger data, headers, step inputs/outputs, events |
+| `IFlowRunStore` | `src/FlowOrchestrator.Core/Storage/IFlowRunStore.cs` | Run lifecycle: start, record step, complete, list, retry, cancel, idempotency key lookup |
+| `IOutputsRepository` | `src/FlowOrchestrator.Core/Storage/IOutputsRepository.cs` | Trigger data, headers, step inputs/outputs, event stream |
 
-Read all three interface files before writing implementations.
+### Optional (vNext features — implement if the backend should support them)
+| Interface | File | Responsibility |
+|---|---|---|
+| `IFlowSchedulerStore` | `src/FlowOrchestrator.Core/Storage/IFlowSchedulerStore.cs` | Persistent pause state and cron override per flow (M1.5) |
+
+Check whether these optional interfaces exist yet — they may be added as part of vNext work. If they don't exist, only implement the required three and note what's missing.
+
+Read all interface files before writing implementations.
 
 ## Implementation steps (execute without stopping)
 

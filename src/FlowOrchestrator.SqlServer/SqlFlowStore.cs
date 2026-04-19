@@ -4,6 +4,10 @@ using Microsoft.Data.SqlClient;
 
 namespace FlowOrchestrator.SqlServer;
 
+/// <summary>
+/// Dapper-based SQL Server implementation of <see cref="IFlowStore"/>.
+/// Uses explicit SQL queries against the <c>FlowDefinitions</c> table.
+/// </summary>
 public sealed class SqlFlowStore : IFlowStore
 {
     private readonly string _connectionString;

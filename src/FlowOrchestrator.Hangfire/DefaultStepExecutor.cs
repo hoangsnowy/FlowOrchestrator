@@ -5,6 +5,12 @@ using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Hangfire;
 
+/// <summary>
+/// Default implementation of <see cref="IStepExecutor"/> that resolves the matching
+/// <see cref="IStepHandlerMetadata"/> by type name, evaluates <c>@triggerBody()</c> and
+/// <c>@triggerHeaders()</c> input expressions against the current run's trigger data,
+/// and delegates execution to the registered handler.
+/// </summary>
 internal sealed class DefaultStepExecutor : IStepExecutor
 {
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
@@ -23,6 +29,14 @@ internal sealed class DefaultStepExecutor : IStepExecutor
         _outputsRepository = outputsRepository;
     }
 
+    /// <summary>
+    /// Resolves inputs, saves them to the output store, then invokes the handler registered for
+    /// <paramref name="step"/>'s type. Returns <see cref="StepStatus.Skipped"/> if the step metadata
+    /// or its handler cannot be found.
+    /// </summary>
+    /// <param name="context">The execution context for the current run.</param>
+    /// <param name="flow">The flow definition that owns this step.</param>
+    /// <param name="step">The step instance with pre-resolved inputs.</param>
     public async ValueTask<IStepResult> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance step)
     {
         var metadata = flow.Manifest.Steps.FindStep(step.Key);

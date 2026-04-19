@@ -6,13 +6,20 @@ using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.InMemory;
 
-public sealed class InMemoryOutputsRepository : IOutputsRepository
+/// <summary>
+/// In-memory implementation of <see cref="IOutputsRepository"/> and <see cref="IFlowEventReader"/>.
+/// Stores trigger data, step outputs, and events in concurrent dictionaries keyed by RunId.
+/// All data is lost on process restart.
+/// </summary>
+public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventReader
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ConcurrentDictionary<Guid, JsonElement> _triggerData = new();
     private readonly ConcurrentDictionary<Guid, IReadOnlyDictionary<string, string>> _triggerHeaders = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), JsonElement> _stepOutputs = new();
+    private readonly ConcurrentDictionary<Guid, List<FlowEventRecord>> _events = new();
+    private readonly ConcurrentDictionary<Guid, long> _sequences = new();
 
     private static JsonElement ToJsonElement(object? value)
     {
@@ -74,5 +81,42 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
         => ValueTask.CompletedTask;
 
     public ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
-        => ValueTask.CompletedTask;
+    {
+        var next = _sequences.AddOrUpdate(ctx.RunId, 1L, static (_, value) => value + 1L);
+        var list = _events.GetOrAdd(ctx.RunId, _ => new List<FlowEventRecord>());
+        lock (list)
+        {
+            list.Add(new FlowEventRecord
+            {
+                Sequence = next,
+                RunId = ctx.RunId,
+                Timestamp = evt.Timestamp,
+                Type = evt.Type,
+                StepKey = evt.StepKey ?? step.Key,
+                Message = evt.Message
+            });
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<FlowEventRecord>> GetRunEventsAsync(Guid runId, int skip = 0, int take = 200)
+    {
+        if (!_events.TryGetValue(runId, out var list))
+        {
+            return Task.FromResult<IReadOnlyList<FlowEventRecord>>([]);
+        }
+
+        IReadOnlyList<FlowEventRecord> result;
+        lock (list)
+        {
+            result = list
+                .OrderBy(x => x.Sequence)
+                .Skip(Math.Max(0, skip))
+                .Take(Math.Max(1, take))
+                .ToList();
+        }
+
+        return Task.FromResult(result);
+    }
 }

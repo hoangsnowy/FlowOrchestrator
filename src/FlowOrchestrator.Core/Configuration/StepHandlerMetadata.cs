@@ -7,6 +7,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace FlowOrchestrator.Core.Configuration;
 
+/// <summary>
+/// DI bridge that resolves a registered <typeparamref name="THandler"/> from the service provider,
+/// deserializes step inputs to the handler's strongly-typed input model, and invokes
+/// <see cref="IStepHandler"/> or <see cref="IStepHandler{TInput}"/> accordingly.
+/// </summary>
+/// <typeparam name="THandler">The handler class registered via <c>AddStepHandler&lt;T&gt;()</c>.</typeparam>
 internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
     where THandler : class
 {
@@ -19,13 +25,24 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
         .GetMethod(nameof(InvokeGenericHandlerAsync), BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException($"Could not locate method '{nameof(InvokeGenericHandlerAsync)}'.");
 
+    /// <summary>Initialises the metadata with the handler's registered type name.</summary>
+    /// <param name="type">The step type name used to match steps in flow manifests.</param>
     public StepHandlerMetadata(string type)
     {
         Type = type;
     }
 
+    /// <summary>Step type name as registered via <c>AddStepHandler&lt;T&gt;("TypeName")</c>.</summary>
     public string Type { get; }
 
+    /// <summary>
+    /// Resolves <typeparamref name="THandler"/> from <paramref name="sp"/>, deserializes inputs,
+    /// and executes the handler, returning a normalised <see cref="IStepResult"/>.
+    /// </summary>
+    /// <param name="sp">The request-scoped service provider.</param>
+    /// <param name="ctx">The current execution context carrying RunId and trigger data.</param>
+    /// <param name="flow">The flow definition containing the step declaration.</param>
+    /// <param name="step">The step instance with resolved inputs.</param>
     public async ValueTask<IStepResult> ExecuteAsync(IServiceProvider sp, IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
     {
         var handler = sp.GetRequiredService<THandler>();
@@ -108,6 +125,13 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
     }
 }
 
+/// <summary>
+/// Wraps an untyped <see cref="IStepInstance"/> and exposes a strongly-typed
+/// <typeparamref name="TInput"/> <see cref="Inputs"/> property for use by
+/// <see cref="IStepHandler{TInput}"/> implementations. Syncs mutations back to the
+/// inner instance after execution so the output store receives the final input state.
+/// </summary>
+/// <typeparam name="TInput">The deserialized input model type.</typeparam>
 internal sealed class TypedStepInstanceAdapter<TInput> : IStepInstance<TInput>
 {
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
@@ -117,6 +141,9 @@ internal sealed class TypedStepInstanceAdapter<TInput> : IStepInstance<TInput>
 
     private readonly IStepInstance _inner;
 
+    /// <summary>Initialises the adapter wrapping <paramref name="inner"/> with pre-deserialized <paramref name="inputs"/>.</summary>
+    /// <param name="inner">The underlying untyped step instance.</param>
+    /// <param name="inputs">The deserialized input model.</param>
     public TypedStepInstanceAdapter(IStepInstance inner, TInput inputs)
     {
         _inner = inner;

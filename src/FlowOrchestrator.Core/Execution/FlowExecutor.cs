@@ -3,15 +3,26 @@ using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Core.Execution;
 
+/// <summary>
+/// Default <see cref="IFlowExecutor"/> implementation.
+/// Persists trigger data via <see cref="IOutputsRepository"/> and resolves the
+/// entry and successor steps based on linear <c>runAfter</c> relationships.
+/// </summary>
+/// <remarks>
+/// This implementation handles simple linear flows. Complex parallel/loop graphs are
+/// driven by <see cref="FlowGraphPlanner"/> in the Hangfire layer.
+/// </remarks>
 public sealed class FlowExecutor : IFlowExecutor
 {
     private readonly IOutputsRepository _outputsRepository;
 
+    /// <summary>Initialises the executor with the outputs repository used to persist trigger data.</summary>
     public FlowExecutor(IOutputsRepository outputsRepository)
     {
         _outputsRepository = outputsRepository;
     }
 
+    /// <inheritdoc/>
     public async ValueTask<IStepInstance> TriggerFlow(ITriggerContext context)
     {
         context.TriggerData = context.Trigger.Data;
@@ -41,6 +52,7 @@ public sealed class FlowExecutor : IFlowExecutor
         return instance;
     }
 
+    /// <inheritdoc/>
     public ValueTask<IStepInstance?> GetNextStep(IExecutionContext context, IFlowDefinition flow, IStepInstance currentStep, IStepResult result)
     {
         var steps = flow.Manifest.Steps;
