@@ -10,7 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.2.2" />
+    <PackageReference Include="Aspire.Hosting.SqlServer"  Version="13.2.2" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.2.2" />
   </ItemGroup>
 
   <ItemGroup>

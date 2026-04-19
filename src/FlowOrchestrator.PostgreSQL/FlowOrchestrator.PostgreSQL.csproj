@@ -5,23 +5,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
-    <PackageId>FlowOrchestrator.SqlServer</PackageId>
-    <Description>SQL Server persistence for FlowOrchestrator workflow engine.</Description>
+    <PackageId>FlowOrchestrator.PostgreSQL</PackageId>
+    <Description>PostgreSQL persistence for FlowOrchestrator workflow engine.</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.72" />
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.Tests" />
+    <ProjectReference Include="..\FlowOrchestrator.Hangfire\FlowOrchestrator.Hangfire.csproj" />
   </ItemGroup>
 
 </Project>

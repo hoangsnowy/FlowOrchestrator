@@ -4,6 +4,7 @@ using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.SqlServer;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace FlowOrchestrator.Hangfire;
 
@@ -24,9 +25,11 @@ public static class FlowOrchestratorServiceCollectionExtensions
         }
         else
         {
-            services.AddSingleton<IFlowStore, InMemoryFlowStore>();
-            services.AddSingleton<IFlowRunStore, InMemoryFlowRunStore>();
-            services.AddSingleton<IOutputsRepository, InMemoryOutputsRepository>();
+            // TryAdd so that storage backends registered inside configure(builder)
+            // (e.g. UsePostgreSql) take precedence over these in-memory fallbacks.
+            services.TryAddSingleton<IFlowStore, InMemoryFlowStore>();
+            services.TryAddSingleton<IFlowRunStore, InMemoryFlowRunStore>();
+            services.TryAddSingleton<IOutputsRepository, InMemoryOutputsRepository>();
         }
 
         services.AddSingleton<IFlowRepository>(sp =>
