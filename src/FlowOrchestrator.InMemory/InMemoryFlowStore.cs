@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using FlowOrchestrator.Core.Storage;
 
-namespace FlowOrchestrator.Core.Storage;
+namespace FlowOrchestrator.InMemory;
 
 public sealed class InMemoryFlowStore : IFlowStore
 {

@@ -2,35 +2,30 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.SqlServer;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace FlowOrchestrator.Hangfire;
 
 public static class FlowOrchestratorServiceCollectionExtensions
 {
-    public static FlowOrchestratorBuilder AddFlowOrchestrator(this IServiceCollection services, Action<FlowOrchestratorBuilder> configure)
+    public static FlowOrchestratorBuilder AddFlowOrchestrator(
+        this IServiceCollection services,
+        Action<FlowOrchestratorBuilder> configure)
     {
         var builder = new FlowOrchestratorBuilder(services);
+
+        // Storage backends (UseSqlServer / UsePostgreSql / UseInMemory) register
+        // IFlowStore, IFlowRunStore, IOutputsRepository inside this callback.
         configure(builder);
 
-        services.AddSingleton(builder.Options);
+        // Validate that a backend was explicitly configured.
+        if (!services.Any(sd => sd.ServiceType == typeof(IFlowStore)))
+            throw new InvalidOperationException(
+                "No FlowOrchestrator storage backend registered. " +
+                "Call options.UseSqlServer(), options.UsePostgreSql(), or options.UseInMemory() " +
+                "inside AddFlowOrchestrator(options => ...).");
 
         services.AddScoped<IExecutionContextAccessor, ExecutionContextAccessor>();
-
-        if (!string.IsNullOrEmpty(builder.Options.ConnectionString))
-        {
-            services.AddFlowOrchestratorSqlServer(builder.Options.ConnectionString);
-        }
-        else
-        {
-            // TryAdd so that storage backends registered inside configure(builder)
-            // (e.g. UsePostgreSql) take precedence over these in-memory fallbacks.
-            services.TryAddSingleton<IFlowStore, InMemoryFlowStore>();
-            services.TryAddSingleton<IFlowRunStore, InMemoryFlowRunStore>();
-            services.TryAddSingleton<IOutputsRepository, InMemoryOutputsRepository>();
-        }
 
         services.AddSingleton<IFlowRepository>(sp =>
         {

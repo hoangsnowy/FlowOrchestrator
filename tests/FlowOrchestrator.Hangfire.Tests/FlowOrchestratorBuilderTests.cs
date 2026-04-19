@@ -1,5 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
+using FlowOrchestrator.SqlServer;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -8,14 +10,17 @@ namespace FlowOrchestrator.Hangfire.Tests;
 public class FlowOrchestratorBuilderTests
 {
     [Fact]
-    public void UseSqlServer_SetsConnectionString()
+    public void UseSqlServer_RegistersSqlFlowStore()
     {
         var services = new ServiceCollection();
         var builder = new FlowOrchestratorBuilder(services);
 
         builder.UseSqlServer("Server=.;Database=Test");
 
-        builder.Options.ConnectionString.Should().Be("Server=.;Database=Test");
+        var descriptor = services.SingleOrDefault(sd => sd.ServiceType == typeof(IFlowStore));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationFactory.Should().NotBeNull();
+        descriptor.ImplementationFactory!(null!).GetType().Name.Should().Be("SqlFlowStore");
     }
 
     [Fact]

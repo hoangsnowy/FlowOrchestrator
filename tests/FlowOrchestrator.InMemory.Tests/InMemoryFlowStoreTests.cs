@@ -1,7 +1,8 @@
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.InMemory;
 using FluentAssertions;
 
-namespace FlowOrchestrator.Core.Tests.Storage;
+namespace FlowOrchestrator.InMemory.Tests;
 
 public class InMemoryFlowStoreTests
 {

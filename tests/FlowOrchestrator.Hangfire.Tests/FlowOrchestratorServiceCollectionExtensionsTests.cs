@@ -1,5 +1,7 @@
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
+using FlowOrchestrator.InMemory;
+using FlowOrchestrator.SqlServer;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -7,63 +9,26 @@ namespace FlowOrchestrator.Hangfire.Tests;
 
 public class FlowOrchestratorServiceCollectionExtensionsTests
 {
-    // ─── IOutputsRepository registration ─────────────────────────────────────
+    // ─── Fail-fast when no backend is registered ──────────────────────────────
 
     [Fact]
-    public void AddFlowOrchestrator_WithoutConnectionString_RegistersInMemoryOutputsRepository()
+    public void AddFlowOrchestrator_WithNoBackend_ThrowsInvalidOperationException()
     {
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(_ => { });
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IOutputsRepository));
+        var act = () => services.AddFlowOrchestrator(_ => { });
 
-        descriptor.ImplementationType.Should().Be(typeof(InMemoryOutputsRepository));
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*No FlowOrchestrator storage backend registered*");
     }
 
-    [Fact]
-    public void AddFlowOrchestrator_WithConnectionString_RegistersSqlOutputsRepository()
-    {
-        var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
-
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IOutputsRepository));
-
-        // SqlOutputsRepository is internal — verify via factory invocation
-        descriptor.ImplementationFactory.Should().NotBeNull("SQL mode must register via factory");
-        var instance = descriptor.ImplementationFactory!(null!);
-        instance.GetType().Name.Should().Be("SqlOutputsRepository");
-    }
+    // ─── InMemory backend ─────────────────────────────────────────────────────
 
     [Fact]
-    public void AddFlowOrchestrator_WithConnectionString_DoesNotRegisterInMemoryOutputsRepository()
+    public void AddFlowOrchestrator_WithUseInMemory_RegistersInMemoryFlowStore()
     {
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
-
-        var descriptors = services.Where(sd => sd.ServiceType == typeof(IOutputsRepository)).ToList();
-
-        descriptors.Should().ContainSingle("exactly one IOutputsRepository must be registered");
-        descriptors[0].ImplementationType.Should().NotBe(typeof(InMemoryOutputsRepository));
-    }
-
-    [Fact]
-    public void AddFlowOrchestrator_WithoutConnectionString_ExactlyOneOutputsRepositoryRegistered()
-    {
-        var services = new ServiceCollection();
-        services.AddFlowOrchestrator(_ => { });
-
-        var descriptors = services.Where(sd => sd.ServiceType == typeof(IOutputsRepository)).ToList();
-
-        descriptors.Should().ContainSingle("exactly one IOutputsRepository must be registered");
-    }
-
-    // ─── IFlowStore / IFlowRunStore registration ──────────────────────────────
-
-    [Fact]
-    public void AddFlowOrchestrator_WithoutConnectionString_RegistersInMemoryFlowStore()
-    {
-        var services = new ServiceCollection();
-        services.AddFlowOrchestrator(_ => { });
+        services.AddFlowOrchestrator(b => b.UseInMemory());
 
         var descriptor = services.Single(sd => sd.ServiceType == typeof(IFlowStore));
 
@@ -71,10 +36,10 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddFlowOrchestrator_WithoutConnectionString_RegistersInMemoryFlowRunStore()
+    public void AddFlowOrchestrator_WithUseInMemory_RegistersInMemoryFlowRunStore()
     {
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(_ => { });
+        services.AddFlowOrchestrator(b => b.UseInMemory());
 
         var descriptor = services.Single(sd => sd.ServiceType == typeof(IFlowRunStore));
 
@@ -82,7 +47,31 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddFlowOrchestrator_WithConnectionString_RegistersSqlFlowStore()
+    public void AddFlowOrchestrator_WithUseInMemory_RegistersInMemoryOutputsRepository()
+    {
+        var services = new ServiceCollection();
+        services.AddFlowOrchestrator(b => b.UseInMemory());
+
+        var descriptor = services.Single(sd => sd.ServiceType == typeof(IOutputsRepository));
+
+        descriptor.ImplementationType.Should().Be(typeof(InMemoryOutputsRepository));
+    }
+
+    [Fact]
+    public void AddFlowOrchestrator_WithUseInMemory_ExactlyOneOfEachServiceRegistered()
+    {
+        var services = new ServiceCollection();
+        services.AddFlowOrchestrator(b => b.UseInMemory());
+
+        services.Where(sd => sd.ServiceType == typeof(IFlowStore)).Should().ContainSingle();
+        services.Where(sd => sd.ServiceType == typeof(IFlowRunStore)).Should().ContainSingle();
+        services.Where(sd => sd.ServiceType == typeof(IOutputsRepository)).Should().ContainSingle();
+    }
+
+    // ─── SQL Server backend ───────────────────────────────────────────────────
+
+    [Fact]
+    public void AddFlowOrchestrator_WithUseSqlServer_RegistersSqlFlowStore()
     {
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
@@ -95,7 +84,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddFlowOrchestrator_WithConnectionString_RegistersSqlFlowRunStore()
+    public void AddFlowOrchestrator_WithUseSqlServer_RegistersSqlFlowRunStore()
     {
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
@@ -105,5 +94,31 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         descriptor.ImplementationFactory.Should().NotBeNull();
         var instance = descriptor.ImplementationFactory!(null!);
         instance.GetType().Name.Should().Be("SqlFlowRunStore");
+    }
+
+    [Fact]
+    public void AddFlowOrchestrator_WithUseSqlServer_RegistersSqlOutputsRepository()
+    {
+        var services = new ServiceCollection();
+        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
+
+        var descriptor = services.Single(sd => sd.ServiceType == typeof(IOutputsRepository));
+
+        descriptor.ImplementationFactory.Should().NotBeNull("SQL mode must register via factory");
+        var instance = descriptor.ImplementationFactory!(null!);
+        instance.GetType().Name.Should().Be("SqlOutputsRepository");
+    }
+
+    [Fact]
+    public void AddFlowOrchestrator_WithUseSqlServer_DoesNotRegisterInMemoryTypes()
+    {
+        var services = new ServiceCollection();
+        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
+
+        services.Where(sd => sd.ServiceType == typeof(IFlowStore)).Should().ContainSingle();
+
+        var storeDescriptor = services.Single(sd => sd.ServiceType == typeof(IFlowStore));
+        if (storeDescriptor.ImplementationType is not null)
+            storeDescriptor.ImplementationType.Should().NotBe(typeof(InMemoryFlowStore));
     }
 }

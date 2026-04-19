@@ -1,10 +1,11 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.InMemory;
 using FluentAssertions;
 using NSubstitute;
 
-namespace FlowOrchestrator.Core.Tests.Storage;
+namespace FlowOrchestrator.InMemory.Tests;
 
 public class InMemoryOutputsRepositoryTests
 {
@@ -63,7 +64,7 @@ public class InMemoryOutputsRepositoryTests
     public async Task SaveAndGetStepOutput_RoundTrip()
     {
         var flow = CreateFlow();
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
         var stepResult = new StepResult { Key = "step1", Result = new { count = 42 } };
 
@@ -85,7 +86,7 @@ public class InMemoryOutputsRepositoryTests
     public async Task SaveStepInputAsync_StoresInput()
     {
         var flow = CreateFlow();
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "Query")
         {
             RunId = ctx.RunId,
@@ -102,7 +103,7 @@ public class InMemoryOutputsRepositoryTests
     public async Task EndScopeAsync_DoesNotThrow()
     {
         var flow = CreateFlow();
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
 
         var act = () => _sut.EndScopeAsync(ctx, flow, step).AsTask();
@@ -114,7 +115,7 @@ public class InMemoryOutputsRepositoryTests
     public async Task RecordEventAsync_DoesNotThrow()
     {
         var flow = CreateFlow();
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var evt = new FlowEvent { Type = "Info", Message = "Test event" };
 
@@ -127,7 +128,7 @@ public class InMemoryOutputsRepositoryTests
     public async Task SaveStepOutput_WithNullResult_StoresSuccessfully()
     {
         var flow = CreateFlow();
-        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var stepResult = new StepResult { Key = "step1", Result = null };
 

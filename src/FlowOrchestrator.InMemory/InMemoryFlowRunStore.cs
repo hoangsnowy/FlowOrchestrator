@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using FlowOrchestrator.Core.Storage;
 
-namespace FlowOrchestrator.Core.Storage;
+namespace FlowOrchestrator.InMemory;
 
 public sealed class InMemoryFlowRunStore : IFlowRunStore
 {
@@ -212,9 +213,7 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
             query = query.Where(r => string.Equals(r.Status, status, StringComparison.OrdinalIgnoreCase));
 
         if (!string.IsNullOrWhiteSpace(search))
-        {
             query = query.Where(r => MatchesRunSearch(r, search));
-        }
 
         return query;
     }
@@ -237,9 +236,7 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
                 || ContainsIgnoreCase(s.OutputJson, search)));
 
         if (stepMatch)
-        {
             return true;
-        }
 
         return _stepAttempts.Values.Any(a =>
             a.RunId == run.Id
@@ -249,61 +246,50 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
     }
 
     private static bool ContainsIgnoreCase(string? value, string search)
-    {
-        return !string.IsNullOrEmpty(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
-    }
+        => !string.IsNullOrEmpty(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
 
-    private static FlowStepRecord CloneStepRecord(FlowStepRecord step)
+    private static FlowStepRecord CloneStepRecord(FlowStepRecord step) => new()
     {
-        return new FlowStepRecord
-        {
-            RunId = step.RunId,
-            StepKey = step.StepKey,
-            StepType = step.StepType,
-            Status = step.Status,
-            InputJson = step.InputJson,
-            OutputJson = step.OutputJson,
-            ErrorMessage = step.ErrorMessage,
-            JobId = step.JobId,
-            StartedAt = step.StartedAt,
-            CompletedAt = step.CompletedAt,
-            AttemptCount = step.AttemptCount
-        };
-    }
+        RunId = step.RunId,
+        StepKey = step.StepKey,
+        StepType = step.StepType,
+        Status = step.Status,
+        InputJson = step.InputJson,
+        OutputJson = step.OutputJson,
+        ErrorMessage = step.ErrorMessage,
+        JobId = step.JobId,
+        StartedAt = step.StartedAt,
+        CompletedAt = step.CompletedAt,
+        AttemptCount = step.AttemptCount
+    };
 
-    private static FlowStepAttemptRecord CloneStepAttemptRecord(FlowStepAttemptRecord attempt)
+    private static FlowStepAttemptRecord CloneStepAttemptRecord(FlowStepAttemptRecord attempt) => new()
     {
-        return new FlowStepAttemptRecord
-        {
-            RunId = attempt.RunId,
-            StepKey = attempt.StepKey,
-            Attempt = attempt.Attempt,
-            StepType = attempt.StepType,
-            Status = attempt.Status,
-            InputJson = attempt.InputJson,
-            OutputJson = attempt.OutputJson,
-            ErrorMessage = attempt.ErrorMessage,
-            JobId = attempt.JobId,
-            StartedAt = attempt.StartedAt,
-            CompletedAt = attempt.CompletedAt
-        };
-    }
+        RunId = attempt.RunId,
+        StepKey = attempt.StepKey,
+        Attempt = attempt.Attempt,
+        StepType = attempt.StepType,
+        Status = attempt.Status,
+        InputJson = attempt.InputJson,
+        OutputJson = attempt.OutputJson,
+        ErrorMessage = attempt.ErrorMessage,
+        JobId = attempt.JobId,
+        StartedAt = attempt.StartedAt,
+        CompletedAt = attempt.CompletedAt
+    };
 
-    private static FlowStepAttemptRecord CreateSyntheticAttempt(FlowStepRecord step)
+    private static FlowStepAttemptRecord CreateSyntheticAttempt(FlowStepRecord step) => new()
     {
-        return new FlowStepAttemptRecord
-        {
-            RunId = step.RunId,
-            StepKey = step.StepKey,
-            Attempt = 1,
-            StepType = step.StepType,
-            Status = step.Status,
-            InputJson = step.InputJson,
-            OutputJson = step.OutputJson,
-            ErrorMessage = step.ErrorMessage,
-            JobId = step.JobId,
-            StartedAt = step.StartedAt,
-            CompletedAt = step.CompletedAt
-        };
-    }
+        RunId = step.RunId,
+        StepKey = step.StepKey,
+        Attempt = 1,
+        StepType = step.StepType,
+        Status = step.Status,
+        InputJson = step.InputJson,
+        OutputJson = step.OutputJson,
+        ErrorMessage = step.ErrorMessage,
+        JobId = step.JobId,
+        StartedAt = step.StartedAt,
+        CompletedAt = step.CompletedAt
+    };
 }
