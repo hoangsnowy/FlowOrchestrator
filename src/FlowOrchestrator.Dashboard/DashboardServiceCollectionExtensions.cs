@@ -110,7 +110,7 @@ public static class DashboardServiceCollectionExtensions
         group.MapGet("/api/flows", async (HttpContext http, IFlowStore store) =>
         {
             var flows = await store.GetAllAsync();
-            await http.Response.WriteAsJsonAsync(flows);
+            await WriteJsonAsync(http.Response,flows);
         });
 
         group.MapGet("/api/flows/{id:guid}", async (HttpContext http, IFlowStore store, Guid id) =>
@@ -121,7 +121,7 @@ public static class DashboardServiceCollectionExtensions
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
-            await http.Response.WriteAsJsonAsync(flow);
+            await WriteJsonAsync(http.Response,flow);
         });
 
         group.MapPost("/api/flows/{id:guid}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
@@ -130,7 +130,7 @@ public static class DashboardServiceCollectionExtensions
             {
                 var flow = await store.SetEnabledAsync(id, true);
                 triggerSync.SyncTriggers(id, true);
-                await http.Response.WriteAsJsonAsync(flow);
+                await WriteJsonAsync(http.Response,flow);
             }
             catch (KeyNotFoundException)
             {
@@ -144,7 +144,7 @@ public static class DashboardServiceCollectionExtensions
             {
                 var flow = await store.SetEnabledAsync(id, false);
                 triggerSync.SyncTriggers(id, false);
-                await http.Response.WriteAsJsonAsync(flow);
+                await WriteJsonAsync(http.Response,flow);
             }
             catch (KeyNotFoundException)
             {
@@ -159,7 +159,7 @@ public static class DashboardServiceCollectionExtensions
             if (flow is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Flow not found in repository." });
+                await WriteJsonAsync(http.Response,new { error = "Flow not found in repository." });
                 return;
             }
 
@@ -167,7 +167,7 @@ public static class DashboardServiceCollectionExtensions
             if (!isValidBody)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Invalid JSON payload." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
                 return;
             }
 
@@ -182,7 +182,7 @@ public static class DashboardServiceCollectionExtensions
                 Trigger = new Trigger("manual", "Manual", body, headers)
             };
             await flowTrigger.TriggerAsync(ctx);
-            await http.Response.WriteAsJsonAsync(new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered." });
+            await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered." });
         });
 
         // Webhook endpoint: POST /flows/api/webhook/{idOrSlug}
@@ -236,7 +236,7 @@ public static class DashboardServiceCollectionExtensions
             if (flow is null || triggerKey is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Flow or webhook trigger not found." });
+                await WriteJsonAsync(http.Response,new { error = "Flow or webhook trigger not found." });
                 return;
             }
 
@@ -244,7 +244,7 @@ public static class DashboardServiceCollectionExtensions
             if (record is not null && !record.IsEnabled)
             {
                 http.Response.StatusCode = StatusCodes.Status403Forbidden;
-                await http.Response.WriteAsJsonAsync(new { error = "Flow is disabled." });
+                await WriteJsonAsync(http.Response,new { error = "Flow is disabled." });
                 return;
             }
 
@@ -255,7 +255,7 @@ public static class DashboardServiceCollectionExtensions
                 if (!string.Equals(providedKey, expectedSecret, StringComparison.Ordinal))
                 {
                     http.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    await http.Response.WriteAsJsonAsync(new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
+                    await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
                     return;
                 }
             }
@@ -264,7 +264,7 @@ public static class DashboardServiceCollectionExtensions
             if (!isValidBody)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Invalid JSON payload." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
                 return;
             }
 
@@ -279,13 +279,13 @@ public static class DashboardServiceCollectionExtensions
                 Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), body, headers)
             };
             await flowTrigger.TriggerAsync(ctx);
-            await http.Response.WriteAsJsonAsync(new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
+            await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         });
 
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
         {
             var list = handlers.Select(h => new { type = h.Type }).ToList();
-            return http.Response.WriteAsJsonAsync(list);
+            return WriteJsonAsync(http.Response,list);
         });
 
         // ── Run monitoring endpoints ──
@@ -307,7 +307,7 @@ public static class DashboardServiceCollectionExtensions
                 var page = await store.GetRunsPageAsync(flowId, status, skip, take, search);
                 if (includeTotal)
                 {
-                    await http.Response.WriteAsJsonAsync(new
+                    await WriteJsonAsync(http.Response,new
                     {
                         items = page.Runs,
                         total = page.TotalCount,
@@ -317,24 +317,24 @@ public static class DashboardServiceCollectionExtensions
                     return;
                 }
 
-                await http.Response.WriteAsJsonAsync(page.Runs);
+                await WriteJsonAsync(http.Response,page.Runs);
                 return;
             }
 
             var runs = await store.GetRunsAsync(flowId, skip, take);
-            await http.Response.WriteAsJsonAsync(runs);
+            await WriteJsonAsync(http.Response,runs);
         });
 
         group.MapGet("/api/runs/active", async (HttpContext http, IFlowRunStore store) =>
         {
             var runs = await store.GetActiveRunsAsync();
-            await http.Response.WriteAsJsonAsync(runs);
+            await WriteJsonAsync(http.Response,runs);
         });
 
         group.MapGet("/api/runs/stats", async (HttpContext http, IFlowRunStore store) =>
         {
             var stats = await store.GetStatisticsAsync();
-            await http.Response.WriteAsJsonAsync(stats);
+            await WriteJsonAsync(http.Response,stats);
         });
 
         group.MapGet("/api/runs/{id:guid}", async (HttpContext http, IFlowRunStore store, IOutputsRepository outputsRepository, Guid id) =>
@@ -347,7 +347,7 @@ public static class DashboardServiceCollectionExtensions
             }
 
             run.TriggerHeaders = await outputsRepository.GetTriggerHeadersAsync(id);
-            await http.Response.WriteAsJsonAsync(run);
+            await WriteJsonAsync(http.Response,run);
         });
 
         group.MapGet("/api/runs/{id:guid}/steps", async (HttpContext http, IFlowRunStore store, Guid id) =>
@@ -358,7 +358,7 @@ public static class DashboardServiceCollectionExtensions
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
-            await http.Response.WriteAsJsonAsync(run.Steps ?? []);
+            await WriteJsonAsync(http.Response,run.Steps ?? []);
         });
 
         group.MapGet("/api/runs/{runId:guid}/events", async (HttpContext http, IServiceProvider services, Guid runId) =>
@@ -366,7 +366,7 @@ public static class DashboardServiceCollectionExtensions
             var reader = services.GetService<IFlowEventReader>();
             if (reader is null)
             {
-                await http.Response.WriteAsJsonAsync(Array.Empty<FlowEventRecord>());
+                await WriteJsonAsync(http.Response,Array.Empty<FlowEventRecord>());
                 return;
             }
 
@@ -379,7 +379,7 @@ public static class DashboardServiceCollectionExtensions
                 : 200;
 
             var events = await reader.GetRunEventsAsync(runId, skip, take);
-            await http.Response.WriteAsJsonAsync(events);
+            await WriteJsonAsync(http.Response,events);
         });
 
         group.MapGet("/api/runs/{runId:guid}/control", async (HttpContext http, IServiceProvider services, Guid runId) =>
@@ -388,7 +388,7 @@ public static class DashboardServiceCollectionExtensions
             if (controlStore is null)
             {
                 http.Response.StatusCode = StatusCodes.Status501NotImplemented;
-                await http.Response.WriteAsJsonAsync(new { error = "Run control store is not configured." });
+                await WriteJsonAsync(http.Response,new { error = "Run control store is not configured." });
                 return;
             }
 
@@ -396,11 +396,11 @@ public static class DashboardServiceCollectionExtensions
             if (state is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Run control state not found." });
+                await WriteJsonAsync(http.Response,new { error = "Run control state not found." });
                 return;
             }
 
-            await http.Response.WriteAsJsonAsync(state);
+            await WriteJsonAsync(http.Response,state);
         });
 
         group.MapPost("/api/runs/{runId:guid}/cancel", async (HttpContext http, IFlowRunStore store, IServiceProvider services, Guid runId) =>
@@ -409,7 +409,7 @@ public static class DashboardServiceCollectionExtensions
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Run not found." });
+                await WriteJsonAsync(http.Response,new { error = "Run not found." });
                 return;
             }
 
@@ -417,7 +417,7 @@ public static class DashboardServiceCollectionExtensions
             if (controlStore is null)
             {
                 http.Response.StatusCode = StatusCodes.Status501NotImplemented;
-                await http.Response.WriteAsJsonAsync(new { error = "Run control store is not configured." });
+                await WriteJsonAsync(http.Response,new { error = "Run control store is not configured." });
                 return;
             }
 
@@ -434,7 +434,7 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var accepted = await controlStore.RequestCancelAsync(runId, reason);
-            await http.Response.WriteAsJsonAsync(new
+            await WriteJsonAsync(http.Response,new
             {
                 success = true,
                 accepted,
@@ -450,7 +450,7 @@ public static class DashboardServiceCollectionExtensions
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Run not found." });
+                await WriteJsonAsync(http.Response,new { error = "Run not found." });
                 return;
             }
 
@@ -458,12 +458,12 @@ public static class DashboardServiceCollectionExtensions
             if (step is null || step.Status != "Failed")
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Step not found or is not in Failed state." });
+                await WriteJsonAsync(http.Response,new { error = "Step not found or is not in Failed state." });
                 return;
             }
 
             BackgroundJob.Enqueue<IHangfireStepRunner>(r => r.RetryStepAsync(run.FlowId, runId, stepKey, null));
-            await http.Response.WriteAsJsonAsync(new { success = true, message = $"Step '{stepKey}' retry enqueued." });
+            await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 
         // ── Schedule management endpoints ──
@@ -522,7 +522,7 @@ public static class DashboardServiceCollectionExtensions
             });
 
             var result = activeJobs.Concat(pausedJobs).ToList();
-            await http.Response.WriteAsJsonAsync(result);
+            await WriteJsonAsync(http.Response,result);
         });
 
         group.MapPost("/api/schedules/{jobId}/trigger", async (HttpContext http, IRecurringJobManager manager, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
@@ -533,16 +533,16 @@ public static class DashboardServiceCollectionExtensions
                 if (state?.IsPaused == true)
                 {
                     BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerByScheduleAsync(state.FlowId, state.TriggerKey, null));
-                    await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' triggered." });
+                    await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' triggered." });
                     return;
                 }
                 manager.Trigger(jobId);
-                await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' triggered." });
+                await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' triggered." });
             }
             catch (Exception ex)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = ex.Message });
+                await WriteJsonAsync(http.Response,new { error = ex.Message });
             }
         });
 
@@ -551,7 +551,7 @@ public static class DashboardServiceCollectionExtensions
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Invalid job ID format." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid job ID format." });
                 return;
             }
 
@@ -572,7 +572,7 @@ public static class DashboardServiceCollectionExtensions
                 CronOverride = string.IsNullOrWhiteSpace(cron) ? null : cron
             });
             manager.RemoveIfExists(jobId);
-            await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' paused." });
+            await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' paused." });
         });
 
         group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
@@ -580,7 +580,7 @@ public static class DashboardServiceCollectionExtensions
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Invalid job ID format." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid job ID format." });
                 return;
             }
 
@@ -588,7 +588,7 @@ public static class DashboardServiceCollectionExtensions
             if (flow?.ManifestJson is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Flow not found." });
+                await WriteJsonAsync(http.Response,new { error = "Flow not found." });
                 return;
             }
 
@@ -597,7 +597,7 @@ public static class DashboardServiceCollectionExtensions
             if (cronExpr is null)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Cron expression not found for this trigger." });
+                await WriteJsonAsync(http.Response,new { error = "Cron expression not found for this trigger." });
                 return;
             }
 
@@ -613,7 +613,7 @@ public static class DashboardServiceCollectionExtensions
             var fid = flowId;
             var key = triggerKey;
             manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), cronExpr);
-            await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
+            await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
         });
 
         group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
@@ -621,7 +621,7 @@ public static class DashboardServiceCollectionExtensions
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "Invalid job ID format." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid job ID format." });
                 return;
             }
 
@@ -629,7 +629,7 @@ public static class DashboardServiceCollectionExtensions
             if (!body.TryGetProperty("cronExpression", out var cronProp) || string.IsNullOrWhiteSpace(cronProp.GetString()))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await http.Response.WriteAsJsonAsync(new { error = "cronExpression is required." });
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is required." });
                 return;
             }
             var newCron = cronProp.GetString()!;
@@ -638,7 +638,7 @@ public static class DashboardServiceCollectionExtensions
             if (flow?.ManifestJson is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = "Flow not found." });
+                await WriteJsonAsync(http.Response,new { error = "Flow not found." });
                 return;
             }
 
@@ -661,10 +661,22 @@ public static class DashboardServiceCollectionExtensions
                 manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), newCron);
             }
 
-            await http.Response.WriteAsJsonAsync(new { success = true, message = $"Cron updated to '{newCron}'." });
+            await WriteJsonAsync(http.Response,new { success = true, message = $"Cron updated to '{newCron}'." });
         });
 
         return endpoints;
+    }
+
+    // WriteAsJsonAsync uses System.Text.Json's PipeWriter async path which requires PipeWriter.UnflushedBytes —
+    // not implemented by ASP.NET Core TestHost's ResponseBodyPipeWriter until .NET 10.
+    // Serialize synchronously and write as a plain string to avoid that code path on all TFMs.
+    // Use camelCase to match ASP.NET Core's default JsonOptions policy.
+    private static readonly JsonSerializerOptions _camelCaseOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    private static Task WriteJsonAsync<T>(HttpResponse response, T value)
+    {
+        response.ContentType = "application/json; charset=utf-8";
+        return response.WriteAsync(JsonSerializer.Serialize(value, _camelCaseOptions));
     }
 
     private static async ValueTask<(bool IsValidBody, object? Body)> TryReadJsonBodyAsync(HttpRequest request)
