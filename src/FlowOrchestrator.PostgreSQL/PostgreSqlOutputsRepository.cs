@@ -1,0 +1,105 @@
+using System.Text.Json;
+using Dapper;
+using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Storage;
+using Npgsql;
+
+namespace FlowOrchestrator.PostgreSQL;
+
+public sealed class PostgreSqlOutputsRepository : IOutputsRepository
+{
+    private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly string _connectionString;
+
+    public PostgreSqlOutputsRepository(string connectionString)
+    {
+        _connectionString = connectionString;
+    }
+
+    public async ValueTask SaveStepOutputAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, IStepResult result)
+    {
+        var json = SerializeToJson(result.Result);
+        await UpsertAsync(ctx.RunId, step.Key, json).ConfigureAwait(false);
+    }
+
+    public async ValueTask SaveStepInputAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    {
+        var json = SerializeToJson(step.Inputs);
+        await UpsertAsync(ctx.RunId, $"{step.Key}:input", json).ConfigureAwait(false);
+    }
+
+    public async ValueTask SaveTriggerDataAsync(ITriggerContext ctx, IFlowDefinition flow, ITrigger trigger)
+    {
+        var json = SerializeToJson(trigger.Data);
+        await UpsertAsync(ctx.RunId, "__trigger:data", json).ConfigureAwait(false);
+    }
+
+    public async ValueTask SaveTriggerHeadersAsync(ITriggerContext ctx, IFlowDefinition flow, ITrigger trigger)
+    {
+        if (trigger.Headers is null) return;
+        var json = SerializeToJson(trigger.Headers);
+        await UpsertAsync(ctx.RunId, "__trigger:headers", json).ConfigureAwait(false);
+    }
+
+    public async ValueTask<object?> GetTriggerDataAsync(Guid runId)
+    {
+        return await GetJsonElementAsync(runId, "__trigger:data").ConfigureAwait(false);
+    }
+
+    public async ValueTask<IReadOnlyDictionary<string, string>?> GetTriggerHeadersAsync(Guid runId)
+    {
+        var element = await GetJsonElementAsync(runId, "__trigger:headers").ConfigureAwait(false);
+        if (element is null) return null;
+
+        if (element is JsonElement je && je.ValueKind == JsonValueKind.Object)
+            return je.Deserialize<Dictionary<string, string>>(_webOptions);
+
+        return null;
+    }
+
+    public async ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey)
+    {
+        return await GetJsonElementAsync(runId, stepKey).ConfigureAwait(false);
+    }
+
+    public ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+        => ValueTask.CompletedTask;
+
+    public ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
+        => ValueTask.CompletedTask;
+
+    private async Task UpsertAsync(Guid runId, string key, string? valueJson)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            """
+            INSERT INTO flow_outputs (run_id, key, value_json, created_at)
+            VALUES (@RunId, @Key, @ValueJson, NOW())
+            ON CONFLICT (run_id, key) DO UPDATE SET
+                value_json = EXCLUDED.value_json
+            """,
+            new { RunId = runId, Key = key, ValueJson = valueJson }).ConfigureAwait(false);
+    }
+
+    private async Task<object?> GetJsonElementAsync(Guid runId, string key)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var json = await conn.ExecuteScalarAsync<string?>(
+            "SELECT value_json FROM flow_outputs WHERE run_id = @RunId AND key = @Key",
+            new { RunId = runId, Key = key }).ConfigureAwait(false);
+
+        if (json is null) return null;
+
+        return JsonSerializer.Deserialize<JsonElement>(json, _webOptions);
+    }
+
+    private static string? SerializeToJson(object? value)
+    {
+        if (value is null) return null;
+        if (value is JsonElement je)
+            return je.ValueKind == JsonValueKind.Undefined ? null : je.GetRawText();
+        return JsonSerializer.Serialize(value, value.GetType(), _webOptions);
+    }
+}

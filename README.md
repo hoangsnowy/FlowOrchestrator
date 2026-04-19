@@ -1,6 +1,6 @@
 ## FlowOrchestrator
 
-FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by **Hangfire**, persisted in **SQL Server**, and monitored via a **built-in dashboard**.
+FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by **Hangfire**, persisted in **SQL Server**, **PostgreSQL**, or **in-memory**, and monitored via a **built-in dashboard**.
 
 **Features at a glance:**
 - Define flows as plain C# classes — no YAML, no JSON files to maintain
@@ -17,7 +17,7 @@ FlowOrchestrator is an open-source .NET library for orchestrating **multi-step b
 
 ## Compatibility
 
-NuGet packages (`FlowOrchestrator.Core`, `.Hangfire`, `.SqlServer`, `.Dashboard`) target: **`net8.0`**, **`net9.0`**, **`net10.0`**.
+NuGet packages (`FlowOrchestrator.Core`, `.Hangfire`, `.SqlServer`, `.PostgreSQL`, `.Dashboard`) target: **`net8.0`**, **`net9.0`**, **`net10.0`**.
 
 ---
 
@@ -26,15 +26,22 @@ NuGet packages (`FlowOrchestrator.Core`, `.Hangfire`, `.SqlServer`, `.Dashboard`
 ```bash
 dotnet add package FlowOrchestrator.Core
 dotnet add package FlowOrchestrator.Hangfire
-dotnet add package FlowOrchestrator.SqlServer
 dotnet add package FlowOrchestrator.Dashboard
+
+# Pick one storage backend:
+dotnet add package FlowOrchestrator.SqlServer    # SQL Server (Dapper)
+dotnet add package FlowOrchestrator.PostgreSQL   # PostgreSQL (Dapper + Npgsql)
+# Or omit both to use the built-in InMemory backend (no persistence)
 ```
 
 Hangfire itself must also be installed:
 ```bash
 dotnet add package Hangfire.Core
-dotnet add package Hangfire.SqlServer
 dotnet add package Hangfire.AspNetCore
+
+# Match your FlowOrchestrator storage choice:
+dotnet add package Hangfire.SqlServer   # for SQL Server
+dotnet add package Hangfire.InMemory    # for PostgreSQL or InMemory
 ```
 
 ---
@@ -413,7 +420,15 @@ The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates four flows th
 dotnet run --project .\FlowOrchestrator.AppHost\FlowOrchestrator.AppHost.csproj
 ```
 
-Aspire spins up a **SQL Server 2022** container and starts the sample app with the connection string injected automatically. Open the **Aspire dashboard** at `http://localhost:18888` (no login in dev mode) to see resource health and the sample app URL.
+Aspire spins up **SQL Server 2022** and **PostgreSQL 16** containers and launches the sample app **three times** — once per storage backend — each on its own port:
+
+| Aspire resource | Backend | Flows available |
+|---|---|---|
+| `flow-sqlserver` | SQL Server | Hello, Order, Shipment, Payment |
+| `flow-postgresql` | PostgreSQL | Hello, Shipment, Payment |
+| `flow-inmemory` | InMemory | Hello, Shipment, Payment |
+
+Open the **Aspire dashboard** at `http://localhost:18888` (no login in dev mode) to see all three resources and their URLs. Each instance exposes `/flows` and `/hangfire` independently, so you can trigger the same flow on different backends and compare run histories side-by-side.
 
 ### Option B — Local (no Docker, using LocalDB)
 
@@ -608,14 +623,40 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 
 ### Swapping storage
 
-Register your own implementations of `IFlowStore`, `IFlowRunStore`, and `IOutputsRepository` directly on `options.Services` (skip `UseSqlServer()`):
+Three backends are included out of the box:
+
+```csharp
+// SQL Server
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connectionString);
+    options.UseHangfire();
+    options.AddFlow<MyFlow>();
+});
+
+// PostgreSQL
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UsePostgreSql(connectionString);
+    options.UseHangfire();
+    options.AddFlow<MyFlow>();
+});
+
+// InMemory (no configuration needed — used when neither UseSqlServer nor UsePostgreSql is called)
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseHangfire();
+    options.AddFlow<MyFlow>();
+});
+```
+
+To plug in a completely custom backend, register your own implementations of `IFlowStore`, `IFlowRunStore`, and `IOutputsRepository` on `options.Services` instead:
 
 ```csharp
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseHangfire();
     options.AddFlow<MyFlow>();
-    // Custom storage:
     options.Services.AddSingleton<IFlowStore, MyRedisFlowStore>();
     options.Services.AddSingleton<IFlowRunStore, MyRedisFlowRunStore>();
     options.Services.AddSingleton<IOutputsRepository, MyRedisOutputsRepository>();
@@ -631,16 +672,22 @@ src/
   FlowOrchestrator.Core          Core abstractions, execution engine, in-memory stores
   FlowOrchestrator.Hangfire      Hangfire bridge, DI extensions, built-in step handlers
   FlowOrchestrator.SqlServer     Dapper/SQL Server persistence + auto-migrator
+  FlowOrchestrator.PostgreSQL    Dapper/PostgreSQL persistence + auto-migrator (Npgsql)
   FlowOrchestrator.Dashboard     REST API + embedded HTML/JS dashboard SPA
 
 samples/
   FlowOrchestrator.SampleApp     Runnable ASP.NET Core demo (OrderHub scenario)
+                                 Supports all 3 backends via FLOW_STORAGE env var
 
-FlowOrchestrator.AppHost/        .NET Aspire host (SQL Server container + SampleApp)
+FlowOrchestrator.AppHost/        .NET Aspire host — launches 3 instances of SampleApp
+                                 (SQL Server, PostgreSQL, InMemory) side-by-side
 
 tests/
-  FlowOrchestrator.Core.Tests    Unit tests (xUnit + FluentAssertions + NSubstitute)
+  FlowOrchestrator.Core.Tests        Unit tests (xUnit + FluentAssertions + NSubstitute)
   FlowOrchestrator.Hangfire.Tests
+  FlowOrchestrator.Dashboard.Tests   Integration tests via ASP.NET Core TestHost
+  FlowOrchestrator.SqlServer.Tests   Integration tests via Testcontainers (Docker)
+  FlowOrchestrator.PostgreSQL.Tests  Integration tests via Testcontainers (Docker)
 ```
 
 ---
