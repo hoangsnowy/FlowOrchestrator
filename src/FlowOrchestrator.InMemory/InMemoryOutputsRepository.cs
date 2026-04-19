@@ -2,8 +2,9 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Storage;
 
-namespace FlowOrchestrator.Core.Storage;
+namespace FlowOrchestrator.InMemory;
 
 public sealed class InMemoryOutputsRepository : IOutputsRepository
 {
@@ -21,7 +22,6 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
                 ? JsonSerializer.SerializeToElement<object?>(null, _webOptions)
                 : element.Clone();
         }
-
         return JsonSerializer.SerializeToElement(value, value?.GetType() ?? typeof(object), _webOptions);
     }
 
@@ -40,19 +40,14 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
     public ValueTask<object?> GetTriggerDataAsync(Guid runId)
     {
         if (_triggerData.TryGetValue(runId, out var element))
-        {
             return ValueTask.FromResult<object?>(element);
-        }
-
         return ValueTask.FromResult<object?>(null);
     }
 
     public ValueTask SaveTriggerHeadersAsync(ITriggerContext ctx, IFlowDefinition flow, ITrigger trigger)
     {
         if (trigger.Headers is not null)
-        {
             _triggerHeaders[ctx.RunId] = trigger.Headers;
-        }
         return ValueTask.CompletedTask;
     }
 
@@ -71,20 +66,13 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository
     public ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey)
     {
         if (_stepOutputs.TryGetValue((runId, stepKey), out var element))
-        {
             return ValueTask.FromResult<object?>(element);
-        }
-
         return ValueTask.FromResult<object?>(null);
     }
 
     public ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
-    {
-        return ValueTask.CompletedTask;
-    }
+        => ValueTask.CompletedTask;
 
     public ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
-    {
-        return ValueTask.CompletedTask;
-    }
+        => ValueTask.CompletedTask;
 }

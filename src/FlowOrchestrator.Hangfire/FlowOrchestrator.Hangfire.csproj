@@ -20,7 +20,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
-    <ProjectReference Include="..\\FlowOrchestrator.SqlServer\\FlowOrchestrator.SqlServer.csproj" />
   </ItemGroup>
 
 </Project>

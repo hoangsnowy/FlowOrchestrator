@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\FlowOrchestrator.Hangfire\FlowOrchestrator.Hangfire.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,10 +1,11 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.InMemory;
 using FluentAssertions;
 using NSubstitute;
 
-namespace FlowOrchestrator.Core.Tests.Storage;
+namespace FlowOrchestrator.InMemory.Tests;
 
 public class OutputsRepositoryTypedExtensionsTests
 {
@@ -30,7 +31,7 @@ public class OutputsRepositoryTypedExtensionsTests
     {
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
-        var ctx = new Core.Execution.ExecutionContext { RunId = runId };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = runId };
         var step = new StepInstance("step1", "Typed") { RunId = runId };
         var result = new StepResult
         {
@@ -51,7 +52,7 @@ public class OutputsRepositoryTypedExtensionsTests
     {
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
-        var ctx = new Core.Execution.ExecutionContext { RunId = runId };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = runId };
         var step = new StepInstance("step1", "Typed") { RunId = runId };
         var result = new StepResult { Key = step.Key, Result = new { attempt = "bad" } };
         await _sut.SaveStepOutputAsync(ctx, flow, step, result);

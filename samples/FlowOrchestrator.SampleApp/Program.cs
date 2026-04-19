@@ -1,7 +1,9 @@
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Dashboard;
 using FlowOrchestrator.Hangfire;
+using FlowOrchestrator.InMemory;
 using FlowOrchestrator.PostgreSQL;
+using FlowOrchestrator.SqlServer;
 using FlowOrchestrator.SampleApp;
 using FlowOrchestrator.SampleApp.Flows;
 using FlowOrchestrator.SampleApp.Steps;
@@ -49,7 +51,8 @@ builder.Services.AddFlowOrchestrator(options =>
         options.UseSqlServer(sqlConnStr);
     else if (storageBackend == "postgresql" && pgConnStr is not null)
         options.UsePostgreSql(pgConnStr);
-    // else: InMemory via TryAddSingleton fallback inside AddFlowOrchestrator
+    else
+        options.UseInMemory();
 
     options.UseHangfire();
     options.AddFlow<HelloWorldFlow>();

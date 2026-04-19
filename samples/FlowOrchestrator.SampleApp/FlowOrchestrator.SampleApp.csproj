@@ -19,7 +19,9 @@
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.Hangfire\\FlowOrchestrator.Hangfire.csproj" />
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.Dashboard\\FlowOrchestrator.Dashboard.csproj" />
+    <ProjectReference Include="..\\..\\src\\FlowOrchestrator.SqlServer\\FlowOrchestrator.SqlServer.csproj" />
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.PostgreSQL\\FlowOrchestrator.PostgreSQL.csproj" />
+    <ProjectReference Include="..\\..\\src\\FlowOrchestrator.InMemory\\FlowOrchestrator.InMemory.csproj" />
   </ItemGroup>
 
 </Project>
