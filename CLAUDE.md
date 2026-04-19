@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Always confirm completion explicitly** — after finishing work, state: what files were changed, build status, and test results.
 - **Always write tests** — any bug fix or new feature must include unit tests. Do not wait to be asked. Run them and confirm they pass.
 - **Always verify the build** — run `dotnet build` after changes. If errors exist, fix them and rebuild. Do not report completion until the build is clean.
+- **Always add XML doc comments** — every new file must have `///` XML doc comments on all public types and members. Follow the Documentation Standards section below.
 
 ## Testing
 
@@ -118,6 +119,73 @@ app.MapFlowDashboard("/flows");
 ```
 
 To swap storage, implement `IFlowStore`, `IFlowRunStore`, and `IOutputsRepository` and register directly on `options.Services` instead of calling `UseSqlServer()`.
+
+## Dashboard UI Standards
+
+All changes to `src/FlowOrchestrator.Dashboard/DashboardHtml.cs` (CSS, HTML, JS) **must follow `DESIGN.md`**.
+
+### Key rules (read `DESIGN.md` for full spec)
+
+- **Color** — use only the warm-toned palette from DESIGN.md. No cool blue-grays. Primary accent is Terracotta `#c96442`. Surface hierarchy: Parchment `#f5f4ed` → Ivory `#faf9f5` → Warm Sand `#e8e6dc`.
+- **Typography** — `Inter` in this codebase maps to `Anthropic Sans` roles (UI text, labels, nav). Monospace (`JetBrains Mono`) maps to `Anthropic Mono`. No other typefaces.
+- **Buttons** — follow the button styles in DESIGN.md §4 (ring-based shadows, rounded corners, warm backgrounds). Never use pure black/white flat buttons.
+- **Layout** — the main-area must remain `height:100vh;overflow:hidden` so internal panels scroll, not the page. Pagination and footers must be `flex-shrink:0` siblings of scroll containers, not inside them.
+- **No gradients** — depth comes from warm surface layering and ring shadows, not gradients.
+- **Icons** — inline SVG only, `stroke-width:2`, consistent 16–20px sizing.
+
+## Documentation Standards
+
+Every new `.cs` file must have XML doc comments on all `public` and `protected` types and members.
+
+### Required tags
+
+```csharp
+/// <summary>
+/// One-sentence description of purpose. Start with a verb for methods ("Gets", "Triggers", "Returns").
+/// </summary>
+/// <param name="runId">The unique identifier of the flow run.</param>
+/// <returns>
+/// <see cref="StepResult.Succeeded"/> on success;
+/// <see cref="StepResult.Failed"/> when the step cannot recover.
+/// </returns>
+/// <remarks>
+/// Only add when behavior is non-obvious: a hidden constraint, a race condition,
+/// a side effect, or a workaround for a specific limitation.
+/// </remarks>
+/// <exception cref="InvalidOperationException">Thrown when X is in state Y.</exception>
+```
+
+### Rules
+
+- **Language**: English only — XML doc is part of the public API surface.
+- `<summary>` is **mandatory** on every public/protected type, property, method, and constructor.
+- `<param>` and `<returns>` are **mandatory** when parameters or return values are non-trivial.
+- `<remarks>` only when behavior would surprise a reader (hidden constraint, side effect, non-obvious invariant).
+- `<exception>` only for exceptions that callers must explicitly handle.
+- **Do not** repeat the member name in the summary ("Gets the run id" for a property named `RunId` is redundant — explain the semantic instead).
+- **Do not** add comments that just paraphrase the code; explain the **WHY** or the **contract**.
+
+### Examples
+
+```csharp
+/// <summary>Unique identifier for this flow run, scoped to a single <see cref="TriggerAsync"/> invocation.</summary>
+public Guid RunId { get; }
+
+/// <summary>
+/// Evaluates the DAG and returns the next step ready to execute,
+/// or <see langword="null"/> if all remaining steps are blocked or complete.
+/// </summary>
+/// <param name="runId">The run whose graph is being evaluated.</param>
+/// <param name="completedStepKey">The step that just finished, used to unlock dependents.</param>
+public ValueTask<StepMetadata?> GetNextStep(Guid runId, string completedStepKey, ...);
+
+/// <summary>Cron expression override; when set, supersedes the expression in the flow manifest.</summary>
+/// <remarks>
+/// Stored separately so the original manifest remains immutable.
+/// Set to <see langword="null"/> to revert to the manifest-defined schedule.
+/// </remarks>
+public string? CronOverride { get; set; }
+```
 
 ### Key Implementation Notes
 

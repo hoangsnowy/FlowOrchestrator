@@ -9,6 +9,9 @@ using FlowOrchestrator.SampleApp.Flows;
 using FlowOrchestrator.SampleApp.Steps;
 using Hangfire;
 using Hangfire.SqlServer;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,13 +41,19 @@ builder.Services.AddHangfire(config =>
 builder.Services.AddHangfireServer();
 
 // ── FlowOrchestrator ──────────────────────────────────────────────────────────
-// OrderHub Sample — four flows covering the full e-commerce lifecycle:
+// Sample flows covering the full feature matrix:
 //
-//   HelloWorldFlow        — minimal cron-scheduled health-check (all backends)
-//   ShipmentTrackingFlow  — poll a carrier tracking API (all backends)
-//   PaymentEventFlow      — receive payment gateway webhooks (all backends)
-//   OrderFulfillmentFlow  — fetch pending orders → call WMS API with polling
-//                           (SQL Server only — requires the Orders business table)
+//   HelloWorldFlow          — minimal cron-scheduled health-check (all backends)
+//   ShipmentTrackingFlow    — poll a carrier tracking API (all backends)
+//   PaymentEventFlow        — receive payment gateway webhooks (all backends)
+//   OrderFulfillmentFlow    — fetch pending orders → call WMS API with polling
+//                             (SQL Server only — requires the Orders business table)
+//
+// vNext additions:
+//   OrderBatchFlow          — M1.4 ForEach loop, M1.1 parallel fan-out within ForEach,
+//                             M2.3 idempotency via "Idempotency-Key" header (all backends)
+//   ParallelHealthCheckFlow — M1.1 DAG multiple entry steps, M1.2 all-of join with
+//                             partial failure tolerance, M1.3 graph validation (all backends)
 builder.Services.AddFlowOrchestrator(options =>
 {
     if (storageBackend == "sqlserver" && sqlConnStr is not null)
@@ -55,9 +64,52 @@ builder.Services.AddFlowOrchestrator(options =>
         options.UseInMemory();
 
     options.UseHangfire();
+
+    // ── M1.5: Persistent schedule overrides ───────────────────────────────────
+    // When true, cron overrides written via the dashboard or API survive process
+    // restarts. FlowSyncHostedService loads them from IFlowScheduleStateStore on
+    // startup instead of reverting to the manifest cron expression.
+    options.Scheduler.PersistOverrides = true;
+
+    // ── M2.2: Default run timeout ─────────────────────────────────────────────
+    // Runs that have not completed within this window are marked as TimedOut.
+    // Set per-flow via IFlowRunControlStore.SetTimeoutAsync for finer control.
+    // Null = no timeout enforced at the framework level.
+    options.RunControl.DefaultRunTimeout = TimeSpan.FromMinutes(10);
+
+    // ── M2.3: Idempotency header ──────────────────────────────────────────────
+    // When set, webhook and manual triggers extract this header value and pass it
+    // to IFlowRunControlStore.TryRegisterIdempotencyKeyAsync. A second request
+    // with the same key returns the existing RunId without creating a new run.
+    // OrderBatchFlow demonstrates this with "Idempotency-Key: batch-2026-04-19-001".
+    options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
+
+    // ── M2.6: Run-data retention ──────────────────────────────────────────────
+    // FlowRetentionHostedService sweeps IFlowRetentionStore on the configured
+    // interval, deleting runs (and their step/output/event records) older than
+    // DataTtl. Disabled by default; enable here for production deployments.
+    options.Retention.Enabled = true;
+    options.Retention.DataTtl = TimeSpan.FromDays(30);
+
+    // ── M2.5: Observability ───────────────────────────────────────────────────
+    // EnableEventPersistence — writes FlowEvent records to IOutputsRepository
+    //   (flow_events table), making run timelines visible in the dashboard.
+    // EnableOpenTelemetry    — activates FlowOrchestratorTelemetry ActivitySource
+    //   and Meter; wire up AddOpenTelemetry() + AddFlowOrchestratorInstrumentation()
+    //   in production to export spans/metrics to your observability backend.
+    options.Observability.EnableEventPersistence = true;
+    options.Observability.EnableOpenTelemetry = true;
+
+    // ── Flow registrations ────────────────────────────────────────────────────
     options.AddFlow<HelloWorldFlow>();
     options.AddFlow<ShipmentTrackingFlow>();
     options.AddFlow<PaymentEventFlow>();
+
+    // M1.4 ForEach + M2.3 Idempotency demo — available on all storage backends.
+    options.AddFlow<OrderBatchFlow>();
+
+    // M1.1 Parallel fan-out + M1.2 All-of join + M1.3 Validation demo.
+    options.AddFlow<ParallelHealthCheckFlow>();
 
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();
@@ -67,6 +119,11 @@ builder.Services.AddFlowOrchestrator(options =>
 builder.Services.AddStepHandler<LogMessageStepHandler>("LogMessage");
 builder.Services.AddStepHandler<CallExternalApiStep>("CallExternalApi");
 builder.Services.AddStepHandler<SerializeProbeStep>("SerializeProbe");
+
+// M1.4 ForEach child handler — processes a single order item per loop iteration.
+// Reads __loopItem (order ID) and __loopIndex injected by ForEachStepHandler at runtime.
+// Used by OrderBatchFlow → process_orders scope → validate_order step.
+builder.Services.AddStepHandler<ProcessOrderItemStep>("ProcessOrderItem");
 
 // QueryDatabaseStep / SaveResultStep / SampleDataMigrator depend on the Orders
 // business table which only exists in the SQL Server instance.
@@ -84,6 +141,21 @@ builder.Services.AddHttpClient("ExternalApi", client =>
     client.BaseAddress = new Uri("https://jsonplaceholder.typicode.com");
     client.Timeout = TimeSpan.FromSeconds(30);
 });
+
+// ── OpenTelemetry ─────────────────────────────────────────────────────────────
+// When running under Aspire, OTEL_EXPORTER_OTLP_ENDPOINT is injected automatically
+// and spans/metrics appear in the Aspire Dashboard. Standalone, set the env var to
+// point at any OTLP-compatible backend (Jaeger, Grafana, etc.).
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("FlowOrchestrator.SampleApp"))
+    .WithTracing(t => t
+        .AddFlowOrchestratorInstrumentation()
+        .AddAspNetCoreInstrumentation()
+        .AddOtlpExporter())
+    .WithMetrics(m => m
+        .AddFlowOrchestratorInstrumentation()
+        .AddAspNetCoreInstrumentation()
+        .AddOtlpExporter());
 
 builder.Services.AddFlowDashboard(builder.Configuration);
 
