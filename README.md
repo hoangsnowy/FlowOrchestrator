@@ -5,12 +5,17 @@ FlowOrchestrator is an open-source .NET library for orchestrating **multi-step b
 **Features at a glance:**
 - Define flows as plain C# classes — no YAML, no JSON files to maintain
 - Three trigger types: Manual (dashboard/API), Cron (recurring schedule), Webhook (external HTTP POST)
-- `runAfter` dependency graph — steps execute when their predecessors reach specific statuses
+- DAG execution planner — supports fan-out/fan-in with `runAfter` dependency conditions
 - `@triggerBody()` / `@triggerHeaders()` expressions — bind trigger payload fields to step inputs at runtime
 - `PollableStepHandler<T>` — built-in retry-with-backoff for steps that wait on external systems
 - `ForEach` loop steps — iterate over collections and fan out parallel/sequential child steps
 - Full run history — step-by-step timeline, input/output capture, attempt tracking
 - Retry button — re-enqueue any failed step from the dashboard without restarting the whole run
+- Run control — cooperative cancel + timeout support per run
+- Idempotent triggers via `Idempotency-Key` header
+- Scheduler durability — pause/cron override state persists across restarts
+- Run event stream + OpenTelemetry metrics/traces
+- Built-in retention cleanup (optional)
 - Optional Basic Auth on the dashboard; webhook secret validation via `X-Webhook-Key`
 
 ---
@@ -114,6 +119,33 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
+### Advanced runtime options (optional)
+
+```csharp
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connectionString);
+    options.UseHangfire();
+    options.AddFlow<MyFlow>();
+
+    // Run control defaults
+    options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
+    options.RunControl.DefaultRunTimeout = TimeSpan.FromMinutes(30); // null = disabled
+
+    // Scheduler state
+    options.Scheduler.PersistOverrides = true;
+
+    // Observability
+    options.Observability.EnableEventPersistence = true;
+    options.Observability.EnableOpenTelemetry = true;
+
+    // Retention cleanup
+    options.Retention.Enabled = true;
+    options.Retention.DataTtl = TimeSpan.FromDays(30);
+    options.Retention.SweepInterval = TimeSpan.FromHours(1);
+});
+```
+
 ---
 
 ## 3. Flow Definition
@@ -196,6 +228,10 @@ Each trigger generates a new `RunId` (GUID). All trigger data, step inputs, outp
 | `Succeeded` | Handler returned successfully |
 | `Failed` | Handler threw or returned a failed result |
 | `Skipped` | Prerequisite did not reach the required status |
+
+### Run statuses
+
+Common run statuses include `Running`, `Succeeded`, `Failed`, plus control-plane statuses `Cancelled` (cooperative cancel requested) and `TimedOut` (timeout threshold reached).
 
 ---
 
@@ -506,7 +542,7 @@ Open `http://localhost:5201/flows` (or your configured base path).
 - Raw JSON manifest viewer
 - **Enable/Disable** toggle and **Trigger** button
 
-**Runs** — Filterable run list (by flow, status, or free-text search). Search matches run fields (`id`, `flowName`, `status`, `triggerKey`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to see the step-by-step timeline with timing, inputs, outputs, and errors. Failed steps show a **Retry** button — clicking it re-enqueues the step and resets the run to **Running**.
+**Runs** — Filterable run list (by flow, status, or free-text search). Search matches run fields (`id`, `flowName`, `status`, `triggerKey`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to see the step-by-step timeline with timing, inputs, outputs, and errors. Failed steps show a **Retry** button. You can also request cooperative **Cancel**, inspect run **Control** state (timeout/cancel/idempotency), and query run **Events**.
 
 **Scheduled** — Hangfire recurring jobs: flow name, trigger key, cron expression, next/last execution. Actions: trigger immediately, pause, resume, edit cron expression inline.
 
@@ -520,6 +556,7 @@ Open `http://localhost:5201/flows` (or your configured base path).
 ```http
 POST http://localhost:5201/flows/api/flows/a1b2c3d4-0000-0000-0000-000000000002/trigger
 Content-Type: application/json
+Idempotency-Key: order-123-manual-001
 
 { "note": "manual test run" }
 ```
@@ -565,6 +602,9 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 | `GET` | `/flows/api/runs/stats` | Dashboard statistics |
 | `GET` | `/flows/api/runs/{id}` | Run detail with trigger headers |
 | `GET` | `/flows/api/runs/{id}/steps` | Step details for a run |
+| `GET` | `/flows/api/runs/{runId}/events` | Run event stream (`?skip=`, `?take=`) |
+| `GET` | `/flows/api/runs/{runId}/control` | Run control state (timeout/cancel/idempotency) |
+| `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative run cancellation |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
 | `GET` | `/flows/api/schedules` | List recurring jobs with status |
 | `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
@@ -631,10 +671,12 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 
 **`FlowOrchestrator.Hangfire`** — Hangfire integration layer.
 - `HangfireFlowOrchestrator` — `TriggerAsync`, `RunStepAsync`, `RetryStepAsync`
+- `FlowGraphPlanner` — DAG planning (fan-out/fan-in), readiness/blocked evaluation
 - `DefaultStepExecutor` — resolves `@triggerBody()` / `@triggerHeaders()` expressions, dispatches to `IStepHandler`
 - `ForEachStepHandler` — built-in handler for `LoopStepMetadata`
 - `FlowSyncHostedService` — on startup: syncs flows to `IFlowStore`, registers Hangfire recurring jobs for Cron triggers
 - `RecurringTriggerSync` — keeps recurring jobs in sync when flows are enabled/disabled at runtime
+- Run control + idempotency + retention hosted services
 - **Fail-fast validation** — throws `InvalidOperationException` at startup if no storage backend is registered
 
 **`FlowOrchestrator.InMemory`** — Pure in-process storage backend (no database required).
@@ -645,7 +687,7 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 **`FlowOrchestrator.SqlServer`** — Dapper-based SQL Server persistence.
 - `SqlFlowStore`, `SqlFlowRunStore`, `SqlOutputsRepository`
 - `FlowOrchestratorSqlMigrator` — `IHostedService` that auto-creates tables on startup:
-  `FlowDefinitions`, `FlowRuns`, `FlowSteps`, `FlowStepAttempts`, `FlowOutputs`
+  `FlowDefinitions`, `FlowRuns`, `FlowSteps`, `FlowStepAttempts`, `FlowOutputs`, `FlowStepClaims`, `FlowRunControls`, `FlowIdempotencyKeys`, `FlowEvents`, `FlowScheduleStates`
 - `UseSqlServer(this FlowOrchestratorBuilder, string connectionString)` DI extension
 
 **`FlowOrchestrator.PostgreSQL`** — Dapper-based PostgreSQL persistence (Npgsql).
@@ -661,10 +703,10 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 ### Execution flow (step-by-step)
 
 1. A trigger fires (dashboard button, cron schedule, or webhook POST).
-2. `HangfireFlowOrchestrator.TriggerAsync` generates a `RunId`, saves trigger data and headers, calls `IFlowExecutor.TriggerFlow()` to get the first step, and enqueues it as a Hangfire job.
+2. `HangfireFlowOrchestrator.TriggerAsync` generates a `RunId`, applies idempotency/timeout configuration, saves trigger data and headers, computes DAG entry steps, and enqueues all runnable entries.
 3. Hangfire fires `RunStepAsync` → `DefaultStepExecutor` resolves input expressions, dispatches to the matching `IStepHandler`, and persists the output.
-4. `IFlowExecutor.GetNextStep()` evaluates `runAfter` conditions. If satisfied → enqueues the next step. If all steps are complete → marks the run as `Succeeded` or `Failed`.
-5. On failure → the run stops. The dashboard **Retry** button calls `RetryStepAsync`, which resets the step state and re-enqueues from that point.
+4. `FlowGraphPlanner` evaluates run state: enqueue all newly ready steps, mark permanently blocked steps as `Skipped`, and prevent duplicate enqueue with step-claim idempotency.
+5. Run completes as `Succeeded`/`Failed`/`Cancelled`/`TimedOut` based on final step outcomes and run-control state.
 6. For polling steps → if `FetchAsync` returns a result where the condition is not yet met, `PollableStepHandler` returns `Pending` + `DelayNextStep`. Hangfire schedules the re-run after the configured interval.
 
 ### Swapping storage
@@ -707,6 +749,13 @@ builder.Services.AddFlowOrchestrator(options =>
     options.Services.AddSingleton<IOutputsRepository, MyRedisOutputsRepository>();
 });
 ```
+
+Optional advanced contracts for full vNext behavior:
+- `IFlowRunRuntimeStore` (step claim/status graph orchestration)
+- `IFlowRunControlStore` (cancel/timeout/idempotency state)
+- `IFlowScheduleStateStore` (persistent pause/cron overrides)
+- `IFlowEventReader` (run event query API)
+- `IFlowRetentionStore` (retention cleanup hook)
 
 ---
 

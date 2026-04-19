@@ -4,6 +4,10 @@ using Npgsql;
 
 namespace FlowOrchestrator.PostgreSQL;
 
+/// <summary>
+/// Dapper-based PostgreSQL implementation of <see cref="IFlowStore"/>.
+/// Uses explicit SQL queries against the <c>flow_definitions</c> table.
+/// </summary>
 public sealed class PostgreSqlFlowStore : IFlowStore
 {
     private readonly string _connectionString;

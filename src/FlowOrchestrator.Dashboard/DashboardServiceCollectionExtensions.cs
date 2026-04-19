@@ -13,10 +13,15 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace FlowOrchestrator.Dashboard;
 
+/// <summary>
+/// Extension methods for registering the FlowOrchestrator dashboard services and mapping
+/// the dashboard SPA, REST API, and webhook endpoints onto an <see cref="IEndpointRouteBuilder"/>.
+/// </summary>
 public static class DashboardServiceCollectionExtensions
 {
     // Headers excluded from trigger capture: sensitive auth/session headers and low-level transport headers
@@ -26,12 +31,24 @@ public static class DashboardServiceCollectionExtensions
         "X-Webhook-Key", "Proxy-Authorization",
         "Connection", "Transfer-Encoding", "Upgrade", "Content-Length"
     };
+
+    /// <summary>
+    /// Registers core dashboard services with default options.
+    /// </summary>
     public static IServiceCollection AddFlowDashboard(this IServiceCollection services)
     {
         services.AddOptions<FlowDashboardOptions>();
+        services.TryAddSingleton<IFlowScheduleStateStore, InMemoryScheduleStateStore>();
         return services;
     }
 
+    /// <summary>
+    /// Registers dashboard services and binds <see cref="FlowDashboardOptions"/> from
+    /// <paramref name="configuration"/> under the <paramref name="sectionName"/> key.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configuration">Application configuration used to bind dashboard options.</param>
+    /// <param name="sectionName">Configuration section name; defaults to <see cref="FlowDashboardOptions.DefaultSectionName"/>.</param>
     public static IServiceCollection AddFlowDashboard(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -44,6 +61,12 @@ public static class DashboardServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers dashboard services and configures <see cref="FlowDashboardOptions"/> via the
+    /// provided <paramref name="configureOptions"/> delegate.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configureOptions">Delegate that configures dashboard options inline.</param>
     public static IServiceCollection AddFlowDashboard(
         this IServiceCollection services,
         Action<FlowDashboardOptions> configureOptions)
@@ -55,6 +78,13 @@ public static class DashboardServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Maps the FlowOrchestrator dashboard SPA, REST API endpoints, and webhook receiver
+    /// onto <paramref name="endpoints"/> under <paramref name="basePath"/>.
+    /// Optionally applies Basic Auth if configured in <see cref="FlowDashboardOptions.BasicAuth"/>.
+    /// </summary>
+    /// <param name="endpoints">The endpoint route builder to register routes on.</param>
+    /// <param name="basePath">URL prefix for all dashboard routes; defaults to <c>/flows</c>.</param>
     public static IEndpointRouteBuilder MapFlowDashboard(this IEndpointRouteBuilder endpoints, string basePath = "/flows")
     {
         var options = endpoints.ServiceProvider
@@ -331,6 +361,89 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(run.Steps ?? []);
         });
 
+        group.MapGet("/api/runs/{runId:guid}/events", async (HttpContext http, IServiceProvider services, Guid runId) =>
+        {
+            var reader = services.GetService<IFlowEventReader>();
+            if (reader is null)
+            {
+                await http.Response.WriteAsJsonAsync(Array.Empty<FlowEventRecord>());
+                return;
+            }
+
+            var query = http.Request.Query;
+            var skip = query.TryGetValue("skip", out var skipValues) && int.TryParse(skipValues, out var parsedSkip)
+                ? parsedSkip
+                : 0;
+            var take = query.TryGetValue("take", out var takeValues) && int.TryParse(takeValues, out var parsedTake)
+                ? parsedTake
+                : 200;
+
+            var events = await reader.GetRunEventsAsync(runId, skip, take);
+            await http.Response.WriteAsJsonAsync(events);
+        });
+
+        group.MapGet("/api/runs/{runId:guid}/control", async (HttpContext http, IServiceProvider services, Guid runId) =>
+        {
+            var controlStore = services.GetService<IFlowRunControlStore>();
+            if (controlStore is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status501NotImplemented;
+                await http.Response.WriteAsJsonAsync(new { error = "Run control store is not configured." });
+                return;
+            }
+
+            var state = await controlStore.GetRunControlAsync(runId);
+            if (state is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await http.Response.WriteAsJsonAsync(new { error = "Run control state not found." });
+                return;
+            }
+
+            await http.Response.WriteAsJsonAsync(state);
+        });
+
+        group.MapPost("/api/runs/{runId:guid}/cancel", async (HttpContext http, IFlowRunStore store, IServiceProvider services, Guid runId) =>
+        {
+            var run = await store.GetRunDetailAsync(runId);
+            if (run is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await http.Response.WriteAsJsonAsync(new { error = "Run not found." });
+                return;
+            }
+
+            var controlStore = services.GetService<IFlowRunControlStore>();
+            if (controlStore is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status501NotImplemented;
+                await http.Response.WriteAsJsonAsync(new { error = "Run control store is not configured." });
+                return;
+            }
+
+            string? reason = null;
+            if (http.Request.ContentLength is > 0)
+            {
+                var payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                if (payload.ValueKind == JsonValueKind.Object
+                    && payload.TryGetProperty("reason", out var reasonProp)
+                    && reasonProp.ValueKind == JsonValueKind.String)
+                {
+                    reason = reasonProp.GetString();
+                }
+            }
+
+            var accepted = await controlStore.RequestCancelAsync(runId, reason);
+            await http.Response.WriteAsJsonAsync(new
+            {
+                success = true,
+                accepted,
+                message = accepted
+                    ? $"Cancellation requested for run '{runId}'."
+                    : $"Run '{runId}' was already cancelled."
+            });
+        });
+
         group.MapPost("/api/runs/{runId:guid}/steps/{stepKey}/retry", async (HttpContext http, IFlowRunStore store, Guid runId, string stepKey) =>
         {
             var run = await store.GetRunDetailAsync(runId);
@@ -355,13 +468,15 @@ public static class DashboardServiceCollectionExtensions
 
         // ── Schedule management endpoints ──
 
-        group.MapGet("/api/schedules", async (HttpContext http, IFlowStore store) =>
+        group.MapGet("/api/schedules", async (HttpContext http, IFlowStore store, IFlowScheduleStateStore scheduleStateStore) =>
         {
             using var connection = JobStorage.Current.GetConnection();
             var recurringJobs = connection.GetRecurringJobs();
 
             var flows = await store.GetAllAsync();
             var flowLookup = flows.ToDictionary(f => f.Id);
+            var states = await scheduleStateStore.GetAllAsync();
+            var stateLookup = states.ToDictionary(s => s.JobId, StringComparer.Ordinal);
 
             var activeJobs = recurringJobs
                 .Where(j => j.Id.StartsWith("flow-"))
@@ -369,13 +484,15 @@ public static class DashboardServiceCollectionExtensions
                 {
                     ParseJobId(j.Id, out var flowId, out var triggerKey);
                     flowLookup.TryGetValue(flowId, out var flow);
+                    stateLookup.TryGetValue(j.Id, out var state);
+                    var cron = string.IsNullOrWhiteSpace(state?.CronOverride) ? j.Cron : state!.CronOverride!;
                     return new
                     {
                         jobId = j.Id,
                         flowId,
                         flowName = flow?.Name ?? "Unknown",
                         triggerKey,
-                        cron = j.Cron,
+                        cron,
                         nextExecution = j.NextExecution,
                         lastExecution = j.LastExecution,
                         lastJobId = j.LastJobId,
@@ -386,13 +503,16 @@ public static class DashboardServiceCollectionExtensions
                 })
                 .ToList();
 
-            var pausedJobs = PausedJobsStore.GetAll().Select(p => new
+            var activeJobIds = activeJobs.Select(x => x.jobId).ToHashSet(StringComparer.Ordinal);
+            var pausedJobs = states
+                .Where(s => s.IsPaused && !activeJobIds.Contains(s.JobId))
+                .Select(s => new
             {
-                jobId = p.JobId,
-                flowId = p.FlowId,
-                flowName = p.FlowName,
-                triggerKey = p.TriggerKey,
-                cron = p.Cron,
+                jobId = s.JobId,
+                flowId = s.FlowId,
+                flowName = s.FlowName,
+                triggerKey = s.TriggerKey,
+                cron = s.CronOverride ?? "",
                 nextExecution = (DateTime?)null,
                 lastExecution = (DateTime?)null,
                 lastJobId = "",
@@ -405,13 +525,14 @@ public static class DashboardServiceCollectionExtensions
             await http.Response.WriteAsJsonAsync(result);
         });
 
-        group.MapPost("/api/schedules/{jobId}/trigger", async (HttpContext http, IRecurringJobManager manager, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/trigger", async (HttpContext http, IRecurringJobManager manager, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             try
             {
-                if (PausedJobsStore.TryGet(jobId, out var paused))
+                var state = await scheduleStateStore.GetAsync(jobId);
+                if (state?.IsPaused == true)
                 {
-                    BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerByScheduleAsync(paused.FlowId, paused.TriggerKey, null));
+                    BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerByScheduleAsync(state.FlowId, state.TriggerKey, null));
                     await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' triggered." });
                     return;
                 }
@@ -425,7 +546,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/schedules/{jobId}/pause", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/pause", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -436,14 +557,25 @@ public static class DashboardServiceCollectionExtensions
 
             var flow = await store.GetByIdAsync(flowId);
             var flowName = flow?.Name ?? "Unknown";
-            var cron = flow?.ManifestJson is not null ? ExtractCronExpression(flow.ManifestJson, triggerKey) ?? "" : "";
+            var existing = await scheduleStateStore.GetAsync(jobId);
+            var cron = existing?.CronOverride
+                ?? (flow?.ManifestJson is not null ? ExtractCronExpression(flow.ManifestJson, triggerKey) : null)
+                ?? "";
 
-            PausedJobsStore.Add(jobId, flowId, flowName, triggerKey, cron);
+            await scheduleStateStore.SaveAsync(new FlowScheduleState
+            {
+                JobId = jobId,
+                FlowId = flowId,
+                FlowName = flowName,
+                TriggerKey = triggerKey,
+                IsPaused = true,
+                CronOverride = string.IsNullOrWhiteSpace(cron) ? null : cron
+            });
             manager.RemoveIfExists(jobId);
             await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' paused." });
         });
 
-        group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -460,7 +592,8 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var cronExpr = ExtractCronExpression(flow.ManifestJson, triggerKey);
+            var existing = await scheduleStateStore.GetAsync(jobId);
+            var cronExpr = existing?.CronOverride ?? ExtractCronExpression(flow.ManifestJson, triggerKey);
             if (cronExpr is null)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -468,14 +601,22 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            PausedJobsStore.Remove(jobId);
+            await scheduleStateStore.SaveAsync(new FlowScheduleState
+            {
+                JobId = jobId,
+                FlowId = flowId,
+                FlowName = flow.Name,
+                TriggerKey = triggerKey,
+                IsPaused = false,
+                CronOverride = existing?.CronOverride
+            });
             var fid = flowId;
             var key = triggerKey;
             manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), cronExpr);
             await http.Response.WriteAsJsonAsync(new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
         });
 
-        group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, string jobId) =>
+        group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -501,15 +642,24 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var manifestDoc = JsonSerializer.Deserialize<JsonElement>(flow.ManifestJson);
-            var updatedManifest = UpdateCronInManifest(manifestDoc, triggerKey, newCron);
-            flow.ManifestJson = JsonSerializer.Serialize(updatedManifest);
-            flow.UpdatedAt = DateTimeOffset.UtcNow;
-            await store.SaveAsync(flow);
+            var existing = await scheduleStateStore.GetAsync(jobId);
+            var paused = existing?.IsPaused ?? false;
+            await scheduleStateStore.SaveAsync(new FlowScheduleState
+            {
+                JobId = jobId,
+                FlowId = flowId,
+                FlowName = flow.Name,
+                TriggerKey = triggerKey,
+                IsPaused = paused,
+                CronOverride = newCron
+            });
 
-            var fid = flowId;
-            var key = triggerKey;
-            manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), newCron);
+            if (!paused)
+            {
+                var fid = flowId;
+                var key = triggerKey;
+                manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), newCron);
+            }
 
             await http.Response.WriteAsJsonAsync(new { success = true, message = $"Cron updated to '{newCron}'." });
         });
@@ -551,8 +701,13 @@ public static class DashboardServiceCollectionExtensions
         }
     }
 
+    /// <summary>
+    /// Endpoint filter that enforces HTTP Basic Authentication on all dashboard routes
+    /// when <see cref="FlowDashboardBasicAuthOptions.IsEnabled"/> is true.
+    /// </summary>
     private sealed class FlowDashboardBasicAuthFilter(FlowDashboardBasicAuthOptions options) : IEndpointFilter
     {
+        /// <inheritdoc/>
         public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
         {
             if (IsAuthorized(context.HttpContext, options))
@@ -662,50 +817,41 @@ public static class DashboardServiceCollectionExtensions
         return null;
     }
 
-    private static JsonElement UpdateCronInManifest(JsonElement manifest, string triggerKey, string newCron)
+    /// <summary>
+    /// Fallback in-memory schedule state store registered when no persistent
+    /// <see cref="IFlowScheduleStateStore"/> is provided by the storage backend.
+    /// State is lost on process restart.
+    /// </summary>
+    private sealed class InMemoryScheduleStateStore : IFlowScheduleStateStore
     {
-        var dict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(manifest.GetRawText())
-            ?? new Dictionary<string, JsonElement>();
+        private readonly ConcurrentDictionary<string, FlowScheduleState> _states = new(StringComparer.Ordinal);
 
-        var triggersKey = dict.ContainsKey("triggers") ? "triggers" : "Triggers";
-        if (!dict.ContainsKey(triggersKey)) return manifest;
-
-        var triggers = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(dict[triggersKey].GetRawText())
-            ?? new Dictionary<string, JsonElement>();
-
-        if (!triggers.ContainsKey(triggerKey)) return manifest;
-
-        var trigger = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(triggers[triggerKey].GetRawText())
-            ?? new Dictionary<string, JsonElement>();
-
-        var inputsKey = trigger.ContainsKey("inputs") ? "inputs" : "Inputs";
-        var inputs = trigger.ContainsKey(inputsKey)
-            ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(trigger[inputsKey].GetRawText()) ?? new Dictionary<string, JsonElement>()
-            : new Dictionary<string, JsonElement>();
-
-        inputs["cronExpression"] = JsonSerializer.Deserialize<JsonElement>($"\"{newCron}\"");
-        trigger[inputsKey] = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(inputs));
-        triggers[triggerKey] = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(trigger));
-        dict[triggersKey] = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(triggers));
-
-        return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(dict));
-    }
-
-    private static class PausedJobsStore
-    {
-        private static readonly ConcurrentDictionary<string, PausedJobInfo> _store = new();
-
-        public static void Add(string jobId, Guid flowId, string flowName, string triggerKey, string cron)
+        public Task<FlowScheduleState?> GetAsync(string jobId)
         {
-            _store[jobId] = new PausedJobInfo(jobId, flowId, flowName, triggerKey, cron);
+            _states.TryGetValue(jobId, out var state);
+            return Task.FromResult<FlowScheduleState?>(state);
         }
 
-        public static void Remove(string jobId) => _store.TryRemove(jobId, out _);
+        public Task<IReadOnlyList<FlowScheduleState>> GetAllAsync()
+        {
+            IReadOnlyList<FlowScheduleState> states = _states.Values
+                .OrderBy(x => x.JobId, StringComparer.Ordinal)
+                .ToList();
+            return Task.FromResult(states);
+        }
 
-        public static bool TryGet(string jobId, out PausedJobInfo info) => _store.TryGetValue(jobId, out info!);
+        public Task SaveAsync(FlowScheduleState state)
+        {
+            state.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            _states[state.JobId] = state;
+            return Task.CompletedTask;
+        }
 
-        public static IEnumerable<PausedJobInfo> GetAll() => _store.Values;
-
-        public record PausedJobInfo(string JobId, Guid FlowId, string FlowName, string TriggerKey, string Cron);
+        public Task DeleteAsync(string jobId)
+        {
+            _states.TryRemove(jobId, out _);
+            return Task.CompletedTask;
+        }
     }
+
 }

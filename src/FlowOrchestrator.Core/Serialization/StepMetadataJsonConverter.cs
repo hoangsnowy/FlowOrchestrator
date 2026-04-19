@@ -4,8 +4,24 @@ using FlowOrchestrator.Core.Abstractions;
 
 namespace FlowOrchestrator.Core.Serialization;
 
+/// <summary>
+/// Custom <see cref="JsonConverter{T}"/> for <see cref="StepMetadata"/> that dispatches
+/// to <see cref="LoopStepMetadata"/> when the JSON <c>type</c> property equals <c>ForEach</c>,
+/// and manually deserializes base <see cref="StepMetadata"/> properties otherwise to avoid
+/// re-entering this converter recursively.
+/// </summary>
 public sealed class StepMetadataJsonConverter : JsonConverter<StepMetadata>
 {
+    /// <summary>
+    /// Reads a <see cref="StepMetadata"/> or <see cref="LoopStepMetadata"/> from JSON.
+    /// </summary>
+    /// <param name="reader">The JSON reader positioned at the start of the object.</param>
+    /// <param name="typeToConvert">Always <see cref="StepMetadata"/>.</param>
+    /// <param name="options">Serializer options forwarded to nested deserializations.</param>
+    /// <returns>
+    /// A <see cref="LoopStepMetadata"/> when <c>type</c> is <c>ForEach</c>;
+    /// otherwise a base <see cref="StepMetadata"/>.
+    /// </returns>
     public override StepMetadata? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
@@ -30,6 +46,13 @@ public sealed class StepMetadataJsonConverter : JsonConverter<StepMetadata>
         return step;
     }
 
+    /// <summary>
+    /// Writes a <see cref="StepMetadata"/> or <see cref="LoopStepMetadata"/> to JSON,
+    /// routing loop steps through their concrete type so all loop-specific properties are included.
+    /// </summary>
+    /// <param name="writer">The JSON writer to write to.</param>
+    /// <param name="value">The step metadata to serialize.</param>
+    /// <param name="options">Serializer options forwarded to nested serializations.</param>
     public override void Write(Utf8JsonWriter writer, StepMetadata value, JsonSerializerOptions options)
     {
         if (value is LoopStepMetadata loop)

@@ -1,14 +1,27 @@
 using System.Collections.Concurrent;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.InMemory;
 
-public sealed class InMemoryFlowRunStore : IFlowRunStore
+/// <summary>
+/// Thread-safe in-memory implementation of all run storage interfaces.
+/// Uses <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/> for concurrent access.
+/// All data is held in process memory and lost on restart.
+/// </summary>
+public sealed class InMemoryFlowRunStore :
+    IFlowRunStore,
+    IFlowRunRuntimeStore,
+    IFlowRunControlStore,
+    IFlowRetentionStore
 {
     private readonly ConcurrentDictionary<Guid, FlowRunRecord> _runs = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowStepRecord> _steps = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey, int Attempt), FlowStepAttemptRecord> _stepAttempts = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), byte> _stepClaims = new();
+    private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
+    private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
 
     public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId)
     {
@@ -202,6 +215,165 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         return Task.CompletedTask;
     }
 
+    public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
+    {
+        var map = _steps.Values
+            .Where(s => s.RunId == runId)
+            .GroupBy(s => s.StepKey, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => ParseStepStatus(g.OrderByDescending(x => x.StartedAt).First().Status),
+                StringComparer.Ordinal);
+
+        return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
+    }
+
+    public Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
+    {
+        IReadOnlyCollection<string> claimed = _stepClaims.Keys
+            .Where(k => k.RunId == runId)
+            .Select(k => k.StepKey)
+            .ToArray();
+
+        return Task.FromResult(claimed);
+    }
+
+    public Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
+    {
+        var claimed = _stepClaims.TryAdd((runId, stepKey), 1);
+        return Task.FromResult(claimed);
+    }
+
+    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
+    {
+        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
+        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+    }
+
+    public Task<string?> GetRunStatusAsync(Guid runId)
+    {
+        _runs.TryGetValue(runId, out var run);
+        return Task.FromResult(run?.Status);
+    }
+
+    public Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
+    {
+        _runControls[runId] = new FlowRunControlRecord
+        {
+            RunId = runId,
+            FlowId = flowId,
+            TriggerKey = triggerKey,
+            IdempotencyKey = idempotencyKey,
+            TimeoutAtUtc = timeoutAtUtc
+        };
+
+        return Task.CompletedTask;
+    }
+
+    public Task<FlowRunControlRecord?> GetRunControlAsync(Guid runId)
+    {
+        _runControls.TryGetValue(runId, out var control);
+        return Task.FromResult<FlowRunControlRecord?>(control);
+    }
+
+    public Task<bool> RequestCancelAsync(Guid runId, string? reason)
+    {
+        if (!_runControls.TryGetValue(runId, out var control))
+        {
+            control = new FlowRunControlRecord { RunId = runId };
+            _runControls[runId] = control;
+        }
+
+        if (control.CancelRequested)
+        {
+            return Task.FromResult(false);
+        }
+
+        control.CancelRequested = true;
+        control.CancelReason = reason;
+        control.CancelRequestedAtUtc = DateTimeOffset.UtcNow;
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
+    {
+        if (!_runControls.TryGetValue(runId, out var control))
+        {
+            control = new FlowRunControlRecord { RunId = runId };
+            _runControls[runId] = control;
+        }
+
+        if (control.TimedOutAtUtc is not null)
+        {
+            return Task.FromResult(false);
+        }
+
+        control.TimedOutAtUtc = DateTimeOffset.UtcNow;
+        control.CancelRequested = true;
+        control.CancelReason = reason ?? "Run timed out.";
+        control.CancelRequestedAtUtc ??= DateTimeOffset.UtcNow;
+
+        return Task.FromResult(true);
+    }
+
+    public Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
+    {
+        var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
+        if (_idempotency.TryGetValue(key, out var runId))
+        {
+            return Task.FromResult<Guid?>(runId);
+        }
+
+        return Task.FromResult<Guid?>(null);
+    }
+
+    public Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
+        var added = _idempotency.TryAdd(key, runId);
+        return Task.FromResult(added);
+    }
+
+    public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
+    {
+        var obsoleteRunIds = _runs.Values
+            .Where(r => r.CompletedAt is not null && r.CompletedAt <= cutoffUtc)
+            .Select(r => r.Id)
+            .ToArray();
+
+        if (obsoleteRunIds.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var obsolete = obsoleteRunIds.ToHashSet();
+
+        foreach (var runId in obsoleteRunIds)
+        {
+            _runs.TryRemove(runId, out _);
+            _runControls.TryRemove(runId, out _);
+        }
+
+        foreach (var key in _steps.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
+        {
+            _steps.TryRemove(key, out _);
+            _stepAttemptCounters.TryRemove(key, out _);
+            _stepClaims.TryRemove(key, out _);
+        }
+
+        foreach (var key in _stepAttempts.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
+        {
+            _stepAttempts.TryRemove(key, out _);
+        }
+
+        foreach (var key in _idempotency.Where(kvp => obsolete.Contains(kvp.Value)).Select(kvp => kvp.Key).ToArray())
+        {
+            _idempotency.TryRemove(key, out _);
+        }
+
+        return Task.CompletedTask;
+    }
+
     private IEnumerable<FlowRunRecord> ApplyRunsFilter(Guid? flowId, string? status, string? search)
     {
         var query = _runs.Values.AsEnumerable();
@@ -292,4 +464,19 @@ public sealed class InMemoryFlowRunStore : IFlowRunStore
         StartedAt = step.StartedAt,
         CompletedAt = step.CompletedAt
     };
+
+    private static StepStatus ParseStepStatus(string status)
+    {
+        if (Enum.TryParse<StepStatus>(status, ignoreCase: true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return StepStatus.Failed;
+    }
+
+    private static (Guid FlowId, string TriggerKey, string IdempotencyKey) NormalizeIdempotencyKey(Guid flowId, string triggerKey, string idempotencyKey)
+    {
+        return (flowId, triggerKey.Trim().ToLowerInvariant(), idempotencyKey.Trim().ToLowerInvariant());
+    }
 }

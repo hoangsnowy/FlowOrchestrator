@@ -4,6 +4,12 @@ using Microsoft.Extensions.Logging;
 
 namespace FlowOrchestrator.SqlServer;
 
+/// <summary>
+/// Hosted service that runs idempotent SQL schema migrations at startup.
+/// Creates the <c>FlowDefinitions</c>, <c>FlowRuns</c>, <c>FlowSteps</c>,
+/// <c>FlowStepAttempts</c>, <c>FlowOutputs</c>, and related tables if they do not already exist.
+/// Safe to run on every startup — all statements use <c>IF NOT EXISTS</c> guards.
+/// </summary>
 public sealed class FlowOrchestratorSqlMigrator : IHostedService
 {
     private readonly string _connectionString;
@@ -147,6 +153,72 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
                 [ValueJson]  NVARCHAR(MAX)    NULL,
                 [CreatedAt]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
                 CONSTRAINT PK_FlowOutputs PRIMARY KEY ([RunId], [Key])
+            );
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepClaims')
+        BEGIN
+            CREATE TABLE [FlowStepClaims] (
+                [RunId]      UNIQUEIDENTIFIER NOT NULL,
+                [StepKey]    NVARCHAR(256)    NOT NULL,
+                [ClaimedAt]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+                CONSTRAINT PK_FlowStepClaims PRIMARY KEY ([RunId], [StepKey])
+            );
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowRunControls')
+        BEGIN
+            CREATE TABLE [FlowRunControls] (
+                [RunId]                UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+                [FlowId]               UNIQUEIDENTIFIER NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+                [TriggerKey]           NVARCHAR(256)    NOT NULL DEFAULT '',
+                [IdempotencyKey]       NVARCHAR(256)    NULL,
+                [TimeoutAtUtc]         DATETIMEOFFSET   NULL,
+                [CancelRequested]      BIT              NOT NULL DEFAULT 0,
+                [CancelReason]         NVARCHAR(MAX)    NULL,
+                [CancelRequestedAtUtc] DATETIMEOFFSET   NULL,
+                [TimedOutAtUtc]        DATETIMEOFFSET   NULL
+            );
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowIdempotencyKeys')
+        BEGIN
+            CREATE TABLE [FlowIdempotencyKeys] (
+                [FlowId]          UNIQUEIDENTIFIER NOT NULL,
+                [TriggerKey]      NVARCHAR(256)    NOT NULL,
+                [IdempotencyKey]  NVARCHAR(256)    NOT NULL,
+                [RunId]           UNIQUEIDENTIFIER NOT NULL,
+                [CreatedAtUtc]    DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+                CONSTRAINT PK_FlowIdempotencyKeys PRIMARY KEY ([FlowId], [TriggerKey], [IdempotencyKey])
+            );
+
+            CREATE INDEX IX_FlowIdempotencyKeys_RunId ON [FlowIdempotencyKeys]([RunId]);
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowEvents')
+        BEGIN
+            CREATE TABLE [FlowEvents] (
+                [Sequence]   BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                [RunId]      UNIQUEIDENTIFIER NOT NULL,
+                [Timestamp]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+                [Type]       NVARCHAR(128)    NOT NULL,
+                [StepKey]    NVARCHAR(256)    NULL,
+                [Message]    NVARCHAR(MAX)    NULL
+            );
+
+            CREATE INDEX IX_FlowEvents_RunId_Sequence ON [FlowEvents]([RunId], [Sequence]);
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowScheduleStates')
+        BEGIN
+            CREATE TABLE [FlowScheduleStates] (
+                [JobId]         NVARCHAR(256)    NOT NULL PRIMARY KEY,
+                [FlowId]        UNIQUEIDENTIFIER NOT NULL,
+                [FlowName]      NVARCHAR(256)    NOT NULL DEFAULT '',
+                [TriggerKey]    NVARCHAR(256)    NOT NULL,
+                [IsPaused]      BIT              NOT NULL DEFAULT 0,
+                [CronOverride]  NVARCHAR(128)    NULL,
+                [UpdatedAtUtc]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET()
             );
         END
         """;

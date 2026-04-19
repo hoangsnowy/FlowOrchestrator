@@ -5,12 +5,25 @@ using FlowOrchestrator.Core.Abstractions;
 namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
-/// Base class for step handlers that support polling via Hangfire delayed jobs.
-/// Subclasses implement <see cref="FetchAsync"/>; poll state tracking and retry scheduling are handled here.
+/// Base class for step handlers that need to repeatedly query an external system
+/// until a condition is met, using Hangfire's delayed scheduling for pacing.
 /// </summary>
+/// <remarks>
+/// Subclasses implement <see cref="FetchAsync"/> to perform the actual fetch.
+/// The base class manages:
+/// <list type="bullet">
+///   <item>Tracking poll start time and attempt count in the step inputs (persisted between reschedules).</item>
+///   <item>Evaluating <see cref="IPollableInput.PollConditionPath"/> against the response.</item>
+///   <item>Enforcing <see cref="IPollableInput.PollMinAttempts"/> before accepting a positive condition.</item>
+///   <item>Returning <see cref="StepStatus.Pending"/> with <see cref="IStepResult.DelayNextStep"/> to reschedule.</item>
+///   <item>Returning <see cref="StepStatus.Failed"/> on timeout.</item>
+/// </list>
+/// </remarks>
+/// <typeparam name="TInput">Step input type implementing <see cref="IPollableInput"/>.</typeparam>
 public abstract class PollableStepHandler<TInput> : IStepHandler<TInput>
     where TInput : IPollableInput
 {
+    /// <inheritdoc/>
     public async ValueTask<object?> ExecuteAsync(
         IExecutionContext ctx, IFlowDefinition flow, IStepInstance<TInput> step)
     {
@@ -70,8 +83,12 @@ public abstract class PollableStepHandler<TInput> : IStepHandler<TInput>
     }
 
     /// <summary>
-    /// Perform the actual data fetch. Returns the payload and whether it was parsed as JSON.
+    /// Performs the actual data fetch against the external system.
     /// </summary>
+    /// <returns>
+    /// A tuple of the fetched <see cref="JsonElement"/> payload and a flag indicating
+    /// whether the response was parsed as valid JSON (required for <see cref="IPollableInput.PollConditionPath"/> evaluation).
+    /// </returns>
     protected abstract ValueTask<(JsonElement Result, bool IsJson)> FetchAsync(
         IExecutionContext ctx, IFlowDefinition flow, IStepInstance<TInput> step);
 

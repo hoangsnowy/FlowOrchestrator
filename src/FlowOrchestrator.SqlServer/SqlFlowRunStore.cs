@@ -1,10 +1,22 @@
 using Dapper;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Data.SqlClient;
 
 namespace FlowOrchestrator.SqlServer;
 
-public sealed class SqlFlowRunStore : IFlowRunStore
+/// <summary>
+/// Dapper-based SQL Server implementation of all run storage interfaces.
+/// A single class implements <see cref="IFlowRunStore"/>, <see cref="IFlowRunRuntimeStore"/>,
+/// <see cref="IFlowRunControlStore"/>, and <see cref="IFlowRetentionStore"/> to share the connection string
+/// and avoid multiple registrations.
+/// Step claim deduplication uses a SQL <c>INSERT IF NOT EXISTS</c> pattern for atomicity.
+/// </summary>
+public sealed class SqlFlowRunStore :
+    IFlowRunStore,
+    IFlowRunRuntimeStore,
+    IFlowRunControlStore,
+    IFlowRetentionStore
 {
     private readonly string _connectionString;
 
@@ -217,6 +229,258 @@ public sealed class SqlFlowRunStore : IFlowRunStore
             new { Id = runId });
     }
 
+    public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(string StepKey, string Status)>(
+            "SELECT StepKey, Status FROM FlowSteps WHERE RunId = @RunId",
+            new { RunId = runId });
+
+        return rows.ToDictionary(
+            x => x.StepKey,
+            x => ParseStepStatus(x.Status),
+            StringComparer.Ordinal);
+    }
+
+    public async Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<string>(
+            "SELECT StepKey FROM FlowStepClaims WHERE RunId = @RunId",
+            new { RunId = runId });
+
+        return rows.AsList();
+    }
+
+    public async Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var affected = await conn.ExecuteScalarAsync<int>(
+            """
+            MERGE FlowStepClaims AS target
+            USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
+            ON target.RunId = source.RunId AND target.StepKey = source.StepKey
+            WHEN NOT MATCHED THEN
+                INSERT (RunId, StepKey, ClaimedAt) VALUES (@RunId, @StepKey, SYSDATETIMEOFFSET());
+            SELECT @@ROWCOUNT;
+            """,
+            new { RunId = runId, StepKey = stepKey });
+
+        return affected > 0;
+    }
+
+    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
+    {
+        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
+        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+    }
+
+    public async Task<string?> GetRunStatusAsync(Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<string?>(
+            "SELECT Status FROM FlowRuns WHERE Id = @Id",
+            new { Id = runId });
+    }
+
+    public async Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            """
+            MERGE FlowRunControls AS target
+            USING (SELECT @RunId AS RunId) AS source
+            ON target.RunId = source.RunId
+            WHEN MATCHED THEN
+                UPDATE SET
+                    FlowId = @FlowId,
+                    TriggerKey = @TriggerKey,
+                    IdempotencyKey = @IdempotencyKey,
+                    TimeoutAtUtc = @TimeoutAtUtc
+            WHEN NOT MATCHED THEN
+                INSERT (RunId, FlowId, TriggerKey, IdempotencyKey, TimeoutAtUtc, CancelRequested)
+                VALUES (@RunId, @FlowId, @TriggerKey, @IdempotencyKey, @TimeoutAtUtc, 0);
+            """,
+            new
+            {
+                RunId = runId,
+                FlowId = flowId,
+                TriggerKey = triggerKey,
+                IdempotencyKey = idempotencyKey,
+                TimeoutAtUtc = timeoutAtUtc
+            });
+    }
+
+    public async Task<FlowRunControlRecord?> GetRunControlAsync(Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        return await conn.QuerySingleOrDefaultAsync<FlowRunControlRecord>(
+            """
+            SELECT
+                RunId,
+                FlowId,
+                TriggerKey,
+                IdempotencyKey,
+                TimeoutAtUtc,
+                CancelRequested,
+                CancelReason,
+                CancelRequestedAtUtc,
+                TimedOutAtUtc
+            FROM FlowRunControls
+            WHERE RunId = @RunId
+            """,
+            new { RunId = runId });
+    }
+
+    public async Task<bool> RequestCancelAsync(Guid runId, string? reason)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE FlowRunControls
+            SET CancelRequested = 1,
+                CancelReason = @Reason,
+                CancelRequestedAtUtc = COALESCE(CancelRequestedAtUtc, SYSDATETIMEOFFSET())
+            WHERE RunId = @RunId
+              AND CancelRequested = 0
+            """,
+            new { RunId = runId, Reason = reason });
+
+        return affected > 0;
+    }
+
+    public async Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE FlowRunControls
+            SET TimedOutAtUtc = COALESCE(TimedOutAtUtc, SYSDATETIMEOFFSET()),
+                CancelRequested = 1,
+                CancelReason = COALESCE(@Reason, CancelReason, 'Run timed out.'),
+                CancelRequestedAtUtc = COALESCE(CancelRequestedAtUtc, SYSDATETIMEOFFSET())
+            WHERE RunId = @RunId
+            """,
+            new { RunId = runId, Reason = reason });
+
+        return affected > 0;
+    }
+
+    public async Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+
+        var runId = await conn.ExecuteScalarAsync<Guid?>(
+            """
+            SELECT RunId
+            FROM FlowIdempotencyKeys
+            WHERE FlowId = @FlowId
+              AND TriggerKey = @TriggerKey
+              AND IdempotencyKey = @IdempotencyKey
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = normalizedTriggerKey,
+                IdempotencyKey = normalizedIdempotencyKey
+            });
+
+        return runId;
+    }
+
+    public async Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+
+        var affected = await conn.ExecuteScalarAsync<int>(
+            """
+            MERGE FlowIdempotencyKeys AS target
+            USING (
+                SELECT @FlowId AS FlowId, @TriggerKey AS TriggerKey, @IdempotencyKey AS IdempotencyKey
+            ) AS source
+            ON target.FlowId = source.FlowId
+               AND target.TriggerKey = source.TriggerKey
+               AND target.IdempotencyKey = source.IdempotencyKey
+            WHEN NOT MATCHED THEN
+                INSERT (FlowId, TriggerKey, IdempotencyKey, RunId, CreatedAtUtc)
+                VALUES (@FlowId, @TriggerKey, @IdempotencyKey, @RunId, SYSDATETIMEOFFSET());
+            SELECT @@ROWCOUNT;
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = normalizedTriggerKey,
+                IdempotencyKey = normalizedIdempotencyKey,
+                RunId = runId
+            });
+
+        return affected > 0;
+    }
+
+    public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await conn.ExecuteAsync(
+            """
+            DELETE fsc
+            FROM FlowStepClaims fsc
+            INNER JOIN FlowRuns fr ON fr.Id = fsc.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE frc
+            FROM FlowRunControls frc
+            INNER JOIN FlowRuns fr ON fr.Id = frc.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fio
+            FROM FlowIdempotencyKeys fio
+            INNER JOIN FlowRuns fr ON fr.Id = fio.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fo
+            FROM FlowOutputs fo
+            INNER JOIN FlowRuns fr ON fr.Id = fo.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fe
+            FROM FlowEvents fe
+            INNER JOIN FlowRuns fr ON fr.Id = fe.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fsa
+            FROM FlowStepAttempts fsa
+            INNER JOIN FlowRuns fr ON fr.Id = fsa.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fs
+            FROM FlowSteps fs
+            INNER JOIN FlowRuns fr ON fr.Id = fs.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE FROM FlowRuns
+            WHERE CompletedAt IS NOT NULL
+              AND CompletedAt < @CutoffUtc;
+            """,
+            new { CutoffUtc = cutoffUtc },
+            tx).ConfigureAwait(false);
+
+        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<FlowRunRecord?> GetRunCoreAsync(SqlConnection conn, Guid runId)
     {
         return await conn.QuerySingleOrDefaultAsync<FlowRunRecord>(
@@ -267,5 +531,15 @@ public sealed class SqlFlowRunStore : IFlowRunStore
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal)
             .Replace("[", "\\[", StringComparison.Ordinal);
+    }
+
+    private static StepStatus ParseStepStatus(string status)
+    {
+        if (Enum.TryParse<StepStatus>(status, ignoreCase: true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return StepStatus.Failed;
     }
 }

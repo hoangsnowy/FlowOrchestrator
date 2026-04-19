@@ -65,6 +65,20 @@ public class StepCollectionTests
     }
 
     [Fact]
+    public void FindStep_RuntimeLoopKey_WithIndex_ReturnsChildStep()
+    {
+        var child = new StepMetadata { Type = "ChildType" };
+        var parent = new LoopStepMetadata
+        {
+            Type = "ForEach",
+            Steps = new StepCollection { ["child"] = child }
+        };
+        var collection = new StepCollection { ["parent"] = parent };
+
+        collection.FindStep("parent.0.child").Should().BeSameAs(child);
+    }
+
+    [Fact]
     public void FindNextStep_WithRunAfter_ReturnsSuccessor()
     {
         var step1 = new StepMetadata { Type = "A" };

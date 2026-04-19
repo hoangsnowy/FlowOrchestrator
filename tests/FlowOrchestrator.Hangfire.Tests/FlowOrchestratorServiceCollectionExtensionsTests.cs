@@ -30,9 +30,8 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseInMemory());
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IFlowStore));
-
-        descriptor.ImplementationType.Should().Be(typeof(InMemoryFlowStore));
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IFlowStore>().Should().BeOfType<InMemoryFlowStore>();
     }
 
     [Fact]
@@ -41,9 +40,8 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseInMemory());
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IFlowRunStore));
-
-        descriptor.ImplementationType.Should().Be(typeof(InMemoryFlowRunStore));
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IFlowRunStore>().Should().BeOfType<InMemoryFlowRunStore>();
     }
 
     [Fact]
@@ -52,9 +50,8 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseInMemory());
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IOutputsRepository));
-
-        descriptor.ImplementationType.Should().Be(typeof(InMemoryOutputsRepository));
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IOutputsRepository>().Should().BeOfType<InMemoryOutputsRepository>();
     }
 
     [Fact]
@@ -76,11 +73,8 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IFlowStore));
-
-        descriptor.ImplementationFactory.Should().NotBeNull();
-        var instance = descriptor.ImplementationFactory!(null!);
-        instance.GetType().Name.Should().Be("SqlFlowStore");
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IFlowStore>().GetType().Name.Should().Be("SqlFlowStore");
     }
 
     [Fact]
@@ -89,11 +83,8 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IFlowRunStore));
-
-        descriptor.ImplementationFactory.Should().NotBeNull();
-        var instance = descriptor.ImplementationFactory!(null!);
-        instance.GetType().Name.Should().Be("SqlFlowRunStore");
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IFlowRunStore>().GetType().Name.Should().Be("SqlFlowRunStore");
     }
 
     [Fact]
@@ -102,11 +93,8 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
 
-        var descriptor = services.Single(sd => sd.ServiceType == typeof(IOutputsRepository));
-
-        descriptor.ImplementationFactory.Should().NotBeNull("SQL mode must register via factory");
-        var instance = descriptor.ImplementationFactory!(null!);
-        instance.GetType().Name.Should().Be("SqlOutputsRepository");
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IOutputsRepository>().GetType().Name.Should().Be("SqlOutputsRepository");
     }
 
     [Fact]

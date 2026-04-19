@@ -6,6 +6,11 @@ using System.Text.Json.Serialization;
 
 namespace FlowOrchestrator.Core.Serialization;
 
+/// <summary>
+/// Provides rich type coercion from loosely-typed step input values (<see cref="IDictionary{TKey,TValue}"/>,
+/// <see cref="System.Text.Json.JsonElement"/>, primitives) to strongly-typed handler input POCOs.
+/// Used internally by <c>StepHandlerMetadata</c> when deserializing step inputs before handler execution.
+/// </summary>
 internal static class JsonValueConversion
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web)
@@ -14,12 +19,28 @@ internal static class JsonValueConversion
         NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
 
+    /// <summary>
+    /// Deserializes <paramref name="value"/> to <typeparamref name="T"/>, applying dictionary-binding,
+    /// primitive coercion, and JSON-element conversion strategies in order.
+    /// </summary>
+    /// <typeparam name="T">The target type.</typeparam>
+    /// <param name="value">The raw input value — may be a dictionary, <see cref="JsonElement"/>, primitive, or <see langword="null"/>.</param>
+    /// <param name="options">Optional serializer options; defaults to web-conventions (camelCase, case-insensitive).</param>
+    /// <returns>The converted value, or the default for <typeparamref name="T"/> when <paramref name="value"/> is null.</returns>
     public static T? Deserialize<T>(object? value, JsonSerializerOptions? options = null)
     {
         var converted = Deserialize(value, typeof(T), options);
         return converted is null ? default : (T)converted;
     }
 
+    /// <summary>
+    /// Attempts to deserialize <paramref name="value"/> to <typeparamref name="T"/>.
+    /// Returns <see langword="false"/> and sets <paramref name="result"/> to the default value if conversion fails.
+    /// </summary>
+    /// <typeparam name="T">The target type.</typeparam>
+    /// <param name="value">The raw input value.</param>
+    /// <param name="result">The converted value on success; default on failure.</param>
+    /// <param name="options">Optional serializer options.</param>
     public static bool TryDeserialize<T>(object? value, out T? result, JsonSerializerOptions? options = null)
     {
         try
@@ -34,6 +55,14 @@ internal static class JsonValueConversion
         }
     }
 
+    /// <summary>
+    /// Deserializes <paramref name="value"/> to <paramref name="targetType"/>, supporting
+    /// dictionary-to-POCO binding, <see cref="JsonElement"/> conversion, and primitive coercion.
+    /// </summary>
+    /// <param name="value">The raw input value.</param>
+    /// <param name="targetType">The type to convert to.</param>
+    /// <param name="options">Optional serializer options.</param>
+    /// <returns>The converted object, or the default value for <paramref name="targetType"/> when <paramref name="value"/> is null.</returns>
     public static object? Deserialize(object? value, Type targetType, JsonSerializerOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(targetType);

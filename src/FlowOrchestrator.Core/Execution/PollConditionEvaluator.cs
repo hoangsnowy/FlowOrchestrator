@@ -3,8 +3,25 @@ using System.Text.Json;
 
 namespace FlowOrchestrator.Core.Execution;
 
+/// <summary>
+/// Evaluates whether a JSON payload satisfies a polling condition expressed as a dot-notation
+/// path and an optional expected value. Used by <c>PollableStepHandler</c> to decide whether
+/// the external system response meets the completion criteria.
+/// </summary>
 internal static class PollConditionEvaluator
 {
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="payload"/> satisfies the condition.
+    /// </summary>
+    /// <param name="payload">The JSON document returned by the polled endpoint.</param>
+    /// <param name="conditionPath">
+    /// Dot-notation path to the target field (e.g. <c>status.code</c>). Pass <see langword="null"/>
+    /// or empty to test whether the root payload has any data.
+    /// </param>
+    /// <param name="expectedValue">
+    /// Value the resolved field must equal (case-insensitive string comparison). Pass
+    /// <see langword="null"/> to treat any non-empty value as a match.
+    /// </param>
     public static bool IsMatched(JsonElement payload, string? conditionPath, object? expectedValue)
     {
         if (!TryResolvePath(payload, conditionPath, out var target))
