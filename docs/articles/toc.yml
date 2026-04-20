@@ -1,0 +1,35 @@
+- name: Getting Started
+  href: getting-started.md
+
+- name: Architecture
+  href: architecture.md
+
+- name: Core Concepts
+  href: core-concepts.md
+
+- name: Step Handlers
+  href: step-handlers.md
+
+- name: Triggers
+  href: triggers.md
+
+- name: Expressions
+  href: expressions.md
+
+- name: Polling Steps
+  href: polling.md
+
+- name: ForEach Loops
+  href: foreach.md
+
+- name: Storage Backends
+  href: storage.md
+
+- name: Dashboard
+  href: dashboard.md
+
+- name: Observability
+  href: observability.md
+
+- name: Configuration Reference
+  href: configuration.md

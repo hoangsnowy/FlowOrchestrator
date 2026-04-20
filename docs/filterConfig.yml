@@ -1,0 +1,25 @@
+apiRules:
+- exclude:
+    uidRegex: ^FlowOrchestrator\..*\.Internal
+    type: Namespace
+- exclude:
+    hasAttribute:
+      uid: System.Runtime.CompilerServices.CompilerGeneratedAttribute
+- exclude:
+    uidRegex: .*<.*>.*
+    type: Member
+- exclude:
+    uidRegex: .*\.DashboardHtml.*
+    type: Class
+- include:
+    type: Namespace
+- include:
+    type: Class
+- include:
+    type: Interface
+- include:
+    type: Enum
+- include:
+    type: Struct
+- include:
+    type: Delegate
