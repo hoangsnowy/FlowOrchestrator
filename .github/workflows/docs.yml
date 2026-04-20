@@ -1,0 +1,73 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'src/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Permissions required for GitHub Pages deployment via OIDC
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One concurrent deployment; queue rather than cancel so no deploy is lost
+concurrency:
+  group: 'pages'
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build DocFX site
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history → DocFX "last modified" + contributor metadata
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore solution
+        run: dotnet restore
+
+      - name: Build solution (generates XML documentation files)
+        # net8.0 only — docs only need one TFM; all three are validated in ci.yml
+        run: dotnet build --no-restore --configuration Release -p:TargetFramework=net8.0
+
+      - name: Restore .NET tools (pinned docfx version)
+        run: dotnet tool restore
+        working-directory: docs
+
+      - name: Build documentation
+        run: dotnet tool run docfx docfx.json
+        working-directory: docs
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
