@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "AppHost — Aspire (http :18888)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "FlowOrchestrator.AppHost/FlowOrchestrator.AppHost.csproj", "--launch-profile", "http"],
+      "port": 18888
+    },
+    {
+      "name": "AppHost — Aspire (https :17225)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "FlowOrchestrator.AppHost/FlowOrchestrator.AppHost.csproj", "--launch-profile", "https"],
+      "port": 17225
+    },
+    {
+      "name": "flow-inmemory (Aspire-managed :5103)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj", "--launch-profile", "http", "--", "--urls", "http://localhost:5103"],
+      "port": 5103
+    },
+    {
+      "name": "SampleApp — standalone (http :5201)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj", "--launch-profile", "http"],
+      "port": 5201
+    },
+    {
+      "name": "SampleApp — standalone (https :7177)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj", "--launch-profile", "https"],
+      "port": 7177
+    }
+  ]
+}

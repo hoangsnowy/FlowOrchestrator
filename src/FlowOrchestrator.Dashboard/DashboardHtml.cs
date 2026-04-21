@@ -83,6 +83,10 @@ internal static class DashboardHtml
   --success-bg:#eaf5ef;
   --success-border:#b5d9c5;
   --success-text:#1b4435;
+  --skip:#87867f;          /* Stone Gray — intentional bypass */
+  --skip-bg:#f5f4ed;       /* Parchment — warm neutral background */
+  --skip-border:#d1cfc5;   /* Ring Warm */
+  --skip-text:#5e5d59;     /* Olive Gray */
   --muted:#87867f;         /* Stone Gray */
   --text:#141413;          /* Anthropic Near Black */
   --text-dim:#5e5d59;      /* Olive Gray */
@@ -161,6 +165,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .badge-running{background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn-border)}
 .badge-succeeded{background:var(--success-bg);color:var(--success-text);border:1px solid var(--success-border)}
 .badge-failed{background:var(--danger-bg);color:var(--danger-text);border:1px solid var(--danger-border)}
+.badge-skipped{background:var(--skip-bg);color:var(--skip-text);border:1px solid var(--skip-border)}
 
 .flow-detail-panel{display:none;flex-direction:column;flex:1;overflow:hidden}
 .flow-detail-panel.show{display:flex}
@@ -226,7 +231,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .run-trigger-cell{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .run-status-badge{font-size:10px;font-weight:700;padding:3px 8px;border-radius:100px;text-transform:uppercase;flex-shrink:0;letter-spacing:.3px}
 .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;vertical-align:middle;margin-right:6px}
-.status-dot.Running{background:var(--warn);animation:pulse 1.5s infinite}.status-dot.Succeeded{background:var(--success)}.status-dot.Failed{background:var(--danger)}
+.status-dot.Running{background:var(--warn);animation:pulse 1.5s infinite}.status-dot.Succeeded{background:var(--success)}.status-dot.Failed{background:var(--danger)}.status-dot.Skipped{background:var(--skip)}
 
 .detail-empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:var(--text-dim);min-height:300px}.detail-empty .icon{font-size:40px;opacity:.25}
 .detail-header{padding:16px 20px;border-bottom:1px solid var(--border);background:var(--surface)}
@@ -239,15 +244,15 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .step-circle.Running{border-color:var(--warn);color:var(--warn);animation:pulse 1.5s infinite}
 .step-circle.Succeeded{border-color:var(--success);color:var(--success);background:var(--success-bg)}
 .step-circle.Failed{border-color:var(--danger);color:var(--danger);background:var(--danger-bg)}
-.step-circle.Pending{border-color:var(--text-light);color:var(--text-light)}
+.step-circle.Pending{border-color:var(--text-light);color:var(--text-light)}.step-circle.Skipped{border-color:var(--skip);color:var(--skip);background:var(--skip-bg)}
 .step-line{width:2px;flex:1;min-height:12px;background:var(--border)}.step-line.done{background:var(--success)}.step-line.last{display:none}
 .step-card{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:10px;margin-left:8px}
-.step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}
+.step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}.step-card.Skipped{border-left:3px dashed var(--skip);opacity:.8}
 .step-card.step-target{outline:2px solid var(--accent);outline-offset:2px;background:var(--accent-light)}
 .step-card-header{display:flex;align-items:center;justify-content:space-between}
 .step-key{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text)}.step-type{font-size:12px;color:var(--text-dim);margin-top:1px}
 .step-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:100px;text-transform:uppercase;letter-spacing:.3px}
-.step-badge.Running{background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn-border)}.step-badge.Succeeded{background:var(--success-bg);color:var(--success-text);border:1px solid var(--success-border)}.step-badge.Failed{background:var(--danger-bg);color:var(--danger-text);border:1px solid var(--danger-border)}.step-badge.Pending{background:var(--surface2);color:var(--text-light);border:1px solid var(--border)}
+.step-badge.Running{background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn-border)}.step-badge.Succeeded{background:var(--success-bg);color:var(--success-text);border:1px solid var(--success-border)}.step-badge.Failed{background:var(--danger-bg);color:var(--danger-text);border:1px solid var(--danger-border)}.step-badge.Pending{background:var(--surface2);color:var(--text-light);border:1px solid var(--border)}.step-badge.Skipped{background:var(--skip-bg);color:var(--skip-text);border:1px solid var(--skip-border)}
 .step-timing{margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap}
 .step-error{margin-top:6px;padding:8px 10px;background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--danger-text);word-break:break-all}
 .step-output{margin-top:6px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);word-break:break-all;max-height:80px;overflow-y:auto}
@@ -410,6 +415,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
             <option value="">All Statuses</option>
             <option value="Running">Running</option>
             <option value="Succeeded">Succeeded</option>
+            <option value="Skipped">Skipped</option>
             <option value="Failed">Failed</option>
           </select>
         </div>
@@ -517,7 +523,9 @@ function renderStepDebugPanels(step) {
     : '';
   const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
-  const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
+  const errorPanel = step.status === 'Skipped'
+    ? renderDetailPanel('Skip Reason', step.errorMessage, false, null)
+    : renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
 }
 function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
@@ -1137,7 +1145,7 @@ function renderTimeline(steps, runId) {
   let html = '<div class="timeline">';
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i], last = i===steps.length-1;
-    const icon = ({Succeeded:'\u2713',Failed:'\u2715',Running:'\u25cf'})[s.status]||'\u25cb';
+    const icon = ({Succeeded:'\u2713',Failed:'\u2715',Running:'\u25cf',Skipped:'\u2298'})[s.status]||'\u25cb';
     const attemptCount = getStepAttemptCount(s);
     html += '<div class="step-node" data-step-key="'+esc(s.stepKey)+'"><div class="step-connector">'
       +'<div class="step-circle '+s.status+'">'+icon+'</div>'
@@ -1177,6 +1185,7 @@ function scheduleBadge(state) {
   const s = state.toLowerCase();
   if (s === 'succeeded') return '<span class="badge badge-succeeded">'+state+'</span>';
   if (s === 'failed') return '<span class="badge badge-failed">'+state+'</span>';
+  if (s === 'skipped') return '<span class="badge badge-skipped">'+state+'</span>';
   if (s === 'processing' || s === 'enqueued') return '<span class="badge badge-running">'+state+'</span>';
   return '<span class="badge badge-paused">'+state+'</span>';
 }
