@@ -517,8 +517,39 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 
         if (termination is null)
         {
-            var hasFailed = statuses.Values.Any(x => x == StepStatus.Failed);
-            termination = hasFailed ? StepStatus.Failed.ToString() : StepStatus.Succeeded.ToString();
+            // Determine run-level status.
+            //
+            // Key question: did any step actually Succeed?
+            //
+            // No Succeeded + has Skipped → Skipped
+            //   Skip propagation dead-ended the whole workflow — nothing useful ran.
+            //
+            // No Succeeded + no Skipped → Failed
+            //   Pure crash with no conditional paths involved.
+            //
+            // Has Succeeded → check whether any failure was left unhandled:
+            //   Unhandled = a Failed step with no downstream that Succeeded.
+            //   Handled   = a Failed step followed by a fallback that Succeeded.
+            //   → Failed if unhandled failure exists, Succeeded otherwise.
+            var anySucceeded = statuses.Values.Any(x => x == StepStatus.Succeeded);
+
+            if (!anySucceeded)
+            {
+                var anySkipped = statuses.Values.Any(x => x == StepStatus.Skipped);
+                termination = anySkipped
+                    ? StepStatus.Skipped.ToString()
+                    : StepStatus.Failed.ToString();
+            }
+            else
+            {
+                var hasUnhandledFailure = statuses.Any(kvp =>
+                    kvp.Value == StepStatus.Failed &&
+                    !IsFailureHandled(kvp.Key, flow.Manifest.Steps, statuses));
+
+                termination = hasUnhandledFailure
+                    ? StepStatus.Failed.ToString()
+                    : StepStatus.Succeeded.ToString();
+            }
         }
 
         await TryCompleteRunAsync(ctx.RunId, termination).ConfigureAwait(false);
@@ -574,6 +605,21 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
             _logger.LogWarning(ex, "Failed to mark step {StepKey} as skipped due to terminal run status.", step.Key);
         }
     }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when a failed step has at least one downstream step
+    /// (a step that lists <paramref name="failedStepKey"/> in its <c>RunAfter</c>) that ran
+    /// and <see cref="StepStatus.Succeeded"/>. This indicates the flow author explicitly
+    /// designed a recovery path that executed successfully, so the failure is considered handled.
+    /// </summary>
+    private static bool IsFailureHandled(
+        string failedStepKey,
+        StepCollection manifestSteps,
+        IReadOnlyDictionary<string, StepStatus> statuses) =>
+        manifestSteps.Any(kvp =>
+            kvp.Value.RunAfter?.ContainsKey(failedStepKey) == true &&
+            statuses.TryGetValue(kvp.Key, out var s) &&
+            s == StepStatus.Succeeded);
 
     private async Task TryCompleteRunAsync(Guid runId, string status)
     {

@@ -111,6 +111,16 @@ builder.Services.AddFlowOrchestrator(options =>
     // M1.1 Parallel fan-out + M1.2 All-of join + M1.3 Validation demo.
     options.AddFlow<ParallelHealthCheckFlow>();
 
+    // Skipped-step visual demo — a payment flow where validate_payment always fails,
+    // charge_customer gets Skipped, handle_decline runs, send_receipt always runs.
+    options.AddFlow<ConditionalSkipDemoFlow>();
+
+    // Skip variants demo — shows both a middle skip (chain continues) and an end skip (dead-end).
+    options.AddFlow<SkipVariantsDemoFlow>();
+
+    // Dead-end skip demo — all leaf steps end as Skipped → run-level status = Skipped.
+    options.AddFlow<DeadEndSkipDemoFlow>();
+
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();
 });
@@ -119,6 +129,8 @@ builder.Services.AddFlowOrchestrator(options =>
 builder.Services.AddStepHandler<LogMessageStepHandler>("LogMessage");
 builder.Services.AddStepHandler<CallExternalApiStep>("CallExternalApi");
 builder.Services.AddStepHandler<SerializeProbeStep>("SerializeProbe");
+
+builder.Services.AddStepHandler<SimulatedFailureStep>("SimulatedFailure");
 
 // M1.4 ForEach child handler — processes a single order item per loop iteration.
 // Reads __loopItem (order ID) and __loopIndex injected by ForEachStepHandler at runtime.
