@@ -8,7 +8,12 @@ on:
 
 jobs:
   build-and-test:
+    name: Build & Test (${{ matrix.tfm }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tfm: [net8.0, net9.0, net10.0]
 
     steps:
       - uses: actions/checkout@v4
@@ -22,18 +27,18 @@ jobs:
             10.0.x
 
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore FlowOrchestrator.Libraries.slnf
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: dotnet build FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }}
 
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
+        run: dotnet test FlowOrchestrator.Libraries.slnf --no-build --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
 
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports
+          name: coverage-reports-${{ matrix.tfm }}
           path: ./test-results/**/coverage.cobertura.xml
           retention-days: 14
