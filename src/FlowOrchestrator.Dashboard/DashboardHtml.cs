@@ -428,7 +428,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
             <option value="">All Statuses</option>
             <option value="Running">Running</option>
             <option value="Succeeded">Succeeded</option>
-            <option value="Skipped">Skipped</option>
+            <option value="Skipped">Blocked</option>
             <option value="Failed">Failed</option>
           </select>
         </div>
@@ -546,7 +546,7 @@ function renderStepDebugPanels(step) {
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
 }
 function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
-function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
+function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }
 
 function normalizeAutoRefreshSeconds(value) {
   const parsed = Number.parseInt(value, 10);
@@ -1087,6 +1087,19 @@ function scrollToStep(stepKey) {
   setTimeout(() => { if (card) card.classList.remove('step-target'); }, 4000);
 }
 
+async function resolveFlowManifest(run) {
+  // Try allFlows cache first
+  let flow = allFlows.find(f => f.name === run.flowName || f.id === run.flowId);
+  if (flow) return flow.manifest;
+  // Cache miss (e.g. navigated directly to run URL) — fetch on demand
+  try {
+    const flows = await fetchJSON(BASE + '/flows');
+    flow = flows.find(f => f.name === run.flowName || f.id === run.flowId);
+    if (flow) { allFlows = flows; return flow.manifest; }
+  } catch {}
+  return null;
+}
+
 function switchRunView(view) {
   const tl = $('run-view-timeline'), dg = $('run-view-dag');
   const btnTl = $('run-view-btn-timeline'), btnDg = $('run-view-btn-dag');
@@ -1289,7 +1302,7 @@ async function selectRun(id, preserveScroll, targetStepKey) {
       +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
       +'</div>'
       +'<div id="run-view-dag" class="run-dag-wrap" style="display:none">'
-      +renderRunDAG(steps, (allFlows.find(f=>f.name===run.flowName||f.id===run.flowId)||{}).manifest)
+      +renderRunDAG(steps, await resolveFlowManifest(run))
       +'</div>';
     if (preserveScroll) $('runs-detail').scrollTop = detailScrollTop;
     if (selectedStepKey) scrollToStep(selectedStepKey);
