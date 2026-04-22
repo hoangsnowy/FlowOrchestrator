@@ -1,0 +1,41 @@
+<Project>
+  <!--
+    Guard against NETSDK1005 when a global -p:TargetFramework override is passed to the full
+    solution (e.g. CI builds with -p:TargetFramework=net8.0).
+
+    Single-TF, non-packable projects (SampleApp, AppHost) are only restored for their native
+    framework (FlowOrchestratorSampleTargetFramework). When the global override requests a
+    different TF their project.assets.json has no entry for it and the build fails.
+
+    This file is imported AFTER the SDK targets, so target definitions here take precedence.
+    When the mismatch condition is true we replace ResolvePackageAssets and Build with no-ops
+    so the SDK error never fires and the project is simply skipped.
+  -->
+
+  <PropertyGroup>
+    <!--
+      True only for single-TF (singular <TargetFramework>), non-packable projects whose
+      active TF doesn't match the framework they were restored for.
+      Multi-targeted library/test projects have $(TargetFrameworks) non-empty, so they are
+      never affected by this guard.
+    -->
+    <_FO_SkipIncompatibleTF Condition="
+        '$(IsPackable)'                        == 'false'  and
+        '$(TargetFrameworks)'                  == ''        and
+        '$(FlowOrchestratorSampleTargetFramework)' != ''   and
+        '$(TargetFramework)' != '$(FlowOrchestratorSampleTargetFramework)'
+      ">true</_FO_SkipIncompatibleTF>
+  </PropertyGroup>
+
+  <!-- Replace ResolvePackageAssets with a no-op to prevent NETSDK1005. -->
+  <Target Name="ResolvePackageAssets"
+          Condition="'$(_FO_SkipIncompatibleTF)' == 'true'" />
+
+  <!-- Replace Build with a no-op (DependsOnTargets="" stops the full dependency chain). -->
+  <Target Name="Build"
+          DependsOnTargets=""
+          Condition="'$(_FO_SkipIncompatibleTF)' == 'true'">
+    <Message Importance="High"
+             Text="[FlowOrchestrator] Skipping $(MSBuildProjectName): TargetFramework '$(TargetFramework)' is not supported by this project (expects '$(FlowOrchestratorSampleTargetFramework)'). Build is a no-op." />
+  </Target>
+</Project>
