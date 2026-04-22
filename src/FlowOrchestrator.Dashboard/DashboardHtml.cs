@@ -293,6 +293,19 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
 .dag-svg{width:100%;overflow:auto}
 .dag-svg svg text{font-family:'JetBrains Mono',monospace;font-size:11px}
+
+/* Run detail — Timeline / DAG toggle */
+.run-view-toggle{display:flex;align-items:center;gap:0;padding:10px 18px;border-bottom:1px solid var(--border);background:var(--surface)}
+.run-view-btn{font-size:11px;font-weight:600;padding:5px 16px;border:1px solid var(--border-dark);background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s;line-height:1.5}
+.run-view-btn:first-child{border-radius:6px 0 0 6px}
+.run-view-btn:last-child{border-radius:0 6px 6px 0;margin-left:-1px}
+.run-view-btn.active{background:var(--accent);color:#faf9f5;border-color:var(--accent);position:relative;z-index:1}
+.run-view-btn:not(.active):hover{border-color:var(--accent);color:var(--accent)}
+
+/* Live DAG in run detail */
+.run-dag-wrap{padding:16px 18px;overflow:auto}
+@keyframes dag-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.dag-node-running rect{animation:dag-pulse 1.5s infinite}
 </style>
 </head>
 <body>
@@ -892,6 +905,125 @@ function renderDAG(manifest) {
   container.innerHTML = svg;
 }
 
+function renderRunDAG(steps, manifest) {
+  if (!manifest || !manifest.steps || Object.keys(manifest.steps).length === 0) {
+    return '<div class="empty-msg">No DAG available — flow manifest not loaded.</div>';
+  }
+
+  // Build status lookup from runtime steps
+  const statusMap = {};
+  for (const s of steps) statusMap[s.stepKey] = s.status;
+
+  const mSteps = manifest.steps;
+  const keys = Object.keys(mSteps);
+  const nodeW = 200, nodeH = 58, padX = 90, padY = 22;
+
+  // Compute DAG levels (same algorithm as renderDAG)
+  const levels = {};
+  function getLevel(key) {
+    if (levels[key] !== undefined) return levels[key];
+    const step = mSteps[key];
+    if (!step.runAfter || Object.keys(step.runAfter).length === 0) return (levels[key] = 0);
+    let max = 0;
+    for (const dep of Object.keys(step.runAfter)) {
+      if (mSteps[dep]) max = Math.max(max, getLevel(dep) + 1);
+    }
+    return (levels[key] = max);
+  }
+  keys.forEach(k => getLevel(k));
+
+  const byLevel = {};
+  keys.forEach(k => { const l = levels[k]; (byLevel[l] = byLevel[l] || []).push(k); });
+  const maxLevel = Math.max(...Object.keys(byLevel).map(Number));
+
+  const positions = {};
+  for (let l = 0; l <= maxLevel; l++) {
+    (byLevel[l] || []).forEach((k, i) => {
+      positions[k] = { x: l * (nodeW + padX) + 20, y: i * (nodeH + padY) + 20 };
+    });
+  }
+
+  const svgW = (maxLevel + 1) * (nodeW + padX) + 40;
+  const maxNodes = Math.max(...Object.values(byLevel).map(g => g.length));
+  const svgH = maxNodes * (nodeH + padY) + 40;
+
+  // Status → visual tokens
+  function nodeStyle(status) {
+    switch (status) {
+      case 'Succeeded': return { fill:'#eaf5ef', stroke:'#2d6a4f', text:'#1b4435', dimText:'#2d6a4f', label:'✓ Succeeded', cls:'' };
+      case 'Failed':    return { fill:'#fdf0ee', stroke:'#b53333', text:'#7a1e1e', dimText:'#b53333', label:'✗ Failed',    cls:'' };
+      case 'Running':   return { fill:'#fef4e8', stroke:'#c8803a', text:'#7a3f08', dimText:'#c8803a', label:'◉ Running',   cls:'dag-node-running' };
+      case 'Skipped':   return { fill:'#f5f4ed', stroke:'#87867f', text:'#5e5d59', dimText:'#87867f', label:'⊘ Blocked',   cls:'' };
+      case 'Pending':   return { fill:'#faf9f5', stroke:'#d1cfc5', text:'#87867f', dimText:'#b0aea5', label:'○ Pending',   cls:'' };
+      default:          return { fill:'#faf9f5', stroke:'#e8e6dc', text:'#87867f', dimText:'#b0aea5', label:'○ Pending',   cls:'' };
+    }
+  }
+
+  // Edge color based on source status
+  function edgeStroke(status) {
+    switch (status) {
+      case 'Succeeded': return { color:'#b5d9c5', marker:'dag-arr-ok'   };
+      case 'Failed':    return { color:'#f5c6c0', marker:'dag-arr-fail' };
+      case 'Running':   return { color:'#f6d8b3', marker:'dag-arr-run'  };
+      default:          return { color:'#d1cfc5', marker:'dag-arr-def'  };
+    }
+  }
+
+  let svg = '<div class="dag-svg" style="min-height:160px"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
+
+  // Arrow markers
+  svg += '<defs>';
+  [['dag-arr-ok','#b5d9c5'],['dag-arr-fail','#f5c6c0'],['dag-arr-run','#f6d8b3'],['dag-arr-def','#d1cfc5']].forEach(([id,col]) => {
+    svg += '<marker id="'+id+'" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="'+col+'"/></marker>';
+  });
+  svg += '</defs>';
+
+  // Draw edges
+  for (const [key, step] of Object.entries(mSteps)) {
+    if (!step.runAfter) continue;
+    for (const dep of Object.keys(step.runAfter)) {
+      if (!positions[dep] || !positions[key]) continue;
+      const from = positions[dep], to = positions[key];
+      const { color, marker } = edgeStroke(statusMap[dep]);
+      svg += '<line'
+        +' x1="'+(from.x+nodeW)+'" y1="'+(from.y+nodeH/2)+'"'
+        +' x2="'+to.x+'" y2="'+(to.y+nodeH/2)+'"'
+        +' stroke="'+color+'" stroke-width="2"'
+        +' marker-end="url(#'+marker+')"/>';
+    }
+  }
+
+  // Draw nodes — clicking switches to timeline and scrolls to that step
+  for (const [key, step] of Object.entries(mSteps)) {
+    if (!positions[key]) continue;
+    const p = positions[key];
+    const status = statusMap[key] || 'Pending';
+    const ns = nodeStyle(status);
+    const safeKey = key.replace(/'/g, "\\'");
+    svg += '<g class="'+ns.cls+'" transform="translate('+p.x+','+p.y+')"'
+      +' onclick="switchRunView(\'timeline\');scrollToStep(\''+safeKey+'\')"'
+      +' style="cursor:pointer">'
+      +'<rect width="'+nodeW+'" height="'+nodeH+'" rx="6"'
+      +' fill="'+ns.fill+'" stroke="'+ns.stroke+'" stroke-width="1.5"/>'
+      // step key (monospace, top)
+      +'<text x="10" y="20" fill="'+ns.text+'"'
+      +' font-weight="600" font-size="12"'
+      +' font-family="JetBrains Mono,monospace">'+esc(key)+'</text>'
+      // step type (terracotta, middle)
+      +'<text x="10" y="36" fill="#c96442"'
+      +' font-size="10" font-family="Inter,sans-serif">'+esc(step.type||'')+'</text>'
+      // status label (bottom-right pill)
+      +'<text x="'+(nodeW-8)+'" y="'+(nodeH-8)+'"'
+      +' fill="'+ns.dimText+'" font-size="9" font-weight="700"'
+      +' text-anchor="end" font-family="Inter,sans-serif"'
+      +' letter-spacing="0.4">'+ns.label+'</text>'
+      +'</g>';
+  }
+
+  svg += '</svg></div>';
+  return svg;
+}
+
 async function toggleFlow(id, enable) {
   try {
     await fetch(BASE+'/flows/'+id+'/'+(enable?'enable':'disable'), {method:'POST'});
@@ -949,6 +1081,17 @@ function scrollToStep(stepKey) {
   if (card) card.classList.add('step-target');
   node.scrollIntoView({ behavior: 'smooth', block: 'center' });
   setTimeout(() => { if (card) card.classList.remove('step-target'); }, 4000);
+}
+
+function switchRunView(view) {
+  const tl = $('run-view-timeline'), dg = $('run-view-dag');
+  const btnTl = $('run-view-btn-timeline'), btnDg = $('run-view-btn-dag');
+  if (!tl || !dg) return;
+  const showDag = view === 'dag';
+  tl.style.display = showDag ? 'none' : '';
+  dg.style.display = showDag ? '' : 'none';
+  if (btnTl) btnTl.classList.toggle('active', !showDag);
+  if (btnDg) btnDg.classList.toggle('active', showDag);
 }
 
 function toggleWebhookSecret(cellId, btn) {
@@ -1132,10 +1275,17 @@ async function selectRun(id, preserveScroll, targetStepKey) {
       +'<span>Started: <b style="color:var(--text)">'+fmtDate(run.startedAt)+'</b></span>'
       +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
       +'</div></div>'
-      +'<div style="padding:16px 18px">'
+      +'<div class="run-view-toggle">'
+      +'<button class="run-view-btn active" id="run-view-btn-timeline" onclick="switchRunView(\'timeline\')">Timeline</button>'
+      +'<button class="run-view-btn" id="run-view-btn-dag" onclick="switchRunView(\'dag\')">DAG</button>'
+      +'</div>'
+      +'<div id="run-view-timeline" style="padding:16px 18px">'
       +renderRunTriggerPanels(run)
       +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
       +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
+      +'</div>'
+      +'<div id="run-view-dag" class="run-dag-wrap" style="display:none">'
+      +renderRunDAG(steps, (allFlows.find(f=>f.name===run.flowName||f.id===run.flowId)||{}).manifest)
       +'</div>';
     if (preserveScroll) $('runs-detail').scrollTop = detailScrollTop;
     if (selectedStepKey) scrollToStep(selectedStepKey);
