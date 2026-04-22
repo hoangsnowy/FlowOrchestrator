@@ -92,6 +92,11 @@ a:hover {
   letter-spacing: -0.01em;
 }
 
+.navbar-brand img {
+  height: 28px;
+  width: auto;
+}
+
 .navbar-nav .nav-link {
   color: var(--fo-olive) !important;
   font-size: 0.9375rem;

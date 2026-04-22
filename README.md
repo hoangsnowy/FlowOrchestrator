@@ -1,5 +1,7 @@
 ## FlowOrchestrator
 
+**[📖 Documentation](https://hoangsnowy.github.io/FlowOrchestrator/)** · **[NuGet](https://www.nuget.org/packages/FlowOrchestrator.Core)** · **[GitHub](https://github.com/hoangsnowy/FlowOrchestrator)**
+
 FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by **Hangfire**, persisted in **SQL Server**, **PostgreSQL**, or **in-memory**, and monitored via a **built-in dashboard**.
 
 **Features at a glance:**

@@ -90,7 +90,7 @@ Filter parameters:
 - Search (free text)
 
 Click a run to open the **run timeline**:
-- Step-by-step execution timeline with status badges
+- Step-by-step execution timeline with status badges (`Succeeded`, `Failed`, `Running`, `Pending`, **`Blocked`** — step could not run because a dependency did not meet its `runAfter` condition)
 - Input/output JSON for each step
 - Retry button on failed steps
 - Cancel button for running steps

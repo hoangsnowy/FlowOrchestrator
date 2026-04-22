@@ -143,7 +143,7 @@ When multiple predecessors are listed, **all** must reach one of their declared 
 | `Running` | Hangfire job is executing |
 | `Succeeded` | Handler returned without error |
 | `Failed` | Handler threw an exception, or returned `StepStatus.Failed` |
-| `Skipped` | All paths to this step resulted in statuses not listed in `RunAfter` |
+| `Skipped` | All paths to this step ended in statuses not listed in its `RunAfter`. The dashboard displays this as **Blocked**. |
 
 ---
 

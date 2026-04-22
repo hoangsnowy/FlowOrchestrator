@@ -524,10 +524,11 @@ function renderStepDebugPanels(step) {
   const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
   const errorPanel = step.status === 'Skipped'
-    ? renderDetailPanel('Skip Reason', step.errorMessage, false, null)
+    ? renderDetailPanel('Blocked Reason', step.errorMessage, false, null)
     : renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
 }
+function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
 function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
 
 function normalizeAutoRefreshSeconds(value) {
@@ -1152,7 +1153,7 @@ function renderTimeline(steps, runId) {
       +'<div class="step-line '+(s.status==='Succeeded'?'done':'')+' '+(last?'last':'')+'"></div></div>'
       +'<div class="step-card '+s.status+'">'
       +'<div class="step-card-header"><div><div class="step-key">'+esc(s.stepKey)+'</div><div class="step-type">'+esc(s.stepType)+'</div></div>'
-      +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+s.status+'</span>'
+      +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+stepStatusLabel(s.status)+'</span>'
       +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
       +'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
