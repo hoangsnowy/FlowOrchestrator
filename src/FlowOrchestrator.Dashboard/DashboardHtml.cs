@@ -247,7 +247,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .step-circle.Pending{border-color:var(--text-light);color:var(--text-light)}.step-circle.Skipped{border-color:var(--skip);color:var(--skip);background:var(--skip-bg)}
 .step-line{width:2px;flex:1;min-height:12px;background:var(--border)}.step-line.done{background:var(--success)}.step-line.last{display:none}
 .step-card{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:10px;margin-left:8px}
-.step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}.step-card.Skipped{border-left:3px dashed var(--skip);opacity:.8}
+.step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}.step-card.Skipped{border-left:2px dashed var(--border-dark);opacity:.6;background:transparent}
 .step-card.step-target{outline:2px solid var(--accent);outline-offset:2px;background:var(--accent-light)}
 .step-card-header{display:flex;align-items:center;justify-content:space-between}
 .step-key{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text)}.step-type{font-size:12px;color:var(--text-dim);margin-top:1px}
@@ -530,15 +530,19 @@ function getStepAttemptCount(step) {
   return 1;
 }
 function renderStepDebugPanels(step) {
+  // Blocked steps never executed — no input/output/error panels to show
+  if (step.status === 'Skipped') {
+    return '<div style="margin-top:5px;font-size:11px;color:var(--skip-text);font-style:italic">'
+      + 'Not executed \u2014 retry the failed step above to resume this flow.'
+      + '</div>';
+  }
   const attemptCount = getStepAttemptCount(step);
   const attemptsPanel = attemptCount > 1
     ? renderDetailPanel('Step Attempts', step.attempts, false, null)
     : '';
   const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
-  const errorPanel = step.status === 'Skipped'
-    ? renderDetailPanel('Blocked Reason', step.errorMessage, false, null)
-    : renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
+  const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
 }
 function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
@@ -1306,9 +1310,9 @@ function renderTimeline(steps, runId) {
       +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+stepStatusLabel(s.status)+'</span>'
       +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
-      +'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+      +(s.status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>':'')
       +'</div></div>'
-      +'<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'
+      +(s.status==='Skipped'?'':('<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'))
       +renderStepDebugPanels(s)
       +'</div></div>';
   }
