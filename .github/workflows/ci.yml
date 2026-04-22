@@ -33,7 +33,7 @@ jobs:
         run: dotnet build FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }}
 
       - name: Test
-        run: dotnet test FlowOrchestrator.Libraries.slnf --no-build --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
+        run: dotnet test FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
 
       - name: Upload coverage reports
         if: always()
