@@ -18,7 +18,7 @@ public interface IPollableInput
     int PollIntervalSeconds { get; }
 
     /// <summary>
-    /// Maximum total seconds to keep polling before the step is marked <see cref="StepStatus.Failed"/>.
+    /// Maximum total seconds to keep polling before the step is marked <see cref="FlowOrchestrator.Core.Abstractions.StepStatus.Failed"/>.
     /// Must be greater than or equal to <see cref="PollIntervalSeconds"/>.
     /// </summary>
     int PollTimeoutSeconds { get; }

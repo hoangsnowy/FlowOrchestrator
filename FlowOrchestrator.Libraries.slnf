@@ -1,0 +1,19 @@
+{
+  "solution": {
+    "path": "FlowOrchestrator.sln",
+    "projects": [
+      "src\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj",
+      "src\\FlowOrchestrator.Hangfire\\FlowOrchestrator.Hangfire.csproj",
+      "src\\FlowOrchestrator.Dashboard\\FlowOrchestrator.Dashboard.csproj",
+      "src\\FlowOrchestrator.SqlServer\\FlowOrchestrator.SqlServer.csproj",
+      "src\\FlowOrchestrator.PostgreSQL\\FlowOrchestrator.PostgreSQL.csproj",
+      "src\\FlowOrchestrator.InMemory\\FlowOrchestrator.InMemory.csproj",
+      "tests\\FlowOrchestrator.Core.Tests\\FlowOrchestrator.Core.Tests.csproj",
+      "tests\\FlowOrchestrator.Hangfire.Tests\\FlowOrchestrator.Hangfire.Tests.csproj",
+      "tests\\FlowOrchestrator.Dashboard.Tests\\FlowOrchestrator.Dashboard.Tests.csproj",
+      "tests\\FlowOrchestrator.SqlServer.Tests\\FlowOrchestrator.SqlServer.Tests.csproj",
+      "tests\\FlowOrchestrator.PostgreSQL.Tests\\FlowOrchestrator.PostgreSQL.Tests.csproj",
+      "tests\\FlowOrchestrator.InMemory.Tests\\FlowOrchestrator.InMemory.Tests.csproj"
+    ]
+  }
+}
