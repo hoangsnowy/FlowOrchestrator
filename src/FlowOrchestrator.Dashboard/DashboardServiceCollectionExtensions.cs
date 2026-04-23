@@ -466,6 +466,42 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 
+        group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IHangfireFlowTrigger flowTrigger, Guid runId) =>
+        {
+            var run = await runStore.GetRunDetailAsync(runId);
+            if (run is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await WriteJsonAsync(http.Response, new { error = "Run not found." });
+                return;
+            }
+
+            var flow = (await repo.GetAllFlowsAsync()).FirstOrDefault(f => f.Id == run.FlowId);
+            if (flow is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await WriteJsonAsync(http.Response, new { error = "Flow for this run is no longer registered." });
+                return;
+            }
+
+            object? data = null;
+            if (!string.IsNullOrWhiteSpace(run.TriggerDataJson))
+            {
+                try { data = JsonDocument.Parse(run.TriggerDataJson).RootElement.Clone(); }
+                catch { data = null; }
+            }
+
+            var triggerKey = string.IsNullOrWhiteSpace(run.TriggerKey) ? "manual" : run.TriggerKey!;
+            var ctx = new TriggerContext
+            {
+                RunId = Guid.NewGuid(),
+                Flow = flow,
+                Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders)
+            };
+            await flowTrigger.TriggerAsync(ctx);
+            await WriteJsonAsync(http.Response, new { runId = ctx.RunId, sourceRunId = runId, message = $"Run '{runId}' re-triggered as '{ctx.RunId}'." });
+        });
+
         // ── Schedule management endpoints ──
 
         group.MapGet("/api/schedules", async (HttpContext http, IFlowStore store, IFlowScheduleStateStore scheduleStateStore) =>

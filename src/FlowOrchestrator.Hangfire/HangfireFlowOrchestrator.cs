@@ -519,26 +519,34 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         {
             // Determine run-level status.
             //
-            // Key question: did any step actually Succeed?
+            // No Succeeded + has Failed (even alongside Skipped) → Failed
+            //   A step crashed; downstream steps being Blocked does not mask the failure.
             //
-            // No Succeeded + has Skipped → Skipped
-            //   Skip propagation dead-ended the whole workflow — nothing useful ran.
+            // No Succeeded + no Failed + has Skipped → Skipped
+            //   Safety net — entry steps always run, so this path is unreachable in practice.
             //
-            // No Succeeded + no Skipped → Failed
-            //   Pure crash with no conditional paths involved.
+            // No Succeeded + no Failed + no Skipped → Failed  (degenerate — all Pending)
             //
-            // Has Succeeded → check whether any failure was left unhandled:
-            //   Unhandled = a Failed step with no downstream that Succeeded.
-            //   Handled   = a Failed step followed by a fallback that Succeeded.
-            //   → Failed if unhandled failure exists, Succeeded otherwise.
+            // Has Succeeded + unhandled failure → Failed
+            //   A step crashed with no fallback that Succeeded downstream.
+            //
+            // Has Succeeded + no unhandled failure + ALL leaf steps Skipped → Skipped
+            //   The happy path completed but the only terminal step(s) were error-handlers
+            //   that were never needed (e.g. A→B→C→D where D only fires on C's failure).
+            //   The run intentionally "ended with a skip".
+            //
+            // Has Succeeded + no unhandled failure + at least one leaf Succeeded → Succeeded
             var anySucceeded = statuses.Values.Any(x => x == StepStatus.Succeeded);
 
             if (!anySucceeded)
             {
+                var anyFailed  = statuses.Values.Any(x => x == StepStatus.Failed);
                 var anySkipped = statuses.Values.Any(x => x == StepStatus.Skipped);
-                termination = anySkipped
-                    ? StepStatus.Skipped.ToString()
-                    : StepStatus.Failed.ToString();
+                termination = anyFailed
+                    ? StepStatus.Failed.ToString()
+                    : anySkipped
+                        ? StepStatus.Skipped.ToString()
+                        : StepStatus.Failed.ToString();
             }
             else
             {
@@ -546,9 +554,26 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
                     kvp.Value == StepStatus.Failed &&
                     !IsFailureHandled(kvp.Key, flow.Manifest.Steps, statuses));
 
-                termination = hasUnhandledFailure
-                    ? StepStatus.Failed.ToString()
-                    : StepStatus.Succeeded.ToString();
+                if (hasUnhandledFailure)
+                {
+                    termination = StepStatus.Failed.ToString();
+                }
+                else
+                {
+                    // A leaf step is one that no other step lists as a runAfter dependency.
+                    var leafKeys = statuses.Keys
+                        .Where(k => !flow.Manifest.Steps.Any(kvp =>
+                            kvp.Value.RunAfter?.ContainsKey(k) == true))
+                        .ToHashSet(StringComparer.Ordinal);
+
+                    var allLeavesSkipped = leafKeys.Count > 0 &&
+                        leafKeys.All(k =>
+                            statuses.TryGetValue(k, out var s) && s == StepStatus.Skipped);
+
+                    termination = allLeavesSkipped
+                        ? StepStatus.Skipped.ToString()
+                        : StepStatus.Succeeded.ToString();
+                }
             }
         }
 

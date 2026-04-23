@@ -3,21 +3,23 @@ using FlowOrchestrator.Core.Abstractions;
 namespace FlowOrchestrator.SampleApp.Flows;
 
 /// <summary>
-/// DeadEndSkipDemoFlow — Produces a run-level <c>Skipped</c> status.
+/// DeadEndSkipDemoFlow — Demonstrates run-level <c>Failed</c> status when an entry step crashes
+/// and all downstream steps become Blocked (Skipped) because their <c>runAfter</c> conditions
+/// can never be satisfied.
 ///
-/// The entry step always fails and all downstream steps require <c>Succeeded</c>,
-/// so skip propagates to every leaf — nothing useful runs — and the run is recorded
-/// as <c>Skipped</c> rather than <c>Failed</c> or <c>Succeeded</c>.
+/// A real step crash (<c>validate_input</c> → Failed) is never masked by downstream skip
+/// propagation. The run is recorded as <c>Failed</c> even though every other step is Skipped.
 ///
 /// DAG:
-///   validate_input  (SimulatedFailure → always fails)
-///       └─► enrich_data   (RunAfter: validate_input=[Succeeded]) → Skipped
-///                 └─► save_result (RunAfter: enrich_data=[Succeeded])   → Skipped ← leaf
+///   validate_input  (SimulatedFailure → always crashes)
+///       └─► enrich_data   (RunAfter: validate_input=[Succeeded]) → Blocked
+///                 └─► save_result (RunAfter: enrich_data=[Succeeded])  → Blocked
 ///
 /// Expected run result:
-///   validate_input   Failed
-///   enrich_data      Skipped
-///   save_result      Skipped  ← only leaf, all leaves Skipped → run = Skipped
+///   validate_input   Failed   ← real crash
+///   enrich_data      Skipped  ← Blocked because validate_input did not Succeed
+///   save_result      Skipped  ← Blocked because enrich_data did not Succeed
+///   → run status = Failed  (crash takes precedence over downstream blocking)
 /// </summary>
 public sealed class DeadEndSkipDemoFlow : IFlowDefinition
 {
@@ -50,8 +52,8 @@ public sealed class DeadEndSkipDemoFlow : IFlowDefinition
                 Inputs = new Dictionary<string, object?> { ["message"] = "Enriching data from external source." }
             },
 
-            // Leaf step — only Succeeded is accepted, so skip propagates here.
-            // All leaves Skipped → run-level = Skipped.
+            // Leaf step — only Succeeded is accepted, so Blocked propagates here.
+            // All downstream Skipped + entry Failed → run-level = Failed.
             ["save_result"] = new StepMetadata
             {
                 Type = "LogMessage",

@@ -1,4 +1,6 @@
 using System.Net;
+using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Dashboard.Tests;
@@ -193,6 +195,57 @@ public sealed class RunEndpointTests : IDisposable
         var response = await _client.PostAsync($"/flows/api/runs/{runId}/steps/step1/retry", null);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task POST_rerun_returns_404_when_run_missing()
+    {
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+
+        var response = await _client.PostAsync($"/flows/api/runs/{Guid.NewGuid()}/rerun", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task POST_rerun_returns_404_when_flow_missing_from_repository()
+    {
+        var runId = Guid.NewGuid();
+        var flowId = Guid.NewGuid();
+        _server.FlowRunStore.GetRunDetailAsync(runId)
+            .Returns(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Failed", TriggerKey = "manual" });
+        _server.FlowRepository.GetAllFlowsAsync().Returns(Array.Empty<IFlowDefinition>());
+
+        var response = await _client.PostAsync($"/flows/api/runs/{runId}/rerun", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task POST_rerun_returns_200_and_triggers_new_run()
+    {
+        var runId = Guid.NewGuid();
+        var flowId = Guid.NewGuid();
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(flowId);
+        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.FlowRunStore.GetRunDetailAsync(runId).Returns(new FlowRunRecord
+        {
+            Id = runId,
+            FlowId = flowId,
+            Status = "Failed",
+            TriggerKey = "webhook",
+            TriggerDataJson = "{\"orderId\":42}"
+        });
+
+        var response = await _client.PostAsync($"/flows/api/runs/{runId}/rerun", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("runId");
+        body.Should().Contain("sourceRunId");
+        await _server.FlowTrigger.Received(1).TriggerAsync(Arg.Is<ITriggerContext>(ctx =>
+            ctx.Flow.Id == flowId && ctx.Trigger.Key == "webhook"));
     }
 
     [Fact]
