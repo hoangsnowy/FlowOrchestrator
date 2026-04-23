@@ -1,5 +1,7 @@
 ## FlowOrchestrator
 
+**[📖 Documentation](https://hoangsnowy.github.io/FlowOrchestrator/)** · **[NuGet](https://www.nuget.org/packages/FlowOrchestrator.Core)** · **[GitHub](https://github.com/hoangsnowy/FlowOrchestrator)**
+
 FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by **Hangfire**, persisted in **SQL Server**, **PostgreSQL**, or **in-memory**, and monitored via a **built-in dashboard**.
 
 **Features at a glance:**
@@ -10,7 +12,9 @@ FlowOrchestrator is an open-source .NET library for orchestrating **multi-step b
 - `PollableStepHandler<T>` — built-in retry-with-backoff for steps that wait on external systems
 - `ForEach` loop steps — iterate over collections and fan out parallel/sequential child steps
 - Full run history — step-by-step timeline, input/output capture, attempt tracking
+- Run detail with **four views**: Timeline, DAG (interactive graph), Gantt (time-axis SVG), Events (raw event stream)
 - Retry button — re-enqueue any failed step from the dashboard without restarting the whole run
+- **Re-run all** — replay a completed run with the original trigger payload via `POST /api/runs/{id}/rerun`
 - Run control — cooperative cancel + timeout support per run
 - Idempotent triggers via `Idempotency-Key` header
 - Scheduler durability — pause/cron override state persists across restarts
@@ -231,7 +235,14 @@ Each trigger generates a new `RunId` (GUID). All trigger data, step inputs, outp
 
 ### Run statuses
 
-Common run statuses include `Running`, `Succeeded`, `Failed`, plus control-plane statuses `Cancelled` (cooperative cancel requested) and `TimedOut` (timeout threshold reached).
+| Status | Meaning |
+|--------|---------|
+| `Running` | One or more steps are currently executing |
+| `Succeeded` | All leaf steps (terminal steps with no dependents) completed successfully |
+| `Skipped` | All leaf steps were Skipped — the run ended via conditional branches with no crash |
+| `Failed` | At least one step failed with no downstream fallback that Succeeded |
+| `Cancelled` | Cooperative cancel was requested and honoured |
+| `TimedOut` | Run exceeded the configured timeout threshold |
 
 ---
 
@@ -465,7 +476,7 @@ Non-matching strings are passed through as-is.
 
 ## 8. Running the Sample App
 
-The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates an e-commerce **OrderHub** scenario with four flows:
+The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates an e-commerce **OrderHub** scenario plus several DAG and run-status demos:
 
 | Flow | Triggers | Demonstrates |
 |---|---|---|
@@ -473,6 +484,11 @@ The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates an e-commerce
 | `OrderFulfillmentFlow` | Manual, Webhook `/order-fulfillment` | DB query → polling API → save result |
 | `ShipmentTrackingFlow` | Manual | Polling pattern (Pending → Pending → Succeeded) |
 | `PaymentEventFlow` | Webhook `/payment-event` | `@triggerBody()` expression extraction |
+| `ParallelHealthCheckFlow` | Manual | Fan-out parallel steps, fan-in join |
+| `ConditionalSkipDemoFlow` | Manual | Conditional branching — one branch Skipped, fallback runs → run = **Succeeded** |
+| `SkipVariantsDemoFlow` | Manual | Middle skip + dead-end skip — run = **Succeeded** |
+| `DeadEndSkipDemoFlow` | Manual | Entry step crashes, all downstream Blocked → run = **Failed** |
+| `FinalStepSkipDemoFlow` | Manual | Happy path completes, final error-handler leaf Skipped → run = **Skipped** |
 
 ### Option A — Via .NET Aspire (recommended, requires Docker Desktop)
 
@@ -542,7 +558,14 @@ Open `http://localhost:5201/flows` (or your configured base path).
 - Raw JSON manifest viewer
 - **Enable/Disable** toggle and **Trigger** button
 
-**Runs** — Filterable run list (by flow, status, or free-text search). Search matches run fields (`id`, `flowName`, `status`, `triggerKey`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to see the step-by-step timeline with timing, inputs, outputs, and errors. Failed steps show a **Retry** button. You can also request cooperative **Cancel**, inspect run **Control** state (timeout/cancel/idempotency), and query run **Events**.
+**Runs** — Filterable run list (by flow, status, or free-text search). Search matches run fields (`id`, `flowName`, `status`, `triggerKey`) and step trace fields (`stepKey`, `errorMessage`, `outputJson`). Click a run to open the detail view with four tabs:
+
+- **Timeline** — vertical step cards with timing, inputs, outputs, errors, and attempt history. Trigger Data and Trigger Headers panels are shown here. Failed steps show a **Retry** button.
+- **DAG** — interactive SVG dependency graph. Click any node to select it and see a step inspector strip below. Blocked (Skipped) steps render with a dashed border.
+- **Gantt** — SVG bars on a relative time axis showing step parallelism. Skipped steps render as dim placeholders. Click a bar to select the step.
+- **Events** — raw `FlowEventRecord` stream grouped by step (requires `IFlowEventReader` to be registered; shows an empty-state message otherwise).
+
+Step selection is URL-synced (`?view=timeline|dag|gantt|events`). The run header shows a live progress bar and pulsing dot while the run is active. Actions available from the header: **Cancel run** (Running only), **Retry failed steps**, **Re-run all** (replays the original trigger payload via `POST /api/runs/{id}/rerun`).
 
 **Scheduled** — Hangfire recurring jobs: flow name, trigger key, cron expression, next/last execution. Actions: trigger immediately, pause, resume, edit cron expression inline.
 
@@ -606,6 +629,7 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 | `GET` | `/flows/api/runs/{runId}/control` | Run control state (timeout/cancel/idempotency) |
 | `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative run cancellation |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
+| `POST` | `/flows/api/runs/{runId}/rerun` | Start a new run replaying the original trigger payload |
 | `GET` | `/flows/api/schedules` | List recurring jobs with status |
 | `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
 | `POST` | `/flows/api/schedules/{jobId}/pause` | Pause a recurring job |

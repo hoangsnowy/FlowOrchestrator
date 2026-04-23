@@ -118,8 +118,12 @@ builder.Services.AddFlowOrchestrator(options =>
     // Skip variants demo — shows both a middle skip (chain continues) and an end skip (dead-end).
     options.AddFlow<SkipVariantsDemoFlow>();
 
-    // Dead-end skip demo — all leaf steps end as Skipped → run-level status = Skipped.
+    // Dead-end skip demo — entry crashes, all downstream Skipped → run-level status = Failed.
     options.AddFlow<DeadEndSkipDemoFlow>();
+
+    // Final-step skip demo — happy path succeeds; the final error-handler leaf is Skipped
+    // because it was never needed → run-level status = Succeeded.
+    options.AddFlow<FinalStepSkipDemoFlow>();
 
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();

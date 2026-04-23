@@ -247,7 +247,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .step-circle.Pending{border-color:var(--text-light);color:var(--text-light)}.step-circle.Skipped{border-color:var(--skip);color:var(--skip);background:var(--skip-bg)}
 .step-line{width:2px;flex:1;min-height:12px;background:var(--border)}.step-line.done{background:var(--success)}.step-line.last{display:none}
 .step-card{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:10px;margin-left:8px}
-.step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}.step-card.Skipped{border-left:3px dashed var(--skip);opacity:.8}
+.step-card.Running{border-left:3px solid var(--warn)}.step-card.Succeeded{border-left:3px solid var(--success)}.step-card.Failed{border-left:3px solid var(--danger)}.step-card.Skipped{border-left:2px dashed var(--border-dark);opacity:.6;background:transparent}
 .step-card.step-target{outline:2px solid var(--accent);outline-offset:2px;background:var(--accent-light)}
 .step-card-header{display:flex;align-items:center;justify-content:space-between}
 .step-key{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text)}.step-type{font-size:12px;color:var(--text-dim);margin-top:1px}
@@ -293,6 +293,77 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
 .dag-svg{width:100%;overflow:auto}
 .dag-svg svg text{font-family:'JetBrains Mono',monospace;font-size:11px}
+
+/* Run detail — Timeline / DAG toggle */
+.run-view-toggle{display:flex;align-items:center;gap:0;padding:10px 18px;border-bottom:1px solid var(--border);background:var(--surface)}
+.run-view-btn{font-size:11px;font-weight:600;padding:5px 16px;border:1px solid var(--border-dark);background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s;line-height:1.5}
+.run-view-btn:first-child{border-radius:6px 0 0 6px}
+.run-view-btn:last-child{border-radius:0 6px 6px 0;margin-left:-1px}
+.run-view-btn.active{background:var(--accent);color:#faf9f5;border-color:var(--accent);position:relative;z-index:1}
+.run-view-btn:not(.active):hover{border-color:var(--accent);color:var(--accent)}
+
+/* Live DAG in run detail */
+.run-dag-wrap{padding:16px 18px;overflow:auto}
+@keyframes dag-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.dag-node-running rect{animation:dag-pulse 1.5s infinite}
+.dag-node-selected rect.dag-node-bg{stroke:var(--accent) !important;stroke-width:2.5 !important;filter:drop-shadow(0 0 0 2px rgba(201,100,66,.25))}
+.dag-node-blocked rect.dag-node-bg{stroke-dasharray:4 3;fill-opacity:.6}
+
+/* Run detail — Tab strip (replaces run-view-toggle pattern) */
+.tab-strip{display:flex;align-items:center;gap:2px;padding:8px 18px 0;border-bottom:1px solid var(--border);background:var(--surface)}
+.tab-strip .tab{font-size:12px;font-weight:600;padding:8px 16px;border:none;background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;font-family:inherit}
+.tab-strip .tab:hover{color:var(--accent);background:var(--accent-light)}
+.tab-strip .tab.active{color:var(--accent);border-bottom-color:var(--accent);background:var(--surface)}
+
+/* Run header — progress, live dot, action row */
+.run-header-actions{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.progress-bar{flex:1;min-width:120px;max-width:260px;height:6px;background:var(--surface2);border:1px solid var(--border);border-radius:100px;overflow:hidden;position:relative}
+.progress-fill{height:100%;background:var(--accent);transition:width .4s ease}
+.progress-label{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);white-space:nowrap}
+.live-dot{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--warn-text);text-transform:uppercase;letter-spacing:.5px}
+.live-dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--warn);animation:pulse 1.5s infinite}
+.btn-action{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:6px 12px;border-radius:6px;background:var(--surface);color:var(--text);border:1px solid var(--border-dark);cursor:pointer;transition:all .15s;font-family:inherit}
+.btn-action:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn-action:disabled{opacity:.4;cursor:not-allowed}
+.btn-action.danger{color:var(--danger-text);border-color:var(--danger-border)}
+.btn-action.danger:hover:not(:disabled){background:var(--danger-bg);border-color:var(--danger);color:var(--danger)}
+.btn-action.primary{background:var(--accent);color:#faf9f5;border-color:var(--accent)}
+.btn-action.primary:hover:not(:disabled){background:var(--accent-hover);border-color:var(--accent-hover);color:#faf9f5}
+
+/* Timeline — selected card ring */
+.step-card.selected{box-shadow:0 0 0 2px var(--accent),0 0 0 6px rgba(201,100,66,.12);border-color:var(--accent)}
+
+/* Gantt */
+.gantt-wrap{padding:16px 18px;overflow:auto}
+.gantt-svg text{font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--text-dim)}
+.gantt-svg .gantt-gutter-label{fill:var(--text);font-weight:600}
+.gantt-svg .gantt-axis line{stroke:var(--border)}
+.gantt-svg .gantt-axis-tick{fill:var(--text-light);font-size:10px}
+.gantt-svg .gantt-bar{cursor:pointer;transition:opacity .15s}
+.gantt-svg .gantt-bar:hover{opacity:.82}
+.gantt-svg .gantt-bar-selected{stroke:var(--accent);stroke-width:2.5}
+.gantt-svg .gantt-duration{fill:var(--text-light);font-size:10px}
+.gantt-empty{padding:32px;text-align:center;color:var(--text-dim);font-size:13px}
+
+/* Events drawer */
+.events-drawer{position:fixed;top:0;right:0;width:460px;max-width:100vw;height:100vh;background:var(--surface);border-left:1px solid var(--border);box-shadow:-4px 0 16px rgba(0,0,0,.06);transform:translateX(100%);transition:transform .25s ease;z-index:900;display:flex;flex-direction:column}
+.events-drawer.open{transform:translateX(0)}
+.events-drawer-header{padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface2);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.events-drawer-title{font-size:13px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.5px}
+.events-drawer-close{background:transparent;border:none;cursor:pointer;color:var(--text-dim);font-size:18px;width:28px;height:28px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center}
+.events-drawer-close:hover{background:var(--accent-light);color:var(--accent)}
+.events-drawer-body{flex:1;overflow-y:auto;padding:12px 18px}
+.event-group{margin-bottom:14px}
+.event-group-title{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:var(--accent);padding:6px 0;border-bottom:1px solid var(--border);margin-bottom:6px}
+.event-item{display:flex;gap:8px;padding:5px 0;font-size:12px;border-bottom:1px dashed var(--border)}
+.event-item:last-child{border-bottom:none}
+.event-time{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-light);flex-shrink:0;width:72px}
+.event-kind{font-weight:600;color:var(--text);flex-shrink:0;width:130px;text-transform:uppercase;letter-spacing:.3px;font-size:10px}
+.event-detail{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);word-break:break-word;flex:1}
+
+/* Inspector strip shared by DAG/Gantt */
+.step-inspector{margin-top:16px;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
+.step-inspector-empty{padding:20px;text-align:center;color:var(--text-dim);font-size:12px;border:1px dashed var(--border);border-radius:var(--radius);margin-top:16px}
 </style>
 </head>
 <body>
@@ -415,7 +486,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
             <option value="">All Statuses</option>
             <option value="Running">Running</option>
             <option value="Succeeded">Succeeded</option>
-            <option value="Skipped">Skipped</option>
+            <option value="Skipped">Blocked</option>
             <option value="Failed">Failed</option>
           </select>
         </div>
@@ -458,6 +529,10 @@ const runsPageSize = 20;
 let runsSearchDebounceTimer = null;
 let selectedRunId = null;
 let selectedStepKey = null;
+let currentRunView = 'timeline'; // 'timeline' | 'dag' | 'gantt' | 'events'
+let currentRun = null; // cache of last loaded run for tab re-renders
+let currentRunManifest = null; // cached resolved manifest for DAG/Gantt
+let eventsDrawerOpen = false;
 let runsView = 'list'; // 'list' | 'detail'
 let selectedFlowDetail = null;
 const autoRefreshStorageEnabledKey = 'flow-dashboard:auto-refresh-enabled';
@@ -517,18 +592,23 @@ function getStepAttemptCount(step) {
   return 1;
 }
 function renderStepDebugPanels(step) {
+  // Blocked steps never executed — no input/output/error panels to show
+  if (step.status === 'Skipped') {
+    return '<div style="margin-top:5px;font-size:11px;color:var(--skip-text);font-style:italic">'
+      + 'Not executed \u2014 retry the failed step above to resume this flow.'
+      + '</div>';
+  }
   const attemptCount = getStepAttemptCount(step);
   const attemptsPanel = attemptCount > 1
     ? renderDetailPanel('Step Attempts', step.attempts, false, null)
     : '';
   const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
-  const errorPanel = step.status === 'Skipped'
-    ? renderDetailPanel('Skip Reason', step.errorMessage, false, null)
-    : renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
+  const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
 }
-function statusBadge(s) { return '<span class="badge badge-'+s.toLowerCase()+'">'+s+'</span>'; }
+function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
+function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }
 
 function normalizeAutoRefreshSeconds(value) {
   const parsed = Number.parseInt(value, 10);
@@ -891,6 +971,149 @@ function renderDAG(manifest) {
   container.innerHTML = svg;
 }
 
+function renderRunDAG(steps, manifest, selectedKey) {
+  if (!manifest || !manifest.steps || Object.keys(manifest.steps).length === 0) {
+    return '<div class="empty-msg">No DAG available — flow manifest not loaded.</div>';
+  }
+
+  // Build status lookup from runtime steps
+  const statusMap = {};
+  const stepMap = {};
+  for (const s of steps) { statusMap[s.stepKey] = s.status; stepMap[s.stepKey] = s; }
+
+  const mSteps = manifest.steps;
+  const keys = Object.keys(mSteps);
+  const nodeW = 220, nodeH = 72, padX = 90, padY = 22;
+
+  // Compute DAG levels (same algorithm as renderDAG)
+  const levels = {};
+  function getLevel(key) {
+    if (levels[key] !== undefined) return levels[key];
+    const step = mSteps[key];
+    if (!step.runAfter || Object.keys(step.runAfter).length === 0) return (levels[key] = 0);
+    let max = 0;
+    for (const dep of Object.keys(step.runAfter)) {
+      if (mSteps[dep]) max = Math.max(max, getLevel(dep) + 1);
+    }
+    return (levels[key] = max);
+  }
+  keys.forEach(k => getLevel(k));
+
+  const byLevel = {};
+  keys.forEach(k => { const l = levels[k]; (byLevel[l] = byLevel[l] || []).push(k); });
+  const maxLevel = Math.max(...Object.keys(byLevel).map(Number));
+
+  const positions = {};
+  for (let l = 0; l <= maxLevel; l++) {
+    (byLevel[l] || []).forEach((k, i) => {
+      positions[k] = { x: l * (nodeW + padX) + 20, y: i * (nodeH + padY) + 20 };
+    });
+  }
+
+  const svgW = (maxLevel + 1) * (nodeW + padX) + 40;
+  const maxNodes = Math.max(...Object.values(byLevel).map(g => g.length));
+  const svgH = maxNodes * (nodeH + padY) + 40;
+
+  // Status → visual tokens
+  function nodeStyle(status) {
+    switch (status) {
+      case 'Succeeded': return { fill:'#eaf5ef', stroke:'#2d6a4f', text:'#1b4435', dimText:'#2d6a4f', label:'✓ Succeeded', cls:'' };
+      case 'Failed':    return { fill:'#fdf0ee', stroke:'#b53333', text:'#7a1e1e', dimText:'#b53333', label:'✗ Failed',    cls:'' };
+      case 'Running':   return { fill:'#fef4e8', stroke:'#c8803a', text:'#7a3f08', dimText:'#c8803a', label:'◉ Running',   cls:'dag-node-running' };
+      case 'Skipped':   return { fill:'#f5f4ed', stroke:'#87867f', text:'#5e5d59', dimText:'#87867f', label:'⊘ Blocked',   cls:'' };
+      case 'Pending':   return { fill:'#faf9f5', stroke:'#d1cfc5', text:'#87867f', dimText:'#b0aea5', label:'○ Pending',   cls:'' };
+      default:          return { fill:'#faf9f5', stroke:'#e8e6dc', text:'#87867f', dimText:'#b0aea5', label:'○ Pending',   cls:'' };
+    }
+  }
+
+  // Edge color based on source status
+  function edgeStroke(status) {
+    switch (status) {
+      case 'Succeeded': return { color:'#b5d9c5', marker:'dag-arr-ok'   };
+      case 'Failed':    return { color:'#f5c6c0', marker:'dag-arr-fail' };
+      case 'Running':   return { color:'#f6d8b3', marker:'dag-arr-run'  };
+      default:          return { color:'#d1cfc5', marker:'dag-arr-def'  };
+    }
+  }
+
+  let svg = '<div class="dag-svg" style="min-height:160px"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
+
+  // Arrow markers
+  svg += '<defs>';
+  [['dag-arr-ok','#b5d9c5'],['dag-arr-fail','#f5c6c0'],['dag-arr-run','#f6d8b3'],['dag-arr-def','#d1cfc5']].forEach(([id,col]) => {
+    svg += '<marker id="'+id+'" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="'+col+'"/></marker>';
+  });
+  svg += '</defs>';
+
+  // Draw edges
+  for (const [key, step] of Object.entries(mSteps)) {
+    if (!step.runAfter) continue;
+    for (const dep of Object.keys(step.runAfter)) {
+      if (!positions[dep] || !positions[key]) continue;
+      const from = positions[dep], to = positions[key];
+      const { color, marker } = edgeStroke(statusMap[dep]);
+      svg += '<line'
+        +' x1="'+(from.x+nodeW)+'" y1="'+(from.y+nodeH/2)+'"'
+        +' x2="'+to.x+'" y2="'+(to.y+nodeH/2)+'"'
+        +' stroke="'+color+'" stroke-width="2"'
+        +' marker-end="url(#'+marker+')"/>';
+    }
+  }
+
+  // Find blocked-reason helper
+  function blockedReason(key) {
+    const step = mSteps[key];
+    if (!step || !step.runAfter) return null;
+    for (const dep of Object.keys(step.runAfter)) {
+      const depStatus = statusMap[dep];
+      if (depStatus && depStatus !== 'Succeeded') return dep;
+    }
+    return null;
+  }
+
+  // Draw nodes — clicking selects the step (updates URL + inspector)
+  for (const [key, step] of Object.entries(mSteps)) {
+    if (!positions[key]) continue;
+    const p = positions[key];
+    const status = statusMap[key] || 'Pending';
+    const ns = nodeStyle(status);
+    const safeKey = key.replace(/'/g, "\\'");
+    const runtimeStep = stepMap[key];
+    const attemptCount = runtimeStep ? getStepAttemptCount(runtimeStep) : 1;
+    const dur = runtimeStep && runtimeStep.startedAt ? duration(runtimeStep.startedAt, runtimeStep.completedAt) : '\u2014';
+    const metaText = dur + (attemptCount > 1 ? '  \u00b7  \u00d7'+attemptCount+' attempts' : '');
+    const classList = [ns.cls, selectedKey===key ? 'dag-node-selected' : '', status==='Skipped' ? 'dag-node-blocked' : ''].filter(Boolean).join(' ');
+    const blockedOn = status==='Skipped' ? blockedReason(key) : null;
+    const tooltip = esc(key)+'\n'+(step.type||'')+(attemptCount>1?'\n\u00d7'+attemptCount+' attempts':'')
+      + (blockedOn ? '\nBlocked because "'+blockedOn+'" did not succeed.' : '');
+    svg += '<g class="'+classList+'" transform="translate('+p.x+','+p.y+')"'
+      +' onclick="selectStep(\''+safeKey+'\')"'
+      +' style="cursor:pointer">'
+      +'<title>'+tooltip+'</title>'
+      +'<rect class="dag-node-bg" width="'+nodeW+'" height="'+nodeH+'" rx="8"'
+      +' fill="'+ns.fill+'" stroke="'+ns.stroke+'" stroke-width="1.5"/>'
+      // step key (monospace, top)
+      +'<text x="10" y="20" fill="'+ns.text+'"'
+      +' font-weight="600" font-size="12"'
+      +' font-family="JetBrains Mono,monospace">'+esc(key.length>24?key.slice(0,23)+'\u2026':key)+'</text>'
+      // step type (terracotta)
+      +'<text x="10" y="36" fill="#c96442"'
+      +' font-size="10" font-family="Inter,sans-serif">'+esc((step.type||'').slice(0,28))+'</text>'
+      // duration · attempts (grey)
+      +'<text x="10" y="52" fill="'+ns.dimText+'"'
+      +' font-size="10" font-family="JetBrains Mono,monospace">'+esc(metaText)+'</text>'
+      // status label (bottom-right pill)
+      +'<text x="'+(nodeW-8)+'" y="'+(nodeH-8)+'"'
+      +' fill="'+ns.dimText+'" font-size="9" font-weight="700"'
+      +' text-anchor="end" font-family="Inter,sans-serif"'
+      +' letter-spacing="0.4">'+ns.label+'</text>'
+      +'</g>';
+  }
+
+  svg += '</svg></div>';
+  return svg;
+}
+
 async function toggleFlow(id, enable) {
   try {
     await fetch(BASE+'/flows/'+id+'/'+(enable?'enable':'disable'), {method:'POST'});
@@ -950,6 +1173,322 @@ function scrollToStep(stepKey) {
   setTimeout(() => { if (card) card.classList.remove('step-target'); }, 4000);
 }
 
+async function resolveFlowManifest(run) {
+  // Try allFlows cache first
+  let flow = allFlows.find(f => f.name === run.flowName || f.id === run.flowId);
+  if (flow) return parseManifest(flow.manifestJson);
+  // Cache miss (e.g. navigated directly to run URL) — fetch on demand
+  try {
+    const flows = await fetchJSON(BASE + '/flows');
+    flow = flows.find(f => f.name === run.flowName || f.id === run.flowId);
+    if (flow) { allFlows = flows; return parseManifest(flow.manifestJson); }
+  } catch {}
+  return null;
+}
+
+function switchRunView(view) {
+  if (!['timeline','dag','gantt','events'].includes(view)) view = 'timeline';
+  currentRunView = view;
+  if (selectedRunId) setRunRoute(selectedRunId, selectedStepKey, view);
+  const tabsEl = $('run-tabs');
+  if (tabsEl) tabsEl.innerHTML = renderTabs(view);
+  const bodyEl = $('run-tab-body');
+  if (bodyEl && currentRun) {
+    bodyEl.innerHTML = renderActiveTab(currentRun, currentRunManifest, view);
+    if (view === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
+  }
+  if (view === 'events') openEventsDrawer(selectedRunId);
+  else closeEventsDrawer();
+}
+
+function renderTabs(activeView) {
+  const tabs = [
+    { key:'timeline', label:'Timeline' },
+    { key:'dag',      label:'DAG' },
+    { key:'gantt',    label:'Gantt' },
+    { key:'events',   label:'Events' }
+  ];
+  return tabs.map(t =>
+    '<button class="tab'+(activeView===t.key?' active':'')+'" onclick="switchRunView(\''+t.key+'\')">'+t.label+'</button>'
+  ).join('');
+}
+
+function renderActiveTab(run, manifest, view) {
+  const steps = run.steps || [];
+  switch (view) {
+    case 'dag':
+      return '<div class="run-dag-wrap">'
+        +renderRunDAG(steps, manifest, selectedStepKey)
+        +renderStepInspector(findStep(steps, selectedStepKey))
+        +'</div>';
+    case 'gantt':
+      return '<div class="gantt-wrap">'
+        +renderGantt(steps, manifest, selectedStepKey)
+        +renderStepInspector(findStep(steps, selectedStepKey))
+        +'</div>';
+    case 'events':
+      return '<div style="padding:16px 18px">'
+        +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
+        +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
+        +'</div>';
+    case 'timeline':
+    default: {
+      const triggerPanels = renderRunTriggerPanels(run);
+      return '<div style="padding:16px 18px">'+triggerPanels
+        +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
+        +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
+        +'</div>';
+    }
+  }
+}
+
+function findStep(steps, key) {
+  if (!key || !steps) return null;
+  return steps.find(s => s.stepKey === key) || null;
+}
+
+function isTerminalStatus(s) { return s === 'Succeeded' || s === 'Failed' || s === 'Cancelled'; }
+
+function renderRunHeader(run, steps) {
+  const total = steps.length;
+  const completed = steps.filter(s => isTerminalStatus(s.status) || s.status === 'Skipped').length;
+  const pct = total ? Math.round((completed / total) * 100) : 0;
+  const isRunning = run.status === 'Running';
+  const failedCount = steps.filter(s => s.status === 'Failed').length;
+  const runId = run.id;
+  const progress = isRunning && total > 0
+    ? '<div class="progress-bar"><div class="progress-fill" style="width:'+pct+'%"></div></div>'
+      +'<span class="progress-label">'+completed+' of '+total+' complete</span>'
+    : '';
+  const liveDot = isRunning ? '<span class="live-dot">Live</span>' : '';
+  const actions = []
+    .concat(isRunning ? ['<button class="btn-action danger" onclick="cancelRun(\''+runId+'\')">Cancel run</button>'] : [])
+    .concat(failedCount > 0 ? ['<button class="btn-action" onclick="retryAllFailed(\''+runId+'\')">Retry failed steps ('+failedCount+')</button>'] : [])
+    .concat(['<button class="btn-action primary" onclick="rerunAll(\''+runId+'\')">Re-run all</button>']);
+  return '<div class="detail-header">'
+    +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">'
+    +'<span>Run Detail \u00b7 '+statusBadge(run.status)+'</span>'
+    +'<button class="btn-copy" onclick="copyRunLink(\''+runId+'\')" title="Copy shareable link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy link</button>'
+    +'</div>'
+    +'<div class="detail-runid">'+runId+'</div>'
+    +'<div style="font-size:12px;color:var(--text-dim);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
+    +'<span>Flow: <b style="color:var(--text)">'+esc(run.flowName||'\u2014')+'</b></span>'
+    +'<span>Trigger: <b style="color:var(--text)">'+esc(run.triggerKey||'\u2014')+'</b></span>'
+    +'<span>Started: <b style="color:var(--text)">'+fmtDate(run.startedAt)+'</b></span>'
+    +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
+    +'</div>'
+    +(progress || liveDot || actions.length
+      ? '<div class="run-header-actions">'+liveDot+progress+actions.join('')+'</div>'
+      : '')
+    +'</div>';
+}
+
+function renderStepInspector(step) {
+  if (!step) return '<div class="step-inspector-empty">Select a step above to see its details.</div>';
+  const attemptCount = getStepAttemptCount(step);
+  const timing = step.status === 'Skipped' || step.status === 'Pending'
+    ? ''
+    : '<div class="step-timing"><span>Start: '+fmt(step.startedAt)+'</span><span>End: '+fmt(step.completedAt)+'</span><span>Duration: '+duration(step.startedAt,step.completedAt)+'</span></div>';
+  return '<div class="step-inspector">'
+    +'<div class="step-card-header"><div><div class="step-key">'+esc(step.stepKey)+'</div>'
+    +(step.status!=='Skipped'?'<div class="step-type">'+esc(step.stepType||'')+'</div>':'')+'</div>'
+    +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+step.status+'">'+stepStatusLabel(step.status)+'</span>'
+    +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
+    +'</div></div>'
+    +timing
+    +renderStepDebugPanels(step)
+    +'</div>';
+}
+
+function selectStep(stepKey) {
+  selectedStepKey = stepKey || null;
+  if (selectedRunId) setRunRoute(selectedRunId, selectedStepKey, currentRunView);
+  if (currentRun) {
+    const bodyEl = $('run-tab-body');
+    if (bodyEl) bodyEl.innerHTML = renderActiveTab(currentRun, currentRunManifest, currentRunView);
+    if (currentRunView === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
+  }
+}
+
+async function cancelRun(runId) {
+  if (!confirm('Cancel run "'+runId+'"?')) return;
+  try {
+    const res = await fetch(BASE+'/runs/'+runId+'/cancel', { method:'POST' });
+    const data = await res.json();
+    if (!res.ok || data.accepted === false) alert(data.message || data.error || 'Cancel request rejected.');
+    await selectRun(runId, true, selectedStepKey, currentRunView);
+  } catch(e) { alert('Failed to cancel run: '+e.message); }
+}
+
+async function retryAllFailed(runId) {
+  if (!currentRun) return;
+  const failed = (currentRun.steps || []).filter(s => s.status === 'Failed');
+  if (failed.length === 0) { alert('No failed steps to retry.'); return; }
+  if (!confirm('Retry '+failed.length+' failed step'+(failed.length!==1?'s':'')+'?')) return;
+  for (const s of failed) {
+    try {
+      await fetch(BASE+'/runs/'+runId+'/steps/'+encodeURIComponent(s.stepKey)+'/retry', { method:'POST' });
+    } catch(e) { console.error('Retry failed for', s.stepKey, e); }
+  }
+  await selectRun(runId, true, selectedStepKey, currentRunView);
+}
+
+async function rerunAll(runId) {
+  if (!confirm('Re-run this flow with the original trigger payload?')) return;
+  try {
+    const res = await fetch(BASE+'/runs/'+runId+'/rerun', { method:'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.runId) { alert(data.error || 'Re-run failed.'); return; }
+    await selectRun(data.runId, false, null, 'timeline');
+  } catch(e) { alert('Failed to re-run: '+e.message); }
+}
+
+function openEventsDrawer(runId) {
+  if (!runId) return;
+  eventsDrawerOpen = true;
+  let drawer = $('events-drawer');
+  if (!drawer) {
+    drawer = document.createElement('div');
+    drawer.id = 'events-drawer';
+    drawer.className = 'events-drawer';
+    document.body.appendChild(drawer);
+  }
+  drawer.innerHTML =
+    '<div class="events-drawer-header">'
+    +'<span class="events-drawer-title">Event Stream'+(selectedStepKey?' \u00b7 <span style="color:var(--accent);font-family:\'JetBrains Mono\',monospace;font-size:12px">'+esc(selectedStepKey)+'</span>':'')+'</span>'
+    +'<button class="events-drawer-close" onclick="switchRunView(\'timeline\')">\u2715</button>'
+    +'</div>'
+    +'<div class="events-drawer-body" id="events-drawer-body">Loading events\u2026</div>';
+  drawer.classList.add('open');
+  loadEventsIntoDrawer(runId);
+}
+
+function closeEventsDrawer() {
+  eventsDrawerOpen = false;
+  const drawer = $('events-drawer');
+  if (drawer) drawer.classList.remove('open');
+}
+
+async function loadEventsIntoDrawer(runId) {
+  const body = $('events-drawer-body');
+  if (!body) return;
+  try {
+    const events = await fetchJSON(BASE+'/runs/'+runId+'/events?take=500');
+    if (!events || events.length === 0) {
+      body.innerHTML = '<div class="step-inspector-empty">Event stream not enabled on this backend. Configure <code>IFlowEventReader</code> to see the raw event log.</div>';
+      return;
+    }
+    const filtered = selectedStepKey ? events.filter(e => e.stepKey === selectedStepKey) : events;
+    if (filtered.length === 0) {
+      body.innerHTML = '<div class="step-inspector-empty">No events for step '+esc(selectedStepKey||'')+'.</div>';
+      return;
+    }
+    const groups = {};
+    for (const e of filtered) {
+      const k = e.stepKey || '(run)';
+      (groups[k] = groups[k] || []).push(e);
+    }
+    let html = '';
+    for (const k of Object.keys(groups)) {
+      html += '<div class="event-group"><div class="event-group-title">'+esc(k)+'</div>';
+      for (const e of groups[k]) {
+        html += '<div class="event-item">'
+          +'<span class="event-time">'+fmt(e.timestamp)+'</span>'
+          +'<span class="event-kind">'+esc(e.type||'event')+'</span>'
+          +'<span class="event-detail">'+esc(e.message||'')+'</span>'
+          +'</div>';
+      }
+      html += '</div>';
+    }
+    body.innerHTML = html;
+  } catch(err) {
+    body.innerHTML = '<div class="step-inspector-empty">Failed to load events: '+esc(err.message||'unknown')+'</div>';
+  }
+}
+
+function renderGantt(steps, manifest, selectedKey) {
+  if (!steps || steps.length === 0) return '<div class="gantt-empty">No steps to chart.</div>';
+  const executed = steps.filter(s => s.startedAt);
+  if (executed.length === 0) return '<div class="gantt-empty">No step has started yet.</div>';
+  const t0 = Math.min(...executed.map(s => new Date(s.startedAt).getTime()));
+  const now = Date.now();
+  const t1 = Math.max(...executed.map(s => s.completedAt ? new Date(s.completedAt).getTime() : now), t0 + 1);
+  const span = Math.max(t1 - t0, 1);
+
+  // Order by manifest level when available, else by startedAt
+  let ordered = steps.slice();
+  if (manifest && manifest.steps) {
+    const mSteps = manifest.steps;
+    const levels = {};
+    function getLevel(key) {
+      if (levels[key] !== undefined) return levels[key];
+      const step = mSteps[key];
+      if (!step || !step.runAfter || Object.keys(step.runAfter).length === 0) return (levels[key] = 0);
+      let max = 0;
+      for (const dep of Object.keys(step.runAfter)) if (mSteps[dep]) max = Math.max(max, getLevel(dep) + 1);
+      return (levels[key] = max);
+    }
+    Object.keys(mSteps).forEach(k => getLevel(k));
+    ordered.sort((a, b) => (levels[a.stepKey] ?? 99) - (levels[b.stepKey] ?? 99) || new Date(a.startedAt||0) - new Date(b.startedAt||0));
+  } else {
+    ordered.sort((a, b) => new Date(a.startedAt||0) - new Date(b.startedAt||0));
+  }
+
+  const rowH = 26, pad = 6, gutterW = 200, chartW = 640, axisH = 28, bottomPad = 12;
+  const svgW = gutterW + chartW + 24;
+  const svgH = axisH + ordered.length * (rowH + pad) + bottomPad;
+
+  function barColor(status) {
+    switch(status) {
+      case 'Succeeded': return '#7bbf9a';
+      case 'Failed':    return '#d97b6f';
+      case 'Running':   return '#e8a769';
+      case 'Skipped':   return '#c8c6bd';
+      case 'Pending':   return '#d8d6cd';
+      default:          return '#c8c6bd';
+    }
+  }
+
+  let svg = '<div class="gantt-svg"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
+  svg += '<defs><pattern id="gantt-running-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#e8a769"/><line x1="0" y1="0" x2="0" y2="6" stroke="#faf9f5" stroke-width="2"/></pattern></defs>';
+
+  // Axis ticks
+  for (let i = 0; i <= 5; i++) {
+    const x = gutterW + (i / 5) * chartW;
+    const secs = ((span / 5) * i) / 1000;
+    svg += '<g class="gantt-axis">'
+      +'<line x1="'+x+'" y1="'+axisH+'" x2="'+x+'" y2="'+svgH+'" stroke-dasharray="2 3"/>'
+      +'<text class="gantt-axis-tick" x="'+x+'" y="'+(axisH-8)+'" text-anchor="middle">+'+secs.toFixed(secs<10?1:0)+'s</text>'
+      +'</g>';
+  }
+
+  ordered.forEach((s, idx) => {
+    const y = axisH + idx * (rowH + pad);
+    const started = s.startedAt ? new Date(s.startedAt).getTime() : t0;
+    const ended   = s.completedAt ? new Date(s.completedAt).getTime() : (s.status === 'Running' ? now : started);
+    let x = gutterW + ((started - t0) / span) * chartW;
+    let w = Math.max(((ended - started) / span) * chartW, 2);
+    let fill = barColor(s.status);
+    let opacity = (s.status === 'Pending' || s.status === 'Skipped') ? 0.45 : 1;
+    if (s.status === 'Pending' || s.status === 'Skipped') { x = gutterW; w = Math.max(chartW * 0.02, 6); }
+    if (s.status === 'Running') fill = 'url(#gantt-running-hatch)';
+    const selected = s.stepKey === selectedKey;
+    const safeKey = s.stepKey.replace(/'/g, "\\'");
+    svg += '<g onclick="selectStep(\''+safeKey+'\')" style="cursor:pointer">'
+      +'<text class="gantt-gutter-label" x="10" y="'+(y+rowH*0.65)+'">'+esc(s.stepKey)+'</text>'
+      +'<rect class="gantt-bar'+(selected?' gantt-bar-selected':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+rowH+'"'
+      +' rx="4" fill="'+fill+'" opacity="'+opacity+'"'
+      +(selected?'':' stroke="rgba(0,0,0,0.04)"')+'>'
+      +'<title>'+esc(s.stepKey)+' \u2014 '+stepStatusLabel(s.status)+' \u00b7 '+duration(s.startedAt, s.completedAt)+'</title>'
+      +'</rect>'
+      +'<text class="gantt-duration" x="'+(x+w+6)+'" y="'+(y+rowH*0.65)+'">'+duration(s.startedAt, s.completedAt)+'</text>'
+      +'</g>';
+  });
+
+  svg += '</svg></div>';
+  return svg;
+}
+
 function toggleWebhookSecret(cellId, btn) {
   const cell = document.getElementById(cellId);
   if (!cell || !btn) return;
@@ -985,6 +1524,9 @@ function showRunsDetailView() {
 async function backToRunsList() {
   selectedRunId = null;
   selectedStepKey = null;
+  currentRun = null;
+  currentRunManifest = null;
+  closeEventsDrawer();
   history.replaceState(null, '', '#/runs');
   showRunsListView();
   if (allRuns.length === 0) await loadRuns();
@@ -1104,40 +1646,34 @@ async function loadRuns(preserveScroll) {
   } catch(e) { console.error('Runs load error', e); }
 }
 
-async function selectRun(id, preserveScroll, targetStepKey) {
-  const newHash = targetStepKey
-    ? '#/runs/'+id+'/steps/'+encodeURIComponent(targetStepKey)
-    : '#/runs/'+id;
-  if (location.hash !== newHash) history.replaceState(null, '', newHash);
-
+async function selectRun(id, preserveScroll, targetStepKey, view) {
   selectedRunId = id;
   selectedStepKey = targetStepKey || null;
+  if (view && ['timeline','dag','gantt','events'].includes(view)) currentRunView = view;
+  setRunRoute(id, selectedStepKey, currentRunView);
+
   showRunsDetailView();
   const detailEl = $('runs-detail');
   const detailScrollTop = preserveScroll && detailEl ? detailEl.scrollTop : 0;
   try {
     const run = await fetchJSON(BASE+'/runs/'+id);
+    currentRun = run;
     const steps = run.steps || [];
+    if (currentRunView === 'dag' || currentRunView === 'gantt') {
+      currentRunManifest = await resolveFlowManifest(run);
+    } else {
+      currentRunManifest = currentRunManifest || null;
+    }
+
     $('runs-detail').innerHTML =
-      '<div class="detail-header">'
-      +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">'
-      +'<span>Run Detail \u00b7 '+statusBadge(run.status)+'</span>'
-      +'<button class="btn-copy" onclick="copyRunLink(\''+run.id+'\')" title="Copy shareable link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy link</button>'
-      +'</div>'
-      +'<div class="detail-runid">'+run.id+'</div>'
-      +'<div style="font-size:12px;color:var(--text-dim);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
-      +'<span>Flow: <b style="color:var(--text)">'+esc(run.flowName||'\u2014')+'</b></span>'
-      +'<span>Trigger: <b style="color:var(--text)">'+esc(run.triggerKey||'\u2014')+'</b></span>'
-      +'<span>Started: <b style="color:var(--text)">'+fmtDate(run.startedAt)+'</b></span>'
-      +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
-      +'</div></div>'
-      +'<div style="padding:16px 18px">'
-      +renderRunTriggerPanels(run)
-      +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
-      +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
-      +'</div>';
+      renderRunHeader(run, steps)
+      +'<div class="tab-strip" id="run-tabs">'+renderTabs(currentRunView)+'</div>'
+      +'<div id="run-tab-body">'+renderActiveTab(run, currentRunManifest, currentRunView)+'</div>';
+
     if (preserveScroll) $('runs-detail').scrollTop = detailScrollTop;
-    if (selectedStepKey) scrollToStep(selectedStepKey);
+    if (currentRunView === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
+    if (currentRunView === 'events') openEventsDrawer(id);
+    else closeEventsDrawer();
   } catch(e) { console.error('Run detail error', e); }
 }
 
@@ -1147,17 +1683,18 @@ function renderTimeline(steps, runId) {
     const s = steps[i], last = i===steps.length-1;
     const icon = ({Succeeded:'\u2713',Failed:'\u2715',Running:'\u25cf',Skipped:'\u2298'})[s.status]||'\u25cb';
     const attemptCount = getStepAttemptCount(s);
+    const sel = selectedStepKey === s.stepKey ? ' selected' : '';
     html += '<div class="step-node" data-step-key="'+esc(s.stepKey)+'"><div class="step-connector">'
       +'<div class="step-circle '+s.status+'">'+icon+'</div>'
       +'<div class="step-line '+(s.status==='Succeeded'?'done':'')+' '+(last?'last':'')+'"></div></div>'
-      +'<div class="step-card '+s.status+'">'
-      +'<div class="step-card-header"><div><div class="step-key">'+esc(s.stepKey)+'</div><div class="step-type">'+esc(s.stepType)+'</div></div>'
-      +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+s.status+'</span>'
+      +'<div class="step-card '+s.status+sel+'">'
+      +'<div class="step-card-header"><div><div class="step-key">'+esc(s.stepKey)+'</div>'+(s.status!=='Skipped'?'<div class="step-type">'+esc(s.stepType)+'</div>':'')+'</div>'
+      +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+stepStatusLabel(s.status)+'</span>'
       +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
-      +'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+      +(s.status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>':'')
       +'</div></div>'
-      +'<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'
+      +(s.status==='Skipped'?'':('<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'))
       +renderStepDebugPanels(s)
       +'</div></div>';
   }
@@ -1276,7 +1813,7 @@ async function refresh() {
     if (currentPage === 'flows') await loadFlows();
     if (currentPage === 'runs') {
       if (runsView === 'detail' && selectedRunId) {
-        await selectRun(selectedRunId, true, selectedStepKey);
+        await selectRun(selectedRunId, true, selectedStepKey, currentRunView);
       } else if (!isRunsAutoRefreshBlocked()) {
         await loadRuns(true);
       }
@@ -1287,21 +1824,37 @@ async function refresh() {
 
 function parseHash() {
   const hash = location.hash || '';
-  if (!hash || hash === '#' || hash === '#/') return { page: 'overview', runId: null, stepKey: null };
-  const path = hash.startsWith('#/') ? hash.slice(2) : hash.slice(1);
+  if (!hash || hash === '#' || hash === '#/') return { page: 'overview', runId: null, stepKey: null, view: null };
+  const raw = hash.startsWith('#/') ? hash.slice(2) : hash.slice(1);
+  const qIdx = raw.indexOf('?');
+  const path = qIdx >= 0 ? raw.slice(0, qIdx) : raw;
+  const query = qIdx >= 0 ? raw.slice(qIdx + 1) : '';
+  let view = null;
+  if (query) {
+    const params = new URLSearchParams(query);
+    const v = params.get('view');
+    if (['timeline','dag','gantt','events'].includes(v)) view = v;
+  }
   const parts = path.split('/');
   const page = ['overview','flows','runs','scheduled'].includes(parts[0]) ? parts[0] : 'overview';
-  if (page !== 'runs') return { page, runId: null, stepKey: null };
+  if (page !== 'runs') return { page, runId: null, stepKey: null, view: null };
   const runId = parts[1] || null;
   const stepKey = (parts[2] === 'steps' && parts[3]) ? decodeURIComponent(parts[3]) : null;
-  return { page, runId, stepKey };
+  return { page, runId, stepKey, view };
+}
+
+function setRunRoute(runId, stepKey, view) {
+  let hash = '#/runs/' + runId;
+  if (stepKey) hash += '/steps/' + encodeURIComponent(stepKey);
+  if (view && view !== 'timeline') hash += '?view=' + view;
+  if (location.hash !== hash) history.replaceState(null, '', hash);
 }
 
 async function applyRoute(route) {
   _navigate(route.page);
   if (route.page === 'runs') {
     if (route.runId) {
-      await selectRun(route.runId, false, route.stepKey);
+      await selectRun(route.runId, false, route.stepKey, route.view);
     } else {
       showRunsListView();
       await loadRuns(false);
