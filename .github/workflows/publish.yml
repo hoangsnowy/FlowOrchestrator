@@ -26,13 +26,15 @@ jobs:
             10.0.x
 
       - name: Restore dependencies
-        run: dotnet restore
+        # Use the library filter — SampleApp/AppHost are not published to NuGet
+        # and would fail when built alongside library projects on net8.0/net9.0.
+        run: dotnet restore FlowOrchestrator.Libraries.slnf
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: dotnet build FlowOrchestrator.Libraries.slnf --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity normal
+        run: dotnet test FlowOrchestrator.Libraries.slnf --no-build --configuration Release --verbosity normal
 
       - name: Determine version
         id: version

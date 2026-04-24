@@ -37,11 +37,14 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore solution
-        run: dotnet restore
+        # Use the library filter — SampleApp/AppHost target net10.0 only and would fail
+        # when built with -p:TargetFramework=net8.0 if restored via the full solution.
+        run: dotnet restore FlowOrchestrator.Libraries.slnf
 
       - name: Build solution (generates XML documentation files)
-        # net8.0 only — docs only need one TFM; all three are validated in ci.yml
-        run: dotnet build --no-restore --configuration Release -p:TargetFramework=net8.0
+        # net8.0 only — docs only need one TFM; all three are validated in ci.yml.
+        # FlowOrchestrator.Libraries.slnf excludes SampleApp/AppHost which target net10.0 only.
+        run: dotnet build FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=net8.0
 
       - name: Restore .NET tools (pinned docfx version)
         run: dotnet tool restore
