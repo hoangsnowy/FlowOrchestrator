@@ -31,11 +31,11 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 
 | Type | Description |
 |---|---|
-| [`IStepHandler<TInput>`](FlowOrchestrator.Core.Abstractions.IStepHandler-1.yml) | Main interface for custom step logic |
-| [`PollableStepHandler<TInput>`](FlowOrchestrator.Core.Abstractions.PollableStepHandler-1.yml) | Base class for steps that poll an external system |
-| [`IPollableInput`](FlowOrchestrator.Core.Abstractions.IPollableInput.yml) | Input contract for pollable steps |
-| [`IExecutionContext`](FlowOrchestrator.Core.Abstractions.IExecutionContext.yml) | Run-scoped context passed to every handler |
-| [`IExecutionContextAccessor`](FlowOrchestrator.Core.Abstractions.IExecutionContextAccessor.yml) | DI-injectable accessor for the current execution context |
+| [`IStepHandler<TInput>`](FlowOrchestrator.Core.Execution.IStepHandler-1.yml) | Main interface for custom step logic |
+| [`PollableStepHandler<TInput>`](FlowOrchestrator.Core.Execution.PollableStepHandler-1.yml) | Base class for steps that poll an external system |
+| [`IPollableInput`](FlowOrchestrator.Core.Execution.IPollableInput.yml) | Input contract for pollable steps |
+| [`IExecutionContext`](FlowOrchestrator.Core.Execution.IExecutionContext.yml) | Run-scoped context passed to every handler |
+| [`IExecutionContextAccessor`](FlowOrchestrator.Core.Execution.IExecutionContextAccessor.yml) | DI-injectable accessor for the current execution context |
 
 ### Storage Abstractions
 
@@ -49,7 +49,7 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 
 | Type | Description |
 |---|---|
-| [`FlowOrchestratorBuilder`](FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.yml) | Returned by `AddFlowOrchestrator()` — configure storage, Hangfire, and flows |
+| [`FlowOrchestratorBuilder`](FlowOrchestrator.Hangfire.FlowOrchestratorBuilder.yml) | Returned by `AddFlowOrchestrator()` — configure storage, Hangfire, and flows |
 
 ## See Also
 

@@ -8,8 +8,8 @@ _layout: landing
 
 Define multi-step background workflows as plain C# classes. Connect them with `runAfter` dependencies. Run them on SQL Server, PostgreSQL, or in-memory. Monitor everything from a built-in dashboard.
 
-[Get Started](articles/getting-started.md){ .btn .btn-primary .mr-1 }
-[API Reference](api/index.md){ .btn .btn-default }
+<a href="articles/getting-started.md" class="btn btn-primary mr-1">Get Started</a>
+<a href="api/index.md" class="btn btn-default">API Reference</a>
 
 ---
 
