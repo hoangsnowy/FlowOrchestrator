@@ -97,6 +97,18 @@ a:hover {
   width: auto;
 }
 
+/* Landing page hero logo — DocFX modern theme renders _appLogoPath large in the hero section.
+   Constrain it to a reasonable size while keeping the navbar logo at 28px (above). */
+.hero-logo,
+.hero-logo img,
+.hero .logo,
+.hero .logo img,
+.landing-banner img,
+.subnav-hero img {
+  max-height: 64px !important;
+  width: auto !important;
+}
+
 .navbar-nav .nav-link {
   color: var(--fo-olive) !important;
   font-size: 0.9375rem;
