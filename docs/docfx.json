@@ -33,16 +33,15 @@
     ],
     "resource": [
       {
-        "files": ["images/**", "styles/**"]
+        "files": ["images/**", "public/**"]
       }
     ],
     "output": "_site",
-    "template": ["default", "modern"],
+    "template": ["default", "modern", "overrides"],
     "globalMetadata": {
       "_appTitle": "FlowOrchestrator",
       "_appName": "FlowOrchestrator",
       "_appFaviconPath": "images/icon.png",
-      "_appLogoPath": "images/icon.png",
       "_enableSearch": true,
       "_disableContribution": false,
       "_gitContribute": {

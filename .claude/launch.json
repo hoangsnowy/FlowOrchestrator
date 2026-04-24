@@ -20,6 +20,13 @@
       "port": 5103
     },
     {
+      "name": "SampleApp — watch InMemory (:5301)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["watch", "run", "--project", "samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj", "--no-hot-reload", "--", "--urls", "http://localhost:5301"],
+      "env": { "FLOW_STORAGE": "inmemory" },
+      "port": 5301
+    },
+    {
       "name": "SampleApp — standalone (http :5201)",
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj", "--launch-profile", "http"],
@@ -30,6 +37,13 @@
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj", "--launch-profile", "https"],
       "port": 7177
+    },
+    {
+      "name": "Docs — DocFX (:8080)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["tool", "run", "docfx", "docfx.json", "--serve", "--port", "8080"],
+      "cwd": "docs",
+      "port": 8080
     }
   ]
 }

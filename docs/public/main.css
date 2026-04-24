@@ -45,6 +45,8 @@
 }
 
 /* ── Override Bootstrap dark-mode — always render warm light palette ── */
+/* DocFX JS sets data-bs-theme="dark" when the browser prefers dark.    */
+/* We pin the warm palette so it wins regardless of system preference.  */
 [data-bs-theme="dark"] {
   --bs-body-bg:             var(--fo-parchment);
   --bs-body-color:          var(--fo-near-black);
@@ -105,21 +107,11 @@ a:hover {
   letter-spacing: -0.01em;
 }
 
-.navbar-brand img {
-  height: 28px;
-  width: auto;
-}
-
-/* Landing page hero logo — DocFX modern theme renders _appLogoPath large in the hero section.
-   Constrain it to a reasonable size while keeping the navbar logo at 28px (above). */
-.hero-logo,
-.hero-logo img,
-.hero .logo,
-.hero .logo img,
-.landing-banner img,
-.subnav-hero img {
-  max-height: 64px !important;
+.navbar-brand img,
+img#logo {
+  height: 28px !important;
   width: auto !important;
+  max-height: 28px !important;
 }
 
 .navbar-nav .nav-link {
