@@ -40,8 +40,10 @@ jobs:
         run: dotnet restore
 
       - name: Build solution (generates XML documentation files)
-        # net8.0 only — docs only need one TFM; all three are validated in ci.yml
-        run: dotnet build --no-restore --configuration Release -p:TargetFramework=net8.0
+        # net10.0 — docs only need one TFM; all three are validated in ci.yml.
+        # Using net10.0 (latest) avoids NETSDK1005 on SampleApp/AppHost which only
+        # target net10.0 when built on SDK 10 (FlowOrchestratorSampleTargetFramework).
+        run: dotnet build --no-restore --configuration Release -p:TargetFramework=net10.0
 
       - name: Restore .NET tools (pinned docfx version)
         run: dotnet tool restore
