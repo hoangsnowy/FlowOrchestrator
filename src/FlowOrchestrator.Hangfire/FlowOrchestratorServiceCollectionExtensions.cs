@@ -69,6 +69,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();
 
         services.AddSingleton<IStepDispatcher, HangfireStepDispatcher>();
+        services.AddTransient<IFlowOrchestrator, FlowOrchestratorEngine>();
 
         services.AddTransient<IHangfireFlowTrigger, HangfireFlowOrchestrator>();
         services.AddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();

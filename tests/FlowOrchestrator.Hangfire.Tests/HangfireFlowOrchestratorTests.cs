@@ -19,12 +19,12 @@ public class HangfireFlowOrchestratorTests
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
     private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
-    private readonly ILogger<HangfireFlowOrchestrator> _logger = Substitute.For<ILogger<HangfireFlowOrchestrator>>();
+    private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
 
     private HangfireFlowOrchestrator CreateSut(IFlowRunRuntimeStore? runtimeStore = null, IFlowRunControlStore? runControlStore = null)
     {
-        return new HangfireFlowOrchestrator(
+        var engine = new FlowOrchestratorEngine(
             _dispatcher,
             _flowExecutor,
             _graphPlanner,
@@ -39,6 +39,7 @@ public class HangfireFlowOrchestratorTests
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger);
+        return new HangfireFlowOrchestrator(engine);
     }
 
     private static IFlowDefinition CreateFlow()
