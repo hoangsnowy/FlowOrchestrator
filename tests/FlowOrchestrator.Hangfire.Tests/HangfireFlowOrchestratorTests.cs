@@ -4,7 +4,6 @@ using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
 using FluentAssertions;
-using Hangfire;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -13,7 +12,7 @@ namespace FlowOrchestrator.Hangfire.Tests;
 
 public class HangfireFlowOrchestratorTests
 {
-    private readonly IBackgroundJobClient _jobClient = Substitute.For<IBackgroundJobClient>();
+    private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
     private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
@@ -26,7 +25,7 @@ public class HangfireFlowOrchestratorTests
     private HangfireFlowOrchestrator CreateSut(IFlowRunRuntimeStore? runtimeStore = null, IFlowRunControlStore? runControlStore = null)
     {
         return new HangfireFlowOrchestrator(
-            _jobClient,
+            _dispatcher,
             _flowExecutor,
             _graphPlanner,
             _stepExecutor,
@@ -102,7 +101,7 @@ public class HangfireFlowOrchestratorTests
             "manual",
             Arg.Any<string?>(),
             Arg.Any<string?>());
-        _jobClient.ReceivedCalls().Should().NotBeEmpty();
+        _dispatcher.ReceivedCalls().Should().NotBeEmpty();
     }
 
     [Fact]
@@ -162,7 +161,7 @@ public class HangfireFlowOrchestratorTests
 
         await _runStore.Received(1).RecordStepCompleteAsync(
             ctx.RunId, "step1", "Pending", Arg.Any<string?>(), Arg.Any<string?>());
-        _jobClient.ReceivedCalls().Should().NotBeEmpty();
+        _dispatcher.ReceivedCalls().Should().NotBeEmpty();
     }
 
     [Fact]
@@ -245,7 +244,7 @@ public class HangfireFlowOrchestratorTests
 
         ctx.RunId.Should().Be(existingRunId);
         result.Should().NotBeNull();
-        _jobClient.ReceivedCalls().Should().BeEmpty();
+        _dispatcher.ReceivedCalls().Should().BeEmpty();
     }
 
     [Fact]

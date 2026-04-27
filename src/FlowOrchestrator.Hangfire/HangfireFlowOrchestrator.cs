@@ -4,7 +4,6 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using Hangfire;
 using Hangfire.Server;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +22,7 @@ namespace FlowOrchestrator.Hangfire;
 /// </remarks>
 public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireStepRunner
 {
-    private readonly IBackgroundJobClient _backgroundJobClient;
+    private readonly IStepDispatcher _dispatcher;
     private readonly IFlowExecutor _flowExecutor;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepExecutor _stepExecutor;
@@ -40,7 +39,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 
     /// <summary>Initialises the orchestrator with all required and optional dependencies.</summary>
     public HangfireFlowOrchestrator(
-        IBackgroundJobClient backgroundJobClient,
+        IStepDispatcher dispatcher,
         IFlowExecutor flowExecutor,
         IFlowGraphPlanner graphPlanner,
         IStepExecutor stepExecutor,
@@ -55,7 +54,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         FlowOrchestratorTelemetry telemetry,
         ILogger<HangfireFlowOrchestrator> logger)
     {
-        _backgroundJobClient = backgroundJobClient;
+        _dispatcher = dispatcher;
         _flowExecutor = flowExecutor;
         _graphPlanner = graphPlanner;
         _stepExecutor = stepExecutor;
@@ -336,9 +335,7 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 
                 var retryDelay = result.DelayNextStep ?? TimeSpan.FromSeconds(10);
                 step.ScheduledTime = DateTimeOffset.UtcNow + retryDelay;
-                _backgroundJobClient.Schedule<IHangfireStepRunner>(
-                    runner => runner.RunStepAsync(ctx, flow, step, null),
-                    retryDelay);
+                await _dispatcher.ScheduleStepAsync(ctx, flow, step, retryDelay).ConfigureAwait(false);
 
                 await RecordEventAsync(ctx, flow, step, "step.pending", $"Step '{step.Key}' pending for {retryDelay}.")
                     .ConfigureAwait(false);
@@ -416,14 +413,11 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
             if (result.DelayNextStep.HasValue)
             {
                 next.ScheduledTime = DateTimeOffset.UtcNow + result.DelayNextStep.Value;
-                _backgroundJobClient.Schedule<IHangfireStepRunner>(
-                    runner => runner.RunStepAsync(ctx, flow, next, null),
-                    result.DelayNextStep.Value);
+                await _dispatcher.ScheduleStepAsync(ctx, flow, next, result.DelayNextStep.Value).ConfigureAwait(false);
             }
             else
             {
-                _backgroundJobClient.Enqueue<IHangfireStepRunner>(
-                    runner => runner.RunStepAsync(ctx, flow, next, null));
+                await _dispatcher.EnqueueStepAsync(ctx, flow, next).ConfigureAwait(false);
             }
 
             return;
@@ -600,14 +594,11 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         if (delay.HasValue)
         {
             step.ScheduledTime = DateTimeOffset.UtcNow + delay.Value;
-            _backgroundJobClient.Schedule<IHangfireStepRunner>(
-                runner => runner.RunStepAsync(ctx, flow, step, null),
-                delay.Value);
+            await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
         }
         else
         {
-            _backgroundJobClient.Enqueue<IHangfireStepRunner>(
-                runner => runner.RunStepAsync(ctx, flow, step, null));
+            await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
         }
 
         return true;
