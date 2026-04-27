@@ -1,5 +1,5 @@
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 

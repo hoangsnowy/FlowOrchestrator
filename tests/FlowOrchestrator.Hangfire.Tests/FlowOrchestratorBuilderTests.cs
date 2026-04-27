@@ -1,6 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.SqlServer;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;

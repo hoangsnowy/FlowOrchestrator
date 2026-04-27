@@ -5,7 +5,6 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
