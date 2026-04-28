@@ -244,8 +244,8 @@ public sealed class RunEndpointTests : IDisposable
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("runId");
         body.Should().Contain("sourceRunId");
-        await _server.FlowTrigger.Received(1).TriggerAsync(Arg.Is<ITriggerContext>(ctx =>
-            ctx.Flow.Id == flowId && ctx.Trigger.Key == "webhook"));
+        await _server.FlowOrchestrator.Received(1).TriggerAsync(Arg.Is<ITriggerContext>(ctx =>
+            ctx.Flow.Id == flowId && ctx.Trigger.Key == "webhook"), Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -355,12 +355,41 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                 }
 
                 var retryDelay = result.DelayNextStep ?? TimeSpan.FromSeconds(10);
+                // Release the dispatch record so the next poll attempt can be dispatched idempotently.
+                await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false);
                 step.ScheduledTime = DateTimeOffset.UtcNow + retryDelay;
-                await _dispatcher.ScheduleStepAsync(ctx, flow, step, retryDelay).ConfigureAwait(false);
+                await TryScheduleStepAsync(ctx, flow, step, retryDelay).ConfigureAwait(false);
 
                 await RecordEventAsync(ctx, flow, step, "step.pending", $"Step '{step.Key}' pending for {retryDelay}.")
                     .ConfigureAwait(false);
                 return result.Result;
+            }
+
+            // Dispatch dynamic child steps declared by the handler (e.g. ForEach iterations).
+            // Validation: hints must NOT target static DAG steps — only dynamic fan-out is allowed.
+            if (result.DispatchHint?.Spawn is { Count: > 0 } hintChildren)
+            {
+                foreach (var child in hintChildren)
+                {
+                    if (flow.Manifest.Steps.FindStep(child.StepKey) is not null)
+                    {
+                        throw new InvalidOperationException(
+                            $"DispatchHint targeted static DAG step '{child.StepKey}'. " +
+                            "Hints are reserved for dynamic fan-out. Use runAfter for static dependencies.");
+                    }
+
+                    var childStep = new StepInstance(child.StepKey, child.StepType)
+                    {
+                        RunId = ctx.RunId,
+                        PrincipalId = ctx.PrincipalId,
+                        TriggerData = ctx.TriggerData,
+                        TriggerHeaders = ctx.TriggerHeaders,
+                        ScheduledTime = DateTimeOffset.UtcNow + (child.Delay ?? TimeSpan.Zero),
+                        Inputs = new Dictionary<string, object?>(child.Inputs)
+                    };
+
+                    await TryScheduleStepAsync(ctx, flow, childStep, child.Delay).ConfigureAwait(false);
+                }
             }
 
             if (_runtimeStore is null)
@@ -416,16 +445,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         var next = await _flowExecutor.GetNextStep(ctx, flow, step, result).ConfigureAwait(false);
         if (next is not null)
         {
-            if (result.DelayNextStep.HasValue)
-            {
-                next.ScheduledTime = DateTimeOffset.UtcNow + result.DelayNextStep.Value;
-                await _dispatcher.ScheduleStepAsync(ctx, flow, next, result.DelayNextStep.Value).ConfigureAwait(false);
-            }
-            else
-            {
-                await _dispatcher.EnqueueStepAsync(ctx, flow, next).ConfigureAwait(false);
-            }
-
+            await TryScheduleStepAsync(ctx, flow, next, result.DelayNextStep).ConfigureAwait(false);
             return;
         }
 
@@ -568,6 +588,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
     private async Task<bool> TryScheduleStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
     {
+        // Guard 1: runtime claim — prevents two workers executing the same step concurrently.
         if (_runtimeStore is not null)
         {
             var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
@@ -577,14 +598,34 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             }
         }
 
+        // Guard 2: dispatch ledger — prevents enqueueing the same step twice (recovery, retry, at-least-once queue).
+        if (!await _runStore.TryRecordDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        string? jobId;
         if (delay.HasValue)
         {
             step.ScheduledTime = DateTimeOffset.UtcNow + delay.Value;
-            await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
+            jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
         }
         else
         {
-            await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
+            jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
+        }
+
+        // Best-effort: record the runtime job/message ID for observability.
+        if (jobId is not null)
+        {
+            try
+            {
+                await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to annotate dispatch for step {StepKey}.", step.Key);
+            }
         }
 
         return true;

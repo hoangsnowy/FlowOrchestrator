@@ -43,4 +43,11 @@ public interface IStepResult
     /// after this delay instead of enqueueing it immediately (used by <see cref="PollableStepHandler{TInput}"/>).
     /// </summary>
     TimeSpan? DelayNextStep { get; set; }
+
+    /// <summary>
+    /// Optional hint instructing the engine to spawn dynamic child steps after this step completes.
+    /// <see langword="null"/> (the default) means the engine continues using the static DAG only.
+    /// Used by <c>ForEachStepHandler</c> to fan out loop iterations without calling the dispatcher directly.
+    /// </summary>
+    StepDispatchHint? DispatchHint { get; }
 }

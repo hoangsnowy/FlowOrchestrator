@@ -1,6 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Hosting;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -63,17 +64,29 @@ public static class FlowOrchestratorServiceCollectionExtensions
 
         services.AddHostedService<FlowSyncHostedService>();
         services.AddHostedService<FlowRetentionHostedService>();
+        services.AddHostedService<FlowRunRecoveryHostedService>();
 
         services.AddTransient<IFlowExecutor, FlowExecutor>();
         services.AddSingleton<IFlowGraphPlanner, FlowGraphPlanner>();
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();
 
-        services.AddSingleton<IStepDispatcher, HangfireStepDispatcher>();
         services.AddTransient<IFlowOrchestrator, FlowOrchestratorEngine>();
 
-        services.AddTransient<IHangfireFlowTrigger, HangfireFlowOrchestrator>();
-        services.AddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();
-        services.AddSingleton<IRecurringTriggerSync, RecurringTriggerSync>();
+        // Runtime-specific adapters: use TryAdd so that an alternative runtime (e.g. UseInMemoryRuntime())
+        // registered earlier inside the configure callback takes priority over the Hangfire defaults.
+        services.TryAddSingleton<IStepDispatcher, HangfireStepDispatcher>();
+        services.TryAddSingleton<IRecurringTriggerDispatcher, HangfireRecurringTriggerDispatcher>();
+        services.TryAddSingleton<IRecurringTriggerInspector, HangfireRecurringTriggerInspector>();
+        services.TryAddSingleton<IRecurringTriggerSync, RecurringTriggerSync>();
+
+        // Hangfire-specific trigger/step-runner adapters are only wired when Hangfire is explicitly enabled.
+        // Registering them without Hangfire infrastructure (IBackgroundJobClient etc.) would cause
+        // resolution failures at runtime.
+        if (builder.HangfireEnabled)
+        {
+            services.AddTransient<IHangfireFlowTrigger, HangfireFlowOrchestrator>();
+            services.AddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();
+        }
 
         services.AddStepHandler<ForEachStepHandler>("ForEach");
 

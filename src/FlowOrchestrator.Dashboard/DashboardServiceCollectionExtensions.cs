@@ -5,9 +5,6 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
-using Hangfire;
-using Hangfire.Storage;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -152,7 +149,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, IFlowRepository repo, Guid id, IHangfireFlowTrigger flowTrigger) =>
+        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, IFlowRepository repo, Guid id, IFlowOrchestrator engine) =>
         {
             var flows = await repo.GetAllFlowsAsync();
             var flow = flows.FirstOrDefault(f => f.Id == id);
@@ -181,7 +178,7 @@ public static class DashboardServiceCollectionExtensions
                 Flow = flow,
                 Trigger = new Trigger("manual", "Manual", body, headers)
             };
-            await flowTrigger.TriggerAsync(ctx);
+            await engine.TriggerAsync(ctx);
             await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered." });
         });
 
@@ -189,7 +186,7 @@ public static class DashboardServiceCollectionExtensions
         // - idOrSlug = flow GUID: use first Webhook trigger (only Webhook has external URL)
         // - idOrSlug = slug: lookup flow by webhookSlug in Webhook trigger Inputs
         // - If trigger has webhookSecret in Inputs, require X-Webhook-Key header to match
-        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug, IHangfireFlowTrigger flowTrigger) =>
+        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug, IFlowOrchestrator engine) =>
         {
             var flows = (await repo.GetAllFlowsAsync()).ToList();
             Core.Abstractions.IFlowDefinition? flow = null;
@@ -278,7 +275,7 @@ public static class DashboardServiceCollectionExtensions
                 Flow = flow,
                 Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), body, headers)
             };
-            await flowTrigger.TriggerAsync(ctx);
+            await engine.TriggerAsync(ctx);
             await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         });
 
@@ -462,11 +459,12 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            BackgroundJob.Enqueue<IHangfireStepRunner>(r => r.RetryStepAsync(run.FlowId, runId, stepKey, null));
+            var engine = http.RequestServices.GetRequiredService<IFlowOrchestrator>();
+            await engine.RetryStepAsync(run.FlowId, runId, stepKey);
             await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 
-        group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IHangfireFlowTrigger flowTrigger, Guid runId) =>
+        group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IFlowOrchestrator engine, Guid runId) =>
         {
             var run = await runStore.GetRunDetailAsync(runId);
             if (run is null)
@@ -498,16 +496,15 @@ public static class DashboardServiceCollectionExtensions
                 Flow = flow,
                 Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders)
             };
-            await flowTrigger.TriggerAsync(ctx);
+            await engine.TriggerAsync(ctx);
             await WriteJsonAsync(http.Response, new { runId = ctx.RunId, sourceRunId = runId, message = $"Run '{runId}' re-triggered as '{ctx.RunId}'." });
         });
 
         // ── Schedule management endpoints ──
 
-        group.MapGet("/api/schedules", async (HttpContext http, IFlowStore store, IFlowScheduleStateStore scheduleStateStore) =>
+        group.MapGet("/api/schedules", async (HttpContext http, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, IRecurringTriggerInspector inspector) =>
         {
-            using var connection = JobStorage.Current.GetConnection();
-            var recurringJobs = connection.GetRecurringJobs();
+            var recurringJobs = await inspector.GetJobsAsync();
 
             var flows = await store.GetAllAsync();
             var flowLookup = flows.ToDictionary(f => f.Id);
@@ -561,18 +558,18 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response,result);
         });
 
-        group.MapPost("/api/schedules/{jobId}/trigger", async (HttpContext http, IRecurringJobManager manager, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/trigger", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             try
             {
                 var state = await scheduleStateStore.GetAsync(jobId);
                 if (state?.IsPaused == true)
                 {
-                    BackgroundJob.Enqueue<IHangfireFlowTrigger>(t => t.TriggerByScheduleAsync(state.FlowId, state.TriggerKey, null));
+                    await triggerDispatcher.EnqueueTriggerAsync(state.FlowId, state.TriggerKey);
                     await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' triggered." });
                     return;
                 }
-                manager.Trigger(jobId);
+                triggerDispatcher.TriggerOnce(jobId);
                 await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' triggered." });
             }
             catch (Exception ex)
@@ -582,7 +579,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/schedules/{jobId}/pause", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/pause", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -607,11 +604,11 @@ public static class DashboardServiceCollectionExtensions
                 IsPaused = true,
                 CronOverride = string.IsNullOrWhiteSpace(cron) ? null : cron
             });
-            manager.RemoveIfExists(jobId);
+            triggerDispatcher.Remove(jobId);
             await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' paused." });
         });
 
-        group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
+        group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -646,13 +643,11 @@ public static class DashboardServiceCollectionExtensions
                 IsPaused = false,
                 CronOverride = existing?.CronOverride
             });
-            var fid = flowId;
-            var key = triggerKey;
-            manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), cronExpr);
+            triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, cronExpr);
             await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
         });
 
-        group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringJobManager manager, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
+        group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
             if (!ParseJobId(jobId, out var flowId, out var triggerKey))
             {
@@ -692,9 +687,7 @@ public static class DashboardServiceCollectionExtensions
 
             if (!paused)
             {
-                var fid = flowId;
-                var key = triggerKey;
-                manager.AddOrUpdate<IHangfireFlowTrigger>(jobId, t => t.TriggerByScheduleAsync(fid, key, null), newCron);
+                triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
             }
 
             await WriteJsonAsync(http.Response,new { success = true, message = $"Cron updated to '{newCron}'." });

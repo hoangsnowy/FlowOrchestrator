@@ -56,4 +56,33 @@ public interface IFlowRunStore
     /// Clears <c>Running</c>/<c>Failed</c> status and increments attempt count.
     /// </summary>
     Task RetryStepAsync(Guid runId, string stepKey);
+
+    /// <summary>
+    /// Atomically records that a step has been dispatched for execution.
+    /// Returns <see langword="true"/> if this is the first dispatch for this step in this run;
+    /// <see langword="false"/> if the step was already dispatched (idempotent guard — caller should skip).
+    /// </summary>
+    /// <remarks>
+    /// Must use an atomic INSERT-if-not-exists primitive (SQL <c>WHERE NOT EXISTS</c>,
+    /// PostgreSQL <c>ON CONFLICT DO NOTHING</c>, or <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}.TryAdd"/>).
+    /// </remarks>
+    Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default);
+
+    /// <summary>
+    /// Stores the runtime job or message ID returned by the dispatcher alongside the dispatch record.
+    /// Best-effort — implementations should not throw; failures are silently ignored by the engine.
+    /// </summary>
+    Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Removes the dispatch record for a step, allowing it to be re-dispatched.
+    /// Called by the engine before rescheduling a <see cref="StepStatus.Pending"/> (polling) step.
+    /// </summary>
+    Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the set of step keys that have been dispatched (and not yet released) for a run.
+    /// Used by the recovery service to avoid re-dispatching already-in-flight steps.
+    /// </summary>
+    Task<IReadOnlySet<string>> GetDispatchedStepKeysAsync(Guid runId);
 }

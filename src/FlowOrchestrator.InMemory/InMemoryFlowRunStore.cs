@@ -20,6 +20,7 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey, int Attempt), FlowStepAttemptRecord> _stepAttempts = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), byte> _stepClaims = new();
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), string?> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
     private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
 
@@ -213,6 +214,33 @@ public sealed class InMemoryFlowRunStore :
         }
 
         return Task.CompletedTask;
+    }
+
+    public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
+    {
+        var added = _stepDispatches.TryAdd((runId, stepKey), null);
+        return Task.FromResult(added);
+    }
+
+    public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
+    {
+        _stepDispatches[(runId, stepKey)] = jobId;
+        return Task.CompletedTask;
+    }
+
+    public Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
+    {
+        _stepDispatches.TryRemove((runId, stepKey), out _);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlySet<string>> GetDispatchedStepKeysAsync(Guid runId)
+    {
+        IReadOnlySet<string> keys = _stepDispatches.Keys
+            .Where(k => k.RunId == runId)
+            .Select(k => k.StepKey)
+            .ToHashSet(StringComparer.Ordinal);
+        return Task.FromResult(keys);
     }
 
     public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)

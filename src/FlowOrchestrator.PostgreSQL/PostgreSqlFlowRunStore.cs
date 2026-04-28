@@ -272,6 +272,44 @@ public sealed class PostgreSqlFlowRunStore :
             new { Id = runId });
     }
 
+    public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.ExecuteAsync(
+            """
+            INSERT INTO flow_step_dispatches (run_id, step_key)
+            VALUES (@RunId, @StepKey)
+            ON CONFLICT (run_id, step_key) DO NOTHING
+            """,
+            new { RunId = runId, StepKey = stepKey });
+        return rows > 0;
+    }
+
+    public async Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            "UPDATE flow_step_dispatches SET dispatch_job_id = @JobId WHERE run_id = @RunId AND step_key = @StepKey",
+            new { RunId = runId, StepKey = stepKey, JobId = jobId });
+    }
+
+    public async Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            "DELETE FROM flow_step_dispatches WHERE run_id = @RunId AND step_key = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
+    }
+
+    public async Task<IReadOnlySet<string>> GetDispatchedStepKeysAsync(Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var keys = await conn.QueryAsync<string>(
+            "SELECT step_key FROM flow_step_dispatches WHERE run_id = @RunId",
+            new { RunId = runId });
+        return keys.ToHashSet(StringComparer.Ordinal);
+    }
+
     public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
