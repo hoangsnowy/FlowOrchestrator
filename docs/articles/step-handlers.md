@@ -159,7 +159,7 @@ public sealed class AuditLogger
 
 ## Cooperative Cancellation
 
-Check `ctx.CancellationToken` before expensive operations. When a user cancels a run from the dashboard, the token is cancelled at the next Hangfire job boundary:
+Check `ctx.CancellationToken` before expensive operations. When a user cancels a run from the dashboard, the token is cancelled at the next step execution boundary (regardless of which runtime adapter is in use):
 
 ```csharp
 public async ValueTask<object?> ExecuteAsync(

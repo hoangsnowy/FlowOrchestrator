@@ -139,15 +139,15 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ### Advanced Contracts
 
-For full feature parity (schedule overrides, run control, event stream, retention), implement these additional interfaces:
+For full feature parity (schedule overrides, run control, event stream, retention, and concurrency safety), implement these additional interfaces:
 
 | Interface | Feature |
 |---|---|
 | `IFlowScheduleStateStore` | Persistent cron overrides (`Scheduler.PersistOverrides`) |
-| `IFlowRunControlStore` | Timeout, cancellation, idempotency key deduplication |
+| `IFlowRunControlStore` | Cancel, timeout, and idempotency key state. The engine checks this on every `TriggerAsync` to deduplicate runs and on every `RunStepAsync` to honour cancellation. |
 | `IFlowEventReader` | Run event stream (`GET /flows/api/runs/{runId}/events`) |
 | `IFlowRetentionStore` | Background retention sweep (deletes old run data) |
-| `IFlowRunRuntimeStore` | Active-run tracking and stats (`GET /flows/api/runs/active`) |
+| `IFlowRunRuntimeStore` | Step claim/dispatch ledger per run. Implements `TryRecordDispatchAsync` (idempotent INSERT — prevents duplicate dispatch) and `TryClaimStepAsync` (claim exclusion — ensures a step is executed by at most one worker). Required for production use with any multi-worker runtime. |
 
 Register these the same way — directly on `options.Services`.
 

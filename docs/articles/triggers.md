@@ -25,7 +25,7 @@ Any JSON body you include becomes the trigger payload, accessible in steps via `
 
 ### Cron
 
-Registers a Hangfire `RecurringJob` that fires the flow on a cron schedule.
+Registers a recurring job with the active runtime adapter that fires the flow on a cron schedule. When using the Hangfire runtime, this maps to a Hangfire `RecurringJob`.
 
 ```csharp
 ["nightly"] = new TriggerMetadata

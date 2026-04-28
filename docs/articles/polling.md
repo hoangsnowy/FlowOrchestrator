@@ -1,10 +1,10 @@
 # Polling Steps
 
-The polling pattern lets a step wait for an external system to reach a desired state without holding a thread. Instead of sleeping in a loop, the step returns `StepStatus.Pending` and Hangfire reschedules the job after a configurable delay.
+The polling pattern lets a step wait for an external system to reach a desired state without holding a thread. Instead of sleeping in a loop, the step returns `StepStatus.Pending` and the runtime reschedules the job after a configurable delay via `IStepDispatcher.ScheduleStepAsync`.
 
 ## The Problem
 
-Blocking a thread inside a Hangfire job while waiting for an external API is expensive and ties up worker threads. With polling, each check-in is a short-lived job that re-enqueues itself:
+Blocking a thread while waiting for an external API is expensive and ties up worker threads. With polling, each check-in is a short-lived execution that re-schedules itself via the runtime adapter:
 
 ```
 Attempt 1 → response: { "status": "processing" } → Pending → wait 10s
@@ -45,7 +45,7 @@ The base class manages:
 - Attempt counting
 - Condition evaluation against the response
 - Timeout enforcement
-- Returning `StepStatus.Pending` with `DelayNextStep` to reschedule
+- Returning `StepStatus.Pending` with `DelayNextStep` — the engine calls `ReleaseDispatchAsync` then `IStepDispatcher.ScheduleStepAsync(delay)` to reschedule via the active runtime adapter
 
 ## Input Class
 
@@ -86,7 +86,7 @@ public sealed class CheckJobStatusInput : IPollableInput
 ```
 
 > [!NOTE]
-> The `[JsonPropertyName]` attributes are required because step inputs are serialized and deserialized by `System.Text.Json` between Hangfire job attempts. Without them the state properties will not survive the round-trip.
+> The `[JsonPropertyName]` attributes are required because step inputs are serialized and deserialized by `System.Text.Json` between execution attempts (across rescheduled jobs or channel messages). Without them the state properties will not survive the round-trip.
 
 ## Polling Configuration (Manifest Inputs)
 
