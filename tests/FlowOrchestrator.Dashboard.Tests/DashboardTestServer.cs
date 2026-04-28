@@ -1,7 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
 using Hangfire;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -25,13 +24,17 @@ public sealed class DashboardTestServer : IDisposable
     public IOutputsRepository OutputsRepository { get; } = Substitute.For<IOutputsRepository>();
     public IFlowEventReader EventReader { get; } = Substitute.For<IFlowEventReader>();
     public IFlowScheduleStateStore ScheduleStateStore { get; } = Substitute.For<IFlowScheduleStateStore>();
-    public IHangfireFlowTrigger FlowTrigger { get; } = Substitute.For<IHangfireFlowTrigger>();
+
+    /// <summary>Mock engine used to verify trigger and retry calls from dashboard endpoints.</summary>
+    public IFlowOrchestrator FlowOrchestrator { get; } = Substitute.For<IFlowOrchestrator>();
+
     public IRecurringTriggerSync TriggerSync { get; } = Substitute.For<IRecurringTriggerSync>();
-    public IRecurringJobManager JobManager { get; } = Substitute.For<IRecurringJobManager>();
+    public IRecurringTriggerDispatcher TriggerDispatcher { get; } = Substitute.For<IRecurringTriggerDispatcher>();
+    public IRecurringTriggerInspector TriggerInspector { get; } = Substitute.For<IRecurringTriggerInspector>();
 
     public DashboardTestServer(Action<FlowDashboardOptions>? configureOptions = null)
     {
-        // Configure Hangfire in-memory so BackgroundJob.Enqueue works during tests.
+        // Configure Hangfire in-memory so any background job infrastructure works during tests.
         GlobalConfiguration.Configuration.UseInMemoryStorage();
 
         ScheduleStateStore.GetAllAsync().Returns(Array.Empty<FlowScheduleState>());
@@ -39,6 +42,11 @@ public sealed class DashboardTestServer : IDisposable
         EventReader.GetRunEventsAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<int>())
             .Returns(Array.Empty<FlowEventRecord>());
         RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).Returns((FlowRunControlRecord?)null);
+        TriggerInspector.GetJobsAsync().Returns(Array.Empty<RecurringTriggerInfo>());
+
+        // Default TriggerAsync returns a non-null object so dashboard can serialize runId from ctx.
+        FlowOrchestrator.TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>((object?)null));
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -51,9 +59,10 @@ public sealed class DashboardTestServer : IDisposable
         builder.Services.AddSingleton(OutputsRepository);
         builder.Services.AddSingleton(EventReader);
         builder.Services.AddSingleton(ScheduleStateStore);
-        builder.Services.AddSingleton(FlowTrigger);
+        builder.Services.AddSingleton(FlowOrchestrator);
         builder.Services.AddSingleton(TriggerSync);
-        builder.Services.AddSingleton(JobManager);
+        builder.Services.AddSingleton(TriggerDispatcher);
+        builder.Services.AddSingleton(TriggerInspector);
 
         if (configureOptions is not null)
             builder.Services.AddFlowDashboard(configureOptions);

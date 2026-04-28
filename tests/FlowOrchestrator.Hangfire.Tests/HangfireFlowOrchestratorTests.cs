@@ -4,7 +4,6 @@ using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
 using FluentAssertions;
-using Hangfire;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -13,20 +12,28 @@ namespace FlowOrchestrator.Hangfire.Tests;
 
 public class HangfireFlowOrchestratorTests
 {
-    private readonly IBackgroundJobClient _jobClient = Substitute.For<IBackgroundJobClient>();
+    private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
     private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
-    private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
+    private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
     private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
-    private readonly ILogger<HangfireFlowOrchestrator> _logger = Substitute.For<ILogger<HangfireFlowOrchestrator>>();
+    private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
+
+    public HangfireFlowOrchestratorTests()
+    {
+        _runStore = Substitute.For<IFlowRunStore>();
+        // Phase 5: TryRecordDispatchAsync must return true by default so dispatch proceeds in all tests.
+        _runStore.TryRecordDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ReturnsForAnyArgs(Task.FromResult(true));
+    }
 
     private HangfireFlowOrchestrator CreateSut(IFlowRunRuntimeStore? runtimeStore = null, IFlowRunControlStore? runControlStore = null)
     {
-        return new HangfireFlowOrchestrator(
-            _jobClient,
+        var engine = new FlowOrchestratorEngine(
+            _dispatcher,
             _flowExecutor,
             _graphPlanner,
             _stepExecutor,
@@ -40,6 +47,7 @@ public class HangfireFlowOrchestratorTests
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger);
+        return new HangfireFlowOrchestrator(engine);
     }
 
     private static IFlowDefinition CreateFlow()
@@ -102,7 +110,7 @@ public class HangfireFlowOrchestratorTests
             "manual",
             Arg.Any<string?>(),
             Arg.Any<string?>());
-        _jobClient.ReceivedCalls().Should().NotBeEmpty();
+        _dispatcher.ReceivedCalls().Should().NotBeEmpty();
     }
 
     [Fact]
@@ -162,7 +170,7 @@ public class HangfireFlowOrchestratorTests
 
         await _runStore.Received(1).RecordStepCompleteAsync(
             ctx.RunId, "step1", "Pending", Arg.Any<string?>(), Arg.Any<string?>());
-        _jobClient.ReceivedCalls().Should().NotBeEmpty();
+        _dispatcher.ReceivedCalls().Should().NotBeEmpty();
     }
 
     [Fact]
@@ -245,7 +253,7 @@ public class HangfireFlowOrchestratorTests
 
         ctx.RunId.Should().Be(existingRunId);
         result.Should().NotBeNull();
-        _jobClient.ReceivedCalls().Should().BeEmpty();
+        _dispatcher.ReceivedCalls().Should().BeEmpty();
     }
 
     [Fact]
@@ -445,5 +453,56 @@ public class HangfireFlowOrchestratorTests
 
         // Assert: mixed leaves (one Succeeded, one Skipped) → run = Succeeded
         await _runStore.Received(1).CompleteRunAsync(runId, "Succeeded");
+    }
+
+    [Fact]
+    public async Task RunStepAsync_WithDispatchHint_Spawn_DispatchesChildren()
+    {
+        // Arrange: step returns a DispatchHint with two dynamic children (ForEach-style fan-out).
+        var sut = CreateSut();
+        var flow = CreateFlow();
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("loop1", "ForEach") { RunId = ctx.RunId };
+
+        var hint = new StepDispatchHint(
+        [
+            new StepDispatchRequest("loop1.0.child", "DoWork", new Dictionary<string, object?> { ["__loopIndex"] = 0 }),
+            new StepDispatchRequest("loop1.1.child", "DoWork", new Dictionary<string, object?> { ["__loopIndex"] = 1 }, TimeSpan.FromMilliseconds(100))
+        ]);
+
+        var stepResult = new StepResult { Key = "loop1", Status = StepStatus.Succeeded, DispatchHint = hint };
+        _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
+
+        await sut.RunStepAsync(ctx, flow, step);
+
+        // Should dispatch one immediate + one delayed child
+        var calls = _dispatcher.ReceivedCalls().ToList();
+        calls.Should().HaveCount(2);
+        calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync)).Should().BeTrue();
+        calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunStepAsync_WithDispatchHint_TargetingStaticDagStep_Throws()
+    {
+        // Arrange: hint targets "step1" which exists in the static DAG — this is illegal.
+        var sut = CreateSut();
+        var flow = CreateFlow();   // CreateFlow() has "step1" in its manifest
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("loop1", "ForEach") { RunId = ctx.RunId };
+
+        var hint = new StepDispatchHint(
+        [
+            new StepDispatchRequest("step1", "LogMessage", new Dictionary<string, object?>())
+        ]);
+
+        var stepResult = new StepResult { Key = "loop1", Status = StepStatus.Succeeded, DispatchHint = hint };
+        _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
+
+        var act = () => sut.RunStepAsync(ctx, flow, step).AsTask();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*static DAG*step1*");
     }
 }

@@ -28,6 +28,9 @@ public sealed class StepInstance : IStepInstance
     public IReadOnlyDictionary<string, string>? TriggerHeaders { get; set; }
 
     /// <inheritdoc/>
+    public string? JobId { get; set; }
+
+    /// <inheritdoc/>
     public DateTimeOffset ScheduledTime { get; set; }
 
     /// <inheritdoc/>

@@ -22,13 +22,39 @@ options.AddFlow<TFlow>()
 
 Registers a flow class. `TFlow` must implement `IFlowDefinition` and have a public parameterless constructor. Call once per flow.
 
-### Hangfire Integration
+### Runtime Adapter
+
+Choose exactly one runtime adapter and register it **before** calling `AddFlowOrchestrator()`:
+
+**Hangfire runtime** (SQL Server or PostgreSQL persistence, distributed workers):
 
 ```csharp
-options.UseHangfire()
+builder.Services.AddHangfire(...);
+builder.Services.AddHangfireServer();
+
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connStr);  // or UsePostgreSql(...)
+    options.UseHangfire();           // wires HangfireStepDispatcher
+    options.AddFlow<MyFlow>();
+});
 ```
 
-Wires up `HangfireFlowOrchestrator` as the `IFlowOrchestrator` implementation. Must be called — there is no other execution backend.
+**InMemory runtime** (no Hangfire packages required — Channel&lt;T&gt;-backed, no external dependencies):
+
+```csharp
+// Call AddInMemoryRuntime() BEFORE AddFlowOrchestrator()
+builder.Services.AddInMemoryRuntime();
+
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseInMemory();           // in-process storage
+    options.AddFlow<MyFlow>();       // do NOT call UseHangfire() here
+});
+```
+
+> [!NOTE]
+> When using the InMemory runtime, Hangfire packages (`Hangfire.Core`, `Hangfire.InMemory`, etc.) are not needed and should not be added.
 
 ---
 
@@ -130,7 +156,9 @@ Or via `appsettings.json`:
 
 ---
 
-## Complete Example
+## Complete Examples
+
+### Hangfire Runtime (SQL Server)
 
 ```csharp
 builder.Services.AddHangfire(c => c
@@ -177,5 +205,28 @@ builder.Services.AddFlowDashboard(builder.Configuration);
 
 var app = builder.Build();
 app.UseHangfireDashboard("/hangfire");
+app.MapFlowDashboard("/flows");
+```
+
+### InMemory Runtime (Dev / Testing — no Hangfire required)
+
+```csharp
+// Register InMemory runtime BEFORE AddFlowOrchestrator
+builder.Services.AddInMemoryRuntime();
+
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseInMemory();
+
+    options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
+    options.Observability.EnableEventPersistence = true;
+
+    options.AddFlow<HelloWorldFlow>();
+});
+
+builder.Services.AddStepHandler<LogMessageHandler>("LogMessage");
+builder.Services.AddFlowDashboard(builder.Configuration);
+
+var app = builder.Build();
 app.MapFlowDashboard("/flows");
 ```

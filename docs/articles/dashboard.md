@@ -166,7 +166,7 @@ From the dashboard, open a failed run and click **Retry** on the failed step. Th
 POST /flows/api/runs/{runId}/steps/{stepKey}/retry
 ```
 
-FlowOrchestrator resets the step to `Pending`, preserves all prior step outputs, and re-enqueues the Hangfire job from the failure point. Steps that already succeeded are not re-executed.
+FlowOrchestrator resets the step to `Pending`, preserves all prior step outputs, and re-dispatches the step via the runtime adapter from the failure point. Steps that already succeeded are not re-executed.
 
 ## Cancel a Running Flow
 
@@ -174,4 +174,4 @@ FlowOrchestrator resets the step to `Pending`, preserves all prior step outputs,
 POST /flows/api/runs/{runId}/cancel
 ```
 
-Sets a cancellation flag. The next Hangfire job for this run picks up the flag and the `CancellationToken` in `IExecutionContext` is cancelled. Step handlers that check `ctx.CancellationToken` will stop gracefully. The run is marked `Cancelled` after the in-flight step completes.
+Sets a cancellation flag. The next execution of this run by the runtime adapter picks up the flag and the `CancellationToken` in `IExecutionContext` is cancelled. Step handlers that check `ctx.CancellationToken` will stop gracefully. The run is marked `Cancelled` after the in-flight step completes.

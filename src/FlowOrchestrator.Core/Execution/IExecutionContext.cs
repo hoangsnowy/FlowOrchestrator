@@ -26,4 +26,11 @@ public interface IExecutionContext
     /// Available to steps via <c>@triggerHeaders()</c> expressions.
     /// </summary>
     IReadOnlyDictionary<string, string>? TriggerHeaders { get; set; }
+
+    /// <summary>
+    /// Runtime-specific job or message identifier for the current execution unit (Hangfire job ID,
+    /// queue message ID, etc.). Set by the runtime adapter before invoking the engine.
+    /// Stored on the run and step records for correlation with the runtime's own dashboard.
+    /// </summary>
+    string? JobId { get; set; }
 }

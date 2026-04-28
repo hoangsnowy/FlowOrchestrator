@@ -26,6 +26,9 @@ public sealed class StepResult : IStepResult
 
     /// <inheritdoc/>
     public TimeSpan? DelayNextStep { get; set; }
+
+    /// <inheritdoc/>
+    public StepDispatchHint? DispatchHint { get; set; }
 }
 
 /// <summary>
@@ -53,6 +56,9 @@ public sealed class StepResult<T> : IStepResult
 
     /// <inheritdoc/>
     public TimeSpan? DelayNextStep { get; set; }
+
+    /// <inheritdoc/>
+    public StepDispatchHint? DispatchHint { get; set; }
 
     /// <summary>
     /// Gets or sets <see cref="Value"/> via JSON round-trip conversion.

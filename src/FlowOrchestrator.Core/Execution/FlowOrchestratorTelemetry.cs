@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace FlowOrchestrator.Hangfire;
+namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Singleton telemetry hub exposing the <c>FlowOrchestrator</c> <see cref="System.Diagnostics.ActivitySource"/>
@@ -52,4 +52,3 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
         Meter.Dispose();
     }
 }
-

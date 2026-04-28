@@ -10,7 +10,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
     <ProjectReference Include="..\FlowOrchestrator.Hangfire\FlowOrchestrator.Hangfire.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>FlowOrchestrator.InMemory.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

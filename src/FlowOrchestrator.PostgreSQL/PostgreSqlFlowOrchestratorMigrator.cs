@@ -145,6 +145,14 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
 
         CREATE INDEX IF NOT EXISTS ix_flow_events_run_id_sequence ON flow_events (run_id, sequence);
 
+        CREATE TABLE IF NOT EXISTS flow_step_dispatches (
+            run_id          UUID         NOT NULL,
+            step_key        VARCHAR(256) NOT NULL,
+            dispatched_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            dispatch_job_id VARCHAR(128) NULL,
+            PRIMARY KEY (run_id, step_key)
+        );
+
         CREATE TABLE IF NOT EXISTS flow_schedule_states (
             job_id         VARCHAR(256) NOT NULL PRIMARY KEY,
             flow_id        UUID         NOT NULL,

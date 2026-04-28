@@ -174,6 +174,12 @@ internal sealed class TypedStepInstanceAdapter<TInput> : IStepInstance<TInput>
         set => _inner.TriggerHeaders = value;
     }
 
+    public string? JobId
+    {
+        get => _inner.JobId;
+        set => _inner.JobId = value;
+    }
+
     public DateTimeOffset ScheduledTime
     {
         get => _inner.ScheduledTime;

@@ -17,4 +17,7 @@ public sealed class ExecutionContext : IExecutionContext
 
     /// <inheritdoc/>
     public IReadOnlyDictionary<string, string>? TriggerHeaders { get; set; }
+
+    /// <inheritdoc/>
+    public string? JobId { get; set; }
 }

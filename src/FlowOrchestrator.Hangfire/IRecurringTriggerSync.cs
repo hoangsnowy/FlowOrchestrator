@@ -1,16 +1,3 @@
-namespace FlowOrchestrator.Hangfire;
-
-/// <summary>
-/// Synchronises Hangfire recurring jobs for a flow's cron triggers at runtime
-/// (e.g. after a pause/resume or cron override from the dashboard).
-/// </summary>
-public interface IRecurringTriggerSync
-{
-    /// <summary>
-    /// Re-evaluates and updates Hangfire recurring jobs for all cron triggers of the given flow,
-    /// applying any persisted schedule overrides from <c>IFlowScheduleStateStore</c>.
-    /// </summary>
-    /// <param name="flowId">The flow whose triggers should be synchronised.</param>
-    /// <param name="isEnabled">When <see langword="false"/>, all recurring jobs for this flow are removed.</param>
-    void SyncTriggers(Guid flowId, bool isEnabled);
-}
+// IRecurringTriggerSync has moved to FlowOrchestrator.Core.Execution.
+// This alias keeps the Hangfire-namespaced symbol available for any code that still imports it.
+global using IRecurringTriggerSync = FlowOrchestrator.Core.Execution.IRecurringTriggerSync;

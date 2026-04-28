@@ -5,22 +5,24 @@ This guide walks you from zero to a running flow in about five minutes.
 ## Prerequisites
 
 - .NET 8 SDK or later
-- A running SQL Server, PostgreSQL, or nothing (in-memory works fine for local development)
-- Hangfire packages: `Hangfire.Core` and either `Hangfire.SqlServer`, `Hangfire.PostgreSql`, or `Hangfire.InMemory`
+- A running SQL Server or PostgreSQL (in-memory works fine for local development with no external DB required)
 
 ## Install NuGet Packages
 
 Pick the storage backend that matches your environment:
 
 ```bash
-# Core + Hangfire (required)
+# Core (always required)
 dotnet add package FlowOrchestrator.Core
-dotnet add package FlowOrchestrator.Hangfire
+
+# Runtime adapter — choose one
+dotnet add package FlowOrchestrator.Hangfire   # Hangfire-backed execution
+dotnet add package FlowOrchestrator.InMemory   # In-process Channel<T>-backed execution (no Hangfire needed)
 
 # Storage backend — choose one
 dotnet add package FlowOrchestrator.SqlServer     # SQL Server via Dapper
 dotnet add package FlowOrchestrator.PostgreSQL    # PostgreSQL via Npgsql
-dotnet add package FlowOrchestrator.InMemory      # In-process (no external DB)
+# (FlowOrchestrator.InMemory also provides in-process storage)
 
 # Optional REST API + SPA dashboard
 dotnet add package FlowOrchestrator.Dashboard
@@ -73,7 +75,7 @@ public sealed class HelloWorldFlow : IFlowDefinition
 ```
 
 > [!NOTE]
-> The flow `Id` is a stable identifier stored in the database and used to route Hangfire jobs. **Never change it** after a flow has been deployed to an environment with existing run history.
+> The flow `Id` is a stable identifier stored in the database and used to route jobs across all runtimes. **Never change it** after a flow has been deployed to an environment with existing run history.
 
 ## Write a Step Handler
 
@@ -154,14 +156,15 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ### In-Memory (Dev / Testing)
 
+The in-memory runtime uses a `Channel<T>`-backed dispatcher — no Hangfire packages are needed.
+
 ```csharp
-builder.Services.AddHangfire(c => c.UseInMemoryStorage());
-builder.Services.AddHangfireServer();
+// Call AddInMemoryRuntime() BEFORE AddFlowOrchestrator()
+builder.Services.AddInMemoryRuntime();
 
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();
-    options.UseHangfire();
     options.AddFlow<HelloWorldFlow>();
 });
 ```

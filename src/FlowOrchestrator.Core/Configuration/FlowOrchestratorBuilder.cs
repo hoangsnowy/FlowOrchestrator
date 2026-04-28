@@ -1,8 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
-using FlowOrchestrator.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace FlowOrchestrator.Hangfire;
+namespace FlowOrchestrator.Core.Configuration;
 
 /// <summary>
 /// Fluent builder returned by <c>AddFlowOrchestrator()</c> for configuring
@@ -21,9 +20,9 @@ public sealed class FlowOrchestratorBuilder
 
     /// <summary>
     /// <see langword="true"/> when <see cref="UseHangfire"/> has been called.
-    /// Checked by <c>AddFlowOrchestrator</c> to conditionally register Hangfire services.
+    /// Checked by the Hangfire integration's service registration to conditionally wire Hangfire-specific services.
     /// </summary>
-    internal bool HangfireEnabled { get; private set; }
+    public bool HangfireEnabled { get; private set; }
 
     /// <summary>Scheduler options controlling cron override persistence behaviour.</summary>
     public FlowSchedulerOptions Scheduler { get; } = new();
@@ -38,8 +37,9 @@ public sealed class FlowOrchestratorBuilder
     public FlowObservabilityOptions Observability { get; } = new();
 
     /// <summary>
-    /// Activates Hangfire integration: registers <see cref="IHangfireFlowTrigger"/>,
-    /// <see cref="IHangfireStepRunner"/>, and the graph planner.
+    /// Activates Hangfire integration. The actual registration of Hangfire-coupled services
+    /// (trigger, step runner, recurring sync) is performed by <c>AddFlowOrchestrator</c>
+    /// in the <c>FlowOrchestrator.Hangfire</c> assembly when this flag is set.
     /// </summary>
     public FlowOrchestratorBuilder UseHangfire()
     {

@@ -90,6 +90,10 @@ for (int i = 0; i < itemCount; i++)
 }
 ```
 
+## How Dispatch Works
+
+`ForEachStepHandler` does not enqueue jobs directly. Instead it returns a `StepResult` that carries a `DispatchHint` with `Spawn` entries — one per iteration. `FlowOrchestratorEngine` receives the hint, validates that the spawned step keys are not already present in the static DAG, and dispatches each one via `IStepDispatcher`. This keeps runtime dispatch logic in the engine and makes `ForEachStepHandler` portable across all runtime adapters (Hangfire, InMemory, or any future adapter).
+
 ## Per-Iteration Injected Inputs
 
 `ForEachStepHandler` injects two additional inputs into each child step before executing it:

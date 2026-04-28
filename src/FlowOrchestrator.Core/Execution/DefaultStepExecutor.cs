@@ -1,9 +1,8 @@
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
-using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 
-namespace FlowOrchestrator.Hangfire;
+namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Default implementation of <see cref="IStepExecutor"/> that resolves the matching
@@ -11,7 +10,7 @@ namespace FlowOrchestrator.Hangfire;
 /// <c>@triggerHeaders()</c> input expressions against the current run's trigger data,
 /// and delegates execution to the registered handler.
 /// </summary>
-internal sealed class DefaultStepExecutor : IStepExecutor
+public sealed class DefaultStepExecutor : IStepExecutor
 {
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -19,6 +18,10 @@ internal sealed class DefaultStepExecutor : IStepExecutor
     private readonly IServiceProvider _serviceProvider;
     private readonly IOutputsRepository _outputsRepository;
 
+    /// <summary>
+    /// Constructs the executor with the registered step handler metadata, the service provider used
+    /// to resolve handler instances, and the outputs repository for persisting resolved step inputs.
+    /// </summary>
     public DefaultStepExecutor(
         IEnumerable<IStepHandlerMetadata> handlerMetadata,
         IServiceProvider serviceProvider,

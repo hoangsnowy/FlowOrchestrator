@@ -44,19 +44,193 @@
   --bs-code-color:          var(--fo-near-black);
 }
 
-/* ── Override Bootstrap dark-mode — always render warm light palette ── */
+/* ── Warm dark mode ── */
+/* DocFX modern theme sets data-bs-theme="dark" on <html> when the user picks dark.
+   We provide a warm, near-black palette that mirrors the dashboard's sidebar tone
+   rather than forcing the light palette. */
 [data-bs-theme="dark"] {
-  --bs-body-bg:             var(--fo-parchment);
-  --bs-body-color:          var(--fo-near-black);
-  --bs-secondary-bg:        var(--fo-ivory);
-  --bs-tertiary-bg:         var(--fo-warm-sand);
-  --bs-border-color:        var(--fo-border-cream);
-  --bs-link-color:          var(--fo-terracotta);
-  --bs-link-hover-color:    var(--fo-coral);
-  --bs-link-color-rgb:      201, 100, 66;
-  --bs-code-color:          var(--fo-near-black);
-  --bs-emphasis-color:      var(--fo-near-black);
-  --bs-heading-color:       var(--fo-near-black);
+  /* ── Bootstrap variable overrides ── */
+  --bs-body-bg:             #1c1b18;
+  --bs-body-color:          #eae7e0;
+  --bs-secondary-bg:        #252421;
+  --bs-tertiary-bg:         #2e2b27;
+  --bs-border-color:        #3d3a35;
+  --bs-link-color:          #e07558;
+  --bs-link-hover-color:    #f0937a;
+  --bs-link-color-rgb:      224, 117, 88;
+  --bs-code-color:          #eae7e0;
+  --bs-emphasis-color:      #eae7e0;
+  --bs-heading-color:       #eae7e0;
+
+  /* ── fo-token overrides (used by component rules below) ── */
+  --fo-ivory:               #252421;
+  --fo-parchment:           #1c1b18;
+  --fo-warm-sand:           #2e2b27;
+  --fo-border-cream:        #3d3a35;
+  --fo-border-warm:         #3d3a35;
+  --fo-near-black:          #eae7e0;
+  --fo-charcoal:            #d0cdc5;
+  --fo-olive:               #a8a49c;
+  --fo-stone:               #706e68;
+  --fo-warm-silver:         #5a5852;
+  --fo-terracotta:          #e07558;
+  --fo-coral:               #f0937a;
+  --fo-ring:                #4a4640;
+  --fo-focus:               #5aabf0;
+}
+
+[data-bs-theme="dark"] body {
+  background-color: #1c1b18 !important;
+  color: #eae7e0 !important;
+}
+
+[data-bs-theme="dark"] h1,
+[data-bs-theme="dark"] h2,
+[data-bs-theme="dark"] h3,
+[data-bs-theme="dark"] h4,
+[data-bs-theme="dark"] h5,
+[data-bs-theme="dark"] h6 {
+  color: #eae7e0;
+  border-bottom-color: #3d3a35;
+}
+
+[data-bs-theme="dark"] pre {
+  background-color: #17161399 !important;
+  border-color: #3d3a35;
+  color: #d0cdc5;
+}
+
+[data-bs-theme="dark"] :not(pre) > code {
+  background-color: #2e2b27;
+  border-color: #3d3a35;
+  color: #e07558;
+}
+
+/* Nav */
+[data-bs-theme="dark"] .navbar {
+  background-color: #1c1b18 !important;
+  border-bottom-color: #3d3a35;
+}
+[data-bs-theme="dark"] .navbar-brand { color: #d0cdc5 !important; }
+[data-bs-theme="dark"] .navbar-nav .nav-link { color: #a8a49c !important; }
+[data-bs-theme="dark"] .navbar-nav .nav-link:hover,
+[data-bs-theme="dark"] .navbar-nav .nav-link.active { color: #eae7e0 !important; }
+
+/* TOC / sidebar */
+[data-bs-theme="dark"] #toc,
+[data-bs-theme="dark"] .toc-panel,
+[data-bs-theme="dark"] .sidebar-panel {
+  background-color: #252421;
+  border-right-color: #3d3a35;
+}
+[data-bs-theme="dark"] .toc .nav-link { color: #a8a49c; }
+[data-bs-theme="dark"] .toc .nav-link:hover {
+  background-color: #2e2b27;
+  color: #eae7e0;
+}
+[data-bs-theme="dark"] .toc .nav-link.active,
+[data-bs-theme="dark"] .toc .nav-item.active > .nav-link {
+  color: #e07558;
+  background-color: rgba(224,117,88,.1);
+}
+
+/* Tables */
+[data-bs-theme="dark"] thead th {
+  background-color: #2e2b27;
+  color: #d0cdc5;
+  border-bottom-color: #3d3a35;
+}
+[data-bs-theme="dark"] tbody td {
+  border-bottom-color: #3d3a35;
+  color: #a8a49c;
+}
+[data-bs-theme="dark"] tbody tr:hover td { background-color: #252421; }
+
+/* Blockquote */
+[data-bs-theme="dark"] blockquote {
+  background-color: #252421;
+  border-left-color: #e07558;
+  color: #a8a49c;
+}
+
+/* Alert/callout boxes */
+[data-bs-theme="dark"] .alert,
+[data-bs-theme="dark"] .NOTE,
+[data-bs-theme="dark"] .TIP,
+[data-bs-theme="dark"] .WARNING,
+[data-bs-theme="dark"] .IMPORTANT,
+[data-bs-theme="dark"] .CAUTION { background-color: #252421; border-color: #3d3a35; }
+
+/* API reference sections */
+[data-bs-theme="dark"] .section {
+  background-color: #252421;
+  border-color: #3d3a35;
+}
+[data-bs-theme="dark"] .api { background-color: #1c1b18; }
+[data-bs-theme="dark"] .api h1 { border-bottom-color: #3d3a35; }
+[data-bs-theme="dark"] .signature {
+  background-color: #2e2b27;
+  border-color: #3d3a35;
+  color: #eae7e0;
+}
+
+/* Feature grid */
+[data-bs-theme="dark"] .feature-grid > * {
+  background-color: #252421;
+  border-color: #3d3a35;
+  box-shadow: 0 2px 12px rgba(0,0,0,.2);
+}
+[data-bs-theme="dark"] .feature-grid h3 { color: #eae7e0; }
+[data-bs-theme="dark"] .feature-grid p  { color: #a8a49c; }
+
+/* Footer */
+[data-bs-theme="dark"] footer {
+  background-color: #17161399;
+  border-top-color: #3d3a35;
+  color: #706e68;
+}
+[data-bs-theme="dark"] footer a { color: #e07558; }
+
+/* Breadcrumb */
+[data-bs-theme="dark"] .breadcrumb-item + .breadcrumb-item::before { color: #5a5852; }
+
+/* Scrollbars */
+[data-bs-theme="dark"] ::-webkit-scrollbar-track  { background: #1c1b18; }
+[data-bs-theme="dark"] ::-webkit-scrollbar-thumb  { background: #3d3a35; }
+[data-bs-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #4a4640; }
+
+/* Search input */
+[data-bs-theme="dark"] #search-input,
+[data-bs-theme="dark"] .search input[type="text"] {
+  background-color: #252421;
+  border-color: #3d3a35;
+  color: #eae7e0;
+}
+[data-bs-theme="dark"] #search-input:focus,
+[data-bs-theme="dark"] .search input[type="text"]:focus {
+  border-color: var(--fo-focus);
+  box-shadow: 0 0 0 3px rgba(90,171,240,.15);
+}
+
+/* Syntax highlight tokens (warm-adjusted for dark bg) */
+[data-bs-theme="dark"] .hljs-keyword  { color: #e07558; font-weight: 500; }
+[data-bs-theme="dark"] .hljs-string   { color: #8fc07a; }
+[data-bs-theme="dark"] .hljs-comment  { color: #706e68; font-style: italic; }
+[data-bs-theme="dark"] .hljs-type     { color: #a892e0; }
+[data-bs-theme="dark"] .hljs-number   { color: #d09070; }
+[data-bs-theme="dark"] .hljs-literal  { color: #e07558; }
+
+/* Buttons */
+[data-bs-theme="dark"] .btn-default,
+[data-bs-theme="dark"] .btn-secondary {
+  background-color: #2e2b27;
+  border-color: #3d3a35;
+  color: #d0cdc5 !important;
+  box-shadow: 0 0 0 1px #4a4640;
+}
+[data-bs-theme="dark"] .btn-default:hover {
+  background-color: #3d3a35;
+  color: #eae7e0 !important;
 }
 
 /* ── Base Typography ─────────────────────────────────────── */

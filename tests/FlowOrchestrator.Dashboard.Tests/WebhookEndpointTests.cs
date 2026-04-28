@@ -48,7 +48,7 @@ public sealed class WebhookEndpointTests : IDisposable
         var response = await _client.PostAsync($"/flows/api/webhook/{id}", null);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        await _server.FlowTrigger.Received(1).TriggerAsync(Arg.Any<ITriggerContext>());
+        await _server.FlowOrchestrator.Received(1).TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -52,7 +52,7 @@ builder.Services.AddOpenTelemetry()
 ### What is emitted
 
 **Traces:**
-- `flow.trigger` span — covers `TriggerAsync` from trigger receipt to first Hangfire enqueue
+- `flow.trigger` span — covers `TriggerAsync` from trigger receipt to first step dispatch via `IStepDispatcher`
 - `flow.step` span — covers the full execution of each step, including expression resolution and handler dispatch
 - `flow.step.poll` span — each individual poll attempt for polling steps
 

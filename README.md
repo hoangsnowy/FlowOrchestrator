@@ -2,7 +2,7 @@
 
 **[📖 Documentation](https://hoangsnowy.github.io/FlowOrchestrator/)** · **[NuGet](https://www.nuget.org/packages/FlowOrchestrator.Core)** · **[GitHub](https://github.com/hoangsnowy/FlowOrchestrator)**
 
-FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by **Hangfire**, persisted in **SQL Server**, **PostgreSQL**, or **in-memory**, and monitored via a **built-in dashboard**.
+FlowOrchestrator is an open-source .NET library for orchestrating **multi-step background workflows** — defined as code-first C# manifests, executed by a **pluggable runtime** (Hangfire or in-memory), persisted in **SQL Server**, **PostgreSQL**, or **in-memory**, and monitored via a **built-in dashboard**.
 
 **Features at a glance:**
 - Define flows as plain C# classes — no YAML, no JSON files to maintain
@@ -53,16 +53,18 @@ dotnet add package FlowOrchestrator.InMemory     # In-process, no database (test
 > **Required:** A storage backend must always be registered explicitly.
 > Calling `AddFlowOrchestrator()` without calling `UseSqlServer()`, `UsePostgreSql()`, or `UseInMemory()` throws `InvalidOperationException` at startup.
 
-Hangfire must also be installed separately:
+If using the **Hangfire runtime**, also install:
 
 ```bash
 dotnet add package Hangfire.Core
 dotnet add package Hangfire.AspNetCore
 
-# Match your FlowOrchestrator storage choice:
+# Match your storage choice:
 dotnet add package Hangfire.SqlServer   # SQL Server backend
-dotnet add package Hangfire.InMemory    # PostgreSQL or InMemory backends
+dotnet add package Hangfire.InMemory    # PostgreSQL or InMemory storage backends
 ```
+
+> **InMemory runtime** (`AddInMemoryRuntime()`) does **not** require Hangfire — steps are dispatched via an in-process `Channel<T>` and executed by a `BackgroundService`.
 
 ---
 
@@ -109,17 +111,16 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-### InMemory (development / testing)
+### InMemory (development / testing — no Hangfire required)
 
 ```csharp
-builder.Services.AddHangfire(c => c.UseInMemoryStorage()); // Hangfire.InMemory
-builder.Services.AddHangfireServer();
+// No Hangfire packages needed for InMemory mode.
+builder.Services.AddInMemoryRuntime();   // ← must come BEFORE AddFlowOrchestrator
 
 builder.Services.AddFlowOrchestrator(options =>
 {
-    options.UseInMemory();   // ← must be called explicitly; no implicit fallback
-    options.UseHangfire();
-    options.AddFlow<MyFlow>();
+    options.UseInMemory();               // in-process storage
+    options.AddFlow<MyFlow>();           // no UseHangfire()
 });
 ```
 
@@ -642,66 +643,72 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 ## 11. Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                       Your ASP.NET Core app                      │
-│  AddFlowOrchestrator()   AddStepHandler<T>()   MapFlowDashboard  │
-└──────┬──────────────────────────┬──────────────────────┬─────────┘
-       │                          │                      │
-┌──────▼──────┐     ┌─────────────▼────────┐  ┌─────────▼────────┐
-│ .Hangfire   │     │  Storage backend     │  │  .Dashboard      │
-│             │     │  (pick one)          │  │                  │
-│ Hangfire    │     │  .SqlServer          │  │  REST API        │
-│ FlowOrch.   │     │    SqlFlowStore      │  │  SPA at /flows   │
-│ DefaultStep │     │    SqlFlowRunStore   │  │  Basic Auth      │
-│ Executor    │     │    SqlOutputsRepo    │  │  Webhook endpt   │
-│ ForEach     │     │    SqlMigrator       │  └──────────────────┘
-│ Handler     │     │  .PostgreSQL         │
-│ FlowSync    │     │    PgFlowStore       │
-│ Hosted      │     │    PgFlowRunStore    │
-│ Service     │     │    PgOutputsRepo     │
-│ Recurring   │     │    PgMigrator        │
-│ TriggerSync │     │  .InMemory           │
-└──────┬──────┘     │    InMemoryFlowStore │
-       │ Hangfire   │    InMemoryFlowRun   │
-┌──────▼──────┐     │    Store             │
-│  Hangfire   │     │    InMemoryOutputs   │
-│  Job Queue  │     │    Repository        │
-└─────────────┘     └─────────────┬────────┘
-                                  │ IFlowStore
-                                  │ IFlowRunStore
-                                  │ IOutputsRepository
-                    ┌─────────────▼────────┐
-                    │      .Core           │
-                    │                      │
-                    │  IFlowDefinition     │
-                    │  IStepHandler<T>     │
-                    │  PollableStep        │
-                    │  Handler<T>          │
-                    │  IFlowExecutor       │
-                    │  IFlowStore          │
-                    │  IFlowRunStore       │
-                    │  IOutputsRepository  │
-                    └──────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                       Your ASP.NET Core app                        │
+│  AddFlowOrchestrator()   AddStepHandler<T>()   MapFlowDashboard()  │
+└──────┬──────────────────────────────┬────────────────────┬─────────┘
+       │                              │                    │
+┌──────▼──────────┐   ┌───────────────▼──────┐  ┌─────────▼────────┐
+│ Runtime adapter │   │  Storage backend     │  │  .Dashboard      │
+│  (pick one)     │   │  (pick one)          │  │                  │
+│                 │   │  .SqlServer          │  │  REST API        │
+│ .Hangfire       │   │    SqlFlowStore      │  │  SPA at /flows   │
+│  Hangfire       │   │    SqlFlowRunStore   │  │  Basic Auth      │
+│  StepDispatcher │   │    SqlOutputsRepo    │  │  Webhook endpt   │
+│  FlowSync       │   │    SqlMigrator       │  │  No Hangfire ref │
+│  RecurringSync  │   │  .PostgreSQL         │  └──────────────────┘
+│                 │   │    PgFlowStore …     │
+│ .InMemory       │   │  .InMemory           │
+│  InMemory       │   │    InMemoryFlowStore │
+│  StepDispatcher │   │    InMemoryFlowRun   │
+│  StepRunner     │   │    Store             │
+│  HostedService  │   │    InMemoryOutputs   │
+└──────┬──────────┘   └──────────┬───────────┘
+       │ IStepDispatcher         │ IFlowStore / IFlowRunStore
+       │                         │ IOutputsRepository
+┌──────▼─────────────────────────▼───────────┐
+│              .Core  (engine)                │
+│                                             │
+│  FlowOrchestratorEngine                     │
+│    TriggerAsync / RunStepAsync              │
+│    RetryStepAsync                           │
+│  IStepDispatcher (bridge to runtime)        │
+│  FlowGraphPlanner  (DAG eval)               │
+│  IStepExecutor / DefaultStepExecutor        │
+│  ForEachStepHandler / PollableStepHandler   │
+│  FlowRunRecoveryHostedService               │
+│  IFlowDefinition / IStepHandler<T>          │
+│  IFlowRunRuntimeStore / IFlowRunControlStore│
+└─────────────────────────────────────────────┘
 ```
 
 ### Layer overview
 
-**`FlowOrchestrator.Core`** — Framework-agnostic abstractions and execution engine.
-- `IFlowDefinition`, `FlowManifest`, `StepCollection`, `TriggerMetadata` — flow DSL
-- `IFlowExecutor` — step ordering: determines which step to run next given `runAfter` conditions
-- `IStepExecutor` / `IStepHandler<T>` — step execution and output capture
-- `PollableStepHandler<T>` — base class for polling-based steps
-- `IFlowStore` / `IFlowRunStore` / `IOutputsRepository` — storage abstractions
-
-**`FlowOrchestrator.Hangfire`** — Hangfire integration layer.
-- `HangfireFlowOrchestrator` — `TriggerAsync`, `RunStepAsync`, `RetryStepAsync`
+**`FlowOrchestrator.Core`** — Runtime-agnostic orchestration engine and all abstractions.
+- `FlowOrchestratorEngine` — `TriggerAsync`, `RunStepAsync`, `RetryStepAsync`; owns the full execution loop
+- `IStepDispatcher` — bridge between the engine and the runtime (Hangfire job queue, InMemory channel, or any future queue)
 - `FlowGraphPlanner` — DAG planning (fan-out/fan-in), readiness/blocked evaluation
-- `DefaultStepExecutor` — resolves `@triggerBody()` / `@triggerHeaders()` expressions, dispatches to `IStepHandler`
-- `ForEachStepHandler` — built-in handler for `LoopStepMetadata`
+- `IStepExecutor` / `DefaultStepExecutor` — resolves `@triggerBody()` / `@triggerHeaders()` expressions, dispatches to `IStepHandler`
+- `ForEachStepHandler` / `PollableStepHandler<T>` — built-in step handler base classes
+- `FlowRunRecoveryHostedService` — on startup: re-dispatches ready/waiting steps for all active runs; safe under concurrent recovery instances via atomic `TryRecordDispatchAsync`
+- `IFlowRunRuntimeStore` / `IFlowRunControlStore` — dispatch ledger, step claims, cancellation, timeout, idempotency key dedup
+- `IFlowStore` / `IFlowRunStore` / `IOutputsRepository` — core storage abstractions
+
+**`FlowOrchestrator.Hangfire`** — Thin Hangfire adapter (no engine logic).
+- `HangfireStepDispatcher` — implements `IStepDispatcher` via `IBackgroundJobClient.Enqueue/Schedule`
+- `HangfireFlowOrchestrator` — one-line shim: extracts `JobId` from `PerformContext`, delegates to `FlowOrchestratorEngine`
+- `HangfireRecurringTriggerDispatcher` / `HangfireRecurringTriggerInspector` — `IRecurringJobManager` adapters
 - `FlowSyncHostedService` — on startup: syncs flows to `IFlowStore`, registers Hangfire recurring jobs for Cron triggers
 - `RecurringTriggerSync` — keeps recurring jobs in sync when flows are enabled/disabled at runtime
 - Run control + idempotency + retention hosted services
 - **Fail-fast validation** — throws `InvalidOperationException` at startup if no storage backend is registered
+
+**`FlowOrchestrator.InMemory`** — Pure in-process runtime. No Hangfire, no database.
+- `InMemoryStepDispatcher` — `IStepDispatcher` backed by `Channel<InMemoryStepEnvelope>`
+- `InMemoryStepRunnerHostedService` — `BackgroundService` draining the channel with configurable concurrency
+- `InMemoryFlowRunStore` — implements `IFlowRunStore` + `IFlowRunRuntimeStore` + `IFlowRunControlStore` in memory
+- `NullRecurringTriggerDispatcher` / `Inspector` / `Sync` — no-op implementations for Cron trigger infrastructure
+- `AddInMemoryRuntime()` — DI extension; call **before** `AddFlowOrchestrator()` (uses `TryAddSingleton` to take priority)
 
 **`FlowOrchestrator.InMemory`** — Pure in-process storage backend (no database required).
 - `InMemoryFlowStore`, `InMemoryFlowRunStore`, `InMemoryOutputsRepository`
@@ -727,11 +734,14 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 ### Execution flow (step-by-step)
 
 1. A trigger fires (dashboard button, cron schedule, or webhook POST).
-2. `HangfireFlowOrchestrator.TriggerAsync` generates a `RunId`, applies idempotency/timeout configuration, saves trigger data and headers, computes DAG entry steps, and enqueues all runnable entries.
-3. Hangfire fires `RunStepAsync` → `DefaultStepExecutor` resolves input expressions, dispatches to the matching `IStepHandler`, and persists the output.
-4. `FlowGraphPlanner` evaluates run state: enqueue all newly ready steps, mark permanently blocked steps as `Skipped`, and prevent duplicate enqueue with step-claim idempotency.
-5. Run completes as `Succeeded`/`Failed`/`Cancelled`/`TimedOut` based on final step outcomes and run-control state.
-6. For polling steps → if `FetchAsync` returns a result where the condition is not yet met, `PollableStepHandler` returns `Pending` + `DelayNextStep`. Hangfire schedules the re-run after the configured interval.
+2. `FlowOrchestratorEngine.TriggerAsync` — checks idempotency key, generates a `RunId`, applies timeout/cancel configuration, saves trigger data and headers, computes DAG entry steps, and dispatches each via `IStepDispatcher` (idempotent: `TryRecordDispatchAsync` guards against double-enqueue).
+3. The runtime adapter (Hangfire job or InMemory channel consumer) calls `FlowOrchestratorEngine.RunStepAsync`.
+4. Engine calls `TryClaimStepAsync` first — if another worker already owns the step, exits silently (claim exclusion).
+5. `DefaultStepExecutor` resolves input expressions, dispatches to the matching `IStepHandler`, and persists the output.
+6. `FlowGraphPlanner` evaluates run state: dispatches all newly ready steps, marks permanently blocked steps as `Skipped`, and completes the run when no more steps are ready or waiting.
+7. Run completes as `Succeeded`/`Failed`/`Skipped`/`Cancelled`/`TimedOut` based on final leaf-step outcomes and run-control state.
+8. For polling steps → `PollableStepHandler` returns `Pending` + `DelayNextStep`. Engine calls `ReleaseDispatchAsync` then `IStepDispatcher.ScheduleStepAsync(delay)` to re-poll.
+9. On crash/restart → `FlowRunRecoveryHostedService` re-dispatches ready/waiting steps for all active runs (skips already-dispatched step keys).
 
 ### Swapping storage
 

@@ -169,7 +169,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
 .flow-detail-panel{display:none;flex-direction:column;flex:1;overflow:hidden}
 .flow-detail-panel.show{display:flex}
-.flow-list-panel{display:flex;flex-direction:column;flex:1}
+.flow-list-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .flow-list-panel.hide{display:none}
 .back-btn{font-size:12px;color:var(--accent);cursor:pointer;display:flex;align-items:center;gap:4px;padding:2px 0;font-weight:600}
 .back-btn:hover{text-decoration:underline}
@@ -305,6 +305,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 /* Live DAG in run detail */
 .run-dag-wrap{padding:16px 18px;overflow:auto}
 @keyframes dag-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .dag-node-running rect{animation:dag-pulse 1.5s infinite}
 .dag-node-selected rect.dag-node-bg{stroke:var(--accent) !important;stroke-width:2.5 !important;filter:drop-shadow(0 0 0 2px rgba(201,100,66,.25))}
 .dag-node-blocked rect.dag-node-bg{stroke-dasharray:4 3;fill-opacity:.6}
@@ -1186,17 +1187,24 @@ async function resolveFlowManifest(run) {
   return null;
 }
 
-function switchRunView(view) {
+async function switchRunView(view) {
   if (!['timeline','dag','gantt','events'].includes(view)) view = 'timeline';
   currentRunView = view;
   if (selectedRunId) setRunRoute(selectedRunId, selectedStepKey, view);
   const tabsEl = $('run-tabs');
   if (tabsEl) tabsEl.innerHTML = renderTabs(view);
   const bodyEl = $('run-tab-body');
-  if (bodyEl && currentRun) {
-    bodyEl.innerHTML = renderActiveTab(currentRun, currentRunManifest, view);
-    if (view === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
+  if (!bodyEl || !currentRun) return;
+  // Lazy-fetch manifest the first time DAG or Gantt is opened.
+  if ((view === 'dag' || view === 'gantt') && !currentRunManifest) {
+    bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:180px;gap:10px;color:var(--text-dim)">'
+      + '<div style="width:18px;height:18px;border:2px solid var(--border-dark);border-top-color:var(--accent);border-radius:50%;animation:spin .55s linear infinite;flex-shrink:0"></div>'
+      + '<span style="font-size:12px">Loading DAG…</span>'
+      + '</div>';
+    currentRunManifest = await resolveFlowManifest(currentRun);
   }
+  bodyEl.innerHTML = renderActiveTab(currentRun, currentRunManifest, view);
+  if (view === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
   if (view === 'events') openEventsDrawer(selectedRunId);
   else closeEventsDrawer();
 }
@@ -1655,6 +1663,13 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
   showRunsDetailView();
   const detailEl = $('runs-detail');
   const detailScrollTop = preserveScroll && detailEl ? detailEl.scrollTop : 0;
+  // Show immediate loading skeleton so the user sees feedback right away.
+  if (!preserveScroll && detailEl) {
+    detailEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:260px;gap:10px;color:var(--text-dim)">'
+      + '<div style="width:20px;height:20px;border:2px solid var(--border-dark);border-top-color:var(--accent);border-radius:50%;animation:spin .55s linear infinite;flex-shrink:0"></div>'
+      + '<span style="font-size:13px">Loading run…</span>'
+      + '</div>';
+  }
   try {
     const run = await fetchJSON(BASE+'/runs/'+id);
     currentRun = run;
