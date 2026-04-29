@@ -498,15 +498,17 @@ The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates an e-commerce
 dotnet run --project .\FlowOrchestrator.AppHost\FlowOrchestrator.AppHost.csproj
 ```
 
-Aspire spins up **SQL Server 2022** and **PostgreSQL 16** containers and launches the sample app **three times in parallel** — once per storage backend — each on a dedicated port:
+Aspire spins up **SQL Server 2022** and **PostgreSQL 16** containers and launches the sample app **three times in parallel** — each combining a different storage and runtime — on dedicated ports:
 
-| Aspire resource | Backend | Hangfire storage | Flows available |
-|---|---|---|---|
-| `flow-sqlserver` | SQL Server | `Hangfire.SqlServer` | Hello, Order, Shipment, Payment |
-| `flow-postgresql` | PostgreSQL | `Hangfire.InMemory` | Hello, Shipment, Payment |
-| `flow-inmemory` | InMemory | `Hangfire.InMemory` | Hello, Shipment, Payment |
+| Aspire resource | Storage | Runtime | Cron driver | `/hangfire` | Flows available |
+|---|---|---|---|---|---|
+| `flow-sqlserver` (5101) | SQL Server | Hangfire | `Hangfire.SqlServer` recurring jobs | ✓ | Hello, Order, Shipment, Payment |
+| `flow-postgresql` (5102) | PostgreSQL | Hangfire | `Hangfire.InMemory` recurring jobs | ✓ | Hello, Shipment, Payment |
+| `flow-inmemory` (5103) | InMemory | **InMemory** | `PeriodicTimer` + Cronos | ✗ (404) | Hello, Shipment, Payment |
 
-Open the **Aspire dashboard** at `http://localhost:18888` to see all three resources and their URLs. Each instance exposes `/flows` and `/hangfire` independently — trigger the same flow across different backends and compare run histories side-by-side.
+Open the **Aspire dashboard** at `http://localhost:18888` to see all three resources and their URLs. Each instance exposes `/flows` independently — trigger the same flow across different combos and compare run histories side-by-side.
+
+> The third instance (`flow-inmemory`) uses **zero external dependencies**: no Hangfire, no database. Step dispatch goes through an in-process `Channel<T>`; cron triggers fire from a `PeriodicTimer`. All run state is lost when the process exits — intended for local dev and integration testing.
 
 > `OrderFulfillmentFlow` requires the `Orders` business table and is only registered on the SQL Server instance.
 
