@@ -78,14 +78,17 @@ FlowOrchestrator.Hangfire      Thin adapter — wires Hangfire as the IStepDispa
   HangfireStepDispatcher       IStepDispatcher → IBackgroundJobClient.Enqueue/Schedule
   HangfireFlowOrchestrator     Shim: extracts JobId from PerformContext, calls FlowOrchestratorEngine
   HangfireRecurringTriggerDispatcher / Inspector  ← IRecurringJobManager adapter
-  FlowSyncHostedService        On startup: syncs flows to IFlowStore, registers cron recurring jobs
-  RecurringTriggerSync         Keeps recurring jobs in sync when flows are enabled/disabled
+  FlowSyncHostedService        On startup: syncs flows to IFlowStore, then delegates cron
+                               registration to IRecurringTriggerSync (runtime-agnostic)
+  RecurringTriggerSync         Hangfire impl of IRecurringTriggerSync (uses IRecurringJobManager)
 
-FlowOrchestrator.InMemory      Pure in-process runtime — no Hangfire, no database
+FlowOrchestrator.InMemory      Pure in-process runtime + storage — no Hangfire, no database
   InMemoryStepDispatcher       Channel<T>-backed dispatcher
   InMemoryStepRunnerHostedService  BackgroundService draining the channel
   InMemoryFlowRunStore         Full IFlowRunStore + IFlowRunRuntimeStore + IFlowRunControlStore
-  NullRecurring*               No-op IRecurringTriggerDispatcher / Inspector / Sync
+  PeriodicTimerRecurringTriggerDispatcher
+                               Cronos-backed dispatcher + inspector + sync; fires cron jobs
+                               from a 1 s PeriodicTimer (parity with Hangfire RecurringJob)
 
 FlowOrchestrator.SqlServer     Dapper-based SQL Server persistence (no EF Core)
   SqlFlowStore / SqlFlowRunStore / SqlOutputsRepository
@@ -130,10 +133,10 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 
 // ── InMemory runtime (dev / testing — no Hangfire needed) ──────────
-builder.Services.AddInMemoryRuntime();     // ← call BEFORE AddFlowOrchestrator
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();                 // storage
+    options.UseInMemoryRuntime();          // Channel<T> dispatcher + PeriodicTimer cron
     options.AddFlow<MyFlow>();             // no UseHangfire()
 });
 ```

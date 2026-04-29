@@ -25,7 +25,12 @@ Any JSON body you include becomes the trigger payload, accessible in steps via `
 
 ### Cron
 
-Registers a recurring job with the active runtime adapter that fires the flow on a cron schedule. When using the Hangfire runtime, this maps to a Hangfire `RecurringJob`.
+Registers a recurring job with the active runtime adapter that fires the flow on a cron schedule.
+
+- **Hangfire runtime** — maps to a Hangfire `RecurringJob` driven by `IRecurringJobManager`.
+- **InMemory runtime** — driven by an in-process `PeriodicTimer` (1 s tick) using [Cronos](https://github.com/HangfireIO/Cronos) for expression parsing. No external scheduler needed.
+
+Both runtimes implement the same `IRecurringTriggerDispatcher` / `IRecurringTriggerSync` abstractions, so cron behaviour (overrides, pause/resume, dashboard controls) is identical across them.
 
 ```csharp
 ["nightly"] = new TriggerMetadata
