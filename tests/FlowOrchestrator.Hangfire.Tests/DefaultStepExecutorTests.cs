@@ -15,6 +15,7 @@ public class DefaultStepExecutorTests
 {
     private readonly IServiceProvider _serviceProvider = Substitute.For<IServiceProvider>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
+    private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
 
     private static IFlowDefinition CreateFlow(StepCollection steps)
     {
@@ -26,7 +27,7 @@ public class DefaultStepExecutorTests
 
     private DefaultStepExecutor CreateExecutor(params IStepHandlerMetadata[] handlers)
     {
-        return new DefaultStepExecutor(handlers, _serviceProvider, _outputsRepo);
+        return new DefaultStepExecutor(handlers, _serviceProvider, _outputsRepo, _runStore);
     }
 
     [Fact]
@@ -357,7 +358,7 @@ public class DefaultStepExecutorTests
         };
 
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
-        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo, _runStore);
 
         // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
@@ -397,7 +398,7 @@ public class DefaultStepExecutorTests
         };
 
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
-        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo, _runStore);
 
         // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
@@ -437,7 +438,7 @@ public class DefaultStepExecutorTests
         };
 
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
-        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo, _runStore);
 
         // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
@@ -478,7 +479,7 @@ public class DefaultStepExecutorTests
         };
 
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
-        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
+        var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo, _runStore);
 
         // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);

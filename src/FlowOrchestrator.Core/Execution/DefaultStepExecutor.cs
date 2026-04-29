@@ -1,14 +1,15 @@
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Expressions;
 using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Default implementation of <see cref="IStepExecutor"/> that resolves the matching
-/// <see cref="IStepHandlerMetadata"/> by type name, evaluates <c>@triggerBody()</c> and
-/// <c>@triggerHeaders()</c> input expressions against the current run's trigger data,
-/// and delegates execution to the registered handler.
+/// <see cref="IStepHandlerMetadata"/> by type name, evaluates <c>@triggerBody()</c>,
+/// <c>@triggerHeaders()</c>, and <c>@steps()</c> input expressions, and delegates
+/// execution to the registered handler.
 /// </summary>
 public sealed class DefaultStepExecutor : IStepExecutor
 {
@@ -17,25 +18,28 @@ public sealed class DefaultStepExecutor : IStepExecutor
     private readonly IEnumerable<IStepHandlerMetadata> _handlerMetadata;
     private readonly IServiceProvider _serviceProvider;
     private readonly IOutputsRepository _outputsRepository;
+    private readonly IFlowRunStore _runStore;
 
     /// <summary>
-    /// Constructs the executor with the registered step handler metadata, the service provider used
-    /// to resolve handler instances, and the outputs repository for persisting resolved step inputs.
+    /// Constructs the executor with the registered step handler metadata, service provider,
+    /// outputs repository, and run store.
     /// </summary>
     public DefaultStepExecutor(
         IEnumerable<IStepHandlerMetadata> handlerMetadata,
         IServiceProvider serviceProvider,
-        IOutputsRepository outputsRepository)
+        IOutputsRepository outputsRepository,
+        IFlowRunStore runStore)
     {
         _handlerMetadata = handlerMetadata;
         _serviceProvider = serviceProvider;
         _outputsRepository = outputsRepository;
+        _runStore = runStore;
     }
 
     /// <summary>
-    /// Resolves inputs, saves them to the output store, then invokes the handler registered for
-    /// <paramref name="step"/>'s type. Returns <see cref="StepStatus.Skipped"/> if the step metadata
-    /// or its handler cannot be found.
+    /// Resolves inputs (trigger and step-output expressions), saves them to the output store,
+    /// then invokes the handler registered for <paramref name="step"/>'s type.
+    /// Returns <see cref="StepStatus.Skipped"/> if the step metadata or its handler cannot be found.
     /// </summary>
     /// <param name="context">The execution context for the current run.</param>
     /// <param name="flow">The flow definition that owns this step.</param>
@@ -53,7 +57,13 @@ public sealed class DefaultStepExecutor : IStepExecutor
             };
         }
 
+        // Pass 1 (sync): resolve @triggerBody() and @triggerHeaders() expressions.
         step.Inputs = ResolveInputs(step.Inputs, context.TriggerData, context.TriggerHeaders);
+
+        // Pass 2 (async): resolve @steps('key').output|status|error expressions.
+        var resolver = new StepOutputResolver(_outputsRepository, _runStore, context.RunId, flow.Manifest.Steps);
+        step.Inputs = await ResolveStepExpressionsAsync(step.Inputs, resolver).ConfigureAwait(false);
+
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
 
         var handler = _handlerMetadata.FirstOrDefault(h => string.Equals(h.Type, metadata.Type, StringComparison.OrdinalIgnoreCase));
@@ -70,18 +80,16 @@ public sealed class DefaultStepExecutor : IStepExecutor
         return await handler.ExecuteAsync(_serviceProvider, context, flow, step).ConfigureAwait(false);
     }
 
+    // ── Trigger expression resolution (synchronous) ───────────────────────────
+
     private static IDictionary<string, object?> ResolveInputs(IDictionary<string, object?> inputs, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)
     {
         if (inputs.Count == 0)
-        {
             return inputs;
-        }
 
         var resolved = new Dictionary<string, object?>(inputs.Count);
         foreach (var (key, value) in inputs)
-        {
             resolved[key] = ResolveValue(value, triggerData, triggerHeaders);
-        }
 
         return resolved;
     }
@@ -112,9 +120,7 @@ public sealed class DefaultStepExecutor : IStepExecutor
     private static object? ResolveJsonElement(JsonElement element, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)
     {
         if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-        {
             return null;
-        }
 
         if (element.ValueKind == JsonValueKind.String)
         {
@@ -135,8 +141,7 @@ public sealed class DefaultStepExecutor : IStepExecutor
 
         if (element.ValueKind == JsonValueKind.Array)
         {
-            var arrayValue = JsonSerializer.Deserialize<List<object?>>(element.GetRawText(), _jsonOptions)
-                             ?? [];
+            var arrayValue = JsonSerializer.Deserialize<List<object?>>(element.GetRawText(), _jsonOptions) ?? [];
             return arrayValue.Select(item => ResolveValue(item, triggerData, triggerHeaders)).ToArray();
         }
 
@@ -163,36 +168,26 @@ public sealed class DefaultStepExecutor : IStepExecutor
     {
         resolved = null;
         if (string.IsNullOrWhiteSpace(expression))
-        {
             return false;
-        }
 
         const string prefix = "@triggerBody()";
         var trimmed = expression.Trim();
         if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
             return false;
-        }
 
         var remainder = trimmed[prefix.Length..].Trim();
         if (string.IsNullOrEmpty(remainder))
         {
-            resolved = triggerData is null ? null : ToJsonElement(triggerData);
+            resolved = triggerData is null ? null : ExpressionPathHelper.ToJsonElement(triggerData, _jsonOptions);
             return true;
         }
 
         if (remainder.StartsWith("?.", StringComparison.Ordinal))
-        {
             remainder = remainder[2..];
-        }
         else if (remainder.StartsWith(".", StringComparison.Ordinal))
-        {
             remainder = remainder[1..];
-        }
         else
-        {
             return false;
-        }
 
         if (string.IsNullOrWhiteSpace(remainder) || triggerData is null)
         {
@@ -200,8 +195,8 @@ public sealed class DefaultStepExecutor : IStepExecutor
             return true;
         }
 
-        var payload = ToJsonElement(triggerData);
-        if (TryResolvePath(payload, remainder, out var target))
+        var payload = ExpressionPathHelper.ToJsonElement(triggerData, _jsonOptions);
+        if (ExpressionPathHelper.TryResolvePath(payload, remainder, out var target))
         {
             resolved = target;
             return true;
@@ -225,11 +220,11 @@ public sealed class DefaultStepExecutor : IStepExecutor
         var remainder = trimmed[prefix.Length..].Trim();
         if (string.IsNullOrEmpty(remainder))
         {
-            resolved = headers is null ? null : ToJsonElement(headers);
+            resolved = headers is null ? null : ExpressionPathHelper.ToJsonElement(headers, _jsonOptions);
             return true;
         }
 
-        // Support ['Header-Name'] and ["Header-Name"] notation for headers with dashes
+        // Support ['Header-Name'] and ["Header-Name"] notation.
         string? headerName = null;
         if (remainder.StartsWith("['", StringComparison.Ordinal) && remainder.EndsWith("']", StringComparison.Ordinal))
             headerName = remainder[2..^2];
@@ -245,43 +240,53 @@ public sealed class DefaultStepExecutor : IStepExecutor
         return false;
     }
 
-    private static JsonElement ToJsonElement(object value)
-    {
-        if (value is JsonElement element)
-        {
-            return element.ValueKind == JsonValueKind.Undefined
-                ? JsonSerializer.SerializeToElement<object?>(null, _jsonOptions)
-                : element.Clone();
-        }
+    // ── Step-output expression resolution (async) ─────────────────────────────
 
-        return JsonSerializer.SerializeToElement(value, value.GetType(), _jsonOptions);
+    private static async ValueTask<IDictionary<string, object?>> ResolveStepExpressionsAsync(
+        IDictionary<string, object?> inputs,
+        StepOutputResolver resolver)
+    {
+        if (inputs.Count == 0)
+            return inputs;
+
+        var resolved = new Dictionary<string, object?>(inputs.Count);
+        foreach (var (key, value) in inputs)
+            resolved[key] = await ResolveStepValueAsync(value, resolver).ConfigureAwait(false);
+
+        return resolved;
     }
 
-    private static bool TryResolvePath(JsonElement payload, string path, out JsonElement target)
+    private static async ValueTask<object?> ResolveStepValueAsync(object? value, StepOutputResolver resolver)
     {
-        target = payload;
-        var normalizedPath = path.Replace("[", ".", StringComparison.Ordinal).Replace("]", string.Empty, StringComparison.Ordinal);
-
-        foreach (var segment in normalizedPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        switch (value)
         {
-            if (target.ValueKind == JsonValueKind.Object && target.TryGetProperty(segment, out var objectValue))
+            case null:
+                return null;
+
+            case string s when StepOutputResolver.IsStepExpression(s):
+                return await resolver.ResolveAsync(s).ConfigureAwait(false);
+
+            case JsonElement { ValueKind: JsonValueKind.String } element:
             {
-                target = objectValue;
-                continue;
+                var str = element.GetString();
+                if (StepOutputResolver.IsStepExpression(str))
+                    return await resolver.ResolveAsync(str!).ConfigureAwait(false);
+                return value;
             }
 
-            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index))
+            case IDictionary<string, object?> dict:
+                return await ResolveStepExpressionsAsync(dict, resolver).ConfigureAwait(false);
+
+            case IEnumerable<object?> sequence:
             {
-                if (index >= 0 && index < target.GetArrayLength())
-                {
-                    target = target[index];
-                    continue;
-                }
+                var items = new List<object?>();
+                foreach (var item in sequence)
+                    items.Add(await ResolveStepValueAsync(item, resolver).ConfigureAwait(false));
+                return items.ToArray();
             }
 
-            return false;
+            default:
+                return value;
         }
-
-        return true;
     }
 }

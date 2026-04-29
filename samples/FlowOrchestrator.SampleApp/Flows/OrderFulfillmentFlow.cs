@@ -68,17 +68,17 @@ public sealed class OrderFulfillmentFlow : IFlowDefinition
             },
 
             // Step 3: Save the WMS confirmation to the ProcessedOrders table.
-            // ordersStepKey / apiResultStepKey tell SaveResultStep which upstream
-            // step outputs to read via IOutputsRepository.GetStepOutputAsync.
+            // @steps() expressions wire the upstream outputs directly into the handler's
+            // input properties — no IOutputsRepository injection needed in SaveResultStep.
             ["save_result"] = new StepMetadata
             {
                 Type = "SaveResult",
                 RunAfter = new RunAfterCollection { ["submit_to_wms"] = [StepStatus.Succeeded] },
                 Inputs = new Dictionary<string, object?>
                 {
-                    ["table"]           = "ProcessedOrders",
-                    ["ordersStepKey"]   = "fetch_orders",
-                    ["apiResultStepKey"] = "submit_to_wms"
+                    ["table"]         = "ProcessedOrders",
+                    ["fetchedOrders"] = "@steps('fetch_orders').output",
+                    ["apiResult"]     = "@steps('submit_to_wms').output"
                 }
             }
         }

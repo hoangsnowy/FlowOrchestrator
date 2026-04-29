@@ -226,3 +226,12 @@ public string? CronOverride { get; set; }
 - **`IExecutionContext`** — thread-scoped context (via `IExecutionContextAccessor`) carrying RunId, trigger data, and principal; resolved from DI during step execution.
 - **Expression resolution happens at step-execution time**, not at definition time, so trigger payload is available dynamically.
 - Tests use **xUnit + NSubstitute** with plain xUnit `Assert.*` and the AAA pattern (`// Arrange` / `// Act` / `// Assert`).
+
+## Roadmap
+
+The library has a 12-week roadmap split into 3 phases. Implementation plans
+live in `.claude/plans/`. See `.claude/plans/README.md` for the full index
+and status tracker.
+
+When working on a roadmap item, read the corresponding plan file first
+and follow its `Done criteria` checklist.

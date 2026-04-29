@@ -86,7 +86,7 @@ new StepMetadata
 |---|---|
 | `Type` | Name used to look up the `IStepHandler` registered with `AddStepHandler<T>("Name")` |
 | `RunAfter` | Zero or more step keys → required statuses. Empty = entry step (runs immediately after trigger). |
-| `Inputs` | Key-value pairs passed to the handler. Values may be literals or `@` expressions. |
+| `Inputs` | Key-value pairs passed to the handler. Values may be literals or `@` expressions — see [Expressions](expressions.md). |
 
 ### LoopStepMetadata
 
