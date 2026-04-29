@@ -1,6 +1,5 @@
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
-using FluentAssertions;
 
 namespace FlowOrchestrator.InMemory.Tests;
 
@@ -20,40 +19,50 @@ public class InMemoryFlowStoreTests
     [Fact]
     public async Task SaveAsync_AndGetByIdAsync_ReturnsRecord()
     {
+        // Arrange
         var record = CreateRecord();
         await _sut.SaveAsync(record);
 
+        // Act
         var result = await _sut.GetByIdAsync(record.Id);
 
-        result.Should().NotBeNull();
-        result!.Name.Should().Be("TestFlow");
-        result.UpdatedAt.Should().NotBe(default);
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("TestFlow", result!.Name);
+        Assert.NotEqual(default, result.UpdatedAt);
     }
 
     [Fact]
     public async Task SaveAsync_SetsCreatedAtOnFirstSave()
     {
+        // Arrange
         var record = CreateRecord();
 
+        // Act
         await _sut.SaveAsync(record);
 
-        record.CreatedAt.Should().NotBe(default);
+        // Assert
+        Assert.NotEqual(default, record.CreatedAt);
     }
 
     [Fact]
     public async Task GetAllAsync_ReturnsAllRecords()
     {
+        // Arrange
         await _sut.SaveAsync(CreateRecord());
         await _sut.SaveAsync(CreateRecord());
 
+        // Act
         var all = await _sut.GetAllAsync();
 
-        all.Should().HaveCount(2);
+        // Assert
+        Assert.Equal(2, all.Count);
     }
 
     [Fact]
     public async Task GetAllAsync_ReturnsOrderedByName()
     {
+        // Arrange
         var r1 = CreateRecord();
         r1.Name = "Bravo";
         var r2 = CreateRecord();
@@ -62,56 +71,75 @@ public class InMemoryFlowStoreTests
         await _sut.SaveAsync(r1);
         await _sut.SaveAsync(r2);
 
+        // Act
         var all = await _sut.GetAllAsync();
-        all[0].Name.Should().Be("Alpha");
-        all[1].Name.Should().Be("Bravo");
+
+        // Assert
+        Assert.Equal("Alpha", all[0].Name);
+        Assert.Equal("Bravo", all[1].Name);
     }
 
     [Fact]
     public async Task DeleteAsync_RemovesRecord()
     {
+        // Arrange
         var record = CreateRecord();
         await _sut.SaveAsync(record);
 
+        // Act
         await _sut.DeleteAsync(record.Id);
 
+        // Assert
         var result = await _sut.GetByIdAsync(record.Id);
-        result.Should().BeNull();
+        Assert.Null(result);
     }
 
     [Fact]
     public async Task DeleteAsync_NonExistentId_DoesNotThrow()
     {
-        var act = () => _sut.DeleteAsync(Guid.NewGuid());
+        // Arrange
 
-        await act.Should().NotThrowAsync();
+        // Act
+        var ex = await Record.ExceptionAsync(() => _sut.DeleteAsync(Guid.NewGuid()));
+
+        // Assert
+        Assert.Null(ex);
     }
 
     [Fact]
     public async Task SetEnabledAsync_UpdatesIsEnabled()
     {
+        // Arrange
         var record = CreateRecord();
         record.IsEnabled = true;
         await _sut.SaveAsync(record);
 
+        // Act
         var result = await _sut.SetEnabledAsync(record.Id, false);
 
-        result.IsEnabled.Should().BeFalse();
+        // Assert
+        Assert.False(result.IsEnabled);
     }
 
     [Fact]
     public async Task SetEnabledAsync_NonExistentId_ThrowsKeyNotFound()
     {
+        // Arrange
         var act = () => _sut.SetEnabledAsync(Guid.NewGuid(), true);
 
-        await act.Should().ThrowAsync<KeyNotFoundException>();
+        // Act + Assert
+        await Assert.ThrowsAsync<KeyNotFoundException>(act);
     }
 
     [Fact]
     public async Task GetByIdAsync_NonExistentId_ReturnsNull()
     {
+        // Arrange
+
+        // Act
         var result = await _sut.GetByIdAsync(Guid.NewGuid());
 
-        result.Should().BeNull();
+        // Assert
+        Assert.Null(result);
     }
 }

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
-using FluentAssertions;
 
 namespace FlowOrchestrator.Core.Tests.Abstractions;
 
@@ -9,21 +8,25 @@ public class TriggerMetadataTests
     [Fact]
     public void TryGetCronExpression_WithValidCronString_ReturnsTrue()
     {
+        // Arrange
         var trigger = new TriggerMetadata
         {
             Type = TriggerType.Cron,
             Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
         };
 
+        // Act
         var found = trigger.TryGetCronExpression(out var cronExpression);
 
-        found.Should().BeTrue();
-        cronExpression.Should().Be("*/10 * * * *");
+        // Assert
+        Assert.True(found);
+        Assert.Equal("*/10 * * * *", cronExpression);
     }
 
     [Fact]
     public void TryGetCronExpression_WithJsonElementString_ReturnsTrue()
     {
+        // Arrange
         var trigger = new TriggerMetadata
         {
             Type = TriggerType.Cron,
@@ -33,36 +36,44 @@ public class TriggerMetadataTests
             }
         };
 
+        // Act
         var found = trigger.TryGetCronExpression(out var cronExpression);
 
-        found.Should().BeTrue();
-        cronExpression.Should().Be("*/5 * * * *");
+        // Assert
+        Assert.True(found);
+        Assert.Equal("*/5 * * * *", cronExpression);
     }
 
     [Fact]
     public void TryGetCronExpression_WithMissingInput_ReturnsFalse()
     {
+        // Arrange
         var trigger = new TriggerMetadata
         {
             Type = TriggerType.Cron
         };
 
+        // Act
         var found = trigger.TryGetCronExpression(out _);
 
-        found.Should().BeFalse();
+        // Assert
+        Assert.False(found);
     }
 
     [Fact]
     public void TryGetCronExpression_ForNonCronTrigger_ReturnsFalse()
     {
+        // Arrange
         var trigger = new TriggerMetadata
         {
             Type = TriggerType.Manual,
             Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
         };
 
+        // Act
         var found = trigger.TryGetCronExpression(out _);
 
-        found.Should().BeFalse();
+        // Assert
+        Assert.False(found);
     }
 }

@@ -12,7 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Testing
 
-- Tests live in `./tests/`. Framework: xUnit + FluentAssertions + NSubstitute.
+- Tests live in `./tests/`. Framework: **xUnit + NSubstitute**. Use plain xUnit `Assert.*` — do **not** add FluentAssertions, Shouldly, or any fluent-assertion library.
+- **AAA pattern** is mandatory: every `[Fact]`/`[Theory]` body must contain three comment blocks, in order — `// Arrange`, `// Act`, `// Assert`. Shared fixture setup in fields/constructor is allowed and does not count as the body's Arrange (a body block may be empty if there is genuinely nothing to do).
 - After any code change: run `dotnet test` and confirm the test count and pass rate.
 - New tests go in the matching test project (e.g., changes in `FlowOrchestrator.Core` → tests in `FlowOrchestrator.Core.Tests`).
 
@@ -221,4 +222,4 @@ public string? CronOverride { get; set; }
 - **`ValueTask` throughout** — minimizes allocations on the synchronous fast path.
 - **`IExecutionContext`** — thread-scoped context (via `IExecutionContextAccessor`) carrying RunId, trigger data, and principal; resolved from DI during step execution.
 - **Expression resolution happens at step-execution time**, not at definition time, so trigger payload is available dynamically.
-- Tests use **xUnit + FluentAssertions + NSubstitute**.
+- Tests use **xUnit + NSubstitute** with plain xUnit `Assert.*` and the AAA pattern (`// Arrange` / `// Act` / `// Assert`).

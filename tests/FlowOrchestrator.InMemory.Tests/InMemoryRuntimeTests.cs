@@ -7,7 +7,6 @@ using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using NSubstitute;
-using FluentAssertions;
 
 namespace FlowOrchestrator.InMemory.Tests;
 
@@ -17,8 +16,6 @@ namespace FlowOrchestrator.InMemory.Tests;
 /// </summary>
 public sealed class InMemoryRuntimeTests
 {
-    // ── Helpers ──────────────────────────────────────────────────────────
-
     private static IExecutionContext MakeContext(Guid runId) =>
         new Core.Execution.ExecutionContext { RunId = runId };
 
@@ -33,77 +30,84 @@ public sealed class InMemoryRuntimeTests
     private static IStepInstance MakeStep(string key = "step1") =>
         new StepInstance(key, "TestStep");
 
-    // ── Dispatcher tests ─────────────────────────────────────────────────
-
     [Fact]
     public async Task EnqueueStepAsync_WritesEnvelopeToChannel()
     {
+        // Arrange
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var dispatcher = new InMemoryStepDispatcher(channel.Writer);
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
         var step = MakeStep();
 
+        // Act
         var jobId = await dispatcher.EnqueueStepAsync(ctx, flow, step);
 
-        channel.Reader.TryRead(out var envelope).Should().BeTrue("one item should be in the channel");
-        envelope.Should().NotBeNull();
-        envelope!.Context.RunId.Should().Be(ctx.RunId);
-        envelope.Step.Key.Should().Be(step.Key);
-        jobId.Should().NotBeNullOrEmpty("dispatcher returns a non-null opaque id");
+        // Assert
+        Assert.True(channel.Reader.TryRead(out var envelope));
+        Assert.NotNull(envelope);
+        Assert.Equal(ctx.RunId, envelope!.Context.RunId);
+        Assert.Equal(step.Key, envelope.Step.Key);
+        Assert.False(string.IsNullOrEmpty(jobId));
     }
 
     [Fact]
     public async Task EnqueueStepAsync_CalledTwice_WritesTwoEnvelopes()
     {
+        // Arrange
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var dispatcher = new InMemoryStepDispatcher(channel.Writer);
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
 
+        // Act
         await dispatcher.EnqueueStepAsync(ctx, flow, MakeStep("a"));
         await dispatcher.EnqueueStepAsync(ctx, flow, MakeStep("b"));
 
-        channel.Reader.Count.Should().Be(2);
+        // Assert
+        Assert.Equal(2, channel.Reader.Count);
     }
 
     [Fact]
     public async Task ScheduleStepAsync_WithZeroDelay_WritesEnvelopePromptly()
     {
+        // Arrange
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var dispatcher = new InMemoryStepDispatcher(channel.Writer);
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
         var step = MakeStep();
 
+        // Act
         var jobId = await dispatcher.ScheduleStepAsync(ctx, flow, step, TimeSpan.Zero);
-
-        // Allow the fire-and-forget task a moment to complete.
         await Task.Delay(100);
 
-        channel.Reader.TryRead(out var envelope).Should().BeTrue();
-        envelope!.EnvelopeId.Should().Be(jobId);
+        // Assert
+        Assert.True(channel.Reader.TryRead(out var envelope));
+        Assert.Equal(jobId, envelope!.EnvelopeId);
     }
 
     [Fact]
     public async Task ScheduleStepAsync_ReturnsDistinctIdFromEnqueue()
     {
+        // Arrange
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var dispatcher = new InMemoryStepDispatcher(channel.Writer);
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
 
+        // Act
         var enqueueId = await dispatcher.EnqueueStepAsync(ctx, flow, MakeStep("a"));
         var scheduleId = await dispatcher.ScheduleStepAsync(ctx, flow, MakeStep("b"), TimeSpan.Zero);
 
-        enqueueId.Should().NotBe(scheduleId, "each dispatch produces a unique id");
+        // Assert
+        Assert.NotEqual(scheduleId, enqueueId);
     }
-
-    // ── Runner tests ─────────────────────────────────────────────────────
 
     [Fact]
     public async Task Runner_WhenEnvelopeWritten_CallsEngineRunStepAsync()
     {
+        // Arrange
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var engine = Substitute.For<IFlowOrchestrator>();
         engine.RunStepAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
@@ -119,17 +123,17 @@ public sealed class InMemoryRuntimeTests
 
         var cts = new CancellationTokenSource();
         var runner = sp.GetServices<IHostedService>().OfType<InMemoryStepRunnerHostedService>().Single();
-        var runTask = runner.StartAsync(cts.Token);
-
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
         var step = MakeStep();
-        await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, step, "e1"));
 
-        // Give the runner a moment to process.
+        // Act
+        var runTask = runner.StartAsync(cts.Token);
+        await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, step, "e1"));
         await Task.Delay(200);
         cts.Cancel();
 
+        // Assert
         await engine.Received(1).RunStepAsync(
             Arg.Is<IExecutionContext>(c => c.RunId == ctx.RunId),
             Arg.Any<IFlowDefinition>(),
@@ -140,6 +144,7 @@ public sealed class InMemoryRuntimeTests
     [Fact]
     public async Task Runner_EngineThrows_ContinuesProcessingNextEnvelope()
     {
+        // Arrange
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var engine = Substitute.For<IFlowOrchestrator>();
         var callCount = 0;
@@ -162,96 +167,114 @@ public sealed class InMemoryRuntimeTests
 
         var cts = new CancellationTokenSource();
         var runner = sp.GetServices<IHostedService>().OfType<InMemoryStepRunnerHostedService>().Single();
-        await runner.StartAsync(cts.Token);
-
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
+
+        // Act
+        await runner.StartAsync(cts.Token);
         await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, MakeStep("failing"), "e1"));
         await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, MakeStep("ok"), "e2"));
-
         await Task.Delay(300);
         cts.Cancel();
 
-        // Both envelopes were attempted — runner survived the first failure.
+        // Assert
         await engine.Received(2).RunStepAsync(
             Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
             Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
     }
 
-    // ── UseInMemoryRuntime() DI integration ──────────────────────────────
-
     [Fact]
     public void UseInMemoryRuntime_RegistersStepDispatcher()
     {
+        // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
-        // Minimal stub so AddFlowOrchestrator's IFlowStore validation passes.
         services.AddSingleton(Substitute.For<IFlowStore>());
-
         services.AddFlowOrchestrator(opts =>
         {
             opts.UseInMemory();
             opts.UseInMemoryRuntime();
         });
 
+        // Act
         using var sp = services.BuildServiceProvider();
         var dispatcher = sp.GetRequiredService<IStepDispatcher>();
-        dispatcher.Should().BeOfType<InMemoryStepDispatcher>();
+
+        // Assert
+        Assert.IsType<InMemoryStepDispatcher>(dispatcher);
     }
 
     [Fact]
     public void UseInMemoryRuntime_RegistersNullRecurringDispatcher()
     {
+        // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(Substitute.For<IFlowStore>());
-
         services.AddFlowOrchestrator(opts =>
         {
             opts.UseInMemory();
             opts.UseInMemoryRuntime();
         });
 
+        // Act
         using var sp = services.BuildServiceProvider();
         var dispatcher = sp.GetRequiredService<IRecurringTriggerDispatcher>();
-        dispatcher.Should().BeOfType<NullRecurringTriggerDispatcher>();
+
+        // Assert
+        Assert.IsType<NullRecurringTriggerDispatcher>(dispatcher);
     }
 
     [Fact]
     public void UseInMemoryRuntime_RegistersNullRecurringInspector()
     {
+        // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(Substitute.For<IFlowStore>());
-
         services.AddFlowOrchestrator(opts =>
         {
             opts.UseInMemory();
             opts.UseInMemoryRuntime();
         });
 
+        // Act
         using var sp = services.BuildServiceProvider();
         var inspector = sp.GetRequiredService<IRecurringTriggerInspector>();
-        inspector.Should().BeOfType<NullRecurringTriggerInspector>();
+
+        // Assert
+        Assert.IsType<NullRecurringTriggerInspector>(inspector);
     }
 
     [Fact]
     public async Task NullRecurringDispatcher_AllOperationsAreNoOps()
     {
+        // Arrange
         var dispatcher = new NullRecurringTriggerDispatcher();
 
-        // None of these should throw.
-        dispatcher.RegisterOrUpdate("job1", Guid.NewGuid(), "schedule", "0 * * * *");
-        dispatcher.Remove("job1");
-        dispatcher.TriggerOnce("job1");
-        await dispatcher.EnqueueTriggerAsync(Guid.NewGuid(), "schedule");
+        // Act
+        var ex = await Record.ExceptionAsync(async () =>
+        {
+            dispatcher.RegisterOrUpdate("job1", Guid.NewGuid(), "schedule", "0 * * * *");
+            dispatcher.Remove("job1");
+            dispatcher.TriggerOnce("job1");
+            await dispatcher.EnqueueTriggerAsync(Guid.NewGuid(), "schedule");
+        });
+
+        // Assert
+        Assert.Null(ex);
     }
 
     [Fact]
     public async Task NullRecurringInspector_ReturnsEmptyList()
     {
+        // Arrange
         var inspector = new NullRecurringTriggerInspector();
+
+        // Act
         var jobs = await inspector.GetJobsAsync();
-        jobs.Should().BeEmpty();
+
+        // Assert
+        Assert.Empty(jobs);
     }
 }

@@ -5,7 +5,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FluentAssertions;
+using FlowOrchestrator.Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 
@@ -32,20 +32,24 @@ public class DefaultStepExecutorTests
     [Fact]
     public async Task ExecuteAsync_StepMetadataNotFound_ReturnsSkipped()
     {
+        // Arrange
         var flow = CreateFlow(new StepCollection());
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("missing_step", "SomeType") { RunId = ctx.RunId };
         var executor = CreateExecutor();
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Skipped);
-        result.FailedReason.Should().Contain("not found");
+        // Assert
+        Assert.Equal(StepStatus.Skipped, result.Status);
+        Assert.Contains("not found", result.FailedReason ?? string.Empty);
     }
 
     [Fact]
     public async Task ExecuteAsync_NoHandlerRegistered_ReturnsSkipped()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "UnknownType" }
@@ -55,15 +59,18 @@ public class DefaultStepExecutorTests
         var step = new StepInstance("step1", "UnknownType") { RunId = ctx.RunId };
         var executor = CreateExecutor();
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Skipped);
-        result.FailedReason.Should().Contain("No handler");
+        // Assert
+        Assert.Equal(StepStatus.Skipped, result.Status);
+        Assert.Contains("No handler", result.FailedReason ?? string.Empty);
     }
 
     [Fact]
     public async Task ExecuteAsync_HandlerFound_DelegatesToHandler()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -79,16 +86,19 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Succeeded);
-        result.Key.Should().Be("step1");
+        // Assert
+        Assert.Equal(StepStatus.Succeeded, result.Status);
+        Assert.Equal("step1", result.Key);
         await handlerMeta.Received(1).ExecuteAsync(_serviceProvider, ctx, flow, step);
     }
 
     [Fact]
     public async Task ExecuteAsync_SavesStepInput()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -104,14 +114,17 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         await executor.ExecuteAsync(ctx, flow, step);
 
+        // Assert
         await _outputsRepo.Received(1).SaveStepInputAsync(ctx, flow, step);
     }
 
     [Fact]
     public async Task ExecuteAsync_HandlerTypeMatch_IsCaseInsensitive()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "logmessage" }
@@ -127,14 +140,17 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Succeeded);
+        // Assert
+        Assert.Equal(StepStatus.Succeeded, result.Status);
     }
 
     [Fact]
     public async Task ExecuteAsync_ResolvesStandaloneTriggerBodyExpression()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -155,18 +171,20 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         await executor.ExecuteAsync(ctx, flow, step);
 
-        step.Inputs.Should().ContainKey("payload");
-        step.Inputs["payload"].Should().BeOfType<JsonElement>();
-        var payload = (JsonElement)step.Inputs["payload"]!;
-        payload.ValueKind.Should().Be(JsonValueKind.Object);
-        payload.GetProperty("orderId").GetString().Should().Be("ORD-1");
+        // Assert
+        Assert.True(step.Inputs.ContainsKey("payload"));
+        var payload = Assert.IsType<JsonElement>(step.Inputs["payload"]);
+        Assert.Equal(JsonValueKind.Object, payload.ValueKind);
+        Assert.Equal("ORD-1", payload.GetProperty("orderId").GetString());
     }
 
     [Fact]
     public async Task ExecuteAsync_ResolvesStandaloneTriggerBodyExpression_FromJsonElementString()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -190,16 +208,18 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         await executor.ExecuteAsync(ctx, flow, step);
 
-        step.Inputs["payload"].Should().BeOfType<JsonElement>();
-        var payload = (JsonElement)step.Inputs["payload"]!;
-        payload.GetProperty("orderId").GetString().Should().Be("ORD-2");
+        // Assert
+        var payload = Assert.IsType<JsonElement>(step.Inputs["payload"]);
+        Assert.Equal("ORD-2", payload.GetProperty("orderId").GetString());
     }
 
     [Fact]
     public async Task ExecuteAsync_ResolvesTriggerHeadersExpression_ForSpecificHeader()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -226,14 +246,17 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         await executor.ExecuteAsync(ctx, flow, step);
 
-        step.Inputs["requestId"].Should().Be("req-42");
+        // Assert
+        Assert.Equal("req-42", step.Inputs["requestId"]);
     }
 
     [Fact]
     public async Task ExecuteAsync_ResolvesTriggerHeadersExpression_ForAllHeaders()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -261,19 +284,21 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         await executor.ExecuteAsync(ctx, flow, step);
 
-        step.Inputs["headers"].Should().BeOfType<JsonElement>();
-        var headersElement = (JsonElement)step.Inputs["headers"]!;
+        // Assert
+        var headersElement = Assert.IsType<JsonElement>(step.Inputs["headers"]);
         var headerMap = headersElement.EnumerateObject()
             .ToDictionary(p => p.Name, p => p.Value.GetString(), StringComparer.OrdinalIgnoreCase);
-        headerMap["X-Correlation-Id"].Should().Be("corr-1");
-        headerMap["Content-Type"].Should().Be("application/json");
+        Assert.Equal("corr-1", headerMap["X-Correlation-Id"]);
+        Assert.Equal("application/json", headerMap["Content-Type"]);
     }
 
     [Fact]
     public async Task ExecuteAsync_InputContainsUndefinedJsonElement_ResolvesToNull()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "LogMessage" }
@@ -296,15 +321,18 @@ public class DefaultStepExecutorTests
 
         var executor = CreateExecutor(handlerMeta);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Succeeded);
-        step.Inputs["payload"].Should().BeNull();
+        // Assert
+        Assert.Equal(StepStatus.Succeeded, result.Status);
+        Assert.Null(step.Inputs["payload"]);
     }
 
     [Fact]
     public async Task ExecuteAsync_GenericHandler_CoercesStringValuesToTypedProperties()
     {
+        // Arrange
         CoercionTypedHandler.Reset();
 
         var services = new ServiceCollection();
@@ -331,18 +359,21 @@ public class DefaultStepExecutorTests
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
         var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Succeeded);
-        CoercionTypedHandler.LastInput.Should().NotBeNull();
-        CoercionTypedHandler.LastInput!.PollEnabled.Should().BeTrue();
-        CoercionTypedHandler.LastInput.PollIntervalSeconds.Should().Be(5);
-        CoercionTypedHandler.LastInput.PollAttempt.Should().Be(2);
+        // Assert
+        Assert.Equal(StepStatus.Succeeded, result.Status);
+        Assert.NotNull(CoercionTypedHandler.LastInput);
+        Assert.True(CoercionTypedHandler.LastInput!.PollEnabled);
+        Assert.Equal(5, CoercionTypedHandler.LastInput.PollIntervalSeconds);
+        Assert.Equal(2, CoercionTypedHandler.LastInput.PollAttempt);
     }
 
     [Fact]
     public async Task ExecuteAsync_GenericHandler_SyncsMutatedInputsBackToStep()
     {
+        // Arrange
         var services = new ServiceCollection();
         services.AddStepHandler<PollStateMutatingHandler>("PollStateMutatingHandler");
         var serviceProvider = services.BuildServiceProvider();
@@ -368,18 +399,21 @@ public class DefaultStepExecutorTests
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
         var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Pending);
-        step.Inputs.Should().ContainKey("__pollAttempt");
-        step.Inputs.Should().ContainKey("__pollStartedAtUtc");
-        ReadInt(step.Inputs["__pollAttempt"]).Should().Be(5);
-        ReadString(step.Inputs["__pollStartedAtUtc"]).Should().Be(PollStateMutatingHandler.NextStartedAtUtc);
+        // Assert
+        Assert.Equal(StepStatus.Pending, result.Status);
+        Assert.True(step.Inputs.ContainsKey("__pollAttempt"));
+        Assert.True(step.Inputs.ContainsKey("__pollStartedAtUtc"));
+        Assert.Equal(5, ReadInt(step.Inputs["__pollAttempt"]));
+        Assert.Equal(PollStateMutatingHandler.NextStartedAtUtc, ReadString(step.Inputs["__pollStartedAtUtc"]));
     }
 
     [Fact]
     public async Task ExecuteAsync_GenericHandler_BindsStrongTypedInput()
     {
+        // Arrange
         GenericTypedHandler.Reset();
 
         var services = new ServiceCollection();
@@ -405,19 +439,22 @@ public class DefaultStepExecutorTests
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
         var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Succeeded);
-        result.Result.Should().Be("JOB-123:4");
-        GenericTypedHandler.ExecutionCount.Should().Be(1);
-        GenericTypedHandler.LastInput.Should().NotBeNull();
-        GenericTypedHandler.LastInput!.JobId.Should().Be("JOB-123");
-        GenericTypedHandler.LastInput.Attempt.Should().Be(4);
+        // Assert
+        Assert.Equal(StepStatus.Succeeded, result.Status);
+        Assert.Equal("JOB-123:4", result.Result);
+        Assert.Equal(1, GenericTypedHandler.ExecutionCount);
+        Assert.NotNull(GenericTypedHandler.LastInput);
+        Assert.Equal("JOB-123", GenericTypedHandler.LastInput!.JobId);
+        Assert.Equal(4, GenericTypedHandler.LastInput.Attempt);
     }
 
     [Fact]
     public async Task ExecuteAsync_GenericHandler_InputDeserializeFailure_ReturnsFailedResult()
     {
+        // Arrange
         GenericTypedHandler.Reset();
 
         var services = new ServiceCollection();
@@ -443,12 +480,14 @@ public class DefaultStepExecutorTests
         var metadata = serviceProvider.GetServices<IStepHandlerMetadata>();
         var executor = new DefaultStepExecutor(metadata, serviceProvider, _outputsRepo);
 
+        // Act
         var result = await executor.ExecuteAsync(ctx, flow, step);
 
-        result.Status.Should().Be(StepStatus.Failed);
-        result.FailedReason.Should().Contain("Failed to deserialize inputs");
-        result.FailedReason.Should().Contain("step1");
-        GenericTypedHandler.ExecutionCount.Should().Be(0);
+        // Assert
+        Assert.Equal(StepStatus.Failed, result.Status);
+        Assert.Contains("Failed to deserialize inputs", result.FailedReason ?? string.Empty);
+        Assert.Contains("step1", result.FailedReason ?? string.Empty);
+        Assert.Equal(0, GenericTypedHandler.ExecutionCount);
     }
 
     private sealed class GenericTypedHandler : IStepHandler<GenericTypedInput>

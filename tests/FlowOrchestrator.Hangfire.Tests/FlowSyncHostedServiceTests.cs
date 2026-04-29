@@ -3,7 +3,6 @@ using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
-using FluentAssertions;
 using Hangfire;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,6 +25,7 @@ public class FlowSyncHostedServiceTests
     [Fact]
     public async Task StartAsync_SyncsFlowsToStore()
     {
+        // Arrange
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(Guid.NewGuid());
         flow.Version.Returns("1.0");
@@ -46,8 +46,10 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         await sut.StartAsync(CancellationToken.None);
 
+        // Assert
         await store.Received(1).SaveAsync(Arg.Is<FlowDefinitionRecord>(r =>
             r.Id == flow.Id && r.Version == "1.0" && r.ManifestJson != null));
     }
@@ -55,6 +57,7 @@ public class FlowSyncHostedServiceTests
     [Fact]
     public async Task StartAsync_UpdatesExistingFlow()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -83,8 +86,10 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         await sut.StartAsync(CancellationToken.None);
 
+        // Assert
         await store.Received(1).SaveAsync(Arg.Is<FlowDefinitionRecord>(r =>
             r.Id == flowId && r.Version == "2.0"));
     }
@@ -92,6 +97,7 @@ public class FlowSyncHostedServiceTests
     [Fact]
     public async Task StartAsync_FlowSyncFailure_Throws()
     {
+        // Arrange
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(Guid.NewGuid());
         flow.Manifest.Returns(new FlowManifest());
@@ -104,26 +110,33 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         var act = () => sut.StartAsync(CancellationToken.None);
 
-        await act.Should().ThrowAsync<Exception>();
+        // Assert
+        var ex = await Record.ExceptionAsync(act);
+        Assert.NotNull(ex);
     }
 
     [Fact]
     public async Task StopAsync_CompletesImmediately()
     {
+        // Arrange
         var repository = Substitute.For<IFlowRepository>();
         var store = Substitute.For<IFlowStore>();
         var sut = CreateSut(repository, store);
 
-        var act = () => sut.StopAsync(CancellationToken.None);
+        // Act
+        var ex = await Record.ExceptionAsync(() => sut.StopAsync(CancellationToken.None));
 
-        await act.Should().NotThrowAsync();
+        // Assert
+        Assert.Null(ex);
     }
 
     [Fact]
     public async Task StartAsync_RegistersRecurringJobForCronTrigger()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -154,8 +167,10 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         await sut.StartAsync(CancellationToken.None);
 
+        // Assert
         _recurringJobManager.Received(1).AddOrUpdate(
             $"flow-{flowId}-scheduled",
             Arg.Any<global::Hangfire.Common.Job>(),
@@ -166,6 +181,7 @@ public class FlowSyncHostedServiceTests
     [Fact]
     public async Task StartAsync_RemovesRecurringJobForDisabledFlow()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -196,14 +212,17 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         await sut.StartAsync(CancellationToken.None);
 
+        // Assert
         _recurringJobManager.Received(1).RemoveIfExists($"flow-{flowId}-scheduled");
     }
 
     [Fact]
     public async Task StartAsync_RespectsPausedScheduleState()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -233,8 +252,10 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         await sut.StartAsync(CancellationToken.None);
 
+        // Assert
         _recurringJobManager.Received(1).RemoveIfExists($"flow-{flowId}-scheduled");
         _recurringJobManager.DidNotReceive().AddOrUpdate(
             Arg.Any<string>(),
@@ -246,6 +267,7 @@ public class FlowSyncHostedServiceTests
     [Fact]
     public async Task StartAsync_UsesCronOverride_WhenPresent()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -280,8 +302,10 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         await sut.StartAsync(CancellationToken.None);
 
+        // Assert
         _recurringJobManager.Received(1).AddOrUpdate(
             $"flow-{flowId}-scheduled",
             Arg.Any<global::Hangfire.Common.Job>(),
@@ -292,6 +316,7 @@ public class FlowSyncHostedServiceTests
     [Fact]
     public async Task StartAsync_InvalidGraph_Throws()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -312,8 +337,10 @@ public class FlowSyncHostedServiceTests
 
         var sut = CreateSut(repository, store);
 
+        // Act
         var act = () => sut.StartAsync(CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        // Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(act);
     }
 }

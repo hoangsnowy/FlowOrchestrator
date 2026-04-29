@@ -1,7 +1,6 @@
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FluentAssertions;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -10,22 +9,26 @@ public class PollableStepHandlerTests
     [Fact]
     public async Task ExecuteAsync_PollDisabled_ReturnsSucceeded()
     {
+        // Arrange
         var input = new TestPollableInput { PollEnabled = false };
         var step = new TestStepInstance("step1", "Pollable", input);
         var handler = new TestPollableHandler(() => (ParseJson("{\"status\":\"processing\"}"), true));
 
+        // Act
         var result = await handler.ExecuteAsync(CreateContext(), CreateFlow(), step);
-        var typedResult = result.Should().BeOfType<StepResult<JsonElement>>().Subject;
 
-        typedResult.Status.Should().Be(StepStatus.Succeeded);
-        typedResult.DelayNextStep.Should().BeNull();
-        input.PollAttempt.Should().BeNull();
-        input.PollStartedAtUtc.Should().BeNull();
+        // Assert
+        var typedResult = Assert.IsType<StepResult<JsonElement>>(result);
+        Assert.Equal(StepStatus.Succeeded, typedResult.Status);
+        Assert.Null(typedResult.DelayNextStep);
+        Assert.Null(input.PollAttempt);
+        Assert.Null(input.PollStartedAtUtc);
     }
 
     [Fact]
     public async Task ExecuteAsync_ConditionNotMatched_ReturnsPending()
     {
+        // Arrange
         var input = new TestPollableInput
         {
             PollEnabled = true,
@@ -37,18 +40,21 @@ public class PollableStepHandlerTests
         var step = new TestStepInstance("step1", "Pollable", input);
         var handler = new TestPollableHandler(() => (ParseJson("{\"status\":\"processing\"}"), true));
 
+        // Act
         var result = await handler.ExecuteAsync(CreateContext(), CreateFlow(), step);
-        var typedResult = result.Should().BeOfType<StepResult<JsonElement>>().Subject;
 
-        typedResult.Status.Should().Be(StepStatus.Pending);
-        typedResult.DelayNextStep.Should().Be(TimeSpan.FromSeconds(7));
-        input.PollAttempt.Should().Be(1);
-        input.PollStartedAtUtc.Should().NotBeNullOrWhiteSpace();
+        // Assert
+        var typedResult = Assert.IsType<StepResult<JsonElement>>(result);
+        Assert.Equal(StepStatus.Pending, typedResult.Status);
+        Assert.Equal(TimeSpan.FromSeconds(7), typedResult.DelayNextStep);
+        Assert.Equal(1, input.PollAttempt);
+        Assert.False(string.IsNullOrWhiteSpace(input.PollStartedAtUtc));
     }
 
     [Fact]
     public async Task ExecuteAsync_MatchAfterMinimumAttempts_ReturnsSucceededAndResetsState()
     {
+        // Arrange
         var input = new TestPollableInput
         {
             PollEnabled = true,
@@ -61,24 +67,26 @@ public class PollableStepHandlerTests
         var step = new TestStepInstance("step1", "Pollable", input);
         var handler = new TestPollableHandler(() => (ParseJson("{\"status\":\"completed\"}"), true));
 
+        // Act
         var first = await handler.ExecuteAsync(CreateContext(), CreateFlow(), step);
-        var firstResult = first.Should().BeOfType<StepResult<JsonElement>>().Subject;
-        firstResult.Status.Should().Be(StepStatus.Pending);
-        firstResult.DelayNextStep.Should().Be(TimeSpan.FromSeconds(3));
-        input.PollAttempt.Should().Be(1);
-        input.PollStartedAtUtc.Should().NotBeNullOrWhiteSpace();
-
         var second = await handler.ExecuteAsync(CreateContext(), CreateFlow(), step);
-        var secondResult = second.Should().BeOfType<StepResult<JsonElement>>().Subject;
-        secondResult.Status.Should().Be(StepStatus.Succeeded);
-        secondResult.DelayNextStep.Should().BeNull();
-        input.PollAttempt.Should().BeNull();
-        input.PollStartedAtUtc.Should().BeNull();
+
+        // Assert
+        var firstResult = Assert.IsType<StepResult<JsonElement>>(first);
+        Assert.Equal(StepStatus.Pending, firstResult.Status);
+        Assert.Equal(TimeSpan.FromSeconds(3), firstResult.DelayNextStep);
+
+        var secondResult = Assert.IsType<StepResult<JsonElement>>(second);
+        Assert.Equal(StepStatus.Succeeded, secondResult.Status);
+        Assert.Null(secondResult.DelayNextStep);
+        Assert.Null(input.PollAttempt);
+        Assert.Null(input.PollStartedAtUtc);
     }
 
     [Fact]
     public async Task ExecuteAsync_TimeoutExceeded_ReturnsFailedAndResetsState()
     {
+        // Arrange
         var input = new TestPollableInput
         {
             PollEnabled = true,
@@ -92,18 +100,21 @@ public class PollableStepHandlerTests
         var step = new TestStepInstance("step1", "Pollable", input);
         var handler = new TestPollableHandler(() => (ParseJson("{\"status\":\"processing\"}"), true));
 
+        // Act
         var result = await handler.ExecuteAsync(CreateContext(), CreateFlow(), step);
-        var typedResult = result.Should().BeOfType<StepResult<JsonElement>>().Subject;
 
-        typedResult.Status.Should().Be(StepStatus.Failed);
-        typedResult.FailedReason.Should().Contain("Polling timed out after 10 seconds.");
-        input.PollAttempt.Should().BeNull();
-        input.PollStartedAtUtc.Should().BeNull();
+        // Assert
+        var typedResult = Assert.IsType<StepResult<JsonElement>>(result);
+        Assert.Equal(StepStatus.Failed, typedResult.Status);
+        Assert.Contains("Polling timed out after 10 seconds.", typedResult.FailedReason ?? string.Empty);
+        Assert.Null(input.PollAttempt);
+        Assert.Null(input.PollStartedAtUtc);
     }
 
     [Fact]
     public async Task ExecuteAsync_NonJsonWithConditionPath_ReturnsFailedAndResetsState()
     {
+        // Arrange
         var input = new TestPollableInput
         {
             PollEnabled = true,
@@ -114,13 +125,15 @@ public class PollableStepHandlerTests
         var step = new TestStepInstance("step1", "Pollable", input);
         var handler = new TestPollableHandler(() => (JsonSerializer.SerializeToElement("plain-response"), false));
 
+        // Act
         var result = await handler.ExecuteAsync(CreateContext(), CreateFlow(), step);
-        var typedResult = result.Should().BeOfType<StepResult<JsonElement>>().Subject;
 
-        typedResult.Status.Should().Be(StepStatus.Failed);
-        typedResult.FailedReason.Should().Contain("requires a JSON response body");
-        input.PollAttempt.Should().BeNull();
-        input.PollStartedAtUtc.Should().BeNull();
+        // Assert
+        var typedResult = Assert.IsType<StepResult<JsonElement>>(result);
+        Assert.Equal(StepStatus.Failed, typedResult.Status);
+        Assert.Contains("requires a JSON response body", typedResult.FailedReason ?? string.Empty);
+        Assert.Null(input.PollAttempt);
+        Assert.Null(input.PollStartedAtUtc);
     }
 
     private static IExecutionContext CreateContext()

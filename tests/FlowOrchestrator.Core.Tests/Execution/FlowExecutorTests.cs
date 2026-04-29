@@ -1,7 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FluentAssertions;
 using NSubstitute;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
@@ -38,6 +37,7 @@ public class FlowExecutorTests
     [Fact]
     public async Task TriggerFlow_FindsEntryStep_WithNoRunAfter()
     {
+        // Arrange
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["X-Correlation-Id"] = "corr-1"
@@ -54,15 +54,17 @@ public class FlowExecutorTests
         var flow = CreateFlow(steps);
         var ctx = CreateTriggerContext(flow, headers);
 
+        // Act
         var result = await _sut.TriggerFlow(ctx);
 
-        result.Key.Should().Be("step1");
-        result.Type.Should().Be("LogMessage");
-        result.RunId.Should().Be(ctx.RunId);
-        ctx.TriggerData.Should().BeSameAs(ctx.Trigger.Data);
-        ctx.TriggerHeaders.Should().BeSameAs(headers);
-        result.TriggerData.Should().BeSameAs(ctx.TriggerData);
-        result.TriggerHeaders.Should().BeSameAs(headers);
+        // Assert
+        Assert.Equal("step1", result.Key);
+        Assert.Equal("LogMessage", result.Type);
+        Assert.Equal(ctx.RunId, result.RunId);
+        Assert.Same(ctx.Trigger.Data, ctx.TriggerData);
+        Assert.Same(headers, ctx.TriggerHeaders);
+        Assert.Same(ctx.TriggerData, result.TriggerData);
+        Assert.Same(headers, result.TriggerHeaders);
         await _outputsRepo.Received(1).SaveTriggerDataAsync(ctx, flow, ctx.Trigger);
         await _outputsRepo.Received(1).SaveTriggerHeadersAsync(ctx, flow, ctx.Trigger);
     }
@@ -70,6 +72,7 @@ public class FlowExecutorTests
     [Fact]
     public async Task TriggerFlow_ThrowsWhenNoEntryStep()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata
@@ -81,15 +84,18 @@ public class FlowExecutorTests
         var flow = CreateFlow(steps);
         var ctx = CreateTriggerContext(flow);
 
+        // Act
         var act = () => _sut.TriggerFlow(ctx).AsTask();
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*entry step*");
+        // Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        Assert.Contains("entry step", ex.Message);
     }
 
     [Fact]
     public async Task GetNextStep_ReturnsNextStepWhenRunAfterMatches()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "A" },
@@ -110,19 +116,22 @@ public class FlowExecutorTests
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var result = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
 
+        // Act
         var next = await _sut.GetNextStep(ctx, flow, currentStep, result);
 
-        next.Should().NotBeNull();
-        next!.Key.Should().Be("step2");
-        next.Type.Should().Be("B");
-        next.RunId.Should().Be(ctx.RunId);
-        next.TriggerData.Should().BeSameAs(triggerData);
-        next.TriggerHeaders.Should().BeSameAs(triggerHeaders);
+        // Assert
+        Assert.NotNull(next);
+        Assert.Equal("step2", next!.Key);
+        Assert.Equal("B", next.Type);
+        Assert.Equal(ctx.RunId, next.RunId);
+        Assert.Same(triggerData, next.TriggerData);
+        Assert.Same(triggerHeaders, next.TriggerHeaders);
     }
 
     [Fact]
     public async Task GetNextStep_ReturnsNullWhenNoSuccessor()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "A" }
@@ -132,14 +141,17 @@ public class FlowExecutorTests
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var result = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
 
+        // Act
         var next = await _sut.GetNextStep(ctx, flow, currentStep, result);
 
-        next.Should().BeNull();
+        // Assert
+        Assert.Null(next);
     }
 
     [Fact]
     public async Task GetNextStep_ReturnsNullWhenStatusNotAllowed()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata { Type = "A" },
@@ -154,14 +166,17 @@ public class FlowExecutorTests
         var currentStep = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var result = new StepResult { Key = "step1", Status = StepStatus.Failed };
 
+        // Act
         var next = await _sut.GetNextStep(ctx, flow, currentStep, result);
 
-        next.Should().BeNull();
+        // Assert
+        Assert.Null(next);
     }
 
     [Fact]
     public async Task TriggerFlow_CopiesInputsToStepInstance()
     {
+        // Arrange
         var steps = new StepCollection
         {
             ["step1"] = new StepMetadata
@@ -173,8 +188,10 @@ public class FlowExecutorTests
         var flow = CreateFlow(steps);
         var ctx = CreateTriggerContext(flow);
 
+        // Act
         var instance = await _sut.TriggerFlow(ctx);
 
-        instance.Inputs.Should().ContainKey("sql");
+        // Assert
+        Assert.True(instance.Inputs.ContainsKey("sql"));
     }
 }

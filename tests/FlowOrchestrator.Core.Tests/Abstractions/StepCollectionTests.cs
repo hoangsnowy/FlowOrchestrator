@@ -1,5 +1,4 @@
 using FlowOrchestrator.Core.Abstractions;
-using FluentAssertions;
 
 namespace FlowOrchestrator.Core.Tests.Abstractions;
 
@@ -8,23 +7,34 @@ public class StepCollectionTests
     [Fact]
     public void FindStep_DirectKey_ReturnsStep()
     {
+        // Arrange
         var step = new StepMetadata { Type = "LogMessage" };
         var collection = new StepCollection { ["step1"] = step };
 
-        collection.FindStep("step1").Should().BeSameAs(step);
+        // Act
+        var result = collection.FindStep("step1");
+
+        // Assert
+        Assert.Same(step, result);
     }
 
     [Fact]
     public void FindStep_MissingKey_ReturnsNull()
     {
+        // Arrange
         var collection = new StepCollection { ["step1"] = new StepMetadata { Type = "A" } };
 
-        collection.FindStep("missing").Should().BeNull();
+        // Act
+        var result = collection.FindStep("missing");
+
+        // Assert
+        Assert.Null(result);
     }
 
     [Fact]
     public void FindStep_NestedKey_ReturnsChildStep()
     {
+        // Arrange
         var child = new StepMetadata { Type = "ChildType" };
         var parent = new LoopStepMetadata
         {
@@ -33,21 +43,31 @@ public class StepCollectionTests
         };
         var collection = new StepCollection { ["parent"] = parent };
 
-        collection.FindStep("parent.child").Should().BeSameAs(child);
+        // Act
+        var result = collection.FindStep("parent.child");
+
+        // Assert
+        Assert.Same(child, result);
     }
 
     [Fact]
     public void FindStep_NestedKey_ParentNotScoped_ReturnsNull()
     {
+        // Arrange
         var parent = new StepMetadata { Type = "Simple" };
         var collection = new StepCollection { ["parent"] = parent };
 
-        collection.FindStep("parent.child").Should().BeNull();
+        // Act
+        var result = collection.FindStep("parent.child");
+
+        // Assert
+        Assert.Null(result);
     }
 
     [Fact]
     public void FindStep_DeeplyNestedKey_ReturnsCorrectStep()
     {
+        // Arrange
         var grandchild = new StepMetadata { Type = "GrandchildType" };
         var child = new LoopStepMetadata
         {
@@ -61,12 +81,17 @@ public class StepCollectionTests
         };
         var collection = new StepCollection { ["parent"] = parent };
 
-        collection.FindStep("parent.child.grandchild").Should().BeSameAs(grandchild);
+        // Act
+        var result = collection.FindStep("parent.child.grandchild");
+
+        // Assert
+        Assert.Same(grandchild, result);
     }
 
     [Fact]
     public void FindStep_RuntimeLoopKey_WithIndex_ReturnsChildStep()
     {
+        // Arrange
         var child = new StepMetadata { Type = "ChildType" };
         var parent = new LoopStepMetadata
         {
@@ -75,12 +100,17 @@ public class StepCollectionTests
         };
         var collection = new StepCollection { ["parent"] = parent };
 
-        collection.FindStep("parent.0.child").Should().BeSameAs(child);
+        // Act
+        var result = collection.FindStep("parent.0.child");
+
+        // Assert
+        Assert.Same(child, result);
     }
 
     [Fact]
     public void FindNextStep_WithRunAfter_ReturnsSuccessor()
     {
+        // Arrange
         var step1 = new StepMetadata { Type = "A" };
         var step2 = new StepMetadata
         {
@@ -93,21 +123,31 @@ public class StepCollectionTests
             ["step2"] = step2
         };
 
-        collection.FindNextStep("step1").Should().BeSameAs(step2);
+        // Act
+        var result = collection.FindNextStep("step1");
+
+        // Assert
+        Assert.Same(step2, result);
     }
 
     [Fact]
     public void FindNextStep_NoSuccessor_ReturnsNull()
     {
+        // Arrange
         var step1 = new StepMetadata { Type = "A" };
         var collection = new StepCollection { ["step1"] = step1 };
 
-        collection.FindNextStep("step1").Should().BeNull();
+        // Act
+        var result = collection.FindNextStep("step1");
+
+        // Assert
+        Assert.Null(result);
     }
 
     [Fact]
     public void FindNextStep_EmptyRunAfter_ReturnsNull()
     {
+        // Arrange
         var step1 = new StepMetadata { Type = "A" };
         var step2 = new StepMetadata
         {
@@ -120,12 +160,17 @@ public class StepCollectionTests
             ["step2"] = step2
         };
 
-        collection.FindNextStep("step1").Should().BeNull();
+        // Act
+        var result = collection.FindNextStep("step1");
+
+        // Assert
+        Assert.Null(result);
     }
 
     [Fact]
     public void FindParentStep_NestedKey_ReturnsParent()
     {
+        // Arrange
         var child = new StepMetadata { Type = "ChildType" };
         var parent = new LoopStepMetadata
         {
@@ -134,14 +179,23 @@ public class StepCollectionTests
         };
         var collection = new StepCollection { ["parent"] = parent };
 
-        collection.FindParentStep("parent.child").Should().BeSameAs(parent);
+        // Act
+        var result = collection.FindParentStep("parent.child");
+
+        // Assert
+        Assert.Same(parent, result);
     }
 
     [Fact]
     public void FindParentStep_TopLevelKey_ReturnsNull()
     {
+        // Arrange
         var collection = new StepCollection { ["step1"] = new StepMetadata { Type = "A" } };
 
-        collection.FindParentStep("step1").Should().BeNull();
+        // Act
+        var result = collection.FindParentStep("step1");
+
+        // Assert
+        Assert.Null(result);
     }
 }

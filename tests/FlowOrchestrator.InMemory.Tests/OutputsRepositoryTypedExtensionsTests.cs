@@ -2,7 +2,6 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
-using FluentAssertions;
 using NSubstitute;
 
 namespace FlowOrchestrator.InMemory.Tests;
@@ -14,21 +13,25 @@ public class OutputsRepositoryTypedExtensionsTests
     [Fact]
     public async Task GetTriggerDataAsync_WithTypedResult_ReturnsDeserializedPayload()
     {
+        // Arrange
         var flow = CreateFlow();
         var trigger = new Trigger("manual", "Manual", new TriggerPayload { JobId = "JOB-9", Attempt = 2 });
         var ctx = new TriggerContext { RunId = Guid.NewGuid(), Flow = flow, Trigger = trigger };
         await _sut.SaveTriggerDataAsync(ctx, flow, trigger);
 
+        // Act
         var payload = await _sut.GetTriggerDataAsync<TriggerPayload>(ctx.RunId);
 
-        payload.Should().NotBeNull();
-        payload!.JobId.Should().Be("JOB-9");
-        payload.Attempt.Should().Be(2);
+        // Assert
+        Assert.NotNull(payload);
+        Assert.Equal("JOB-9", payload!.JobId);
+        Assert.Equal(2, payload.Attempt);
     }
 
     [Fact]
     public async Task GetStepOutputAsync_WithTypedResult_ReturnsDeserializedPayload()
     {
+        // Arrange
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = runId };
@@ -40,16 +43,19 @@ public class OutputsRepositoryTypedExtensionsTests
         };
         await _sut.SaveStepOutputAsync(ctx, flow, step, result);
 
+        // Act
         var payload = await _sut.GetStepOutputAsync<TriggerPayload>(runId, step.Key);
 
-        payload.Should().NotBeNull();
-        payload!.JobId.Should().Be("JOB-22");
-        payload.Attempt.Should().Be(7);
+        // Assert
+        Assert.NotNull(payload);
+        Assert.Equal("JOB-22", payload!.JobId);
+        Assert.Equal(7, payload.Attempt);
     }
 
     [Fact]
     public async Task GetStepOutputAsync_WithInvalidShape_ThrowsJsonException()
     {
+        // Arrange
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = runId };
@@ -57,9 +63,11 @@ public class OutputsRepositoryTypedExtensionsTests
         var result = new StepResult { Key = step.Key, Result = new { attempt = "bad" } };
         await _sut.SaveStepOutputAsync(ctx, flow, step, result);
 
+        // Act
         var act = async () => await _sut.GetStepOutputAsync<TriggerPayload>(runId, step.Key);
 
-        await act.Should().ThrowAsync<System.Text.Json.JsonException>();
+        // Assert
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(act);
     }
 
     private static IFlowDefinition CreateFlow()

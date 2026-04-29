@@ -108,7 +108,7 @@ Tests to write:
 - `OutputsRepository`: SaveTriggerDataAsync → GetTriggerDataAsync round-trip; SaveStepOutputAsync → GetStepOutputAsync
 - Edge cases: GetByIdAsync with unknown ID returns null; GetRunsPageAsync pagination respects skip/take
 
-Use xUnit + FluentAssertions. For backends that require external services (Redis, MongoDB), use integration test fixtures or embedded/testcontainer equivalents.
+Use xUnit (`Assert.*`) with the AAA pattern (`// Arrange` / `// Act` / `// Assert`). Do **not** add FluentAssertions or any other fluent-assertion library. For backends that require external services (Redis, MongoDB), use integration test fixtures or embedded/testcontainer equivalents.
 
 ### 5. Register the auto-migrator (if applicable)
 
