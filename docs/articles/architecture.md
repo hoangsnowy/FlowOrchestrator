@@ -40,7 +40,7 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 |---|---|
 | `FlowOrchestrator.Core` | Engine, abstractions, DAG planning, `FlowOrchestratorEngine`, `IStepDispatcher`, `DefaultStepExecutor`, `PollableStepHandler<T>`, in-memory storage |
 | `FlowOrchestrator.Hangfire` | Hangfire adapter: `HangfireStepDispatcher`, `RecurringTriggerSync`, cron job management |
-| `FlowOrchestrator.InMemory` | Channel-based in-process runtime: `InMemoryStepDispatcher`, `InMemoryStepRunnerHostedService` |
+| `FlowOrchestrator.InMemory` | Channel-based in-process runtime + storage: `InMemoryStepDispatcher`, `InMemoryStepRunnerHostedService`, `PeriodicTimerRecurringTriggerDispatcher` (Cronos cron parser), full `InMemoryFlowStore` / `InMemoryFlowRunStore` / `InMemoryOutputsRepository` |
 | `FlowOrchestrator.SqlServer` | Dapper + SQL Server persistence, auto-migration of 9 tables |
 | `FlowOrchestrator.PostgreSQL` | Dapper + Npgsql PostgreSQL persistence, auto-migration |
 | `FlowOrchestrator.Dashboard` | REST API endpoints + embedded SPA (HTML/JS/CSS) served at a configurable base path |
@@ -68,8 +68,7 @@ The sequence from trigger to completion:
 `FlowSyncHostedService` runs on `IHostedService.StartAsync`:
 
 1. Calls `IFlowStore.UpsertAsync` for every registered `IFlowDefinition` — creates or updates the flow record in the database.
-2. Iterates cron triggers: registers recurring job entries in the runtime adapter for each, applying any persisted cron overrides from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true`.
-3. Removes stale recurring jobs for flows that have been unregistered or disabled.
+2. Delegates cron-trigger registration to `IRecurringTriggerSync.SyncTriggers(flowId, isEnabled)` — runtime-agnostic. The Hangfire impl writes to `IRecurringJobManager`; the InMemory impl writes to an in-process `PeriodicTimer` registry. Both apply persisted cron overrides from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true` and remove jobs for disabled flows.
 
 `FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart.
 

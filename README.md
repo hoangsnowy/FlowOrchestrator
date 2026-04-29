@@ -64,7 +64,7 @@ dotnet add package Hangfire.SqlServer   # SQL Server backend
 dotnet add package Hangfire.InMemory    # PostgreSQL or InMemory storage backends
 ```
 
-> **InMemory runtime** (`AddInMemoryRuntime()`) does **not** require Hangfire — steps are dispatched via an in-process `Channel<T>` and executed by a `BackgroundService`.
+> **InMemory runtime** (`opts.UseInMemoryRuntime()`) does **not** require Hangfire — steps are dispatched via an in-process `Channel<T>` and executed by a `BackgroundService`. Cron triggers fire from a `PeriodicTimer` (Cronos parser) inside the same process.
 
 ---
 
@@ -115,14 +115,15 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ```csharp
 // No Hangfire packages needed for InMemory mode.
-builder.Services.AddInMemoryRuntime();   // ← must come BEFORE AddFlowOrchestrator
-
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();               // in-process storage
+    options.UseInMemoryRuntime();        // Channel<T> dispatcher + PeriodicTimer cron
     options.AddFlow<MyFlow>();           // no UseHangfire()
 });
 ```
+
+> Storage and runtime are independent — `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but persistent state.
 
 ### Advanced runtime options (optional)
 
@@ -221,7 +222,7 @@ Each trigger generates a new `RunId` (GUID). All trigger data, step inputs, outp
 | Type | How to start | Required inputs |
 |------|-------------|-----------------|
 | `TriggerType.Manual` | Dashboard button or `POST /flows/api/flows/{id}/trigger` | — |
-| `TriggerType.Cron` | Hangfire recurring job | `cronExpression` (e.g. `"0 2 * * *"`) |
+| `TriggerType.Cron` | Hangfire recurring job (Hangfire runtime) or in-process `PeriodicTimer` (InMemory runtime) | `cronExpression` (e.g. `"0 2 * * *"`) |
 | `TriggerType.Webhook` | `POST /flows/api/webhook/{slug}` | `webhookSlug`; optionally `webhookSecret` |
 
 ### Step statuses
@@ -497,19 +498,31 @@ The sample app (`samples/FlowOrchestrator.SampleApp`) demonstrates an e-commerce
 dotnet run --project .\FlowOrchestrator.AppHost\FlowOrchestrator.AppHost.csproj
 ```
 
-Aspire spins up **SQL Server 2022** and **PostgreSQL 16** containers and launches the sample app **three times in parallel** — once per storage backend — each on a dedicated port:
+Aspire spins up **SQL Server 2022** and **PostgreSQL 16** containers and launches the sample app **three times in parallel** — each combining a different storage and runtime — on dedicated ports:
 
-| Aspire resource | Backend | Hangfire storage | Flows available |
-|---|---|---|---|
-| `flow-sqlserver` | SQL Server | `Hangfire.SqlServer` | Hello, Order, Shipment, Payment |
-| `flow-postgresql` | PostgreSQL | `Hangfire.InMemory` | Hello, Shipment, Payment |
-| `flow-inmemory` | InMemory | `Hangfire.InMemory` | Hello, Shipment, Payment |
+| Aspire resource | Storage | Runtime | Cron driver | `/hangfire` | Flows available |
+|---|---|---|---|---|---|
+| `flow-sqlserver` (5101) | SQL Server | Hangfire | `Hangfire.SqlServer` recurring jobs | ✓ | Hello, Order, Shipment, Payment |
+| `flow-postgresql` (5102) | PostgreSQL | Hangfire | `Hangfire.InMemory` recurring jobs | ✓ | Hello, Shipment, Payment |
+| `flow-inmemory` (5103) | InMemory | **InMemory** | `PeriodicTimer` + Cronos | ✗ (404) | Hello, Shipment, Payment |
 
-Open the **Aspire dashboard** at `http://localhost:18888` to see all three resources and their URLs. Each instance exposes `/flows` and `/hangfire` independently — trigger the same flow across different backends and compare run histories side-by-side.
+Open the **Aspire dashboard** at `http://localhost:18888` to see all three resources and their URLs. Each instance exposes `/flows` independently — trigger the same flow across different combos and compare run histories side-by-side.
+
+> The third instance (`flow-inmemory`) uses **zero external dependencies**: no Hangfire, no database. Step dispatch goes through an in-process `Channel<T>`; cron triggers fire from a `PeriodicTimer`. All run state is lost when the process exits — intended for local dev and integration testing.
 
 > `OrderFulfillmentFlow` requires the `Orders` business table and is only registered on the SQL Server instance.
 
-### Option B — Local (no Docker, using LocalDB)
+### Option B — Local InMemory mode (no Docker, no database)
+
+The fastest way to try the sample. Uses the InMemory runtime + InMemory storage:
+
+```powershell
+dotnet run --project .\samples\FlowOrchestrator.SampleApp\FlowOrchestrator.SampleApp.csproj --launch-profile inmemory
+```
+
+The `inmemory` launch profile sets `RUNTIME=inmemory` and `FLOW_STORAGE=inmemory`. App starts at `http://localhost:5301`. Hangfire packages are not loaded; `/hangfire` returns 404. Cron-scheduled flows fire from the in-process `PeriodicTimer`.
+
+### Option C — Local with SQL Server (LocalDB)
 
 Create `samples/FlowOrchestrator.SampleApp/appsettings.Development.json`:
 
@@ -703,16 +716,12 @@ All endpoints are under the base path configured in `MapFlowDashboard(basePath)`
 - Run control + idempotency + retention hosted services
 - **Fail-fast validation** — throws `InvalidOperationException` at startup if no storage backend is registered
 
-**`FlowOrchestrator.InMemory`** — Pure in-process runtime. No Hangfire, no database.
+**`FlowOrchestrator.InMemory`** — Pure in-process runtime + storage. No Hangfire, no database.
 - `InMemoryStepDispatcher` — `IStepDispatcher` backed by `Channel<InMemoryStepEnvelope>`
-- `InMemoryStepRunnerHostedService` — `BackgroundService` draining the channel with configurable concurrency
-- `InMemoryFlowRunStore` — implements `IFlowRunStore` + `IFlowRunRuntimeStore` + `IFlowRunControlStore` in memory
-- `NullRecurringTriggerDispatcher` / `Inspector` / `Sync` — no-op implementations for Cron trigger infrastructure
-- `AddInMemoryRuntime()` — DI extension; call **before** `AddFlowOrchestrator()` (uses `TryAddSingleton` to take priority)
-
-**`FlowOrchestrator.InMemory`** — Pure in-process storage backend (no database required).
-- `InMemoryFlowStore`, `InMemoryFlowRunStore`, `InMemoryOutputsRepository`
-- `UseInMemory(this FlowOrchestratorBuilder)` DI extension
+- `InMemoryStepRunnerHostedService` — `BackgroundService` draining the channel
+- `PeriodicTimerRecurringTriggerDispatcher` — implements `IRecurringTriggerDispatcher` + `IRecurringTriggerInspector` + `IRecurringTriggerSync`; cron parsing via [Cronos](https://github.com/HangfireIO/Cronos), fires jobs from a 1 s `PeriodicTimer`
+- `InMemoryFlowStore`, `InMemoryFlowRunStore`, `InMemoryOutputsRepository` — full storage stack in memory
+- `UseInMemory()` (storage) and `UseInMemoryRuntime()` (runtime) — DI extensions on `FlowOrchestratorBuilder`. Both go inside the `AddFlowOrchestrator(opts => …)` callback. Either can be combined with the other runtime/storage backends independently
 - All data is lost when the process restarts — use for development or testing only
 
 **`FlowOrchestrator.SqlServer`** — Dapper-based SQL Server persistence.
@@ -806,8 +815,10 @@ src/
 
 samples/
   FlowOrchestrator.SampleApp     Runnable ASP.NET Core demo (OrderHub scenario)
-                                 Selects backend via FLOW_STORAGE env var:
-                                   "sqlserver" | "postgresql" | "inmemory" (default)
+                                 Selects via env vars:
+                                   FLOW_STORAGE = "sqlserver" | "postgresql" | "inmemory" (default)
+                                   RUNTIME      = "hangfire" (default) | "inmemory"
+                                 Storage and runtime are independent — any combination works.
 
 FlowOrchestrator.AppHost/        .NET Aspire host — launches 3 SampleApp instances
                                  (SQL Server · PostgreSQL · InMemory) side-by-side

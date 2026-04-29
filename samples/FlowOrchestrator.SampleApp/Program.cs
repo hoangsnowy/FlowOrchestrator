@@ -22,23 +22,34 @@ var builder = WebApplication.CreateBuilder(args);
 //   "inmemory"   — fully in-process, no external dependencies (default)
 var storageBackend = builder.Configuration["FLOW_STORAGE"] ?? "inmemory";
 
+// ── Runtime selection ─────────────────────────────────────────────────────────
+// Set via RUNTIME environment variable:
+//   "hangfire" — IBackgroundJobClient drives step dispatch; cron via RecurringJobManager (default).
+//   "inmemory" — Channel<T> drives step dispatch in-process; cron via PeriodicTimer.
+// Storage and runtime are independent: any RUNTIME × FLOW_STORAGE combination is valid.
+var runtime = (builder.Configuration["RUNTIME"] ?? "hangfire").ToLowerInvariant();
+var useHangfireRuntime = runtime == "hangfire";
+
 var sqlConnStr = builder.Configuration.GetConnectionString("FlowOrchestrator");
 var pgConnStr  = builder.Configuration.GetConnectionString("FlowOrchestratorPg");
 
-// ── Hangfire ──────────────────────────────────────────────────────────────────
-builder.Services.AddHangfire(config =>
+// ── Hangfire (only when runtime=hangfire) ────────────────────────────────────
+if (useHangfireRuntime)
 {
-    config.SetDataCompatibilityLevel(CompatibilityLevel.Version_170)
-          .UseSimpleAssemblyNameTypeSerializer()
-          .UseRecommendedSerializerSettings();
+    builder.Services.AddHangfire(config =>
+    {
+        config.SetDataCompatibilityLevel(CompatibilityLevel.Version_170)
+              .UseSimpleAssemblyNameTypeSerializer()
+              .UseRecommendedSerializerSettings();
 
-    if (storageBackend == "sqlserver" && sqlConnStr is not null)
-        config.UseSqlServerStorage(sqlConnStr, new SqlServerStorageOptions());
-    else
-        config.UseInMemoryStorage();
-});
+        if (storageBackend == "sqlserver" && sqlConnStr is not null)
+            config.UseSqlServerStorage(sqlConnStr, new SqlServerStorageOptions());
+        else
+            config.UseInMemoryStorage();
+    });
 
-builder.Services.AddHangfireServer();
+    builder.Services.AddHangfireServer();
+}
 
 // ── FlowOrchestrator ──────────────────────────────────────────────────────────
 // Sample flows covering the full feature matrix:
@@ -63,7 +74,10 @@ builder.Services.AddFlowOrchestrator(options =>
     else
         options.UseInMemory();
 
-    options.UseHangfire();
+    if (useHangfireRuntime)
+        options.UseHangfire();
+    else
+        options.UseInMemoryRuntime();
 
     // ── M1.5: Persistent schedule overrides ───────────────────────────────────
     // When true, cron overrides written via the dashboard or API survive process
@@ -178,10 +192,11 @@ builder.Services.AddFlowDashboard(builder.Configuration);
 var app = builder.Build();
 
 app.UseStaticFiles();
-app.UseHangfireDashboard("/hangfire");
+if (useHangfireRuntime)
+    app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");
 
 app.MapGet("/", () =>
-    $"OrderHub [{storageBackend.ToUpperInvariant()}] is running. Visit /flows for the dashboard.");
+    $"OrderHub [runtime={runtime}, storage={storageBackend}] is running. Visit /flows for the dashboard.");
 
 app.Run();

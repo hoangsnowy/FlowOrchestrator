@@ -36,13 +36,14 @@ public static class InMemoryServiceCollectionExtensions
 
     /// <summary>
     /// Registers the in-memory step-execution runtime: a <see cref="Channel{T}"/>-based
-    /// dispatcher and a background-service consumer that calls
-    /// <c>IFlowOrchestrator.RunStepAsync</c> for each dispatched step.
+    /// dispatcher, a background-service consumer that calls <c>IFlowOrchestrator.RunStepAsync</c>
+    /// for each dispatched step, and a <see cref="PeriodicTimer"/>-based recurring trigger
+    /// dispatcher that fires cron-scheduled flows in-process.
     /// </summary>
     /// <remarks>
     /// Call this inside <c>AddFlowOrchestrator(opts =&gt; opts.UseInMemoryRuntime())</c>
-    /// as an alternative to Hangfire. Cron-triggered flows are not supported — all
-    /// <see cref="IRecurringTriggerDispatcher"/> calls are silently ignored.
+    /// as an alternative to Hangfire. Provides cron-trigger feature parity with the
+    /// Hangfire runtime via <see cref="PeriodicTimerRecurringTriggerDispatcher"/>.
     /// <para>
     /// The runtime is registered with <see cref="ServiceCollectionDescriptorExtensions.TryAdd"/>
     /// semantics so it can co-exist with other registrations without conflicting.
@@ -60,12 +61,20 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton(channel.Reader);
         builder.Services.AddSingleton(channel.Writer);
 
-        // Runtime adapters — registered with TryAdd so they don't conflict if a test
-        // registers its own mocks first.
+        // Step dispatcher — writes step envelopes to the channel.
         builder.Services.TryAddSingleton<IStepDispatcher, InMemoryStepDispatcher>();
-        builder.Services.TryAddSingleton<IRecurringTriggerDispatcher, NullRecurringTriggerDispatcher>();
-        builder.Services.TryAddSingleton<IRecurringTriggerInspector, NullRecurringTriggerInspector>();
-        builder.Services.TryAddSingleton<IRecurringTriggerSync, NullRecurringTriggerSync>();
+
+        // Recurring-trigger dispatcher: a single PeriodicTimer-backed implementation that
+        // satisfies all three recurring-trigger interfaces and runs as a hosted service.
+        builder.Services.TryAddSingleton<PeriodicTimerRecurringTriggerDispatcher>();
+        builder.Services.TryAddSingleton<IRecurringTriggerDispatcher>(
+            sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
+        builder.Services.TryAddSingleton<IRecurringTriggerInspector>(
+            sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
+        builder.Services.TryAddSingleton<IRecurringTriggerSync>(
+            sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
+        builder.Services.AddHostedService(
+            sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
 
         // Background service that drains the channel and invokes the engine.
         builder.Services.AddHostedService<InMemoryStepRunnerHostedService>();

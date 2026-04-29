@@ -31,9 +31,13 @@ builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-postgresql")
        .WithReference(postgres)
        .WaitFor(postgres);
 
-// ── Instance 3: InMemory backend (zero external deps) ───────────── port 5103 ─
+// ── Instance 3: Fully in-memory — no Hangfire, no database ──────── port 5103 ─
+// Demonstrates RUNTIME=inmemory + FLOW_STORAGE=inmemory: Channel<T>-backed step
+// dispatcher and PeriodicTimer-backed cron, all in-process. /hangfire returns 404
+// because Hangfire is not registered in this mode.
 builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-inmemory")
        .WithEnvironment("FLOW_STORAGE", "inmemory")
+       .WithEnvironment("RUNTIME", "inmemory")
        .WithEndpoint("http",  e => e.Port = 5103)
        .WithEndpoint("https", e => e.Port = 7103);
 

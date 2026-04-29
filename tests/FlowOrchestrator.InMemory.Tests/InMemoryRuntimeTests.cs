@@ -205,7 +205,7 @@ public sealed class InMemoryRuntimeTests
     }
 
     [Fact]
-    public void UseInMemoryRuntime_RegistersNullRecurringDispatcher()
+    public void UseInMemoryRuntime_RegistersPeriodicTimerRecurringDispatcher()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -222,11 +222,11 @@ public sealed class InMemoryRuntimeTests
         var dispatcher = sp.GetRequiredService<IRecurringTriggerDispatcher>();
 
         // Assert
-        Assert.IsType<NullRecurringTriggerDispatcher>(dispatcher);
+        Assert.IsType<PeriodicTimerRecurringTriggerDispatcher>(dispatcher);
     }
 
     [Fact]
-    public void UseInMemoryRuntime_RegistersNullRecurringInspector()
+    public void UseInMemoryRuntime_RegistersPeriodicTimerRecurringInspector()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -243,38 +243,30 @@ public sealed class InMemoryRuntimeTests
         var inspector = sp.GetRequiredService<IRecurringTriggerInspector>();
 
         // Assert
-        Assert.IsType<NullRecurringTriggerInspector>(inspector);
+        Assert.IsType<PeriodicTimerRecurringTriggerDispatcher>(inspector);
     }
 
     [Fact]
-    public async Task NullRecurringDispatcher_AllOperationsAreNoOps()
+    public void UseInMemoryRuntime_AllRecurringInterfacesShareSingleInstance()
     {
         // Arrange
-        var dispatcher = new NullRecurringTriggerDispatcher();
-
-        // Act
-        var ex = await Record.ExceptionAsync(async () =>
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(Substitute.For<IFlowStore>());
+        services.AddFlowOrchestrator(opts =>
         {
-            dispatcher.RegisterOrUpdate("job1", Guid.NewGuid(), "schedule", "0 * * * *");
-            dispatcher.Remove("job1");
-            dispatcher.TriggerOnce("job1");
-            await dispatcher.EnqueueTriggerAsync(Guid.NewGuid(), "schedule");
+            opts.UseInMemory();
+            opts.UseInMemoryRuntime();
         });
 
-        // Assert
-        Assert.Null(ex);
-    }
-
-    [Fact]
-    public async Task NullRecurringInspector_ReturnsEmptyList()
-    {
-        // Arrange
-        var inspector = new NullRecurringTriggerInspector();
-
         // Act
-        var jobs = await inspector.GetJobsAsync();
+        using var sp = services.BuildServiceProvider();
+        var dispatcher = sp.GetRequiredService<IRecurringTriggerDispatcher>();
+        var inspector = sp.GetRequiredService<IRecurringTriggerInspector>();
+        var sync = sp.GetRequiredService<IRecurringTriggerSync>();
 
-        // Assert
-        Assert.Empty(jobs);
+        // Assert — all three resolve to the same PeriodicTimer instance.
+        Assert.Same(dispatcher, inspector);
+        Assert.Same(dispatcher, sync);
     }
 }

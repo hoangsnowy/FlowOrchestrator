@@ -40,21 +40,22 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-**InMemory runtime** (no Hangfire packages required — Channel&lt;T&gt;-backed, no external dependencies):
+**InMemory runtime** (no Hangfire packages required — `Channel<T>` step dispatcher + `PeriodicTimer` cron):
 
 ```csharp
-// Call AddInMemoryRuntime() BEFORE AddFlowOrchestrator()
-builder.Services.AddInMemoryRuntime();
-
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();           // in-process storage
+    options.UseInMemoryRuntime();    // Channel<T> dispatcher + PeriodicTimer cron
     options.AddFlow<MyFlow>();       // do NOT call UseHangfire() here
 });
 ```
 
 > [!NOTE]
-> When using the InMemory runtime, Hangfire packages (`Hangfire.Core`, `Hangfire.InMemory`, etc.) are not needed and should not be added.
+> When using the InMemory runtime, Hangfire packages (`Hangfire.Core`, `Hangfire.InMemory`, etc.) are not needed and should not be added. Cron parsing is handled by [Cronos](https://github.com/HangfireIO/Cronos).
+
+> [!TIP]
+> Storage and runtime are independent. `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but durable run state.
 
 ---
 
@@ -211,12 +212,10 @@ app.MapFlowDashboard("/flows");
 ### InMemory Runtime (Dev / Testing — no Hangfire required)
 
 ```csharp
-// Register InMemory runtime BEFORE AddFlowOrchestrator
-builder.Services.AddInMemoryRuntime();
-
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();
+    options.UseInMemoryRuntime();    // Channel<T> dispatcher + PeriodicTimer cron
 
     options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
     options.Observability.EnableEventPersistence = true;

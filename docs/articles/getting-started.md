@@ -156,15 +156,13 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ### In-Memory (Dev / Testing)
 
-The in-memory runtime uses a `Channel<T>`-backed dispatcher — no Hangfire packages are needed.
+The in-memory runtime uses a `Channel<T>`-backed step dispatcher and a `PeriodicTimer`-driven cron scheduler — no Hangfire packages are needed.
 
 ```csharp
-// Call AddInMemoryRuntime() BEFORE AddFlowOrchestrator()
-builder.Services.AddInMemoryRuntime();
-
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();
+    options.UseInMemoryRuntime();    // Channel<T> dispatcher + PeriodicTimer cron
     options.AddFlow<HelloWorldFlow>();
 });
 ```

@@ -41,7 +41,8 @@
       "applicationUrl": "http://localhost:5301",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "FLOW_STORAGE": "inmemory"
+        "FLOW_STORAGE": "inmemory",
+        "RUNTIME": "inmemory"
       }
     }
   }
