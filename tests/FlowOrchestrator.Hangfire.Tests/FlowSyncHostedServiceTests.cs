@@ -1,26 +1,27 @@
 using FlowOrchestrator.Core.Abstractions;
-using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
-using Hangfire;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace FlowOrchestrator.Hangfire.Tests;
 
+/// <summary>
+/// Tests for <see cref="FlowSyncHostedService"/> — flow validation, persistence to store,
+/// and delegation to the runtime-agnostic <see cref="IRecurringTriggerSync"/>.
+/// </summary>
 public class FlowSyncHostedServiceTests
 {
     private static readonly ILogger<FlowSyncHostedService> Logger =
         NullLoggerFactory.Instance.CreateLogger<FlowSyncHostedService>();
 
-    private readonly IRecurringJobManager _recurringJobManager = Substitute.For<IRecurringJobManager>();
-    private readonly IFlowScheduleStateStore _scheduleStateStore = Substitute.For<IFlowScheduleStateStore>();
+    private readonly IRecurringTriggerSync _triggerSync = Substitute.For<IRecurringTriggerSync>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
 
-    private FlowSyncHostedService CreateSut(IFlowRepository repository, IFlowStore store, FlowSchedulerOptions? options = null)
-        => new(repository, store, _recurringJobManager, _scheduleStateStore, _graphPlanner, options ?? new FlowSchedulerOptions(), Logger);
+    private FlowSyncHostedService CreateSut(IFlowRepository repository, IFlowStore store)
+        => new(repository, store, _triggerSync, _graphPlanner, Logger);
 
     [Fact]
     public async Task StartAsync_SyncsFlowsToStore()
@@ -134,7 +135,7 @@ public class FlowSyncHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_RegistersRecurringJobForCronTrigger()
+    public async Task StartAsync_DelegatesToRecurringTriggerSync_WithEnabledFlag()
     {
         // Arrange
         var flowId = Guid.NewGuid();
@@ -143,100 +144,6 @@ public class FlowSyncHostedServiceTests
         flow.Version.Returns("1.0");
         flow.Manifest.Returns(new FlowManifest
         {
-            Triggers = new FlowTriggerCollection
-            {
-                ["scheduled"] = new TriggerMetadata
-                {
-                    Type = TriggerType.Cron,
-                    Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
-                }
-            },
-            Steps = new StepCollection
-            {
-                ["step1"] = new StepMetadata { Type = "LogMessage" }
-            }
-        });
-
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
-
-        var record = new FlowDefinitionRecord { Id = flowId, IsEnabled = true };
-        var store = Substitute.For<IFlowStore>();
-        store.GetByIdAsync(flowId).Returns(record);
-        store.SaveAsync(Arg.Any<FlowDefinitionRecord>()).Returns(ci => ci.Arg<FlowDefinitionRecord>());
-
-        var sut = CreateSut(repository, store);
-
-        // Act
-        await sut.StartAsync(CancellationToken.None);
-
-        // Assert
-        _recurringJobManager.Received(1).AddOrUpdate(
-            $"flow-{flowId}-scheduled",
-            Arg.Any<global::Hangfire.Common.Job>(),
-            "*/10 * * * *",
-            Arg.Any<global::Hangfire.RecurringJobOptions>());
-    }
-
-    [Fact]
-    public async Task StartAsync_RemovesRecurringJobForDisabledFlow()
-    {
-        // Arrange
-        var flowId = Guid.NewGuid();
-        var flow = Substitute.For<IFlowDefinition>();
-        flow.Id.Returns(flowId);
-        flow.Version.Returns("1.0");
-        flow.Manifest.Returns(new FlowManifest
-        {
-            Triggers = new FlowTriggerCollection
-            {
-                ["scheduled"] = new TriggerMetadata
-                {
-                    Type = TriggerType.Cron,
-                    Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
-                }
-            },
-            Steps = new StepCollection
-            {
-                ["step1"] = new StepMetadata { Type = "LogMessage" }
-            }
-        });
-
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
-
-        var record = new FlowDefinitionRecord { Id = flowId, IsEnabled = false };
-        var store = Substitute.For<IFlowStore>();
-        store.GetByIdAsync(flowId).Returns(record);
-        store.SaveAsync(Arg.Any<FlowDefinitionRecord>()).Returns(ci => ci.Arg<FlowDefinitionRecord>());
-
-        var sut = CreateSut(repository, store);
-
-        // Act
-        await sut.StartAsync(CancellationToken.None);
-
-        // Assert
-        _recurringJobManager.Received(1).RemoveIfExists($"flow-{flowId}-scheduled");
-    }
-
-    [Fact]
-    public async Task StartAsync_RespectsPausedScheduleState()
-    {
-        // Arrange
-        var flowId = Guid.NewGuid();
-        var flow = Substitute.For<IFlowDefinition>();
-        flow.Id.Returns(flowId);
-        flow.Version.Returns("1.0");
-        flow.Manifest.Returns(new FlowManifest
-        {
-            Triggers = new FlowTriggerCollection
-            {
-                ["scheduled"] = new TriggerMetadata
-                {
-                    Type = TriggerType.Cron,
-                    Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
-                }
-            },
             Steps = new StepCollection { ["step1"] = new StepMetadata { Type = "LogMessage" } }
         });
 
@@ -247,25 +154,18 @@ public class FlowSyncHostedServiceTests
         store.GetByIdAsync(flowId).Returns(new FlowDefinitionRecord { Id = flowId, IsEnabled = true });
         store.SaveAsync(Arg.Any<FlowDefinitionRecord>()).Returns(ci => ci.Arg<FlowDefinitionRecord>());
 
-        _scheduleStateStore.GetAsync($"flow-{flowId}-scheduled")
-            .Returns(new FlowScheduleState { JobId = $"flow-{flowId}-scheduled", IsPaused = true });
-
         var sut = CreateSut(repository, store);
 
         // Act
         await sut.StartAsync(CancellationToken.None);
 
-        // Assert
-        _recurringJobManager.Received(1).RemoveIfExists($"flow-{flowId}-scheduled");
-        _recurringJobManager.DidNotReceive().AddOrUpdate(
-            Arg.Any<string>(),
-            Arg.Any<global::Hangfire.Common.Job>(),
-            Arg.Any<string>(),
-            Arg.Any<global::Hangfire.RecurringJobOptions>());
+        // Assert — recurring-trigger logic is now delegated; runtime-specific
+        // behaviour is covered by the IRecurringTriggerSync implementations' own tests.
+        _triggerSync.Received(1).SyncTriggers(flowId, isEnabled: true);
     }
 
     [Fact]
-    public async Task StartAsync_UsesCronOverride_WhenPresent()
+    public async Task StartAsync_DisabledFlow_PassesIsEnabledFalseToTriggerSync()
     {
         // Arrange
         var flowId = Guid.NewGuid();
@@ -274,14 +174,6 @@ public class FlowSyncHostedServiceTests
         flow.Version.Returns("1.0");
         flow.Manifest.Returns(new FlowManifest
         {
-            Triggers = new FlowTriggerCollection
-            {
-                ["scheduled"] = new TriggerMetadata
-                {
-                    Type = TriggerType.Cron,
-                    Inputs = new Dictionary<string, object?> { ["cronExpression"] = "*/10 * * * *" }
-                }
-            },
             Steps = new StepCollection { ["step1"] = new StepMetadata { Type = "LogMessage" } }
         });
 
@@ -289,16 +181,8 @@ public class FlowSyncHostedServiceTests
         repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
 
         var store = Substitute.For<IFlowStore>();
-        store.GetByIdAsync(flowId).Returns(new FlowDefinitionRecord { Id = flowId, IsEnabled = true });
+        store.GetByIdAsync(flowId).Returns(new FlowDefinitionRecord { Id = flowId, IsEnabled = false });
         store.SaveAsync(Arg.Any<FlowDefinitionRecord>()).Returns(ci => ci.Arg<FlowDefinitionRecord>());
-
-        _scheduleStateStore.GetAsync($"flow-{flowId}-scheduled")
-            .Returns(new FlowScheduleState
-            {
-                JobId = $"flow-{flowId}-scheduled",
-                IsPaused = false,
-                CronOverride = "0 * * * *"
-            });
 
         var sut = CreateSut(repository, store);
 
@@ -306,11 +190,7 @@ public class FlowSyncHostedServiceTests
         await sut.StartAsync(CancellationToken.None);
 
         // Assert
-        _recurringJobManager.Received(1).AddOrUpdate(
-            $"flow-{flowId}-scheduled",
-            Arg.Any<global::Hangfire.Common.Job>(),
-            "0 * * * *",
-            Arg.Any<global::Hangfire.RecurringJobOptions>());
+        _triggerSync.Received(1).SyncTriggers(flowId, isEnabled: false);
     }
 
     [Fact]

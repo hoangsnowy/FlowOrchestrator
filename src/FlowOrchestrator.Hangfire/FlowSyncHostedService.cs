@@ -1,8 +1,6 @@
 using System.Text.Json;
-using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using Hangfire;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -10,38 +8,39 @@ namespace FlowOrchestrator.Hangfire;
 
 /// <summary>
 /// Hosted service that runs at application startup to validate, upsert, and
-/// activate all code-registered flow definitions.
-/// Also registers Hangfire recurring jobs for each flow's cron triggers,
-/// applying any persisted schedule overrides.
+/// activate all code-registered flow definitions, then delegates recurring-job
+/// synchronisation to the runtime-specific <see cref="IRecurringTriggerSync"/>.
 /// </summary>
+/// <remarks>
+/// The recurring-trigger logic itself is runtime-agnostic — Hangfire provides
+/// <c>RecurringTriggerSync</c>, the in-memory runtime provides
+/// <c>PeriodicTimerRecurringTriggerDispatcher</c>. This service does not
+/// depend on Hangfire types directly.
+/// </remarks>
 internal sealed class FlowSyncHostedService : IHostedService
 {
     private readonly IFlowRepository _repository;
     private readonly IFlowStore _store;
-    private readonly IRecurringJobManager _recurringJobManager;
-    private readonly IFlowScheduleStateStore _scheduleStateStore;
+    private readonly IRecurringTriggerSync _triggerSync;
     private readonly IFlowGraphPlanner _graphPlanner;
-    private readonly FlowSchedulerOptions _schedulerOptions;
     private readonly ILogger<FlowSyncHostedService> _logger;
 
+    /// <summary>Initialises the hosted service with required services.</summary>
     public FlowSyncHostedService(
         IFlowRepository repository,
         IFlowStore store,
-        IRecurringJobManager recurringJobManager,
-        IFlowScheduleStateStore scheduleStateStore,
+        IRecurringTriggerSync triggerSync,
         IFlowGraphPlanner graphPlanner,
-        FlowSchedulerOptions schedulerOptions,
         ILogger<FlowSyncHostedService> logger)
     {
         _repository = repository;
         _store = store;
-        _recurringJobManager = recurringJobManager;
-        _scheduleStateStore = scheduleStateStore;
+        _triggerSync = triggerSync;
         _graphPlanner = graphPlanner;
-        _schedulerOptions = schedulerOptions;
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var flows = await _repository.GetAllFlowsAsync().ConfigureAwait(false);
@@ -65,7 +64,7 @@ internal sealed class FlowSyncHostedService : IHostedService
                 await _store.SaveAsync(record).ConfigureAwait(false);
                 _logger.LogInformation("Synced flow {FlowName} ({FlowId}) to store.", record.Name, record.Id);
 
-                await SyncRecurringTriggersAsync(flow, record.IsEnabled).ConfigureAwait(false);
+                _triggerSync.SyncTriggers(flow.Id, record.IsEnabled);
             }
             catch (Exception ex)
             {
@@ -75,49 +74,6 @@ internal sealed class FlowSyncHostedService : IHostedService
         }
     }
 
-    internal async Task SyncRecurringTriggersAsync(Core.Abstractions.IFlowDefinition flow, bool isEnabled)
-    {
-        foreach (var (triggerKey, trigger) in flow.Manifest.Triggers)
-        {
-            var jobId = $"flow-{flow.Id}-{triggerKey}";
-            var state = _schedulerOptions.PersistOverrides
-                ? await _scheduleStateStore.GetAsync(jobId).ConfigureAwait(false)
-                : null;
-
-            if (trigger.Type != Core.Abstractions.TriggerType.Cron)
-                continue;
-
-            if (!isEnabled
-                || !trigger.TryGetCronExpression(out var cronExpression))
-            {
-                _recurringJobManager.RemoveIfExists(jobId);
-                _logger.LogInformation("Removed recurring job {JobId} (disabled or missing cron).", jobId);
-                continue;
-            }
-
-            if (state?.IsPaused == true)
-            {
-                _recurringJobManager.RemoveIfExists(jobId);
-                _logger.LogInformation("Recurring job {JobId} remains paused.", jobId);
-                continue;
-            }
-
-            var effectiveCron = string.IsNullOrWhiteSpace(state?.CronOverride)
-                ? cronExpression
-                : state!.CronOverride!;
-
-            var flowId = flow.Id;
-            var key = triggerKey;
-            _recurringJobManager.AddOrUpdate<IHangfireFlowTrigger>(
-                jobId,
-                t => t.TriggerByScheduleAsync(flowId, key, null),
-                effectiveCron);
-
-            _logger.LogInformation(
-                "Registered recurring job {JobId} for flow {FlowId} trigger '{TriggerKey}' with cron '{Cron}'.",
-                jobId, flow.Id, triggerKey, effectiveCron);
-        }
-    }
-
+    /// <inheritdoc/>
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
