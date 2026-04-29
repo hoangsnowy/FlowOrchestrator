@@ -3,7 +3,7 @@ using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire;
-using FluentAssertions;
+using Hangfire;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -67,6 +67,7 @@ public class HangfireFlowOrchestratorTests
     [Fact]
     public async Task TriggerAsync_AssignsRunId_WhenEmpty()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         _runStore.StartRunAsync(default, default!, default, default!, default, default)
@@ -79,14 +80,17 @@ public class HangfireFlowOrchestratorTests
             Trigger = new Trigger("manual", "Manual", null)
         };
 
+        // Act
         await sut.TriggerAsync(ctx);
 
-        ctx.RunId.Should().NotBe(Guid.Empty);
+        // Assert
+        Assert.NotEqual(Guid.Empty, ctx.RunId);
     }
 
     [Fact]
     public async Task TriggerAsync_StartsRunInStore_AndEnqueuesEntryStep()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
@@ -101,8 +105,10 @@ public class HangfireFlowOrchestratorTests
             Trigger = new Trigger("manual", "Manual", null)
         };
 
+        // Act
         await sut.TriggerAsync(ctx);
 
+        // Assert
         await _runStore.Received(1).StartRunAsync(
             flow.Id,
             Arg.Any<string>(),
@@ -110,12 +116,13 @@ public class HangfireFlowOrchestratorTests
             "manual",
             Arg.Any<string?>(),
             Arg.Any<string?>());
-        _dispatcher.ReceivedCalls().Should().NotBeEmpty();
+        Assert.NotEmpty(_dispatcher.ReceivedCalls());
     }
 
     [Fact]
     public async Task TriggerAsync_ClearsContextAccessor()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         _runStore.StartRunAsync(default, default!, default, default!, default, default)
@@ -128,14 +135,17 @@ public class HangfireFlowOrchestratorTests
             Trigger = new Trigger("manual", "Manual", null)
         };
 
+        // Act
         await sut.TriggerAsync(ctx);
 
-        _ctxAccessor.CurrentContext.Should().BeNull();
+        // Assert
+        Assert.Null(_ctxAccessor.CurrentContext);
     }
 
     [Fact]
     public async Task RunStepAsync_ExecutesStepAndSavesOutput()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
@@ -145,14 +155,17 @@ public class HangfireFlowOrchestratorTests
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
+        // Act
         await sut.RunStepAsync(ctx, flow, step);
 
+        // Assert
         await _outputsRepo.Received(1).SaveStepOutputAsync(ctx, flow, step, stepResult);
     }
 
     [Fact]
     public async Task RunStepAsync_PendingStatus_ReschedulesCurrentStep()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
@@ -166,16 +179,19 @@ public class HangfireFlowOrchestratorTests
         };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
 
+        // Act
         await sut.RunStepAsync(ctx, flow, step);
 
+        // Assert
         await _runStore.Received(1).RecordStepCompleteAsync(
             ctx.RunId, "step1", "Pending", Arg.Any<string?>(), Arg.Any<string?>());
-        _dispatcher.ReceivedCalls().Should().NotBeEmpty();
+        Assert.NotEmpty(_dispatcher.ReceivedCalls());
     }
 
     [Fact]
     public async Task RunStepAsync_CompletesRunWhenNoNextStep_LegacyPath()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
@@ -185,14 +201,17 @@ public class HangfireFlowOrchestratorTests
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
+        // Act
         await sut.RunStepAsync(ctx, flow, step);
 
+        // Assert
         await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Succeeded");
     }
 
     [Fact]
     public async Task RunStepAsync_ReThrowTrue_ThrowsException()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
@@ -202,14 +221,18 @@ public class HangfireFlowOrchestratorTests
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
+        // Act
         var act = () => sut.RunStepAsync(ctx, flow, step).AsTask();
 
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("critical");
+        // Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        Assert.Contains("critical", ex.Message);
     }
 
     [Fact]
     public async Task TriggerAsync_RunStoreFailure_DoesNotThrow()
     {
+        // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
 
@@ -223,14 +246,17 @@ public class HangfireFlowOrchestratorTests
             Trigger = new Trigger("manual", "Manual", null)
         };
 
-        var act = () => sut.TriggerAsync(ctx).AsTask();
+        // Act
+        var ex = await Record.ExceptionAsync(() => sut.TriggerAsync(ctx).AsTask());
 
-        await act.Should().NotThrowAsync();
+        // Assert
+        Assert.Null(ex);
     }
 
     [Fact]
     public async Task TriggerAsync_IdempotencyDuplicate_ReturnsExistingRun()
     {
+        // Arrange
         var controlStore = Substitute.For<IFlowRunControlStore>();
         var existingRunId = Guid.NewGuid();
         controlStore.FindRunIdByIdempotencyKeyAsync(Arg.Any<Guid>(), "manual", "dup-key")
@@ -249,16 +275,19 @@ public class HangfireFlowOrchestratorTests
             Trigger = new Trigger("manual", "Manual", null, headers)
         };
 
+        // Act
         var result = await sut.TriggerAsync(ctx);
 
-        ctx.RunId.Should().Be(existingRunId);
-        result.Should().NotBeNull();
-        _dispatcher.ReceivedCalls().Should().BeEmpty();
+        // Assert
+        Assert.Equal(existingRunId, ctx.RunId);
+        Assert.NotNull(result);
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
     [Fact]
     public async Task RunStepAsync_CancelRequested_SkipsStepAndCompletesRun()
     {
+        // Arrange
         var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
         runtimeStore.GetStepStatusesAsync(Arg.Any<Guid>())
             .Returns(new Dictionary<string, StepStatus>());
@@ -274,8 +303,10 @@ public class HangfireFlowOrchestratorTests
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
+        // Act
         await sut.RunStepAsync(ctx, flow, step);
 
+        // Assert
         await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Cancelled");
     }
 
@@ -311,18 +342,13 @@ public class HangfireFlowOrchestratorTests
         var failedResult = new StepResult { Key = "step1", Status = StepStatus.Failed, FailedReason = "Input validation failed." };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(failedResult);
 
-        // Both calls to GetStepStatusesAsync return the post-execution state:
-        // step1 = Failed, step2 = Skipped (already recorded by a prior worker call).
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
             ["step1"] = StepStatus.Failed,
             ["step2"] = StepStatus.Skipped
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
-        // No step is still in-flight and no step is claimed but unrecorded.
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
-        // TryClaimStepAsync — step2 is already recorded Skipped so graph evaluation won't put it in BlockedStepKeys;
-        // but if the planner does try to claim it, return false (already done).
         runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(false);
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
@@ -359,8 +385,6 @@ public class HangfireFlowOrchestratorTests
                     Type = "LogMessage",
                     RunAfter = new RunAfterCollection { ["step_b"] = [StepStatus.Succeeded] }
                 },
-                // step_d is the ONLY leaf — it only runs if step_c fails.
-                // Since step_c Succeeded, step_d is Skipped.
                 ["step_d"] = new StepMetadata
                 {
                     Type = "LogMessage",
@@ -371,14 +395,12 @@ public class HangfireFlowOrchestratorTests
 
         var runId = Guid.NewGuid();
         var ctx = new Core.Execution.ExecutionContext { RunId = runId };
-        // step_c is the step completing now (the last Succeeded step before the leaf check)
         var step = new StepInstance("step_c", "LogMessage") { RunId = runId };
 
         var succeededResult = new StepResult { Key = "step_c", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(succeededResult);
         _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).Returns((IStepInstance?)null);
 
-        // Post-execution statuses: A, B, C all Succeeded; D already Skipped (blocked).
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
             ["step_a"] = StepStatus.Succeeded,
@@ -414,13 +436,11 @@ public class HangfireFlowOrchestratorTests
             Steps = new StepCollection
             {
                 ["start"] = new StepMetadata { Type = "LogMessage" },
-                // leaf 1 — runs on success (Succeeded)
                 ["happy_path"] = new StepMetadata
                 {
                     Type = "LogMessage",
                     RunAfter = new RunAfterCollection { ["start"] = [StepStatus.Succeeded] }
                 },
-                // leaf 2 — only runs on failure (Skipped because start Succeeded)
                 ["error_handler"] = new StepMetadata
                 {
                     Type = "LogMessage",
@@ -440,8 +460,8 @@ public class HangfireFlowOrchestratorTests
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
             ["start"]         = StepStatus.Succeeded,
-            ["happy_path"]    = StepStatus.Succeeded,   // leaf — Succeeded
-            ["error_handler"] = StepStatus.Skipped      // leaf — Skipped
+            ["happy_path"]    = StepStatus.Succeeded,
+            ["error_handler"] = StepStatus.Skipped
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
@@ -478,9 +498,9 @@ public class HangfireFlowOrchestratorTests
 
         // Should dispatch one immediate + one delayed child
         var calls = _dispatcher.ReceivedCalls().ToList();
-        calls.Should().HaveCount(2);
-        calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync)).Should().BeTrue();
-        calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync)).Should().BeTrue();
+        Assert.Equal(2, calls.Count);
+        Assert.True(calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync)));
+        Assert.True(calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync)));
     }
 
     [Fact]
@@ -502,7 +522,9 @@ public class HangfireFlowOrchestratorTests
 
         var act = () => sut.RunStepAsync(ctx, flow, step).AsTask();
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*static DAG*step1*");
+        // Act + Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        Assert.Contains("static DAG", ex.Message);
+        Assert.Contains("step1", ex.Message);
     }
 }

@@ -1,5 +1,4 @@
 using FlowOrchestrator.Core.Abstractions;
-using FluentAssertions;
 
 namespace FlowOrchestrator.Core.Tests.Abstractions;
 
@@ -8,15 +7,22 @@ public class FlowManifestTests
     [Fact]
     public void DefaultManifest_HasEmptyTriggersAndSteps()
     {
+        // Arrange
+
+        // Act
         var manifest = new FlowManifest();
 
-        manifest.Triggers.Should().BeEmpty();
-        manifest.Steps.Should().BeEmpty();
+        // Assert
+        Assert.Empty(manifest.Triggers);
+        Assert.Empty(manifest.Steps);
     }
 
     [Fact]
     public void Manifest_CanHoldTriggersAndSteps()
     {
+        // Arrange
+
+        // Act
         var manifest = new FlowManifest
         {
             Triggers = new FlowTriggerCollection
@@ -29,26 +35,35 @@ public class FlowManifestTests
             }
         };
 
-        manifest.Triggers.Should().ContainKey("manual");
-        manifest.Steps.Should().ContainKey("step1");
+        // Assert
+        Assert.True(manifest.Triggers.ContainsKey("manual"));
+        Assert.True(manifest.Steps.ContainsKey("step1"));
     }
 
     [Fact]
     public void LoopStepMetadata_DefaultProperties()
     {
+        // Arrange
+
+        // Act
         var loop = new LoopStepMetadata();
 
-        loop.ForEach.Should().BeNull();
-        loop.ConcurrencyLimit.Should().Be(1);
-        loop.Steps.Should().BeEmpty();
+        // Assert
+        Assert.Null(loop.ForEach);
+        Assert.Equal(1, loop.ConcurrencyLimit);
+        Assert.Empty(loop.Steps);
     }
 
     [Fact]
     public void TriggerMetadata_DefaultProperties()
     {
+        // Arrange
+
+        // Act
         var trigger = new TriggerMetadata { Type = TriggerType.Manual };
 
-        trigger.Type.Should().Be(TriggerType.Manual);
-        trigger.Inputs.Should().BeEmpty();
+        // Assert
+        Assert.Equal(TriggerType.Manual, trigger.Type);
+        Assert.Empty(trigger.Inputs);
     }
 }

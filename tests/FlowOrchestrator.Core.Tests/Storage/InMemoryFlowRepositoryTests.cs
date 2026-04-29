@@ -1,6 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
-using FluentAssertions;
 using NSubstitute;
 
 namespace FlowOrchestrator.Core.Tests.Storage;
@@ -10,27 +9,32 @@ public class InMemoryFlowRepositoryTests
     [Fact]
     public async Task Add_AndGetAllFlows_ReturnsAddedFlows()
     {
+        // Arrange
         var repo = new InMemoryFlowRepository();
         var flow1 = Substitute.For<IFlowDefinition>();
         var flow2 = Substitute.For<IFlowDefinition>();
 
+        // Act
         repo.Add(flow1);
         repo.Add(flow2);
-
         var all = await repo.GetAllFlowsAsync();
 
-        all.Should().HaveCount(2);
-        all.Should().Contain(flow1);
-        all.Should().Contain(flow2);
+        // Assert
+        Assert.Equal(2, all.Count());
+        Assert.Contains(flow1, all);
+        Assert.Contains(flow2, all);
     }
 
     [Fact]
     public async Task GetAllFlows_Empty_ReturnsEmptyList()
     {
+        // Arrange
         var repo = new InMemoryFlowRepository();
 
+        // Act
         var all = await repo.GetAllFlowsAsync();
 
-        all.Should().BeEmpty();
+        // Assert
+        Assert.Empty(all);
     }
 }

@@ -120,10 +120,15 @@ public async Task DagFanIn_WhenTwoUpstreamsCompleteConcurrently_DownstreamEnqueu
 [Fact]
 public async Task TriggerAsync_WithSameIdempotencyKey_ReturnsSameRunId()
 {
+    // Arrange
     var key = Guid.NewGuid().ToString();
+
+    // Act
     var runId1 = await orchestrator.TriggerAsync(flowId, trigger, headers: new() { ["Idempotency-Key"] = key });
     var runId2 = await orchestrator.TriggerAsync(flowId, trigger, headers: new() { ["Idempotency-Key"] = key });
-    runId1.Should().Be(runId2);
+
+    // Assert
+    Assert.Equal(runId2, runId1);
 }
 ```
 

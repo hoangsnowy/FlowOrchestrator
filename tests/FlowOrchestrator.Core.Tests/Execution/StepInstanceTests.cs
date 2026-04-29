@@ -1,5 +1,4 @@
 using FlowOrchestrator.Core.Execution;
-using FluentAssertions;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -8,24 +7,36 @@ public class StepInstanceTests
     [Fact]
     public void Constructor_SetsKeyAndType()
     {
+        // Arrange
+
+        // Act
         var instance = new StepInstance("step1", "LogMessage");
 
-        instance.Key.Should().Be("step1");
-        instance.Type.Should().Be("LogMessage");
+        // Assert
+        Assert.Equal("step1", instance.Key);
+        Assert.Equal("LogMessage", instance.Type);
     }
 
     [Fact]
     public void DefaultInputs_IsEmptyDictionary()
     {
+        // Arrange
+
+        // Act
         var instance = new StepInstance("step1", "A");
 
-        instance.Inputs.Should().NotBeNull().And.BeEmpty();
+        // Assert
+        Assert.NotNull(instance.Inputs);
+        Assert.Empty(instance.Inputs);
     }
 
     [Fact]
     public void Properties_CanBeSet()
     {
+        // Arrange
         var runId = Guid.NewGuid();
+
+        // Act
         var instance = new StepInstance("step1", "Query")
         {
             RunId = runId,
@@ -35,9 +46,10 @@ public class StepInstanceTests
             ScopeMoveNext = true
         };
 
-        instance.RunId.Should().Be(runId);
-        instance.PrincipalId.Should().Be("user-1");
-        instance.Index.Should().Be(5);
-        instance.ScopeMoveNext.Should().BeTrue();
+        // Assert
+        Assert.Equal(runId, instance.RunId);
+        Assert.Equal("user-1", instance.PrincipalId);
+        Assert.Equal(5, instance.Index);
+        Assert.True(instance.ScopeMoveNext);
     }
 }

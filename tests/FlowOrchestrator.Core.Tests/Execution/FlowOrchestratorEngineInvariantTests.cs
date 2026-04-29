@@ -3,7 +3,6 @@ using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
-using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
@@ -33,8 +32,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
 
     public FlowOrchestratorEngineInvariantTests()
     {
-        // Allow dispatch to proceed in all tests by default.
-        // Individual tests override this to exercise the "already dispatched" guard.
         _runStore.TryRecordDispatchAsync(
                 Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(Task.FromResult(true));
@@ -89,18 +86,17 @@ public sealed class FlowOrchestratorEngineInvariantTests
     [Fact]
     public async Task TriggerAsync_WhenTryRecordDispatchReturnsFalse_DispatcherIsNeverCalled()
     {
-        // Override default: the dispatch ledger reports every step as already dispatched.
+        // Arrange
         _runStore.TryRecordDispatchAsync(
                 Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(Task.FromResult(false));
-
         var ctx = MakeTriggerCtx(MakeFlow("step1"));
 
+        // Act
         await CreateEngine().TriggerAsync(ctx);
 
-        _dispatcher.ReceivedCalls().Should().BeEmpty(
-            "TryRecordDispatch returned false — the step is already in the dispatch ledger, " +
-            "so the runtime must not receive a second enqueue");
+        // Assert
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
     // ── Invariant 2: Claim exclusion ──────────────────────────────────────────
@@ -108,19 +104,17 @@ public sealed class FlowOrchestratorEngineInvariantTests
     [Fact]
     public async Task TriggerAsync_WhenTryClaimStepReturnsFalse_DispatcherIsNeverCalled()
     {
-        // A runtime store that always refuses the claim — simulates another worker
-        // already owning this step during a parallel fan-out.
+        // Arrange
         var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
         runtimeStore.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>())
             .ReturnsForAnyArgs(Task.FromResult(false));
-
         var ctx = MakeTriggerCtx(MakeFlow("step1"));
 
+        // Act
         await CreateEngine(runtimeStore: runtimeStore).TriggerAsync(ctx);
 
-        _dispatcher.ReceivedCalls().Should().BeEmpty(
-            "TryClaimStep returned false — another worker already owns this step, " +
-            "so the dispatcher must not be called");
+        // Assert
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
     // ── Invariant 3: Polling rescheduling order ───────────────────────────────
@@ -128,7 +122,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
     [Fact]
     public async Task RunStepAsync_WhenPending_ReleasesDispatchBeforeSchedulingNextAttempt()
     {
-        // Verify ordering: ReleaseDispatchAsync must fire before ScheduleStepAsync.
+        // Arrange
         var releaseWasCalled = false;
         var scheduleObservedReleaseFirst = false;
 
@@ -164,9 +158,11 @@ public sealed class FlowOrchestratorEngineInvariantTests
         var runId = Guid.NewGuid();
         var flow = MakeFlow("step1");
 
+        // Act
         await CreateEngine().RunStepAsync(
             MakeCtx(runId), flow, new StepInstance("step1", "Work") { RunId = runId });
 
+        // Assert
         await _runStore.Received(1)
             .ReleaseDispatchAsync(runId, "step1", Arg.Any<CancellationToken>());
         await _dispatcher.Received(1).ScheduleStepAsync(
@@ -175,9 +171,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
             Arg.Is<IStepInstance>(s => s.Key == "step1"),
             Arg.Is<TimeSpan>(d => d == TimeSpan.FromSeconds(5)),
             Arg.Any<CancellationToken>());
-        scheduleObservedReleaseFirst.Should().BeTrue(
-            "ReleaseDispatchAsync must be called before ScheduleStepAsync so the next poll " +
-            "attempt can be atomically re-recorded in the dispatch ledger");
+        Assert.True(scheduleObservedReleaseFirst);
     }
 
     // ── Invariant 6: DispatchHint targeting static DAG step throws ────────────
@@ -185,7 +179,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
     [Fact]
     public async Task RunStepAsync_DispatchHintTargetingStaticStep_ThrowsInvalidOperationException()
     {
-        // The executor returns a hint spawning "step2", which already exists in the manifest.
+        // Arrange
         var flow = MakeFlow("step1", "step2");
         var runId = Guid.NewGuid();
 
@@ -204,8 +198,9 @@ public sealed class FlowOrchestratorEngineInvariantTests
             await CreateEngine().RunStepAsync(
                 MakeCtx(runId), flow, new StepInstance("step1", "Work") { RunId = runId });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*static DAG*");
+        // Act + Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        Assert.Contains("static DAG", ex.Message);
     }
 
     // ── Invariant 4: Cascade skip → run completes Skipped ─────────────────────
@@ -213,9 +208,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
     [Fact]
     public async Task RunStepAsync_WhenAllLeafStepsAreSkipped_CompletesRunWithSkippedStatus()
     {
-        // Flow: step1 (entry, Succeeded) + step2 (only runs if step1 Failed).
-        // When step1 Succeeds, step2 is blocked by the graph → engine records it as Skipped.
-        // Since step2 is the only leaf and it is Skipped, the run must complete as Skipped.
+        // Arrange
         var realStore = new InMemoryFlowRunStore();
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
@@ -232,7 +225,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
                     Type = "Fallback",
                     RunAfter = new RunAfterCollection
                     {
-                        ["step1"] = [StepStatus.Failed]   // only runs on failure
+                        ["step1"] = [StepStatus.Failed]
                     }
                 }
             }
@@ -250,12 +243,12 @@ public sealed class FlowOrchestratorEngineInvariantTests
 
         var engine = CreateEngine(runtimeStore: realStore, runStoreOverride: realStore);
 
+        // Act
         await engine.RunStepAsync(
             MakeCtx(runId), flow, new StepInstance("step1", "Work") { RunId = runId });
 
+        // Assert
         var status = await realStore.GetRunStatusAsync(runId);
-        status.Should().Be(StepStatus.Skipped.ToString(),
-            "all leaf steps were skipped because their runAfter conditions could not be satisfied — " +
-            "the run should complete as Skipped, not Succeeded");
+        Assert.Equal("Skipped", status);
     }
 }

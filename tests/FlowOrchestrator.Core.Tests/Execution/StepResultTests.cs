@@ -1,6 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FluentAssertions;
 using System.Text.Json;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
@@ -10,31 +9,46 @@ public class StepResultTests
     [Fact]
     public void DefaultStatus_IsSucceeded()
     {
+        // Arrange
+
+        // Act
         var result = new StepResult();
 
-        result.Status.Should().Be(StepStatus.Succeeded);
+        // Assert
+        Assert.Equal(StepStatus.Succeeded, result.Status);
     }
 
     [Fact]
     public void DefaultReThrow_IsFalse()
     {
+        // Arrange
+
+        // Act
         var result = new StepResult();
 
-        result.ReThrow.Should().BeFalse();
+        // Assert
+        Assert.False(result.ReThrow);
     }
 
     [Fact]
     public void DefaultDelayNextStep_IsNull()
     {
+        // Arrange
+
+        // Act
         var result = new StepResult();
 
-        result.DelayNextStep.Should().BeNull();
+        // Assert
+        Assert.Null(result.DelayNextStep);
     }
 
     [Fact]
     public void Properties_CanBeSet()
     {
+        // Arrange
         var delay = TimeSpan.FromSeconds(10);
+
+        // Act
         var result = new StepResult
         {
             Key = "step1",
@@ -45,37 +59,45 @@ public class StepResultTests
             DelayNextStep = delay
         };
 
-        result.Key.Should().Be("step1");
-        result.Status.Should().Be(StepStatus.Failed);
-        result.Result.Should().NotBeNull();
-        result.FailedReason.Should().Be("Something went wrong");
-        result.ReThrow.Should().BeTrue();
-        result.DelayNextStep.Should().Be(delay);
+        // Assert
+        Assert.Equal("step1", result.Key);
+        Assert.Equal(StepStatus.Failed, result.Status);
+        Assert.NotNull(result.Result);
+        Assert.Equal("Something went wrong", result.FailedReason);
+        Assert.True(result.ReThrow);
+        Assert.Equal(delay, result.DelayNextStep);
     }
 
     [Fact]
     public void GenericStepResult_MapsValueToResult()
     {
+        // Arrange
+
+        // Act
         var result = new StepResult<TestPayload>
         {
             Key = "step2",
             Value = new TestPayload { Code = "A1" }
         };
 
-        result.Result.Should().BeOfType<TestPayload>();
-        result.Value!.Code.Should().Be("A1");
+        // Assert
+        Assert.IsType<TestPayload>(result.Result);
+        Assert.Equal("A1", result.Value!.Code);
     }
 
     [Fact]
     public void GenericStepResult_MapsResultToValue()
     {
+        // Arrange
         var result = new StepResult<TestPayload> { Key = "step3" };
         var payloadElement = JsonSerializer.Deserialize<JsonElement>("{\"code\":\"B2\"}");
 
+        // Act
         result.Result = payloadElement;
 
-        result.Value.Should().NotBeNull();
-        result.Value!.Code.Should().Be("B2");
+        // Assert
+        Assert.NotNull(result.Value);
+        Assert.Equal("B2", result.Value!.Code);
     }
 
     private sealed class TestPayload

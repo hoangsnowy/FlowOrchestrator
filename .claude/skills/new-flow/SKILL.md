@@ -112,7 +112,7 @@ Test:
 - `runAfter` dependencies are wired correctly
 - For each webhook trigger: `webhookSlug` is set
 
-Use the same xUnit + FluentAssertions + NSubstitute stack as the rest of the test suite.
+Use the same **xUnit + NSubstitute** stack as the rest of the test suite. Write assertions with plain xUnit `Assert.*` and follow the AAA pattern (`// Arrange` / `// Act` / `// Assert`). Do not add FluentAssertions or any other fluent-assertion library.
 
 ### 5. Build and test
 

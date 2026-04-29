@@ -1,5 +1,4 @@
 using FlowOrchestrator.Core.Abstractions;
-using FluentAssertions;
 
 namespace FlowOrchestrator.Core.Tests.Abstractions;
 
@@ -8,61 +7,90 @@ public class StepMetadataTests
     [Fact]
     public void ShouldExecute_EmptyRunAfter_ReturnsTrue()
     {
+        // Arrange
         var step = new StepMetadata { Type = "A", RunAfter = new RunAfterCollection() };
 
-        step.ShouldExecute("anyStep", StepStatus.Succeeded).Should().BeTrue();
+        // Act
+        var result = step.ShouldExecute("anyStep", StepStatus.Succeeded);
+
+        // Assert
+        Assert.True(result);
     }
 
     [Fact]
     public void ShouldExecute_MatchingStepAndStatus_ReturnsTrue()
     {
+        // Arrange
         var step = new StepMetadata
         {
             Type = "B",
             RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded, StepStatus.Failed } }
         };
 
-        step.ShouldExecute("step1", StepStatus.Succeeded).Should().BeTrue();
-        step.ShouldExecute("step1", StepStatus.Failed).Should().BeTrue();
+        // Act
+        var succeeded = step.ShouldExecute("step1", StepStatus.Succeeded);
+        var failed = step.ShouldExecute("step1", StepStatus.Failed);
+
+        // Assert
+        Assert.True(succeeded);
+        Assert.True(failed);
     }
 
     [Fact]
     public void ShouldExecute_StatusNotInAllowedList_ReturnsFalse()
     {
+        // Arrange
         var step = new StepMetadata
         {
             Type = "B",
             RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
         };
 
-        step.ShouldExecute("step1", StepStatus.Failed).Should().BeFalse();
+        // Act
+        var result = step.ShouldExecute("step1", StepStatus.Failed);
+
+        // Assert
+        Assert.False(result);
     }
 
     [Fact]
     public void ShouldExecute_DifferentPrecedingStep_ReturnsFalse()
     {
+        // Arrange
         var step = new StepMetadata
         {
             Type = "B",
             RunAfter = new RunAfterCollection { ["step1"] = new[] { StepStatus.Succeeded } }
         };
 
-        step.ShouldExecute("step2", StepStatus.Succeeded).Should().BeFalse();
+        // Act
+        var result = step.ShouldExecute("step2", StepStatus.Succeeded);
+
+        // Assert
+        Assert.False(result);
     }
 
     [Fact]
     public void DefaultInputs_IsEmptyDictionary()
     {
+        // Arrange
+
+        // Act
         var step = new StepMetadata { Type = "A" };
 
-        step.Inputs.Should().BeEmpty();
+        // Assert
+        Assert.Empty(step.Inputs);
     }
 
     [Fact]
     public void DefaultRunAfter_IsEmptyCollection()
     {
+        // Arrange
+
+        // Act
         var step = new StepMetadata { Type = "A" };
 
-        step.RunAfter.Should().BeEmpty();
+        // Assert
+        Assert.Empty(step.RunAfter);
     }
 }

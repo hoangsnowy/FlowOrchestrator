@@ -2,7 +2,6 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Hosting;
 using FlowOrchestrator.Core.Storage;
-using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 
@@ -39,8 +38,6 @@ public class FlowRunRecoveryHostedServiceTests
         return flow;
     }
 
-    // ── helpers ────────────────────────────────────────────────────────────────
-
     private static IReadOnlyList<FlowRunRecord> RunList(params FlowRunRecord[] runs) => runs;
     private static IReadOnlyDictionary<string, StepStatus> EmptyStatuses() =>
         new Dictionary<string, StepStatus>();
@@ -49,32 +46,37 @@ public class FlowRunRecoveryHostedServiceTests
     private static IReadOnlySet<string> DispatchedSet(params string[] keys) =>
         new HashSet<string>(keys, StringComparer.Ordinal);
 
-    // ── tests ─────────────────────────────────────────────────────────────────
-
     [Fact]
     public async Task StartAsync_NoActiveRuns_DoesNotDispatch()
     {
+        // Arrange
         _runStore.GetActiveRunsAsync()
             .Returns(Task.FromResult<IReadOnlyList<FlowRunRecord>>(Array.Empty<FlowRunRecord>()));
 
+        // Act
         await CreateSut().StartAsync(default);
 
-        _dispatcher.ReceivedCalls().Should().BeEmpty();
+        // Assert
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
     [Fact]
     public async Task StartAsync_NoRuntimeStore_SkipsRecovery()
     {
+        // Arrange
+
+        // Act
         await CreateSut(includeRuntimeStore: false).StartAsync(default);
 
-        // GetActiveRunsAsync must NOT have been called — we bail out early.
+        // Assert
         await _runStore.DidNotReceiveWithAnyArgs().GetActiveRunsAsync();
-        _dispatcher.ReceivedCalls().Should().BeEmpty();
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
     [Fact]
     public async Task StartAsync_ReadyStepNotDispatched_EnqueuesStep()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var flow = FlowWith(flowId, "step1");
@@ -83,20 +85,17 @@ public class FlowRunRecoveryHostedServiceTests
             .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
         _flowRepo.GetAllFlowsAsync()
             .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
-
-        // step1 has no dependencies → graph evaluates it as Ready.
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult(EmptyStatuses()));
-
-        // No dispatch row yet — recovery should enqueue it.
         _runStore.GetDispatchedStepKeysAsync(runId)
             .Returns(Task.FromResult(EmptyDispatched()));
-
         _runStore.TryRecordDispatchAsync(runId, "step1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
 
+        // Act
         await CreateSut().StartAsync(default);
 
+        // Assert
         await _dispatcher.Received(1).EnqueueStepAsync(
             Arg.Is<IExecutionContext>(c => c.RunId == runId),
             flow,
@@ -107,6 +106,7 @@ public class FlowRunRecoveryHostedServiceTests
     [Fact]
     public async Task StartAsync_ReadyStepAlreadyDispatched_DoesNotReEnqueue()
     {
+        // Arrange
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var flow = FlowWith(flowId, "step1");
@@ -117,20 +117,20 @@ public class FlowRunRecoveryHostedServiceTests
             .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult(EmptyStatuses()));
-
-        // Dispatch row already exists → recovery must skip it.
         _runStore.GetDispatchedStepKeysAsync(runId)
             .Returns(Task.FromResult(DispatchedSet("step1")));
 
+        // Act
         await CreateSut().StartAsync(default);
 
-        _dispatcher.ReceivedCalls().Should().BeEmpty();
+        // Assert
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
     [Fact]
     public async Task StartAsync_TryRecordDispatchReturnsFalse_DoesNotCallDispatcher()
     {
-        // Two recovery replicas race — only one wins TryRecordDispatch.
+        // Arrange
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var flow = FlowWith(flowId, "step1");
@@ -143,13 +143,13 @@ public class FlowRunRecoveryHostedServiceTests
             .Returns(Task.FromResult(EmptyStatuses()));
         _runStore.GetDispatchedStepKeysAsync(runId)
             .Returns(Task.FromResult(EmptyDispatched()));
-
-        // This instance lost the atomic race.
         _runStore.TryRecordDispatchAsync(runId, "step1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(false));
 
+        // Act
         await CreateSut().StartAsync(default);
 
-        _dispatcher.ReceivedCalls().Should().BeEmpty();
+        // Assert
+        Assert.Empty(_dispatcher.ReceivedCalls());
     }
 }

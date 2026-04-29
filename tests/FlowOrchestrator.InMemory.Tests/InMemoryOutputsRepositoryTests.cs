@@ -2,7 +2,6 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
-using FluentAssertions;
 using NSubstitute;
 
 namespace FlowOrchestrator.InMemory.Tests;
@@ -22,27 +21,35 @@ public class InMemoryOutputsRepositoryTests
     [Fact]
     public async Task SaveAndGetTriggerData_RoundTrip()
     {
+        // Arrange
         var flow = CreateFlow();
         var trigger = new Trigger("manual", "Manual", new { foo = "bar" });
         var ctx = new TriggerContext { RunId = Guid.NewGuid(), Flow = flow, Trigger = trigger };
 
+        // Act
         await _sut.SaveTriggerDataAsync(ctx, flow, trigger);
         var result = await _sut.GetTriggerDataAsync(ctx.RunId);
 
-        result.Should().NotBeNull();
+        // Assert
+        Assert.NotNull(result);
     }
 
     [Fact]
     public async Task GetTriggerDataAsync_NonExistentRunId_ReturnsNull()
     {
+        // Arrange
+
+        // Act
         var result = await _sut.GetTriggerDataAsync(Guid.NewGuid());
 
-        result.Should().BeNull();
+        // Assert
+        Assert.Null(result);
     }
 
     [Fact]
     public async Task SaveAndGetTriggerHeaders_RoundTrip()
     {
+        // Arrange
         var flow = CreateFlow();
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -52,39 +59,49 @@ public class InMemoryOutputsRepositoryTests
         var trigger = new Trigger("manual", "Manual", new { foo = "bar" }, headers);
         var ctx = new TriggerContext { RunId = Guid.NewGuid(), Flow = flow, Trigger = trigger };
 
+        // Act
         await _sut.SaveTriggerHeadersAsync(ctx, flow, trigger);
         var result = await _sut.GetTriggerHeadersAsync(ctx.RunId);
 
-        result.Should().NotBeNull();
-        result!["X-Correlation-Id"].Should().Be("corr-123");
-        result["content-type"].Should().Be("application/json");
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("corr-123", result!["X-Correlation-Id"]);
+        Assert.Equal("application/json", result["content-type"]);
     }
 
     [Fact]
     public async Task SaveAndGetStepOutput_RoundTrip()
     {
+        // Arrange
         var flow = CreateFlow();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
         var stepResult = new StepResult { Key = "step1", Result = new { count = 42 } };
 
+        // Act
         await _sut.SaveStepOutputAsync(ctx, flow, step, stepResult);
         var output = await _sut.GetStepOutputAsync(ctx.RunId, "step1");
 
-        output.Should().NotBeNull();
+        // Assert
+        Assert.NotNull(output);
     }
 
     [Fact]
     public async Task GetStepOutputAsync_NonExistentKey_ReturnsNull()
     {
+        // Arrange
+
+        // Act
         var result = await _sut.GetStepOutputAsync(Guid.NewGuid(), "missing");
 
-        result.Should().BeNull();
+        // Assert
+        Assert.Null(result);
     }
 
     [Fact]
     public async Task SaveStepInputAsync_StoresInput()
     {
+        // Arrange
         var flow = CreateFlow();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "Query")
@@ -93,48 +110,59 @@ public class InMemoryOutputsRepositoryTests
             Inputs = new Dictionary<string, object?> { ["sql"] = "SELECT 1" }
         };
 
+        // Act
         await _sut.SaveStepInputAsync(ctx, flow, step);
 
+        // Assert
         var result = await _sut.GetStepOutputAsync(ctx.RunId, "step1:input");
-        result.Should().NotBeNull();
+        Assert.NotNull(result);
     }
 
     [Fact]
     public async Task EndScopeAsync_DoesNotThrow()
     {
+        // Arrange
         var flow = CreateFlow();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
 
-        var act = () => _sut.EndScopeAsync(ctx, flow, step).AsTask();
+        // Act
+        var ex = await Record.ExceptionAsync(async () => await _sut.EndScopeAsync(ctx, flow, step));
 
-        await act.Should().NotThrowAsync();
+        // Assert
+        Assert.Null(ex);
     }
 
     [Fact]
     public async Task RecordEventAsync_DoesNotThrow()
     {
+        // Arrange
         var flow = CreateFlow();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var evt = new FlowEvent { Type = "Info", Message = "Test event" };
 
-        var act = () => _sut.RecordEventAsync(ctx, flow, step, evt).AsTask();
+        // Act
+        var ex = await Record.ExceptionAsync(async () => await _sut.RecordEventAsync(ctx, flow, step, evt));
 
-        await act.Should().NotThrowAsync();
+        // Assert
+        Assert.Null(ex);
     }
 
     [Fact]
     public async Task SaveStepOutput_WithNullResult_StoresSuccessfully()
     {
+        // Arrange
         var flow = CreateFlow();
         var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
         var stepResult = new StepResult { Key = "step1", Result = null };
 
+        // Act
         await _sut.SaveStepOutputAsync(ctx, flow, step, stepResult);
         var output = await _sut.GetStepOutputAsync(ctx.RunId, "step1");
 
-        output.Should().NotBeNull();
+        // Assert
+        Assert.NotNull(output);
     }
 }

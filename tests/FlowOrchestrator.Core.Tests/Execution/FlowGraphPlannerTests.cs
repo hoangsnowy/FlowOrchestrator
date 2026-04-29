@@ -1,6 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FluentAssertions;
 using NSubstitute;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
@@ -12,6 +11,7 @@ public class FlowGraphPlannerTests
     [Fact]
     public void Evaluate_FanOut_ReturnsMultipleReadySteps()
     {
+        // Arrange
         var flow = CreateFlow(new StepCollection
         {
             ["a"] = new StepMetadata { Type = "A" },
@@ -19,14 +19,18 @@ public class FlowGraphPlannerTests
             ["c"] = new StepMetadata { Type = "C", RunAfter = new RunAfterCollection { ["a"] = [StepStatus.Succeeded] } }
         });
 
+        // Act
         var evaluation = _sut.Evaluate(flow, new Dictionary<string, StepStatus> { ["a"] = StepStatus.Succeeded });
 
-        evaluation.ReadyStepKeys.Should().Contain(["b", "c"]);
+        // Assert
+        Assert.Contains("b", evaluation.ReadyStepKeys);
+        Assert.Contains("c", evaluation.ReadyStepKeys);
     }
 
     [Fact]
     public void Evaluate_FanInBlocked_ReturnsBlockedStep()
     {
+        // Arrange
         var flow = CreateFlow(new StepCollection
         {
             ["a"] = new StepMetadata { Type = "A" },
@@ -43,6 +47,7 @@ public class FlowGraphPlannerTests
             }
         });
 
+        // Act
         var evaluation = _sut.Evaluate(flow, new Dictionary<string, StepStatus>
         {
             ["a"] = StepStatus.Succeeded,
@@ -50,12 +55,14 @@ public class FlowGraphPlannerTests
             ["c"] = StepStatus.Succeeded
         });
 
-        evaluation.BlockedStepKeys.Should().Contain("d");
+        // Assert
+        Assert.Contains("d", evaluation.BlockedStepKeys);
     }
 
     [Fact]
     public void Evaluate_RuntimeScopedDependency_ResolvesRelativeDependency()
     {
+        // Arrange
         var flow = CreateFlow(new StepCollection
         {
             ["loop"] = new LoopStepMetadata
@@ -76,27 +83,32 @@ public class FlowGraphPlannerTests
             }
         });
 
+        // Act
         var evaluation = _sut.Evaluate(flow, new Dictionary<string, StepStatus>
         {
             ["loop.0.child1"] = StepStatus.Succeeded
         });
 
-        evaluation.ReadyStepKeys.Should().Contain("loop.0.child2");
+        // Assert
+        Assert.Contains("loop.0.child2", evaluation.ReadyStepKeys);
     }
 
     [Fact]
     public void Validate_DetectsCycle()
     {
+        // Arrange
         var flow = CreateFlow(new StepCollection
         {
             ["a"] = new StepMetadata { Type = "A", RunAfter = new RunAfterCollection { ["b"] = [StepStatus.Succeeded] } },
             ["b"] = new StepMetadata { Type = "B", RunAfter = new RunAfterCollection { ["a"] = [StepStatus.Succeeded] } }
         });
 
+        // Act
         var result = _sut.Validate(flow);
 
-        result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.Contains("cycle", StringComparison.OrdinalIgnoreCase));
+        // Assert
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("cycle", StringComparison.OrdinalIgnoreCase));
     }
 
     private static IFlowDefinition CreateFlow(StepCollection steps)
