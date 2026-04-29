@@ -2,65 +2,47 @@ using System.Text.Json;
 using Dapper;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.SampleApp.Steps;
 
 /// <summary>
-/// Reads outputs from two upstream steps and saves a combined summary to the database.
+/// Reads resolved step outputs from its input properties and saves a combined summary to the database.
 ///
-/// ── Advanced topic: Reading upstream step outputs via IOutputsRepository ────
+/// ── Using @steps() expressions ──────────────────────────────────────────────
 ///
-/// Every step's return value is persisted to FlowOutputs keyed by (RunId, stepKey).
-/// Use IOutputsRepository.GetStepOutputAsync{T}(runId, stepKey) in any downstream
-/// step to retrieve those outputs — without needing to pass data through inputs.
+/// The upstream step outputs are wired into this handler's inputs via manifest expressions:
 ///
-/// Key points:
-///   • IOutputsRepository is injected via the constructor like any other DI service.
-///   • ctx.RunId scopes the lookup to the current flow run.
-///   • The step keys (e.g. "fetch_orders", "submit_to_wms") are made configurable
-///     via SaveResultStepInput so this handler can be reused across different flows
-///     without hardcoding predecessor step names.
-///   • If a referenced step did not run (e.g. was skipped), GetStepOutputAsync
-///     returns default(T) — always check ValueKind before using the result.
+///   ["fetchedOrders"] = "@steps('fetch_orders').output"
+///   ["apiResult"]     = "@steps('submit_to_wms').output"
+///
+/// The engine resolves these before ExecuteAsync is called, so the handler receives the
+/// outputs as JsonElement values and requires no IOutputsRepository injection.
 ///
 /// Flow: OrderFulfillmentFlow
-///   fetch_orders  → rows[]        (read by ordersStepKey input)
-///   submit_to_wms → WMS response  (read by apiResultStepKey input)
+///   fetch_orders  → rows[]        (wired via fetchedOrders input)
+///   submit_to_wms → WMS response  (wired via apiResult input)
 ///   save_result   → this step — combines both and saves to ProcessedOrders table
 /// </summary>
 public sealed class SaveResultStep : IStepHandler<SaveResultStepInput>
 {
     private readonly DbConnectionFactory _dbFactory;
-    private readonly IOutputsRepository _outputsRepository;
     private readonly ILogger<SaveResultStep> _logger;
 
-    public SaveResultStep(
-        DbConnectionFactory dbFactory,
-        IOutputsRepository outputsRepository,
-        ILogger<SaveResultStep> logger)
+    public SaveResultStep(DbConnectionFactory dbFactory, ILogger<SaveResultStep> logger)
     {
         _dbFactory = dbFactory;
-        _outputsRepository = outputsRepository;
         _logger = logger;
     }
 
     public async ValueTask<object?> ExecuteAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance<SaveResultStepInput> step)
     {
-        var table          = string.IsNullOrWhiteSpace(step.Inputs.Table) ? "Results" : step.Inputs.Table;
-        var ordersStepKey  = string.IsNullOrWhiteSpace(step.Inputs.OrdersStepKey)    ? "fetch_orders"   : step.Inputs.OrdersStepKey;
-        var apiStepKey     = string.IsNullOrWhiteSpace(step.Inputs.ApiResultStepKey) ? "submit_to_wms"  : step.Inputs.ApiResultStepKey;
-
-        // Retrieve outputs produced by the two upstream steps in this run.
-        // The step keys are supplied via manifest Inputs so this handler stays reusable.
-        var fetchOutput = await _outputsRepository.GetStepOutputAsync<JsonElement>(ctx.RunId, ordersStepKey).ConfigureAwait(false);
-        var apiOutput   = await _outputsRepository.GetStepOutputAsync<JsonElement>(ctx.RunId, apiStepKey).ConfigureAwait(false);
+        var table = string.IsNullOrWhiteSpace(step.Inputs.Table) ? "Results" : step.Inputs.Table;
 
         var summary = new SaveResultSummary
         {
             RunId         = ctx.RunId,
-            FetchedOrders = ToRawJson(fetchOutput),
-            ApiResponse   = ToRawJson(apiOutput),
+            FetchedOrders = ToRawJson(step.Inputs.FetchedOrders),
+            ApiResponse   = ToRawJson(step.Inputs.ApiResult),
             ProcessedAt   = DateTimeOffset.UtcNow
         };
 
@@ -88,8 +70,14 @@ public sealed class SaveResultStep : IStepHandler<SaveResultStepInput>
         return new StepResult<SaveResultSummary> { Key = step.Key, Value = summary };
     }
 
-    private static string? ToRawJson(JsonElement value) =>
-        value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined ? null : value.GetRawText();
+    private static string? ToRawJson(object? value) =>
+        value switch
+        {
+            JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined } => null,
+            JsonElement el => el.GetRawText(),
+            string s when !string.IsNullOrWhiteSpace(s) => s,
+            _ => null
+        };
 }
 
 public sealed class SaveResultStepInput
@@ -98,17 +86,16 @@ public sealed class SaveResultStepInput
     public string? Table { get; set; }
 
     /// <summary>
-    /// Step key whose output holds the fetched order rows.
-    /// Defaults to "fetch_orders" — override in the manifest Inputs to reuse this
-    /// handler in other flows that use a different predecessor step name.
+    /// Resolved output of the fetch step, supplied via <c>@steps('fetch_orders').output</c>
+    /// in the flow manifest.
     /// </summary>
-    public string? OrdersStepKey { get; set; }
+    public object? FetchedOrders { get; set; }
 
     /// <summary>
-    /// Step key whose output holds the API/WMS response.
-    /// Defaults to "submit_to_wms".
+    /// Resolved output of the WMS API step, supplied via <c>@steps('submit_to_wms').output</c>
+    /// in the flow manifest.
     /// </summary>
-    public string? ApiResultStepKey { get; set; }
+    public object? ApiResult { get; set; }
 }
 
 public sealed class SaveResultSummary
