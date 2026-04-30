@@ -221,6 +221,38 @@ For InMemory (no Hangfire, no database) and PostgreSQL variants, see **[📖 Get
 | Configuration reference | [configuration](https://hoangsnowy.github.io/FlowOrchestrator/articles/configuration.html) |
 | Architecture | [architecture](https://hoangsnowy.github.io/FlowOrchestrator/articles/architecture.html) |
 | Observability | [observability](https://hoangsnowy.github.io/FlowOrchestrator/articles/observability.html) |
+| Mermaid export | [mermaid-export](https://hoangsnowy.github.io/FlowOrchestrator/articles/mermaid-export.html) |
+
+---
+
+## Visualize any flow with one line
+
+`flow.ToMermaid()` returns a Mermaid flowchart string that renders in GitHub
+READMEs, Notion, Confluence, and any modern Markdown surface — no running app
+required. Here is the sample `OrderFulfillmentFlow`:
+
+```mermaid
+flowchart TD
+    classDef trigger fill:#e1f5ff,stroke:#0288d1
+    classDef entry fill:#c8e6c9,stroke:#388e3c
+    classDef polling fill:#fff9c4,stroke:#f57f17
+    classDef loop fill:#f3e5f5,stroke:#7b1fa2
+
+    T_manual["⚡ manual<br/>Manual"]:::trigger
+    T_webhook["⚡ webhook<br/>Webhook /order-fulfillment"]:::trigger
+
+    fetch_orders["fetch_orders<br/><i>QueryDatabase</i>"]:::entry
+    submit_to_wms["submit_to_wms<br/><i>CallExternalApi</i>"]:::polling
+    save_result["save_result<br/><i>SaveResult</i>"]
+
+    T_manual --> fetch_orders
+    T_webhook --> fetch_orders
+    fetch_orders -- Succeeded --> submit_to_wms
+    submit_to_wms -- Succeeded --> save_result
+```
+
+The dashboard ships a Copy Mermaid button on every flow detail page, and the
+sample app exposes `--export-mermaid <flowId>` for CI integrations.
 
 ---
 
