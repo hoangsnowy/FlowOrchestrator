@@ -24,7 +24,7 @@ namespace FlowOrchestrator.SampleApp.Flows;
 public sealed class AmountThresholdFlow : IFlowDefinition
 {
     /// <inheritdoc/>
-    public Guid Id { get; } = new Guid("00000000-0000-0000-0000-000000000010");
+    public Guid Id { get; } = new Guid("00000000-0000-0000-0000-000000000012");
 
     /// <inheritdoc/>
     public string Version => "1.0";
