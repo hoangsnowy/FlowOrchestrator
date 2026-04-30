@@ -6,6 +6,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-04-30
+
+### Added
+
+- **`FlowOrchestrator.Testing` package** — fluent in-process test host for flow integration tests
+  without ASP.NET, Hangfire, or a real database.
+  - Single-line setup: `await FlowTestHost.For<MyFlow>().WithHandler<H>("Step").BuildAsync()`.
+  - Builder options: `WithService<T>(fake)`, `WithHandler<T>(stepType)`, `WithLogging`,
+    `WithSystemClock` (frozen clock for cron tests), `WithFastPolling` (collapses
+    `pollIntervalSeconds` to ~100ms), `WithCustomConfiguration` (escape hatch).
+  - `TriggerAsync` and `TriggerWebhookAsync` poll `IFlowRunStore` until the run reaches a
+    terminal status (or the test-host timeout fires). Default timeout: 30 seconds.
+  - `FlowTestRunResult` exposes `Status`, per-step `Output`/`Inputs`/`AttemptCount`/`FailureReason`,
+    and the persisted `Events` log.
+  - Documentation: [Testing](docs/articles/testing.md).
+
 ## [1.15.0] - 2026-04-30
 
 ### Added

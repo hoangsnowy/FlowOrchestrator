@@ -89,6 +89,8 @@ public sealed class NightlyOrdersFlow : IFlowDefinition
 // Dashboard, per-step retry, full run history, DAG view — included.
 ```
 
+And yes — your flows are testable. See [`FlowOrchestrator.Testing`](docs/articles/testing.md) for a one-liner test host that runs flows in-process without Hangfire or ASP.NET.
+
 ## Coming from Temporal or Dapr?
 
 If you don't need replay-based determinism and a separate cluster, here is the simpler model:
