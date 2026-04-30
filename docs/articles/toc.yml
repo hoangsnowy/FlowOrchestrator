@@ -31,6 +31,9 @@
 - name: Mermaid Diagram Export
   href: mermaid-export.md
 
+- name: Testing
+  href: testing.md
+
 - name: Observability
   href: observability.md
 
