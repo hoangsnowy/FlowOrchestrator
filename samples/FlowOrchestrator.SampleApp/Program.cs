@@ -145,6 +145,10 @@ builder.Services.AddFlowOrchestrator(options =>
     // because it was never needed → run-level status = Succeeded.
     options.AddFlow<FinalStepSkipDemoFlow>();
 
+    // When-condition demo — two mutually-exclusive branches gated by @triggerBody().amount.
+    // Trigger with { "amount": 1500 } → high_value_approve runs; { "amount": 500 } → auto_approve runs.
+    options.AddFlow<AmountThresholdFlow>();
+
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();
 });
