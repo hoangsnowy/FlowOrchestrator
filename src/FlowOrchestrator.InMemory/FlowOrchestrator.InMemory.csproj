@@ -22,7 +22,13 @@
 
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
-      <_Parameter1>FlowOrchestrator.InMemory.Tests</_Parameter1>
+      <_Parameter1>FlowOrchestrator.InMemory.UnitTests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>FlowOrchestrator.InMemory.IntegrationTests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>FlowOrchestrator.RegressionTests</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

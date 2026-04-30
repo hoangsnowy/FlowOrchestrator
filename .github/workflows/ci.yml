@@ -5,11 +5,16 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    # Nightly regression sweep at 03:00 UTC.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
-  build-and-test:
-    name: Build & Test (${{ matrix.tfm }})
+  unit:
+    name: Unit Tests (${{ matrix.tfm }})
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
@@ -26,19 +31,85 @@ jobs:
             9.0.x
             10.0.x
 
-      - name: Restore dependencies
-        run: dotnet restore FlowOrchestrator.Libraries.slnf
+      - name: Restore
+        run: dotnet restore FlowOrchestrator.UnitTests.slnf
 
       - name: Build
-        run: dotnet build FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }}
+        run: dotnet build FlowOrchestrator.UnitTests.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }}
 
-      - name: Test
-        run: dotnet test FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
+      - name: Test (Unit)
+        run: dotnet test FlowOrchestrator.UnitTests.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
 
-      - name: Upload coverage reports
+      - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports-${{ matrix.tfm }}
+          name: coverage-unit-${{ matrix.tfm }}
           path: ./test-results/**/coverage.cobertura.xml
           retention-days: 14
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore FlowOrchestrator.IntegrationTests.slnf
+
+      - name: Build
+        run: dotnet build FlowOrchestrator.IntegrationTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0
+
+      - name: Test (Integration)
+        run: dotnet test FlowOrchestrator.IntegrationTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0 --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: ./test-results/**/coverage.cobertura.xml
+          retention-days: 14
+
+  regression:
+    name: Regression Tests (nightly + main + dispatch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: integration
+    # Skip on feature-branch PRs — these tests are timing/concurrency stress and
+    # too noisy to gate every PR. They run on main, on schedule, and on demand.
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore FlowOrchestrator.RegressionTests.slnf
+
+      - name: Build
+        run: dotnet build FlowOrchestrator.RegressionTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0
+
+      - name: Test (Regression)
+        run: dotnet test FlowOrchestrator.RegressionTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0 --verbosity normal

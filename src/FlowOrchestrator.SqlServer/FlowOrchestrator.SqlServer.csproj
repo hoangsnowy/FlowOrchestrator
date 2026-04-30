@@ -22,7 +22,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.Tests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.IntegrationTests" />
   </ItemGroup>
 
 </Project>

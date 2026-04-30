@@ -29,12 +29,29 @@ public sealed class CronFlow : IFlowDefinition
     };
 }
 
-/// <summary>Singleton call counter shared with <see cref="CronTickStepHandler"/>.</summary>
+/// <summary>
+/// Singleton call counter shared with <see cref="CronTickStepHandler"/>.
+/// Exposes <see cref="FirstCall"/> so tests can <c>await</c> the first invocation
+/// instead of polling on a wall-clock deadline (which is flaky on slow CI runners).
+/// </summary>
 public sealed class CronCallCounter
 {
     private int _calls;
-    public int Increment() => Interlocked.Increment(ref _calls);
+    private readonly TaskCompletionSource _firstCallSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Increments the counter and signals <see cref="FirstCall"/> on the first call.</summary>
+    public int Increment()
+    {
+        var n = Interlocked.Increment(ref _calls);
+        _firstCallSignal.TrySetResult();
+        return n;
+    }
+
+    /// <summary>Total number of times the handler has been invoked.</summary>
     public int Calls => _calls;
+
+    /// <summary>Completes the first time <see cref="Increment"/> is called.</summary>
+    public Task FirstCall => _firstCallSignal.Task;
 }
 
 /// <summary>Handler that increments a shared counter — proves the cron trigger fired.</summary>

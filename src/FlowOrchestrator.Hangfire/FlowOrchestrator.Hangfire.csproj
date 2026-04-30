@@ -10,7 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="FlowOrchestrator.Hangfire.Tests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.Hangfire.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.Hangfire.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.RegressionTests" />
   </ItemGroup>
 
   <ItemGroup>
