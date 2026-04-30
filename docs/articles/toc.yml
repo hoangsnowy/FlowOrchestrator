@@ -16,6 +16,9 @@
 - name: Expressions
   href: expressions.md
 
+- name: Conditional Execution
+  href: conditional-execution.md
+
 - name: Polling Steps
   href: polling.md
 

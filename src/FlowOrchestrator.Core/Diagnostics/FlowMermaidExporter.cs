@@ -175,17 +175,32 @@ public static class FlowMermaidExporter
     {
         foreach (var (key, metadata) in steps)
         {
-            foreach (var (predecessorKey, statuses) in metadata.RunAfter)
+            foreach (var (predecessorKey, condition) in metadata.RunAfter)
             {
-                if (statuses is null || statuses.Length == 0)
+                if (condition is null)
                 {
                     continue;
                 }
 
-                var label = string.Join('|', statuses.Select(s => s.ToString()));
+                var statuses = condition.Statuses;
+                var labelParts = new List<string>(2);
+                if (statuses is { Length: > 0 })
+                {
+                    labelParts.Add(string.Join('|', statuses.Select(s => s.ToString())));
+                }
+                if (!string.IsNullOrWhiteSpace(condition.When))
+                {
+                    labelParts.Add($"when: {EscapeLabel(condition.When!)}");
+                }
+
+                if (labelParts.Count == 0)
+                {
+                    continue;
+                }
+
                 sb.Append("    ")
                   .Append(SafeId(predecessorKey))
-                  .Append(" -- ").Append(label).Append(" --> ")
+                  .Append(" -- ").Append(string.Join(' ', labelParts)).Append(" --> ")
                   .Append(SafeId(key))
                   .AppendLine();
             }

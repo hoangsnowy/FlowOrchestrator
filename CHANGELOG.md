@@ -6,6 +6,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **`When` boolean condition on `RunAfter`** (Plan 05). Steps can now branch on
+  *values* of prior step outputs or the trigger payload, not just on predecessor
+  status. A step whose `When` evaluates to `false` is recorded as `Skipped`
+  (not `Failed`), and the dashboard's new **"Why skipped"** panel shows the
+  evaluation trace (e.g. `500 > 1000 → false`) so authors can debug branching
+  decisions without log diving.
+  - `RunAfterCondition` carries optional `Statuses` and `When`. The legacy
+    `["x"] = [StepStatus.Succeeded]` array literal continues to compile via
+    `[CollectionBuilder]` + an implicit conversion — no source changes required
+    for existing flows.
+  - Hand-rolled recursive-descent `BooleanExpressionEvaluator` supports `==`,
+    `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `!`, parentheses, and literals
+    (number, string, `true`, `false`, `null`). Zero new third-party dependencies.
+  - LHS resolution reuses the existing `StepOutputResolver` (Plan 01) plus
+    extracted `@triggerBody()`/`@triggerHeaders()` helpers.
+  - SQL Server / PostgreSQL / in-memory storage all gain a nullable
+    `EvaluationTraceJson` column (idempotent `ALTER TABLE` migration).
+  - Sample: `samples/.../Flows/AmountThresholdFlow.cs`.
+  - Documentation: [Conditional Execution](docs/articles/conditional-execution.md).
+
 ## [1.16.0] - 2026-04-30
 
 ### Added

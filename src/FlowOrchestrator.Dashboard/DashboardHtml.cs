@@ -597,6 +597,8 @@ function getStepAttemptCount(step) {
 function renderStepDebugPanels(step) {
   // Blocked steps never executed — no input/output/error panels to show
   if (step.status === 'Skipped') {
+    const tracePanel = renderWhyWhenSkippedPanel(step);
+    if (tracePanel) return tracePanel;
     return '<div style="margin-top:5px;font-size:11px;color:var(--skip-text);font-style:italic">'
       + 'Not executed \u2014 retry the failed step above to resume this flow.'
       + '</div>';
@@ -609,6 +611,25 @@ function renderStepDebugPanels(step) {
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
   const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
+}
+function renderWhyWhenSkippedPanel(step) {
+  const traceJson = step && step.evaluationTraceJson;
+  if (!traceJson) return '';
+  let trace;
+  try { trace = JSON.parse(traceJson); } catch { return ''; }
+  if (!trace || typeof trace.expression !== 'string') return '';
+  const expression = esc(trace.expression);
+  const resolved = esc(trace.resolved || '');
+  const result = trace.result === true ? 'true' : 'false';
+  return '<div class="step-detail">'
+    + '<div class="step-detail-title"><span>Why skipped</span></div>'
+    + '<div class="step-detail-body" style="font-family:var(--font-mono);font-size:12px;line-height:1.6">'
+    +   '<div style="color:var(--text-muted)">Expression</div>'
+    +   '<div style="margin-bottom:6px">' + expression + '</div>'
+    +   '<div style="color:var(--text-muted)">Resolved</div>'
+    +   '<div>' + resolved + ' \u2192 <strong style="color:var(--error-text)">' + result + '</strong></div>'
+    + '</div>'
+    + '</div>';
 }
 function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
 function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }

@@ -16,6 +16,12 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
     <PackageReference Include="System.Text.Json" Version="10.0.5" />
+    <!-- Newtonsoft.Json 13.0.4 is provided centrally by Directory.Build.props (already
+         pinned because Hangfire pulls in a vulnerable 11.0.1). Core uses it ONLY to carry
+         the [Newtonsoft.Json.JsonConverter] attribute on RunAfterCondition — the most
+         reliable way to override Newtonsoft's IEnumerable auto-detection regardless of
+         Hangfire's contract caching / settings init order. All FlowOrchestrator.Core
+         internal serialisation still uses System.Text.Json end-to-end. -->
   </ItemGroup>
 
 </Project>

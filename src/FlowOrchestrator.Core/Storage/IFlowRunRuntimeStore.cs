@@ -34,6 +34,18 @@ public interface IFlowRunRuntimeStore
     Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason);
 
     /// <summary>
+    /// Records a step as <see cref="StepStatus.Skipped"/> and persists a
+    /// <see cref="Expressions.WhenEvaluationTrace"/> describing why a <c>When</c>
+    /// clause evaluated to <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// Default implementation falls back to <see cref="RecordSkippedStepAsync(Guid, string, string, string?)"/>
+    /// so existing custom storage providers continue to compile without modification.
+    /// </remarks>
+    Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
+        => RecordSkippedStepAsync(runId, stepKey, stepType, reason);
+
+    /// <summary>
     /// Returns the current overall status of the run (<c>"Running"</c>, <c>"Succeeded"</c>, etc.),
     /// or <see langword="null"/> if the run does not exist.
     /// </summary>

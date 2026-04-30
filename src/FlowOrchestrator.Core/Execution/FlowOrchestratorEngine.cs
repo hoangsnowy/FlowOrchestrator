@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
+using FlowOrchestrator.Core.Expressions;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -37,6 +38,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
     private readonly FlowObservabilityOptions _observabilityOptions;
     private readonly FlowOrchestratorTelemetry _telemetry;
     private readonly ILogger<FlowOrchestratorEngine> _logger;
+    private readonly WhenClauseEvaluator _whenEvaluator;
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     public FlowOrchestratorEngine(
@@ -69,6 +71,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         _observabilityOptions = observabilityOptions;
         _telemetry = telemetry;
         _logger = logger;
+        _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
 
         if (_runtimeStore is null)
         {
@@ -196,9 +199,32 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                 throw new InvalidOperationException("No entry step found for flow.");
             }
 
+            var anyEntryScheduled = false;
+            var anyEntrySkipped = false;
             foreach (var entry in entries)
             {
-                await TryScheduleStepAsync(triggerContext, triggerContext.Flow, entry, null).ConfigureAwait(false);
+                var skipped = await TryEvaluateWhenAndSkipAsync(triggerContext, triggerContext.Flow, entry.Key).ConfigureAwait(false);
+                if (skipped)
+                {
+                    anyEntrySkipped = true;
+                    continue;
+                }
+
+                if (await TryScheduleStepAsync(triggerContext, triggerContext.Flow, entry, null).ConfigureAwait(false))
+                {
+                    anyEntryScheduled = true;
+                }
+            }
+
+            // If every entry step was skipped by a When clause, kick off a single graph
+            // continuation pass so dependents can cascade or the run can terminate cleanly.
+            if (!anyEntryScheduled && anyEntrySkipped && _runtimeStore is not null)
+            {
+                await RunGraphContinuationAsync(
+                    triggerContext,
+                    triggerContext.Flow,
+                    CreateRunEventStep(triggerContext.RunId),
+                    new StepResult { Key = "__entry_skipped", Status = StepStatus.Skipped }).ConfigureAwait(false);
             }
 
             if (_observabilityOptions.EnableOpenTelemetry)
@@ -493,28 +519,47 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         var enqueued = 0;
         if (termination is null)
         {
-            foreach (var readyStepKey in evaluation.ReadyStepKeys)
+            // When-evaluation may skip steps and unblock new dependents; loop until the
+            // ready set is stable (no further skips produced).
+            var safetyCounter = 0;
+            while (true)
             {
-                var metadata = flow.Manifest.Steps.FindStep(readyStepKey);
-                if (metadata is null)
+                var anyWhenSkipped = false;
+                foreach (var readyStepKey in evaluation.ReadyStepKeys)
                 {
-                    continue;
+                    var metadata = flow.Manifest.Steps.FindStep(readyStepKey);
+                    if (metadata is null)
+                    {
+                        continue;
+                    }
+
+                    if (await TryEvaluateWhenAndSkipAsync(ctx, flow, readyStepKey).ConfigureAwait(false))
+                    {
+                        anyWhenSkipped = true;
+                        continue;
+                    }
+
+                    var nextStep = new StepInstance(readyStepKey, metadata.Type)
+                    {
+                        RunId = ctx.RunId,
+                        PrincipalId = ctx.PrincipalId,
+                        TriggerData = ctx.TriggerData,
+                        TriggerHeaders = ctx.TriggerHeaders,
+                        ScheduledTime = DateTimeOffset.UtcNow,
+                        Inputs = new Dictionary<string, object?>(metadata.Inputs)
+                    };
+
+                    if (await TryScheduleStepAsync(ctx, flow, nextStep, result.DelayNextStep).ConfigureAwait(false))
+                    {
+                        enqueued++;
+                    }
                 }
 
-                var nextStep = new StepInstance(readyStepKey, metadata.Type)
-                {
-                    RunId = ctx.RunId,
-                    PrincipalId = ctx.PrincipalId,
-                    TriggerData = ctx.TriggerData,
-                    TriggerHeaders = ctx.TriggerHeaders,
-                    ScheduledTime = DateTimeOffset.UtcNow,
-                    Inputs = new Dictionary<string, object?>(metadata.Inputs)
-                };
+                if (!anyWhenSkipped) break;
+                if (++safetyCounter > flow.Manifest.Steps.Count + 4) break;
 
-                if (await TryScheduleStepAsync(ctx, flow, nextStep, result.DelayNextStep).ConfigureAwait(false))
-                {
-                    enqueued++;
-                }
+                statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+                evaluation = _graphPlanner.Evaluate(flow, statuses);
             }
         }
 
@@ -627,6 +672,74 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                 _logger.LogWarning(ex, "Failed to annotate dispatch for step {StepKey}.", step.Key);
             }
         }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Evaluates the <c>When</c> clauses on <paramref name="stepKey"/>'s metadata. If any
+    /// clause returns <see langword="false"/>, marks the step <see cref="StepStatus.Skipped"/>
+    /// and persists the evaluation trace for dashboard display.
+    /// </summary>
+    /// <returns><see langword="true"/> when the step was skipped due to a false When clause.</returns>
+    private async Task<bool> TryEvaluateWhenAndSkipAsync(IExecutionContext ctx, IFlowDefinition flow, string stepKey)
+    {
+        var metadata = flow.Manifest.Steps.FindStep(stepKey);
+        if (metadata is null || metadata.RunAfter.Count == 0)
+        {
+            return false;
+        }
+
+        var hasAnyWhen = metadata.RunAfter.Values.Any(v => !string.IsNullOrWhiteSpace(v.When));
+        if (!hasAnyWhen)
+        {
+            return false;
+        }
+
+        WhenEvaluationTrace? trace;
+        try
+        {
+            trace = await _whenEvaluator.EvaluateAsync(ctx, flow, metadata).ConfigureAwait(false);
+        }
+        catch (FlowExpressionException ex)
+        {
+            _logger.LogError(ex, "When-clause evaluation failed for step {StepKey}; treating as failure.", stepKey);
+            // A malformed expression is an authoring error. Skip with a synthetic trace
+            // so the dashboard surfaces the problem to the user.
+            trace = new WhenEvaluationTrace
+            {
+                Expression = ex.Expression,
+                Resolved = ex.Message,
+                Result = false
+            };
+        }
+
+        if (trace is null)
+        {
+            return false;
+        }
+
+        if (_runtimeStore is null)
+        {
+            return false;
+        }
+
+        if (!await _runtimeStore.TryClaimStepAsync(ctx.RunId, stepKey).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        var traceJson = JsonSerializer.Serialize(trace, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var reason = $"When clause '{trace.Expression}' evaluated to false ({trace.Resolved}).";
+        await _runtimeStore.RecordSkippedStepAsync(ctx.RunId, stepKey, metadata.Type, reason, traceJson).ConfigureAwait(false);
+
+        await RecordEventAsync(
+            ctx,
+            flow,
+            new StepInstance(stepKey, metadata.Type) { RunId = ctx.RunId, ScheduledTime = DateTimeOffset.UtcNow },
+            "step.skipped",
+            $"Step '{stepKey}' skipped because '{trace.Expression}' evaluated to false.",
+            stepKey).ConfigureAwait(false);
 
         return true;
     }

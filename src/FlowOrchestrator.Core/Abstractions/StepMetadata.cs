@@ -43,11 +43,11 @@ public class StepMetadata
             return true;
         }
 
-        if (!RunAfter.TryGetValue(precedingStepKey, out var allowedStatuses) || allowedStatuses is null)
+        if (!RunAfter.TryGetValue(precedingStepKey, out var condition) || condition is null)
         {
             return false;
         }
 
-        return allowedStatuses.Contains(status);
+        return condition.AcceptsStatus(status);
     }
 }

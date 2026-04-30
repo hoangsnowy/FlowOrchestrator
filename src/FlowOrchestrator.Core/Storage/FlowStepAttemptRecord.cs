@@ -38,4 +38,11 @@ public sealed class FlowStepAttemptRecord
 
     /// <summary>UTC timestamp when this attempt reached a terminal status.</summary>
     public DateTimeOffset? CompletedAt { get; set; }
+
+    /// <summary>
+    /// JSON-serialised <see cref="Expressions.WhenEvaluationTrace"/> persisted when this
+    /// attempt was skipped because a <c>When</c> clause evaluated to <see langword="false"/>;
+    /// otherwise <see langword="null"/>.
+    /// </summary>
+    public string? EvaluationTraceJson { get; set; }
 }

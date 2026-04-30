@@ -9,15 +9,30 @@ namespace FlowOrchestrator.Core.Execution;
 public sealed class FlowGraphPlanner : IFlowGraphPlanner
 {
     /// <inheritdoc/>
+    /// <remarks>
+    /// A step is an entry step when its <c>RunAfter</c> is empty OR contains only the
+    /// synthetic empty-string key (<c>RunAfter[""]</c>) used to attach a <c>When</c>
+    /// clause directly to the trigger payload.
+    /// </remarks>
     public IReadOnlyList<IStepInstance> CreateEntrySteps(ITriggerContext context)
     {
         var entries = context.Flow.Manifest.Steps
-            .Where(kvp => kvp.Value is { } meta && (meta.RunAfter is null || meta.RunAfter.Count == 0))
+            .Where(kvp => kvp.Value is { } meta && IsEntryStep(meta))
             .Select(kvp => CreateStepInstance(context, kvp.Key, kvp.Value.Type, kvp.Value.Inputs))
             .Cast<IStepInstance>()
             .ToList();
 
         return entries;
+    }
+
+    private static bool IsEntryStep(StepMetadata meta)
+    {
+        if (meta.RunAfter is null || meta.RunAfter.Count == 0)
+        {
+            return true;
+        }
+        // Entry-with-condition: RunAfter contains only the synthetic "" key.
+        return meta.RunAfter.Count == 1 && meta.RunAfter.ContainsKey(string.Empty);
     }
 
     /// <inheritdoc/>
@@ -51,6 +66,12 @@ public sealed class FlowGraphPlanner : IFlowGraphPlanner
             var hasFinalMismatch = false;
             foreach (var dependency in metadata.RunAfter)
             {
+                // Synthetic entry-trigger key — no real predecessor, status gate is vacuously satisfied.
+                if (string.IsNullOrEmpty(dependency.Key))
+                {
+                    continue;
+                }
+
                 var runtimeDependencyKey = ResolveRuntimeDependencyKey(stepKey, dependency.Key);
                 if (!statuses.TryGetValue(runtimeDependencyKey, out var dependencyStatus))
                 {
@@ -58,7 +79,7 @@ public sealed class FlowGraphPlanner : IFlowGraphPlanner
                     continue;
                 }
 
-                if (dependency.Value.Contains(dependencyStatus))
+                if (dependency.Value.AcceptsStatus(dependencyStatus))
                 {
                     continue;
                 }

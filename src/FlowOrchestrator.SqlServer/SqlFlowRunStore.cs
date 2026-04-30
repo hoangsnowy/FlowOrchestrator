@@ -180,12 +180,12 @@ public sealed class SqlFlowRunStore :
         if (run is null) return null;
 
         var steps = (await conn.QueryAsync<FlowStepRecord>(
-            "SELECT RunId, StepKey, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt FROM FlowSteps WHERE RunId = @RunId ORDER BY StartedAt",
+            "SELECT RunId, StepKey, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt, EvaluationTraceJson FROM FlowSteps WHERE RunId = @RunId ORDER BY StartedAt",
             new { RunId = runId }))
             .AsList();
 
         var attempts = (await conn.QueryAsync<FlowStepAttemptRecord>(
-            "SELECT RunId, StepKey, AttemptNo AS Attempt, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt FROM FlowStepAttempts WHERE RunId = @RunId ORDER BY StepKey, AttemptNo",
+            "SELECT RunId, StepKey, AttemptNo AS Attempt, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt, EvaluationTraceJson FROM FlowStepAttempts WHERE RunId = @RunId ORDER BY StepKey, AttemptNo",
             new { RunId = runId })
             ).AsList();
 
@@ -308,8 +308,41 @@ public sealed class SqlFlowRunStore :
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
     {
+        await RecordSkippedStepAsync(runId, stepKey, stepType, reason, evaluationTraceJson: null).ConfigureAwait(false);
+    }
+
+    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
+    {
         await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
         await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(evaluationTraceJson))
+        {
+            await using var conn = new SqlConnection(_connectionString);
+            await conn.ExecuteAsync(
+                """
+                BEGIN TRANSACTION;
+
+                UPDATE FlowSteps
+                SET EvaluationTraceJson = @EvaluationTraceJson
+                WHERE RunId = @RunId AND StepKey = @StepKey;
+
+                UPDATE attempts
+                SET EvaluationTraceJson = @EvaluationTraceJson
+                FROM FlowStepAttempts AS attempts
+                INNER JOIN (
+                    SELECT TOP (1) RunId, StepKey, AttemptNo
+                    FROM FlowStepAttempts
+                    WHERE RunId = @RunId AND StepKey = @StepKey
+                    ORDER BY AttemptNo DESC
+                ) AS latest
+                    ON latest.RunId = attempts.RunId
+                   AND latest.StepKey = attempts.StepKey
+                   AND latest.AttemptNo = attempts.AttemptNo;
+
+                COMMIT TRANSACTION;
+                """,
+                new { RunId = runId, StepKey = stepKey, EvaluationTraceJson = evaluationTraceJson }).ConfigureAwait(false);
+        }
     }
 
     public async Task<string?> GetRunStatusAsync(Guid runId)
@@ -557,7 +590,8 @@ public sealed class SqlFlowRunStore :
             ErrorMessage = step.ErrorMessage,
             JobId = step.JobId,
             StartedAt = step.StartedAt,
-            CompletedAt = step.CompletedAt
+            CompletedAt = step.CompletedAt,
+            EvaluationTraceJson = step.EvaluationTraceJson
         };
     }
 
