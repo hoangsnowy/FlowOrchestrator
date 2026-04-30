@@ -28,6 +28,9 @@
 - name: Dashboard
   href: dashboard.md
 
+- name: Mermaid Diagram Export
+  href: mermaid-export.md
+
 - name: Observability
   href: observability.md
 

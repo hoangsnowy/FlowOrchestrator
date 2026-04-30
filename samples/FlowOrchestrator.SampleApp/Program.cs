@@ -13,6 +13,12 @@ using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 
+// Short-circuit `--export-mermaid <flowId|flowName>` before standing up the host.
+if (MermaidExportCli.TryHandle(args, out var exitCode))
+{
+    return exitCode;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Storage backend selection ─────────────────────────────────────────────────
@@ -200,3 +206,5 @@ app.MapGet("/", () =>
     $"OrderHub [runtime={runtime}, storage={storageBackend}] is running. Visit /flows for the dashboard.");
 
 app.Run();
+
+return 0;

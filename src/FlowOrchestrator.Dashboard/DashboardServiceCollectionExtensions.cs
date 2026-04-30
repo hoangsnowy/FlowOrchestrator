@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Diagnostics;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.AspNetCore.Builder;
@@ -119,6 +120,21 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
             await WriteJsonAsync(http.Response,flow);
+        });
+
+        group.MapGet("/api/flows/{id:guid}/mermaid", async (HttpContext http, IFlowRepository repo, Guid id) =>
+        {
+            var flow = (await repo.GetAllFlowsAsync()).FirstOrDefault(f => f.Id == id);
+            if (flow is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                http.Response.ContentType = "text/plain; charset=utf-8";
+                await http.Response.WriteAsync($"Flow '{id}' not found.");
+                return;
+            }
+
+            http.Response.ContentType = "text/plain; charset=utf-8";
+            await http.Response.WriteAsync(flow.ToMermaid());
         });
 
         group.MapPost("/api/flows/{id:guid}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>

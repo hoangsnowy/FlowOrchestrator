@@ -464,6 +464,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
         <div class="detail-tab" data-tab="fd-triggers" onclick="switchFlowTab('fd-triggers')">Triggers</div>
         <div class="detail-tab" data-tab="fd-schedule" onclick="switchFlowTab('fd-schedule')">Schedule</div>
         <div class="detail-tab" data-tab="fd-dag" onclick="switchFlowTab('fd-dag')">DAG</div>
+        <div class="detail-tab" data-tab="fd-mermaid" onclick="switchFlowTab('fd-mermaid')">Mermaid</div>
         <div class="detail-tab" data-tab="fd-json" onclick="switchFlowTab('fd-json')">Raw JSON</div>
       </div>
       <div class="tab-content active" id="fd-manifest"></div>
@@ -471,6 +472,7 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
       <div class="tab-content" id="fd-triggers"></div>
       <div class="tab-content" id="fd-schedule"></div>
       <div class="tab-content" id="fd-dag"></div>
+      <div class="tab-content" id="fd-mermaid"></div>
       <div class="tab-content" id="fd-json"></div>
     </div>
   </div>
@@ -893,6 +895,36 @@ function renderFlowDetail() {
 
   // Raw JSON tab
   $('fd-json').innerHTML = '<div class="json-viewer">'+(m ? esc(JSON.stringify(m, null, 2)) : 'No manifest data.')+'</div>';
+
+  // Mermaid tab — fetched lazily from /api/flows/{id}/mermaid
+  renderMermaidTab(f.id);
+}
+
+function renderMermaidTab(flowId) {
+  const host = $('fd-mermaid');
+  host.innerHTML = '<div class="empty-msg">Loading Mermaid…</div>';
+  fetch('{{BASE_PATH}}/api/flows/'+flowId+'/mermaid', { headers: { 'Accept': 'text/plain' } })
+    .then(r => r.ok ? r.text() : Promise.reject(r.statusText))
+    .then(text => {
+      const safe = esc(text);
+      host.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+        +'<div style="font-size:12px;color:var(--text-dim)">Paste into any Markdown surface that renders Mermaid (GitHub, Notion, Confluence, …).</div>'
+        +'<button class="btn-copy" onclick="copyMermaid(this)" data-mermaid="'+safe.replace(/"/g,'&quot;')+'">'
+          +'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+          +'Copy Mermaid'
+        +'</button>'
+        +'</div>'
+        +'<div class="json-viewer">'+safe+'</div>';
+    })
+    .catch(err => { host.innerHTML = '<div class="empty-msg">Failed to load Mermaid: '+esc(String(err))+'</div>'; });
+}
+
+function copyMermaid(btn) {
+  const tmp = document.createElement('textarea');
+  tmp.innerHTML = btn.dataset.mermaid;
+  const text = tmp.value;
+  navigator.clipboard.writeText(text).then(() => showToast('Mermaid copied!')).catch(() => alert('Copy failed'));
 }
 
 function renderDAG(manifest) {
