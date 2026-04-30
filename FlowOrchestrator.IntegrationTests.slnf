@@ -9,17 +9,12 @@
       "src/FlowOrchestrator.PostgreSQL/FlowOrchestrator.PostgreSQL.csproj",
       "src/FlowOrchestrator.InMemory/FlowOrchestrator.InMemory.csproj",
       "src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj",
-      "tests/unit/FlowOrchestrator.Core.UnitTests/FlowOrchestrator.Core.UnitTests.csproj",
-      "tests/unit/FlowOrchestrator.InMemory.UnitTests/FlowOrchestrator.InMemory.UnitTests.csproj",
-      "tests/unit/FlowOrchestrator.Hangfire.UnitTests/FlowOrchestrator.Hangfire.UnitTests.csproj",
-      "tests/unit/FlowOrchestrator.SqlServer.UnitTests/FlowOrchestrator.SqlServer.UnitTests.csproj",
       "tests/integration/FlowOrchestrator.Dashboard.IntegrationTests/FlowOrchestrator.Dashboard.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.PostgreSQL.IntegrationTests/FlowOrchestrator.PostgreSQL.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.SqlServer.IntegrationTests/FlowOrchestrator.SqlServer.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.Hangfire.IntegrationTests/FlowOrchestrator.Hangfire.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.InMemory.IntegrationTests/FlowOrchestrator.InMemory.IntegrationTests.csproj",
-      "tests/integration/FlowOrchestrator.Testing.IntegrationTests/FlowOrchestrator.Testing.IntegrationTests.csproj",
-      "tests/regression/FlowOrchestrator.RegressionTests/FlowOrchestrator.RegressionTests.csproj"
+      "tests/integration/FlowOrchestrator.Testing.IntegrationTests/FlowOrchestrator.Testing.IntegrationTests.csproj"
     ]
   }
 }

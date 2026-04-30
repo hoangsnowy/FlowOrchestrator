@@ -1,0 +1,12 @@
+{
+  "solution": {
+    "path": "FlowOrchestrator.sln",
+    "projects": [
+      "src/FlowOrchestrator.Core/FlowOrchestrator.Core.csproj",
+      "src/FlowOrchestrator.Hangfire/FlowOrchestrator.Hangfire.csproj",
+      "src/FlowOrchestrator.InMemory/FlowOrchestrator.InMemory.csproj",
+      "src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj",
+      "tests/regression/FlowOrchestrator.RegressionTests/FlowOrchestrator.RegressionTests.csproj"
+    ]
+  }
+}

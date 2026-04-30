@@ -33,4 +33,13 @@
     <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
+
+  <!-- Link the root xunit.runner.json into every UNIT test project's output so xunit picks up
+       parallelizeAssembly: true. Integration projects are excluded because Testcontainers /
+       WebApplicationFactory don't tolerate multiple TFM assemblies of the same project starting
+       containers in parallel (causes Postgres/SqlServer resource races, observed empirically).
+       RegressionTests has its own local xunit.runner.json (parallelism disabled). -->
+  <ItemGroup Condition="$(MSBuildProjectName.EndsWith('UnitTests'))">
+    <None Include="$(MSBuildThisFileDirectory)xunit.runner.json" Link="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
 </Project>

@@ -12,10 +12,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Testing
 
-- Tests live in `./tests/`. Framework: **xUnit + NSubstitute**. Use plain xUnit `Assert.*` — do **not** add FluentAssertions, Shouldly, or any fluent-assertion library.
+- Tests live in `./tests/` split into three categories — see `tests/README.md` for the full picker:
+  - **`tests/unit/`** — `*.UnitTests` projects. Pure NSubstitute mocks, no I/O, no `Task.Delay > 50ms`, no containers, no HTTP. Total wall-clock target: **< 60 s**. Runs on every PR and push.
+  - **`tests/integration/`** — `*.IntegrationTests` projects. Hits real DB via Testcontainers, `WebApplicationFactory`, Hangfire in-memory, etc. Runs on every PR + push.
+  - **`tests/regression/FlowOrchestrator.RegressionTests/`** — timing-sensitive (cron / polling / timeout) and concurrency stress (64-task gate contests). Runs nightly + on push to `main` + manual dispatch. Has its own `xunit.runner.json` with parallelization disabled.
+- Framework: **xUnit + NSubstitute**. Use plain xUnit `Assert.*` — do **not** add FluentAssertions, Shouldly, or any fluent-assertion library.
 - **AAA pattern** is mandatory: every `[Fact]`/`[Theory]` body must contain three comment blocks, in order — `// Arrange`, `// Act`, `// Assert`. Shared fixture setup in fields/constructor is allowed and does not count as the body's Arrange (a body block may be empty if there is genuinely nothing to do).
-- After any code change: run `dotnet test` and confirm the test count and pass rate.
-- New tests go in the matching test project (e.g., changes in `FlowOrchestrator.Core` → tests in `FlowOrchestrator.Core.Tests`).
+- **Solution filters** — pick the right one for what you're running:
+  - `dotnet test FlowOrchestrator.UnitTests.slnf` — fast feedback (~30 s).
+  - `dotnet test FlowOrchestrator.IntegrationTests.slnf` — needs Docker.
+  - `dotnet test FlowOrchestrator.RegressionTests.slnf` — slow, run before merging anything that touches scheduling, polling, or concurrency primitives.
+- **Anti-flakiness rules** (mandatory for any test you write):
+  - Never assert an *upper bound* on `Stopwatch.Elapsed` — that pattern is the classic source of CI flakiness.
+  - Never poll on a counter with a wall-clock deadline (`while (counter == 0) Task.Delay(...)`). Wait on a logical event — `TaskCompletionSource` set by the handler / store / dispatcher.
+  - When you need a real sleep budget (timeout assertions), pick a generous one (≥ 30 s) so CI CPU contention doesn't trip it.
+- New tests go in the matching project, picked by category first: a pure unit test for `FlowOrchestrator.Core` lives in `tests/unit/FlowOrchestrator.Core.UnitTests`; an integration test for the same component lives in `tests/integration/FlowOrchestrator.{Component}.IntegrationTests`.
 
 ## Build & Verification
 
@@ -29,12 +40,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 dotnet build
 dotnet build --configuration Release
 
-# Run all tests
-dotnet test
+# Run tests by category (see "Testing" section above)
+dotnet test FlowOrchestrator.UnitTests.slnf            # fast — every change
+dotnet test FlowOrchestrator.IntegrationTests.slnf     # needs Docker
+dotnet test FlowOrchestrator.RegressionTests.slnf      # slow — before merging
 
 # Run a single test project
-dotnet test ./tests/FlowOrchestrator.Core.Tests/FlowOrchestrator.Core.Tests.csproj
-dotnet test ./tests/FlowOrchestrator.Hangfire.Tests/FlowOrchestrator.Hangfire.Tests.csproj
+dotnet test ./tests/unit/FlowOrchestrator.Core.UnitTests/FlowOrchestrator.Core.UnitTests.csproj
 
 # Filter to a specific test class or method
 dotnet test --filter "FullyQualifiedName~MyTestClass"

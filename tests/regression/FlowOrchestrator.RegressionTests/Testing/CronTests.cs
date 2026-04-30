@@ -16,19 +16,15 @@ public sealed class CronTests
             .WithSystemClock(new DateTimeOffset(2026, 4, 30, 10, 0, 0, TimeSpan.Zero))
             .BuildAsync();
 
-        // Act — give the cron-trigger sync a moment to register, then advance 1 minute and wait
-        // for the in-memory dispatcher's next real-time tick (1s) plus the run to complete.
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        // Act — advance the frozen clock past the cron's next fire time.
+        // The cron sync runs on host start; advancing here triggers the dispatcher loop.
         await host.FastForwardAsync(TimeSpan.FromMinutes(1));
 
-        // Window must absorb (a) the 1s PeriodicTimer tick and (b) CI-side CPU contention.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-        while (DateTime.UtcNow < deadline && counter.Calls == 0)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(100));
-        }
+        // Wait for the handler to actually run. 30s budget absorbs CI CPU contention
+        // and the in-memory dispatcher's 1s real-time tick. Logical event > wall clock.
+        await counter.FirstCall.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Assert
-        Assert.True(counter.Calls >= 1, $"Cron trigger should have fired but counter={counter.Calls}.");
+        Assert.True(counter.Calls >= 1);
     }
 }

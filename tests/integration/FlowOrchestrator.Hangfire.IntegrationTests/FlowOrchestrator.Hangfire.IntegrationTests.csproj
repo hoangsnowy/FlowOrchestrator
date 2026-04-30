@@ -15,9 +15,6 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="NSubstitute" Version="5.3.0" />
-    <PackageReference Include="Testcontainers.MsSql" Version="4.4.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.4" />
     <PackageReference Include="coverlet.collector" Version="8.0.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -25,7 +22,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\FlowOrchestrator.SqlServer\FlowOrchestrator.SqlServer.csproj" />
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.InMemory\FlowOrchestrator.InMemory.csproj" />
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.Hangfire\FlowOrchestrator.Hangfire.csproj" />
   </ItemGroup>
 
 </Project>
