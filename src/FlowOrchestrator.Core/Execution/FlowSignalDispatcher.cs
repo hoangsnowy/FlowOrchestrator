@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Core.Execution;
@@ -35,20 +36,23 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     private readonly IFlowRepository _flowRepository;
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
+    private readonly FlowOrchestratorTelemetry? _telemetry;
 
-    /// <summary>Initialises the dispatcher with its dependencies.</summary>
+    /// <summary>Initialises the dispatcher with its dependencies. <paramref name="telemetry"/> is optional — when omitted, signal-wait metrics are not emitted.</summary>
     public FlowSignalDispatcher(
         IFlowSignalStore signalStore,
         IFlowRunStore runStore,
         IFlowRepository flowRepository,
         IStepDispatcher dispatcher,
-        IOutputsRepository outputsRepository)
+        IOutputsRepository outputsRepository,
+        FlowOrchestratorTelemetry? telemetry = null)
     {
         _signalStore = signalStore;
         _runStore = runStore;
         _flowRepository = flowRepository;
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
+        _telemetry = telemetry;
     }
 
     /// <inheritdoc/>
@@ -73,6 +77,23 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         if (run is null)
         {
             return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
+        }
+
+        // Record the parked-step wait time: from waiter registration to signal delivery.
+        // GetWaiterAsync returns the persisted row including CreatedAt; DeliveredAt is set
+        // by DeliverSignalAsync above. Skip silently if telemetry was not registered.
+        if (_telemetry is not null && result.DeliveredAt is { } deliveredAt)
+        {
+            var waiter = await _signalStore.GetWaiterAsync(runId, result.StepKey, ct).ConfigureAwait(false);
+            if (waiter is not null)
+            {
+                var waitMs = Math.Max(0, (deliveredAt - waiter.CreatedAt).TotalMilliseconds);
+                _telemetry.SignalWaitMs.Record(
+                    waitMs,
+                    new KeyValuePair<string, object?>("flow_id", run.FlowId.ToString()),
+                    new KeyValuePair<string, object?>("step_key", result.StepKey),
+                    new KeyValuePair<string, object?>("signal_name", signalName));
+            }
         }
 
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);

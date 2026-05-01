@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Configuration;
+using FlowOrchestrator.Core.HealthChecks;
 using FlowOrchestrator.Dashboard;
 using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
@@ -9,6 +10,7 @@ using FlowOrchestrator.SampleApp.Flows;
 using FlowOrchestrator.SampleApp.Steps;
 using Hangfire;
 using Hangfire.SqlServer;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -191,18 +193,47 @@ builder.Services.AddHttpClient("ExternalApi", client =>
 // When running under Aspire, OTEL_EXPORTER_OTLP_ENDPOINT is injected automatically
 // and spans/metrics appear in the Aspire Dashboard. Standalone, set the env var to
 // point at any OTLP-compatible backend (Jaeger, Grafana, etc.).
+// OTel: console exporter prints spans/metrics to stdout for local development; OTLP exporter
+// forwards to whatever backend OTEL_EXPORTER_OTLP_ENDPOINT points at (Aspire Dashboard, Jaeger,
+// Tempo, …). Both can run concurrently — production typically keeps only the OTLP exporter.
+var enableConsoleExporter = builder.Configuration.GetValue("OBSERVABILITY_CONSOLE", true);
+
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService("FlowOrchestrator.SampleApp"))
-    .WithTracing(t => t
-        .AddFlowOrchestratorInstrumentation()
-        .AddAspNetCoreInstrumentation()
-        .AddOtlpExporter())
-    .WithMetrics(m => m
-        .AddFlowOrchestratorInstrumentation()
-        .AddAspNetCoreInstrumentation()
-        .AddOtlpExporter());
+    .WithTracing(t =>
+    {
+        t.AddFlowOrchestratorInstrumentation()
+         .AddAspNetCoreInstrumentation()
+         .AddOtlpExporter();
+        if (enableConsoleExporter) t.AddConsoleExporter();
+    })
+    .WithMetrics(m =>
+    {
+        m.AddFlowOrchestratorInstrumentation()
+         .AddAspNetCoreInstrumentation()
+         .AddOtlpExporter();
+        if (enableConsoleExporter) m.AddConsoleExporter();
+    });
+
+// OTel structured-logging exporter: ships every ILogger call as an OTLP log record so the
+// engine's BeginScope correlation (RunId / FlowId / StepKey / Attempt) and stable EventIds
+// land in Aspire Dashboard's Logs tab — alongside the matching trace. Without this, logs
+// only go to stdout via the default ConsoleLogger and the OTLP backend sees zero log records.
+builder.Logging.AddOpenTelemetry(o =>
+{
+    o.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("FlowOrchestrator.SampleApp"));
+    o.IncludeFormattedMessage = true;
+    o.IncludeScopes = true;            // CRITICAL: surfaces BeginScope props as log attributes
+    o.ParseStateValues = true;          // Treat structured-template values as structured attrs
+    o.AddOtlpExporter();
+});
 
 builder.Services.AddFlowDashboard(builder.Configuration);
+
+// Storage-reachability probe so a load balancer can drop traffic when the flow store is down.
+builder.Services
+    .AddHealthChecks()
+    .AddFlowOrchestratorHealthChecks();
 
 var app = builder.Build();
 
@@ -210,6 +241,7 @@ app.UseStaticFiles();
 if (useHangfireRuntime)
     app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");
+app.MapHealthChecks("/health");
 
 app.MapGet("/", () =>
     $"OrderHub [runtime={runtime}, storage={storageBackend}] is running. Visit /flows for the dashboard.");

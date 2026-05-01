@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -48,6 +50,19 @@ internal sealed class InMemoryStepRunnerHostedService : BackgroundService
             // Run each step in a separate scope so scoped services (e.g. IExecutionContextAccessor) are isolated.
             _ = Task.Run(async () =>
             {
+                // Re-establish the parent trace context captured at dispatch time so the
+                // step's flow.step span becomes a child of the original caller's trace,
+                // not an orphan root. Mirrors TraceContextHangfireFilter for the InMemory runtime.
+                using var wrapperActivity = envelope.ParentTraceContext is { } parentCtx
+                    ? FlowOrchestratorTelemetry.SharedActivitySource.StartActivity(
+                        "flow.runtime.execute",
+                        ActivityKind.Consumer,
+                        parentCtx)
+                    : null;
+                wrapperActivity?.SetTag("messaging.system", "in_memory_channel");
+                wrapperActivity?.SetTag("messaging.operation", "process");
+                wrapperActivity?.SetTag("messaging.message.id", envelope.EnvelopeId);
+
                 try
                 {
                     await using var scope = _scopeFactory.CreateAsyncScope();

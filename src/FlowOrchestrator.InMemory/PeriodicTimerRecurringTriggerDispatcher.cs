@@ -3,6 +3,7 @@ using Cronos;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -31,20 +32,22 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     private readonly FlowSchedulerOptions _schedulerOptions;
     private readonly ILogger<PeriodicTimerRecurringTriggerDispatcher> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly FlowOrchestratorTelemetry? _telemetry;
     private readonly ConcurrentDictionary<string, JobState> _jobs = new(StringComparer.Ordinal);
 
     private PeriodicTimer? _timer;
     private Task? _loop;
     private CancellationTokenSource? _cts;
 
-    /// <summary>Initialises the dispatcher with required services.</summary>
+    /// <summary>Initialises the dispatcher with required services. <paramref name="telemetry"/> is optional — when omitted, cron-lag metrics are not emitted.</summary>
     public PeriodicTimerRecurringTriggerDispatcher(
         IServiceProvider services,
         IFlowRepository repository,
         IFlowScheduleStateStore scheduleStateStore,
         FlowSchedulerOptions schedulerOptions,
         ILogger<PeriodicTimerRecurringTriggerDispatcher> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        FlowOrchestratorTelemetry? telemetry = null)
     {
         _services = services;
         _repository = repository;
@@ -52,6 +55,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
         _schedulerOptions = schedulerOptions;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _telemetry = telemetry;
     }
 
     /// <inheritdoc/>
@@ -116,6 +120,20 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
 
     private async Task FireAsync(string jobId, JobState state, CancellationToken ct)
     {
+        // Capture cron lag: how late we are versus the scheduled fire time. NextExecution is the
+        // schedule we're firing for; the loop guarantees it is <= now when FireAsync is called.
+        var scheduledAt = state.NextExecution;
+        var firedAt = _timeProvider.GetUtcNow();
+        if (_telemetry is not null)
+        {
+            var lagMs = Math.Max(0, (firedAt - scheduledAt).TotalMilliseconds);
+            _telemetry.CronLagMs.Record(
+                lagMs,
+                new KeyValuePair<string, object?>("flow_id", state.FlowId.ToString()),
+                new KeyValuePair<string, object?>("trigger_key", state.TriggerKey),
+                new KeyValuePair<string, object?>("runtime", "in_memory"));
+        }
+
         try
         {
             using var scope = _services.CreateScope();

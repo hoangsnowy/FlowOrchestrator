@@ -3,6 +3,7 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Expressions;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -75,8 +76,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
         if (_runtimeStore is null)
         {
-            _logger.LogDebug(
-                "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.");
+            EngineLog.LegacySequentialMode(_logger);
         }
     }
 
@@ -123,6 +123,10 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         triggerContext.TriggerData = triggerContext.Trigger.Data;
         triggerContext.TriggerHeaders = triggerContext.Trigger.Headers;
         _contextAccessor.CurrentContext = triggerContext;
+
+        // BeginScope ensures every nested log line in this run carries RunId/FlowId,
+        // including logs emitted by user-written step handlers further down the stack.
+        using var _scope = EngineLogScope.Begin(_logger, triggerContext.RunId, triggerContext.Flow.Id);
 
         activity?.SetTag("flow.id", triggerContext.Flow.Id.ToString());
         activity?.SetTag("run.id", triggerContext.RunId.ToString());
@@ -177,7 +181,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to track flow run start.");
+                EngineLog.RunStartTrackingFailed(_logger, ex);
             }
 
             if (_runControlStore is not null)
@@ -245,6 +249,13 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
             return new { runId = triggerContext.RunId, duplicate = false };
         }
+        catch (Exception ex)
+        {
+            // Mark the trigger activity as failed before propagating. Without this, APM tools
+            // see a span that simply ended with no error indicator and never raise an alert.
+            activity.RecordError(ex);
+            throw;
+        }
         finally
         {
             _contextAccessor.CurrentContext = null;
@@ -278,6 +289,8 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
         await EnsureTriggerDataAsync(ctx).ConfigureAwait(false);
         _contextAccessor.CurrentContext = ctx;
+
+        using var _scope = EngineLogScope.Begin(_logger, ctx.RunId, flow.Id, step.Key);
 
         activity?.SetTag("flow.id", flow.Id.ToString());
         activity?.SetTag("run.id", ctx.RunId.ToString());
@@ -313,13 +326,14 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to track step start.");
+                EngineLog.StepStartTrackingFailed(_logger, ex);
             }
 
             await RecordEventAsync(ctx, flow, step, "step.started", $"Step '{step.Key}' started.").ConfigureAwait(false);
 
             var stepExecutionStart = Stopwatch.GetTimestamp();
             IStepResult result;
+            Exception? handlerException = null;
             try
             {
                 result = await _stepExecutor.ExecuteAsync(ctx, flow, step).ConfigureAwait(false);
@@ -327,7 +341,8 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Step execution failed for {StepKey}", step.Key);
+                handlerException = ex;
+                EngineLog.StepExecutionFailed(_logger, ex, step.Key);
                 result = new StepResult
                 {
                     Key = step.Key,
@@ -335,6 +350,20 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                     FailedReason = ex.ToString(),
                     ReThrow = false
                 };
+            }
+
+            // Mark the step activity as Error so APMs treat the span as a failure even when
+            // the handler exception is swallowed and translated into a Failed StepResult.
+            if (result.Status == StepStatus.Failed)
+            {
+                if (handlerException is not null)
+                {
+                    activity.RecordError(handlerException);
+                }
+                else
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error, result.FailedReason);
+                }
             }
 
             try
@@ -345,7 +374,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to track step completion.");
+                EngineLog.StepCompletionTrackingFailed(_logger, ex);
             }
 
             var stepExecutionMs = Stopwatch.GetElapsedTime(stepExecutionStart).TotalMilliseconds;
@@ -374,6 +403,16 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
             if (result.Status == StepStatus.Pending)
             {
+                // A step returning Pending means a poll iteration completed without satisfying the
+                // condition — count it so operators can see how aggressive a flow's polling is.
+                if (_observabilityOptions.EnableOpenTelemetry)
+                {
+                    _telemetry.StepPollAttemptsCounter.Add(
+                        1,
+                        new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
+                        new KeyValuePair<string, object?>("step_key", step.Key));
+                }
+
                 var controlAfterPending = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
                 if (controlAfterPending is not null)
                 {
@@ -435,6 +474,13 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
             return result.Result;
         }
+        catch (Exception ex)
+        {
+            // Engine-level failure outside the handler (storage, dispatch, continuation). The
+            // inner catch already recorded handler exceptions; this guards everything else.
+            activity.RecordError(ex);
+            throw;
+        }
         finally
         {
             _contextAccessor.CurrentContext = null;
@@ -444,6 +490,25 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
     /// <inheritdoc/>
     public async ValueTask<object?> RetryStepAsync(Guid flowId, Guid runId, string stepKey, CancellationToken ct = default)
     {
+        using var _scope = EngineLogScope.Begin(_logger, runId, flowId, stepKey);
+
+        // Span the retry dispatch separately from the eventual flow.step that runs the
+        // re-executed handler. Tags help operators correlate retry storms with run state.
+        using var activity = _observabilityOptions.EnableOpenTelemetry
+            ? _telemetry.ActivitySource.StartActivity("flow.step.retry", ActivityKind.Internal)
+            : null;
+        activity?.SetTag("flow.id", flowId.ToString());
+        activity?.SetTag("run.id", runId.ToString());
+        activity?.SetTag("step.key", stepKey);
+
+        if (_observabilityOptions.EnableOpenTelemetry)
+        {
+            _telemetry.StepRetriesCounter.Add(
+                1,
+                new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
+                new KeyValuePair<string, object?>("step_key", stepKey));
+        }
+
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
         var flow = flows.FirstOrDefault(f => f.Id == flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
@@ -503,6 +568,15 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                 blockedStepKey,
                 metadata?.Type ?? "Unknown",
                 "Prerequisite status did not satisfy runAfter conditions.").ConfigureAwait(false);
+
+            if (_observabilityOptions.EnableOpenTelemetry)
+            {
+                _telemetry.StepSkippedCounter.Add(
+                    1,
+                    new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
+                    new KeyValuePair<string, object?>("step_key", blockedStepKey),
+                    new KeyValuePair<string, object?>("reason", "prerequisites_unmet"));
+            }
 
             await RecordEventAsync(
                 ctx,
@@ -670,7 +744,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to annotate dispatch for step {StepKey}.", step.Key);
+                EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
             }
         }
 
@@ -697,6 +771,13 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             return false;
         }
 
+        using var whenActivity = _observabilityOptions.EnableOpenTelemetry
+            ? _telemetry.ActivitySource.StartActivity("flow.step.when", ActivityKind.Internal)
+            : null;
+        whenActivity?.SetTag("flow.id", flow.Id.ToString());
+        whenActivity?.SetTag("run.id", ctx.RunId.ToString());
+        whenActivity?.SetTag("step.key", stepKey);
+
         WhenEvaluationTrace? trace;
         try
         {
@@ -704,7 +785,9 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         }
         catch (FlowExpressionException ex)
         {
-            _logger.LogError(ex, "When-clause evaluation failed for step {StepKey}; treating as failure.", stepKey);
+            EngineLog.WhenEvaluationFailed(_logger, ex, stepKey);
+            // Surface to the parent flow.step activity (if any) so APMs see a failure event.
+            Activity.Current.RecordError(ex);
             // A malformed expression is an authoring error. Skip with a synthetic trace
             // so the dashboard surfaces the problem to the user.
             trace = new WhenEvaluationTrace
@@ -734,6 +817,18 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         var reason = $"When clause '{trace.Expression}' evaluated to false ({trace.Resolved}).";
         await _runtimeStore.RecordSkippedStepAsync(ctx.RunId, stepKey, metadata.Type, reason, traceJson).ConfigureAwait(false);
 
+        whenActivity?.SetTag("flow.when.expression", trace.Expression);
+        whenActivity?.SetTag("flow.when.resolved", trace.Resolved);
+        whenActivity?.SetTag("flow.when.result", false);
+        if (_observabilityOptions.EnableOpenTelemetry)
+        {
+            _telemetry.StepSkippedCounter.Add(
+                1,
+                new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
+                new KeyValuePair<string, object?>("step_key", stepKey),
+                new KeyValuePair<string, object?>("reason", "when_false"));
+        }
+
         await RecordEventAsync(
             ctx,
             flow,
@@ -759,7 +854,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to mark step {StepKey} as skipped due to terminal run status.", step.Key);
+            EngineLog.StepSkipTrackingFailed(_logger, ex, step.Key);
         }
     }
 
@@ -921,7 +1016,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to record flow event {EventType}.", type);
+            EngineLog.EventPersistenceFailed(_logger, ex, type);
         }
     }
 

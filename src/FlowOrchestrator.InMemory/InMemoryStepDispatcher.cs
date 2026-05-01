@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
@@ -32,7 +33,8 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
         CancellationToken ct = default)
     {
         var id = Guid.NewGuid().ToString("N");
-        await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id), ct).ConfigureAwait(false);
+        var traceContext = CaptureCurrentTraceContext();
+        await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext }, ct).ConfigureAwait(false);
         return id;
     }
 
@@ -45,6 +47,7 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
         CancellationToken ct = default)
     {
         var id = Guid.NewGuid().ToString("N");
+        var traceContext = CaptureCurrentTraceContext();
 
         // Fire-and-forget: wait for the delay then write to channel.
         // The outer ValueTask completes immediately; the step becomes visible to the runner
@@ -54,7 +57,7 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
             try
             {
                 await Task.Delay(delay, ct).ConfigureAwait(false);
-                await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id), ct)
+                await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext }, ct)
                              .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -65,5 +68,16 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
         }, ct);
 
         return new ValueTask<string?>(id);
+    }
+
+    /// <summary>
+    /// Captures <see cref="Activity.Current"/>'s context if it is W3C-formatted; the runner
+    /// uses it to re-parent the step's span and keep the distributed trace continuous across
+    /// the channel handover.
+    /// </summary>
+    private static ActivityContext? CaptureCurrentTraceContext()
+    {
+        var current = Activity.Current;
+        return current is { IdFormat: ActivityIdFormat.W3C } ? current.Context : null;
     }
 }

@@ -1,5 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Hangfire.Server;
 
@@ -22,12 +23,17 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 {
     private readonly IFlowOrchestrator _engine;
     private readonly IFlowRepository _flowRepository;
+    private readonly FlowOrchestratorTelemetry? _telemetry;
 
-    /// <summary>Initialises the adapter with the core execution engine and the flow repository used to rehydrate definitions on the worker.</summary>
-    public HangfireFlowOrchestrator(IFlowOrchestrator engine, IFlowRepository flowRepository)
+    /// <summary>Initialises the adapter with the core execution engine, the flow repository used to rehydrate definitions on the worker, and an optional telemetry hub for cron-lag metrics.</summary>
+    public HangfireFlowOrchestrator(
+        IFlowOrchestrator engine,
+        IFlowRepository flowRepository,
+        FlowOrchestratorTelemetry? telemetry = null)
     {
         _engine = engine;
         _flowRepository = flowRepository;
+        _telemetry = telemetry;
     }
 
     /// <inheritdoc/>
@@ -39,7 +45,23 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
 
     /// <inheritdoc/>
     public ValueTask<object?> TriggerByScheduleAsync(Guid flowId, string triggerKey, PerformContext? performContext = null)
-        => _engine.TriggerByScheduleAsync(flowId, triggerKey, performContext?.BackgroundJob?.Id);
+    {
+        // Cron lag = wall-clock between Hangfire enqueueing the job (when the recurring scheduler
+        // fired internally) and the worker picking it up. Hangfire does not expose the cron's
+        // exact scheduled tick time, but BackgroundJob.CreatedAt is the closest proxy and is
+        // what operators care about: "how far behind is the cron pipeline?".
+        if (_telemetry is not null && performContext?.BackgroundJob?.CreatedAt is { } createdAt)
+        {
+            var lagMs = Math.Max(0, (DateTime.UtcNow - createdAt).TotalMilliseconds);
+            _telemetry.CronLagMs.Record(
+                lagMs,
+                new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
+                new KeyValuePair<string, object?>("trigger_key", triggerKey),
+                new KeyValuePair<string, object?>("runtime", "hangfire"));
+        }
+
+        return _engine.TriggerByScheduleAsync(flowId, triggerKey, performContext?.BackgroundJob?.Id);
+    }
 
     /// <inheritdoc/>
     public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null)

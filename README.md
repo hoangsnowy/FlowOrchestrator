@@ -1,6 +1,6 @@
 # FlowOrchestrator
 
-**The DAG layer Hangfire is missing. No new infrastructure.**
+**Code-first DAG orchestration for .NET. Runs on Hangfire — or in-process with zero infrastructure.**
 
 [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
 [![Downloads](https://img.shields.io/nuget/dt/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
@@ -15,14 +15,19 @@
 
 ---
 
+> **What's new in v1.19** — `AddFlowOrchestratorHealthChecks()` for storage reachability probes, plus two new docs: [Versioning Flows in Production](https://hoangsnowy.github.io/FlowOrchestrator/articles/versioning.html) and [Production Deployment Checklist](https://hoangsnowy.github.io/FlowOrchestrator/articles/production-checklist.html). v1.18 shipped [`WaitForSignal`](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html) for human-in-loop workflows; v1.17 shipped [`When` conditions](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html) on `RunAfter`. Full [CHANGELOG](CHANGELOG.md).
+
+---
+
 ## When to choose FlowOrchestrator
 
 ✅ **Choose FlowOrchestrator if:**
-- You already use Hangfire and want multi-step DAGs without leaving it
+- You want multi-step DAGs in .NET without standing up a separate workflow server
 - Your team writes C# and wants flows defined as plain code, not JSON or a designer
-- You need a built-in dashboard with Timeline, DAG, and Gantt views
-- You want polling, fan-out, and cron in one library with one storage backend
-- You want zero new infrastructure — just SQL Server or PostgreSQL you already have
+- You need conditional branching (`When`), polling, fan-out (`ForEach`), human-in-loop (`WaitForSignal`), and cron in one library
+- You want a built-in dashboard with Timeline, DAG, and Gantt views
+- You want flows that are unit-testable in-process (`FlowTestHost`) and renderable as Mermaid diagrams in a PR
+- You already use Hangfire — or you want zero infrastructure at all (in-process runtime works without Hangfire or a database)
 
 ❌ **Choose something else if:**
 - You need multi-language workflows (Python + Go + .NET) → **[Temporal](https://temporal.io)**
@@ -50,11 +55,11 @@
 | Separate server / sidecar required | ✗ | ✗ | Optional | ✓ Required | ✓ Sidecar |
 | Storage you already have | SQL Server, PG, Redis | SQL Server, PG | SQL Server, PG, MongoDB | Cassandra, MySQL, PG | State store of choice |
 | Deterministic replay | ✗ | ✗ | ✗ | ✓ | ✓ |
-| External signals / human-in-loop | ✗ | Roadmap | ✓ | ✓ | ✓ |
+| External signals / human-in-loop | ✗ | ✓ `WaitForSignal` | ✓ | ✓ | ✓ |
 | Operational complexity | Low | Low | Low–Medium | High | Medium |
 | Learning curve (.NET dev) | Low | Low | Medium | Medium–High | Medium |
 
-> *FlowOrchestrator deliberately ships fewer features than Temporal or Dapr Workflows. It does not replay. It does not run a separate server. It is for teams that want DAG orchestration inside their existing Hangfire app, not a new platform.*
+> *FlowOrchestrator deliberately ships fewer features than Temporal or Dapr Workflows. It does not replay. It does not run a separate server. It is for teams that want DAG orchestration inside their existing ASP.NET Core app — alongside Hangfire if they have it, or fully in-process if they do not.*
 
 *Comparison verified 2026-04-30 against Elsa v3, Temporal .NET SDK v1, Dapr .NET SDK v1. [PRs welcome](https://github.com/hoangsnowy/FlowOrchestrator/pulls) to keep it current.*
 
@@ -141,18 +146,44 @@ public sealed class OrderFlow : IFlowDefinition
 
 ---
 
+## Pick a runtime
+
+FlowOrchestrator separates **storage** (where flow definitions and run history live) from the **runtime adapter** (which dispatches and executes steps).
+
+| | Hangfire runtime | InMemory runtime |
+|---|---|---|
+| Step dispatcher | `IBackgroundJobClient` | `Channel<T>` inside the host process |
+| Cron triggers | `IRecurringJobManager` (multi-instance safe) | `PeriodicTimer` (single-instance only) |
+| Survives process restart | ✓ (jobs in Hangfire storage) | ✗ (in-memory queue) |
+| Multi-instance horizontal scale | ✓ | ✗ |
+| Extra infrastructure | Hangfire + SQL Server / PostgreSQL | None |
+| Best for | Production workloads | Local dev, integration tests, single-node side projects |
+
+Storage is independent — InMemory storage works only for dev / tests, while SQL Server and PostgreSQL are production-ready under either runtime.
+
+---
+
 ## Install
 
 ```bash
 dotnet add package FlowOrchestrator.Core
-dotnet add package FlowOrchestrator.Hangfire
-dotnet add package FlowOrchestrator.SqlServer     # or FlowOrchestrator.PostgreSQL / FlowOrchestrator.InMemory
-dotnet add package FlowOrchestrator.Dashboard     # optional — REST API + SPA dashboard
+
+# Runtime adapter — pick one
+dotnet add package FlowOrchestrator.Hangfire     # Hangfire-backed (production default)
+dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T> (dev / testing / single-node)
+
+# Storage backend — pick one
+dotnet add package FlowOrchestrator.SqlServer    # or FlowOrchestrator.PostgreSQL
+                                                  # FlowOrchestrator.InMemory ships its own storage too
+
+# Optional
+dotnet add package FlowOrchestrator.Dashboard    # REST API + SPA dashboard
+dotnet add package FlowOrchestrator.Testing      # FlowTestHost — in-process integration test helper
 ```
 
 ---
 
-## Quick Start (SQL Server + Hangfire)
+## Quick Start — SQL Server + Hangfire
 
 ```csharp
 // Program.cs
@@ -203,7 +234,29 @@ public sealed class OrderFulfillmentFlow : IFlowDefinition
 
 Open `http://localhost:5000/flows` — trigger the flow, watch steps execute in the DAG view, retry any failure.
 
-For InMemory (no Hangfire, no database) and PostgreSQL variants, see **[📖 Getting Started](https://hoangsnowy.github.io/FlowOrchestrator/articles/getting-started.html)**.
+## Quick Start — InMemory (zero infrastructure)
+
+For local development, prototypes, and single-node side projects — no Hangfire, no database:
+
+```csharp
+// Program.cs
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseInMemory();           // storage in-process
+    options.UseInMemoryRuntime();    // Channel<T> dispatcher + PeriodicTimer cron
+    options.AddFlow<OrderFulfillmentFlow>();
+});
+
+builder.Services.AddStepHandler<FetchOrdersStep>("FetchOrders");
+builder.Services.AddStepHandler<SubmitToWmsStep>("SubmitToWms");
+builder.Services.AddFlowDashboard(builder.Configuration);
+
+app.MapFlowDashboard("/flows");
+```
+
+All run data is lost on restart — see [Storage Backends](https://hoangsnowy.github.io/FlowOrchestrator/articles/storage.html#in-memory) for the full picture, and [Production Checklist](https://hoangsnowy.github.io/FlowOrchestrator/articles/production-checklist.html) for why this combo is unsuitable for production.
+
+For PostgreSQL, see **[📖 Getting Started](https://hoangsnowy.github.io/FlowOrchestrator/articles/getting-started.html)**.
 
 ---
 
@@ -224,6 +277,17 @@ For InMemory (no Hangfire, no database) and PostgreSQL variants, see **[📖 Get
 | Architecture | [architecture](https://hoangsnowy.github.io/FlowOrchestrator/articles/architecture.html) |
 | Observability | [observability](https://hoangsnowy.github.io/FlowOrchestrator/articles/observability.html) |
 | Mermaid export | [mermaid-export](https://hoangsnowy.github.io/FlowOrchestrator/articles/mermaid-export.html) |
+| Conditional execution (`When`) | [conditional-execution](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html) |
+| Human-in-loop (`WaitForSignal`) | [wait-for-signal](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html) |
+| Testing flows (`FlowTestHost`) | [testing](https://hoangsnowy.github.io/FlowOrchestrator/articles/testing.html) |
+| Versioning flows in production | [versioning](https://hoangsnowy.github.io/FlowOrchestrator/articles/versioning.html) |
+| Production deployment checklist | [production-checklist](https://hoangsnowy.github.io/FlowOrchestrator/articles/production-checklist.html) |
+
+---
+
+## Production?
+
+Before changing any deployed flow, read **[Versioning Flows](https://hoangsnowy.github.io/FlowOrchestrator/articles/versioning.html)** — it explains which manifest changes are safe and which need a maintenance window. Before go-live, walk through the **[Production Checklist](https://hoangsnowy.github.io/FlowOrchestrator/articles/production-checklist.html)** for storage, multi-instance, monitoring, secrets, capacity, and upgrade guidance. Wire `AddFlowOrchestratorHealthChecks()` into `/health` so your load balancer can drop traffic when the flow store is unreachable.
 
 ---
 
@@ -268,6 +332,7 @@ sample app exposes `--export-mermaid <flowId>` for CI integrations.
 | `FlowOrchestrator.SqlServer` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.PostgreSQL` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.Dashboard` | `net8.0` · `net9.0` · `net10.0` |
+| `FlowOrchestrator.Testing` | `net8.0` · `net9.0` · `net10.0` |
 
 ---
 

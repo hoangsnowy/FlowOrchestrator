@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="System.Text.Json" />
@@ -22,6 +23,12 @@
          IEnumerable auto-detection regardless of Hangfire's contract caching /
          settings init order. All internal serialisation still uses STJ end-to-end. -->
     <PackageReference Include="Newtonsoft.Json" />
+    <!-- Observability: OpenTelemetry.Api is the API-only ~30 KB package that defines
+         TracerProviderBuilder / MeterProviderBuilder. The Activity / Meter primitives
+         themselves come from System.Diagnostics in the BCL. The full OpenTelemetry SDK
+         is opt-in (the user adds it when they call .AddOpenTelemetry()), so library
+         consumers who do not enable telemetry pay essentially nothing at runtime. -->
+    <PackageReference Include="OpenTelemetry.Api" />
   </ItemGroup>
 
 </Project>

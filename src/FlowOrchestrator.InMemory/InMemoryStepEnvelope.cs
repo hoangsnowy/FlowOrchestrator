@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 
@@ -23,4 +24,14 @@ internal sealed record InMemoryStepEnvelope(
     IStepInstance Step,
 
     /// <summary>Opaque identifier returned to the caller as the "job id".</summary>
-    string EnvelopeId);
+    string EnvelopeId)
+{
+    /// <summary>
+    /// W3C trace context captured at dispatch time so the runner can re-establish it as the
+    /// parent of the step's span — preserving distributed-trace continuity across the
+    /// <see cref="System.Threading.Channels.Channel{T}"/> boundary, mirroring what
+    /// <c>TraceContextHangfireFilter</c> does for the Hangfire runtime. <see langword="null"/>
+    /// when no activity was current at dispatch time.
+    /// </summary>
+    public ActivityContext? ParentTraceContext { get; init; }
+}

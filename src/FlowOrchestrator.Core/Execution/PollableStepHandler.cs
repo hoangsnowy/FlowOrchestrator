@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Observability;
 
 namespace FlowOrchestrator.Core.Execution;
 
@@ -28,7 +30,29 @@ public abstract class PollableStepHandler<TInput> : IStepHandler<TInput>
         IExecutionContext ctx, IFlowDefinition flow, IStepInstance<TInput> step)
     {
         var input = step.Inputs;
-        var (result, parsedAsJson) = await FetchAsync(ctx, flow, step).ConfigureAwait(false);
+
+        // Open a span around each individual poll attempt so APMs show the polling history as a
+        // sequence of child spans of the parent flow.step. The current attempt number is read
+        // before IncrementPollAttempt so it reflects "the attempt about to happen".
+        using var activity = FlowOrchestratorTelemetry.SharedActivitySource.StartActivity(
+            "flow.step.poll",
+            ActivityKind.Internal);
+        activity?.SetTag("flow.id", flow.Id.ToString());
+        activity?.SetTag("run.id", ctx.RunId.ToString());
+        activity?.SetTag("step.key", step.Key);
+        activity?.SetTag("flow.poll.attempt", (input.PollAttempt ?? 0) + 1);
+
+        (JsonElement result, bool parsedAsJson) fetched;
+        try
+        {
+            fetched = await FetchAsync(ctx, flow, step).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            activity.RecordError(ex);
+            throw;
+        }
+        var (result, parsedAsJson) = fetched;
 
         if (!input.PollEnabled)
         {
@@ -56,9 +80,11 @@ public abstract class PollableStepHandler<TInput> : IStepHandler<TInput>
         if (currentAttempt >= minAttempts
             && PollConditionEvaluator.IsMatched(result, input.PollConditionPath, input.PollConditionEquals))
         {
+            activity?.SetTag("flow.poll.condition_met", true);
             ResetPollState(input);
             return new StepResult<JsonElement> { Key = step.Key, Value = result };
         }
+        activity?.SetTag("flow.poll.condition_met", false);
 
         var elapsed = DateTimeOffset.UtcNow - pollStartedAt;
         if (elapsed >= TimeSpan.FromSeconds(timeoutSeconds))
