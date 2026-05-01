@@ -245,15 +245,21 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
         END
 
         -- Re-run lineage column (idempotent ALTER TABLE).
+        --
+        -- NOTE: the CREATE INDEX must be wrapped in EXEC() so SQL Server defers
+        -- column-name resolution to runtime. Without it, the entire batch is
+        -- parsed at compile time and the [SourceRunId] reference fails on a
+        -- pre-existing FlowRuns table that hasn't yet had the column added —
+        -- the IF guard alone is NOT enough because SQL Server compiles the
+        -- whole batch up front.
         IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE Name = N'SourceRunId' AND Object_ID = Object_ID(N'[FlowRuns]'))
         BEGIN
             ALTER TABLE [FlowRuns] ADD [SourceRunId] UNIQUEIDENTIFIER NULL;
         END
 
-        IF EXISTS (SELECT 1 FROM sys.columns WHERE Name = N'SourceRunId' AND Object_ID = Object_ID(N'[FlowRuns]'))
-           AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_SourceRunId' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_SourceRunId' AND object_id = OBJECT_ID(N'[FlowRuns]'))
         BEGIN
-            CREATE INDEX IX_FlowRuns_SourceRunId ON [FlowRuns]([SourceRunId]) WHERE [SourceRunId] IS NOT NULL;
+            EXEC('CREATE INDEX IX_FlowRuns_SourceRunId ON [FlowRuns]([SourceRunId]) WHERE [SourceRunId] IS NOT NULL');
         END
         """;
 }
