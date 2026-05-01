@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Diagnostics;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -202,8 +204,19 @@ public static class DashboardServiceCollectionExtensions
         // - idOrSlug = flow GUID: use first Webhook trigger (only Webhook has external URL)
         // - idOrSlug = slug: lookup flow by webhookSlug in Webhook trigger Inputs
         // - If trigger has webhookSecret in Inputs, require X-Webhook-Key header to match
-        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug, IFlowOrchestrator engine) =>
+        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug, IFlowOrchestrator engine, [Microsoft.AspNetCore.Mvc.FromServices] FlowOrchestratorTelemetry? telemetry) =>
         {
+            // Stitch the run onto the caller's distributed trace by reading the inbound W3C
+            // headers and starting our entry-point activity as a child of them. This works
+            // even when the host app has not enabled OpenTelemetry's AspNetCore instrumentation.
+            // telemetry is nullable so dashboards wired without observability still resolve.
+            using var ingressActivity = telemetry is null ? null : InboundTraceContext.StartActivity(
+                telemetry.ActivitySource,
+                "flow.webhook.receive",
+                ActivityKind.Server,
+                http.Request.Headers.TryGetValue(InboundTraceContext.TraceparentHeaderName, out var tp) ? tp.FirstOrDefault() : null,
+                http.Request.Headers.TryGetValue(InboundTraceContext.TracestateHeaderName, out var ts) ? ts.FirstOrDefault() : null);
+            ingressActivity?.SetTag("flow.webhook.slug_or_id", idOrSlug);
             var flows = (await repo.GetAllFlowsAsync()).ToList();
             Core.Abstractions.IFlowDefinition? flow = null;
             string? triggerKey = null;
@@ -512,8 +525,19 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 
-        group.MapPost("/api/runs/{runId:guid}/signals/{signalName}", async (HttpContext http, IFlowRunStore runStore, IFlowSignalDispatcher signals, Guid runId, string signalName) =>
+        group.MapPost("/api/runs/{runId:guid}/signals/{signalName}", async (HttpContext http, IFlowRunStore runStore, IFlowSignalDispatcher signals, Guid runId, string signalName, [Microsoft.AspNetCore.Mvc.FromServices] FlowOrchestratorTelemetry? telemetry) =>
         {
+            // Same inbound-traceparent extraction as the webhook endpoint — keeps signal delivery
+            // on the caller's trace so APMs can show "approval came in here, run continued there".
+            using var ingressActivity = telemetry is null ? null : InboundTraceContext.StartActivity(
+                telemetry.ActivitySource,
+                "flow.signal.deliver",
+                ActivityKind.Server,
+                http.Request.Headers.TryGetValue(InboundTraceContext.TraceparentHeaderName, out var tp) ? tp.FirstOrDefault() : null,
+                http.Request.Headers.TryGetValue(InboundTraceContext.TracestateHeaderName, out var ts) ? ts.FirstOrDefault() : null);
+            ingressActivity?.SetTag("flow.run_id", runId.ToString());
+            ingressActivity?.SetTag("flow.signal_name", signalName);
+
             if (string.IsNullOrWhiteSpace(signalName))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;

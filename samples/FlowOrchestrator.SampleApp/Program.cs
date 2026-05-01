@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Configuration;
+using FlowOrchestrator.Core.HealthChecks;
 using FlowOrchestrator.Dashboard;
 using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
@@ -191,18 +192,34 @@ builder.Services.AddHttpClient("ExternalApi", client =>
 // When running under Aspire, OTEL_EXPORTER_OTLP_ENDPOINT is injected automatically
 // and spans/metrics appear in the Aspire Dashboard. Standalone, set the env var to
 // point at any OTLP-compatible backend (Jaeger, Grafana, etc.).
+// OTel: console exporter prints spans/metrics to stdout for local development; OTLP exporter
+// forwards to whatever backend OTEL_EXPORTER_OTLP_ENDPOINT points at (Aspire Dashboard, Jaeger,
+// Tempo, …). Both can run concurrently — production typically keeps only the OTLP exporter.
+var enableConsoleExporter = builder.Configuration.GetValue("OBSERVABILITY_CONSOLE", true);
+
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService("FlowOrchestrator.SampleApp"))
-    .WithTracing(t => t
-        .AddFlowOrchestratorInstrumentation()
-        .AddAspNetCoreInstrumentation()
-        .AddOtlpExporter())
-    .WithMetrics(m => m
-        .AddFlowOrchestratorInstrumentation()
-        .AddAspNetCoreInstrumentation()
-        .AddOtlpExporter());
+    .WithTracing(t =>
+    {
+        t.AddFlowOrchestratorInstrumentation()
+         .AddAspNetCoreInstrumentation()
+         .AddOtlpExporter();
+        if (enableConsoleExporter) t.AddConsoleExporter();
+    })
+    .WithMetrics(m =>
+    {
+        m.AddFlowOrchestratorInstrumentation()
+         .AddAspNetCoreInstrumentation()
+         .AddOtlpExporter();
+        if (enableConsoleExporter) m.AddConsoleExporter();
+    });
 
 builder.Services.AddFlowDashboard(builder.Configuration);
+
+// Storage-reachability probe so a load balancer can drop traffic when the flow store is down.
+builder.Services
+    .AddHealthChecks()
+    .AddFlowOrchestratorHealthChecks();
 
 var app = builder.Build();
 
@@ -210,6 +227,7 @@ app.UseStaticFiles();
 if (useHangfireRuntime)
     app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");
+app.MapHealthChecks("/health");
 
 app.MapGet("/", () =>
     $"OrderHub [runtime={runtime}, storage={storageBackend}] is running. Visit /flows for the dashboard.");

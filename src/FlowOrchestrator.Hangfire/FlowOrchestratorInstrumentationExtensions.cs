@@ -1,35 +1,38 @@
-using FlowOrchestrator.Core.Execution;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
+using CoreObservability = FlowOrchestrator.Core.Observability;
 
 namespace FlowOrchestrator.Hangfire;
 
 /// <summary>
-/// Extension methods for wiring <see cref="FlowOrchestratorTelemetry"/> into an OpenTelemetry pipeline.
+/// Backwards-compatibility forwarders for the OpenTelemetry registration helpers that moved to
+/// <see cref="CoreObservability.FlowOrchestratorInstrumentationExtensions"/> in v1.19.
 /// </summary>
+/// <remarks>
+/// Existing user code calling <c>using FlowOrchestrator.Hangfire;</c> followed by
+/// <c>tracer.AddFlowOrchestratorInstrumentation()</c> continues to compile, but the call site
+/// produces a CS0618 obsolete-warning pointing at the new location. Remove these forwarders in
+/// the next major release.
+/// </remarks>
+[Obsolete(
+    "Use FlowOrchestrator.Core.Observability.FlowOrchestratorInstrumentationExtensions instead. " +
+    "OTel registration is no longer Hangfire-specific.",
+    error: false)]
 public static class FlowOrchestratorInstrumentationExtensions
 {
-    /// <summary>
-    /// Registers the FlowOrchestrator <see cref="System.Diagnostics.ActivitySource"/> so that
-    /// flow and step execution spans are captured by the tracing pipeline.
-    /// </summary>
-    /// <param name="builder">The <see cref="TracerProviderBuilder"/> to configure.</param>
-    /// <returns>The same builder for chaining.</returns>
+    /// <summary>Forwards to <see cref="CoreObservability.FlowOrchestratorInstrumentationExtensions.AddFlowOrchestratorInstrumentation(TracerProviderBuilder)"/>.</summary>
+    [Obsolete(
+        "Use FlowOrchestrator.Core.Observability.FlowOrchestratorInstrumentationExtensions.AddFlowOrchestratorInstrumentation instead.",
+        error: false)]
     public static TracerProviderBuilder AddFlowOrchestratorInstrumentation(
         this TracerProviderBuilder builder)
-    {
-        return builder.AddSource(FlowOrchestratorTelemetry.SourceName);
-    }
+        => CoreObservability.FlowOrchestratorInstrumentationExtensions.AddFlowOrchestratorInstrumentation(builder);
 
-    /// <summary>
-    /// Registers the FlowOrchestrator <see cref="System.Diagnostics.Metrics.Meter"/> so that
-    /// run/step counters and duration histograms are captured by the metrics pipeline.
-    /// </summary>
-    /// <param name="builder">The <see cref="MeterProviderBuilder"/> to configure.</param>
-    /// <returns>The same builder for chaining.</returns>
+    /// <summary>Forwards to <see cref="CoreObservability.FlowOrchestratorInstrumentationExtensions.AddFlowOrchestratorInstrumentation(MeterProviderBuilder)"/>.</summary>
+    [Obsolete(
+        "Use FlowOrchestrator.Core.Observability.FlowOrchestratorInstrumentationExtensions.AddFlowOrchestratorInstrumentation instead.",
+        error: false)]
     public static MeterProviderBuilder AddFlowOrchestratorInstrumentation(
         this MeterProviderBuilder builder)
-    {
-        return builder.AddMeter(FlowOrchestratorTelemetry.SourceName);
-    }
+        => CoreObservability.FlowOrchestratorInstrumentationExtensions.AddFlowOrchestratorInstrumentation(builder);
 }

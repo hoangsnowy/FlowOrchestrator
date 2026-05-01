@@ -84,8 +84,8 @@ new StepMetadata
 
 | Field | Purpose |
 |---|---|
-| `Type` | Name used to look up the `IStepHandler` registered with `AddStepHandler<T>("Name")` |
-| `RunAfter` | Zero or more step keys → required statuses. Empty = entry step (runs immediately after trigger). |
+| `Type` | Name used to look up the `IStepHandler` registered with `AddStepHandler<T>("Name")`. Built-in step types include `ForEach` (see [ForEach Loops](foreach.md)) and `WaitForSignal` (see [WaitForSignal](wait-for-signal.md)). |
+| `RunAfter` | Zero or more step keys → required statuses, optionally combined with a `When` boolean expression. Empty = entry step (runs immediately after trigger). See [Conditional Execution](conditional-execution.md) for the full syntax. |
 | `Inputs` | Key-value pairs passed to the handler. Values may be literals or `@` expressions — see [Expressions](expressions.md). |
 
 ### LoopStepMetadata
@@ -133,6 +133,8 @@ RunAfter = null  // or omit entirely
 
 When multiple predecessors are listed, **all** must reach one of their declared statuses before the step becomes ready (AND-join semantics). This enables fan-in after parallel branches.
 
+`RunAfterCondition` also supports a `When` boolean expression evaluated against trigger payload and upstream step outputs. A step whose `When` evaluates to `false` is recorded as `Skipped` and the dashboard surfaces the evaluation trace under the **Why skipped** panel. See [Conditional Execution](conditional-execution.md).
+
 ---
 
 ## Step Statuses
@@ -143,7 +145,7 @@ When multiple predecessors are listed, **all** must reach one of their declared 
 | `Running` | The runtime adapter is executing this step |
 | `Succeeded` | Handler returned without error |
 | `Failed` | Handler threw an exception, or returned `StepStatus.Failed` |
-| `Skipped` | All paths to this step ended in statuses not listed in its `RunAfter`. The dashboard displays this as **Blocked**. |
+| `Skipped` | The step did not run. Either every path to it ended in statuses not listed in its `RunAfter`, or its `When` condition evaluated to `false` (see [Conditional Execution](conditional-execution.md)). The dashboard displays this as **Blocked**. |
 
 ---
 

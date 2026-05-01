@@ -2,7 +2,10 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Hosting;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Hangfire.Telemetry;
+using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -88,6 +91,15 @@ public static class FlowOrchestratorServiceCollectionExtensions
             services.AddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();
             // Newtonsoft uses RunAfterCondition's [JsonConverter] attribute automatically.
             // No global serializer settings to mutate — keeps Hangfire's defaults intact.
+
+            // W3C trace-context propagation across the enqueue / dequeue boundary. Idempotent —
+            // double-registration of AddFlowOrchestrator does not stack the filter. The
+            // GlobalJobFilters.Filters collection wraps each instance in a JobFilter, so we
+            // probe via .Instance rather than OfType<T>.
+            if (!GlobalJobFilters.Filters.Any(f => f.Instance is TraceContextHangfireFilter))
+            {
+                GlobalJobFilters.Filters.Add(new TraceContextHangfireFilter());
+            }
         }
 
         services.AddStepHandler<ForEachStepHandler>("ForEach");

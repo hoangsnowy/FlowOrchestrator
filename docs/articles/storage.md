@@ -37,10 +37,13 @@ builder.Services.AddFlowOrchestrator(options =>
 | `FlowSteps` | One row per step per run: status, attempt count |
 | `FlowStepAttempts` | Detailed per-attempt records (start, end, error) |
 | `FlowOutputs` | Step inputs and outputs serialized as JSON |
-| `FlowTriggerData` | Persisted trigger headers and body |
-| `FlowScheduleState` | Cron override storage (when `PersistOverrides = true`) |
-| `FlowRunControl` | Timeout, cancellation, idempotency key records |
+| `FlowStepDispatches` | Idempotent dispatch ledger — supports the *Dispatch many, Execute once* invariant |
+| `FlowStepClaims` | Exclusive execution claim per step (the *Execute once* half) |
+| `FlowRunControls` | Cancellation, timeout, and idempotency key records |
+| `FlowIdempotencyKeys` | Trigger-time idempotency dedupe |
 | `FlowEvents` | Event stream records (when `EnableEventPersistence = true`) |
+| `FlowSignalWaiters` | Parked `WaitForSignal` step state (see [WaitForSignal](wait-for-signal.md)) |
+| `FlowScheduleStates` | Cron override storage (when `Scheduler.PersistOverrides = true`) |
 
 **Connection string format:**
 
@@ -147,6 +150,7 @@ For full feature parity (schedule overrides, run control, event stream, retentio
 | `IFlowRunControlStore` | Cancel, timeout, and idempotency key state. The engine checks this on every `TriggerAsync` to deduplicate runs and on every `RunStepAsync` to honour cancellation. |
 | `IFlowEventReader` | Run event stream (`GET /flows/api/runs/{runId}/events`) |
 | `IFlowRetentionStore` | Background retention sweep (deletes old run data) |
+| `IFlowSignalStore` | Parked `WaitForSignal` waiter state. Required if you want to use the [`WaitForSignal`](wait-for-signal.md) built-in step on a custom backend. |
 | `IFlowRunRuntimeStore` | Step claim/dispatch ledger per run. Implements `TryRecordDispatchAsync` (idempotent INSERT — prevents duplicate dispatch) and `TryClaimStepAsync` (claim exclusion — ensures a step is executed by at most one worker). Required for production use with any multi-worker runtime. |
 
 Register these the same way — directly on `options.Services`.

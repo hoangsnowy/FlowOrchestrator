@@ -6,6 +6,91 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-05-01
+
+### Added
+
+- **Production-grade observability across logs, traces, and metrics.** Three-phase
+  upgrade in this release:
+  - **Phase 1 — Foundations + P0 correctness.** A new `FlowOrchestrator.Core.Observability`
+    namespace gathers `FlowOrchestratorTelemetry` (moved from `Core.Execution`),
+    `FlowOrchestratorInstrumentationExtensions` (moved from `FlowOrchestrator.Hangfire`,
+    Hangfire keeps a deprecated `[Obsolete]` shim for one release), `LogEvents` event-ID
+    constants, an `EngineLogScope` helper, and an `ActivityExtensions.RecordError` helper
+    that follows the OTel exception semantic convention. Every public engine entry point
+    now opens a `BeginScope({RunId, FlowId, StepKey, Attempt})` so nested log lines —
+    including logs emitted by user-written step handlers — are correlation-ready. Every
+    failed step / failed trigger now marks its activity with `ActivityStatusCode.Error`
+    and records the exception, so APMs treat the span as red instead of silently green.
+  - **Phase 2 — Trace continuity across runtime boundaries (Hangfire AND InMemory).**
+    A new `TraceContextHangfireFilter` (`IClientFilter` + `IServerFilter`) captures
+    `Activity.Current.Context` on enqueue, persists the W3C `traceparent` /
+    `tracestate` as Hangfire job parameters, and restores them in a wrapping
+    `flow.runtime.execute` activity when the worker dequeues. Symmetrically, the
+    InMemory runtime captures the same context on `InMemoryStepDispatcher` enqueue
+    (stored on `InMemoryStepEnvelope.ParentTraceContext`) and the channel runner
+    opens an equivalent `flow.runtime.execute` wrapper before invoking
+    `RunStepAsync`. Inbound webhook (`POST /flows/api/webhook/...`) and signal
+    (`POST /flows/api/runs/{runId}/signals/{name}`) endpoints in the Dashboard
+    read the same headers via the new `InboundTraceContext` helper and start their
+    entry-point activity as a child. The upshot: a single `traceId` connects the
+    original caller, the run, the runtime job, and every step span — for both
+    runtimes — no more forests of disconnected root spans. `FlowOrchestratorTelemetry.SharedActivitySource`
+    is now public so external runtime adapters can emit through the same source.
+  - **Phase 3 — Full span coverage, all metrics wired, source-gen logging, E2E test.** Three
+    new spans: `flow.step.retry` (per `RetryStepAsync`), `flow.step.when` (per `When`-clause
+    evaluation, tagged with resolved expression + result), `flow.step.poll` (per iteration
+    in `PollableStepHandler`, tagged with attempt number and condition match). Five new
+    instruments fully wired: counter `flow_step_retries`, counter `flow_step_skipped`
+    (with `reason` tag — `when_false` / `prerequisites_unmet`), counter
+    `flow_step_poll_attempts`, histogram `flow_signal_wait_ms` (from waiter registration
+    to signal delivery, recorded by `FlowSignalDispatcher`), histogram `flow_cron_lag_ms`
+    (scheduled-fire-time vs actual-dispatch, recorded by both Hangfire and InMemory
+    recurring dispatchers, tagged with `runtime`). Engine hot-path `ILogger` calls converted
+    to source-generated `[LoggerMessage]` partial methods (`EngineLog.cs`) for zero-allocation,
+    AOT-friendly logging. New E2E integration test
+    `TraceContextPropagationTests` spins up a real `BackgroundJobServer` over Hangfire
+    in-memory storage and asserts the parent `TraceId` survives enqueue → dequeue.
+- **`AddFlowOrchestratorHealthChecks()` extension** on `IHealthChecksBuilder`.
+  Registers a storage-reachability probe (`flow-orchestrator-storage`) backed by
+  `IFlowStore.GetAllAsync()` so a load balancer or container orchestrator can drop
+  traffic when the database is unreachable. Probe budget defaults to 5 s and is
+  configurable; the resolved `IFlowStore` is fetched from DI on every probe so
+  SQL Server, PostgreSQL, and in-memory all work without re-registration.
+- **Documentation: *Observability*** ([docs/articles/observability.md](docs/articles/observability.md))
+  rewritten with the full per-span / per-metric / per-tag table, a "Distributed tracing
+  across the runtime" diagram, sampling guidance, and a logger-scope / EventIds section.
+- **Documentation: *Versioning Flows in Production*** ([docs/articles/versioning.md](docs/articles/versioning.md)).
+  Five-section guide covering the three-layer mental model (Id / Version / manifest),
+  safe changes, caution changes that require a drain, breaking changes with
+  migration recipes, a pre-deploy checklist, and a worked `OrderFulfillmentFlow`
+  v1.0 → v1.1 → v2.0 evolution.
+- **Documentation: *Production Deployment Checklist*** ([docs/articles/production-checklist.md](docs/articles/production-checklist.md)).
+  Six-section checklist covering storage and persistence (the twelve tables
+  written by `FlowOrchestratorSqlMigrator`), multi-instance deployment under the
+  *Dispatch many, Execute once* invariant, monitoring (logs / OTel spans / metrics
+  / suggested alerts / health-check endpoint), secrets and PII, capacity planning
+  with retention guidance, and the upgrade path.
+- README: new **Production?** top-level section and two doc-table rows linking
+  to the new pages.
+
+### Changed
+
+- `FlowOrchestratorTelemetry` moved from the `FlowOrchestrator.Core.Execution` namespace
+  to `FlowOrchestrator.Core.Observability`. Add `using FlowOrchestrator.Core.Observability;`
+  to existing call sites; binary compatibility is unaffected because the type is normally
+  resolved from DI.
+- `AddFlowOrchestratorInstrumentation` moved from `FlowOrchestrator.Hangfire` to
+  `FlowOrchestrator.Core.Observability`. The Hangfire namespace still exposes a forwarding
+  `[Obsolete]` shim that emits a CS0618 warning at the call site. Existing user code
+  continues to compile; update the namespace at your convenience.
+
+### Internal
+
+- `OpenTelemetry.Api` (~30 KB API-only package) added as a direct dependency of
+  `FlowOrchestrator.Core` to let the OTel registration helpers ship in the same assembly
+  that already emits the activities. The full SDK is still opt-in.
+
 ## [1.18.0] - 2026-05-01
 
 ### Added

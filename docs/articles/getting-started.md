@@ -179,6 +179,20 @@ app.UseHangfireDashboard("/hangfire");  // Hangfire's own dashboard (optional)
 app.MapFlowDashboard("/flows");          // FlowOrchestrator dashboard + REST API
 ```
 
+## Add a Health Check (optional but recommended)
+
+For production, expose a `/health` endpoint that probes flow-store reachability so a load balancer can drop traffic when the database is unavailable:
+
+```csharp
+builder.Services
+    .AddHealthChecks()
+    .AddFlowOrchestratorHealthChecks();   // probes IFlowStore reachability
+
+app.MapHealthChecks("/health");
+```
+
+The check resolves whichever `IFlowStore` you registered (SQL Server, PostgreSQL, or in-memory). Probe budget defaults to 5 seconds and is configurable. See [Production Checklist](production-checklist.md#3-monitoring) for the full operational story.
+
 ## Run the App
 
 ```bash
@@ -214,3 +228,6 @@ GET /flows/api/runs/3fa85f64-5717-4562-b3fc-2c963f66afa6
 - [Step Handlers](step-handlers.md) — write more complex handlers with typed outputs
 - [Triggers](triggers.md) — cron schedules, webhooks, and idempotency
 - [Polling Steps](polling.md) — wait for external systems without blocking threads
+
+> [!TIP]
+> When you are ready for production, read **[Versioning Flows](versioning.md)** before changing any deployed flow, and walk through the **[Production Checklist](production-checklist.md)** before go-live.
