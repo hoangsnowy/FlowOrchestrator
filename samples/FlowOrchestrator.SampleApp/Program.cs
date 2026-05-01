@@ -10,6 +10,7 @@ using FlowOrchestrator.SampleApp.Flows;
 using FlowOrchestrator.SampleApp.Steps;
 using Hangfire;
 using Hangfire.SqlServer;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -213,6 +214,19 @@ builder.Services.AddOpenTelemetry()
          .AddOtlpExporter();
         if (enableConsoleExporter) m.AddConsoleExporter();
     });
+
+// OTel structured-logging exporter: ships every ILogger call as an OTLP log record so the
+// engine's BeginScope correlation (RunId / FlowId / StepKey / Attempt) and stable EventIds
+// land in Aspire Dashboard's Logs tab — alongside the matching trace. Without this, logs
+// only go to stdout via the default ConsoleLogger and the OTLP backend sees zero log records.
+builder.Logging.AddOpenTelemetry(o =>
+{
+    o.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("FlowOrchestrator.SampleApp"));
+    o.IncludeFormattedMessage = true;
+    o.IncludeScopes = true;            // CRITICAL: surfaces BeginScope props as log attributes
+    o.ParseStateValues = true;          // Treat structured-template values as structured attrs
+    o.AddOtlpExporter();
+});
 
 builder.Services.AddFlowDashboard(builder.Configuration);
 

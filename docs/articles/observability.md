@@ -238,6 +238,9 @@ The check resolves whichever `IFlowStore` you registered (SQL Server, PostgreSQL
 
 When running under Aspire, `OTEL_EXPORTER_OTLP_ENDPOINT` is injected automatically. Spans and metrics appear in the Aspire Dashboard with no extra configuration beyond `AddFlowOrchestratorInstrumentation()`.
 
+> [!IMPORTANT]
+> **For the engine's structured logs to show up in Aspire's Logs tab** (with `RunId` / `StepKey` / `EventId` as searchable attributes), wire up `builder.Logging.AddOpenTelemetry(...)` with `IncludeScopes = true` and `AddOtlpExporter()` — see the [OpenTelemetry Logs](#opentelemetry-logs-auto-trace-correlation) example above. OTel's tracing and metrics pipelines do *not* automatically wire the logging pipeline; without this snippet the Logs tab will be empty even though traces and metrics flow through.
+
 ---
 
 ## Run Control State
