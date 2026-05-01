@@ -24,10 +24,12 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);**/artifacts/**</DefaultItemExcludes>
   </PropertyGroup>
 
-  <!-- Pin Newtonsoft.Json to a safe version — Hangfire.Core pulls in 11.0.1 which has a known high-severity ReDoS vulnerability -->
-  <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-  </ItemGroup>
+  <!--
+    Newtonsoft.Json pin moved to Directory.Packages.props as a GlobalPackageReference
+    so Central Package Management owns every version. The reason we still ship it at
+    all (despite being on STJ): Hangfire.Core pulls in 11.0.1, which has a known
+    high-severity ReDoS vulnerability — pinning to 13.0.4 forces a safe transitive.
+  -->
 
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Visible="false" />
