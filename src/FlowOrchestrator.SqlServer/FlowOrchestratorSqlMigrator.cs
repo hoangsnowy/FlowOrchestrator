@@ -232,5 +232,34 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
                 [UpdatedAtUtc]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET()
             );
         END
+
+        -- When-clause evaluation trace columns (idempotent ALTER TABLE).
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE Name = N'EvaluationTraceJson' AND Object_ID = Object_ID(N'[FlowSteps]'))
+        BEGIN
+            ALTER TABLE [FlowSteps] ADD [EvaluationTraceJson] NVARCHAR(MAX) NULL;
+        END
+
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE Name = N'EvaluationTraceJson' AND Object_ID = Object_ID(N'[FlowStepAttempts]'))
+        BEGIN
+            ALTER TABLE [FlowStepAttempts] ADD [EvaluationTraceJson] NVARCHAR(MAX) NULL;
+        END
+
+        -- Re-run lineage column (idempotent ALTER TABLE).
+        --
+        -- NOTE: the CREATE INDEX must be wrapped in EXEC() so SQL Server defers
+        -- column-name resolution to runtime. Without it, the entire batch is
+        -- parsed at compile time and the [SourceRunId] reference fails on a
+        -- pre-existing FlowRuns table that hasn't yet had the column added —
+        -- the IF guard alone is NOT enough because SQL Server compiles the
+        -- whole batch up front.
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE Name = N'SourceRunId' AND Object_ID = Object_ID(N'[FlowRuns]'))
+        BEGIN
+            ALTER TABLE [FlowRuns] ADD [SourceRunId] UNIQUEIDENTIFIER NULL;
+        END
+
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_SourceRunId' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+        BEGIN
+            EXEC('CREATE INDEX IX_FlowRuns_SourceRunId ON [FlowRuns]([SourceRunId]) WHERE [SourceRunId] IS NOT NULL');
+        END
         """;
 }

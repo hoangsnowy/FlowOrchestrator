@@ -22,8 +22,12 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         IStepInstance step,
         CancellationToken ct)
     {
+        // Pass only flow.Id through Hangfire's argument store. The runner rehydrates the
+        // full IFlowDefinition via IFlowRepository — this avoids serialising the manifest
+        // (and types like RunAfterCondition) through Hangfire's Newtonsoft.Json serializer.
+        var flowId = flow.Id;
         var id = _client.Enqueue<IHangfireStepRunner>(
-            r => r.RunStepAsync(context, flow, step, null));
+            r => r.RunStepAsync(context, flowId, step, null));
         return new(id);
     }
 
@@ -35,8 +39,9 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         TimeSpan delay,
         CancellationToken ct)
     {
+        var flowId = flow.Id;
         var id = _client.Schedule<IHangfireStepRunner>(
-            r => r.RunStepAsync(context, flow, step, null),
+            r => r.RunStepAsync(context, flowId, step, null),
             delay);
         return new(id);
     }

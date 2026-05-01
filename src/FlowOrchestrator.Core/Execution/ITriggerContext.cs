@@ -18,4 +18,10 @@ public interface ITriggerContext : IExecutionContext
 
     /// <summary>The trigger event that fired (key, type, payload, headers).</summary>
     ITrigger Trigger { get; set; }
+
+    /// <summary>
+    /// Optional lineage pointer — when set, persisted on the new run as <c>SourceRunId</c>
+    /// so the dashboard can render a link back to the original. Used by "Re-run all".
+    /// </summary>
+    Guid? SourceRunId { get => null; set { } }
 }

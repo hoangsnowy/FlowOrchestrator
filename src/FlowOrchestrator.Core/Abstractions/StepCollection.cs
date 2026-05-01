@@ -91,7 +91,8 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
                 continue;
             }
 
-            if (metadata.RunAfter.TryGetValue(currentKey, out var statuses) && statuses is { Length: > 0 })
+            if (metadata.RunAfter.TryGetValue(currentKey, out var condition)
+                && condition?.Statuses is { Length: > 0 })
             {
                 return metadata;
             }

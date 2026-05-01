@@ -37,6 +37,12 @@ public sealed class FlowRunRecord
     public DateTimeOffset? CompletedAt { get; set; }
 
     /// <summary>
+    /// Optional lineage pointer — when this run was created via "Re-run all" on a previous
+    /// run, this is the ID of that previous run. <see langword="null"/> for original runs.
+    /// </summary>
+    public Guid? SourceRunId { get; set; }
+
+    /// <summary>
     /// Step records for this run. Populated only by <see cref="IFlowRunStore.GetRunDetailAsync"/>;
     /// <see langword="null"/> in list-view results to avoid over-fetching.
     /// </summary>

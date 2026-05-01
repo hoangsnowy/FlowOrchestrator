@@ -23,17 +23,34 @@ public sealed class PostgreSqlFlowRunStore :
         _connectionString = connectionString;
     }
 
-    public async Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId)
+    public async Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.ExecuteAsync(
             """
-            INSERT INTO flow_runs (id, flow_id, flow_name, status, trigger_key, trigger_data_json, background_job_id, started_at)
-            VALUES (@Id, @FlowId, @FlowName, 'Running', @TriggerKey, @TriggerDataJson, @BackgroundJobId, NOW())
+            INSERT INTO flow_runs (id, flow_id, flow_name, status, trigger_key, trigger_data_json, background_job_id, started_at, source_run_id)
+            VALUES (@Id, @FlowId, @FlowName, 'Running', @TriggerKey, @TriggerDataJson, @BackgroundJobId, NOW(), @SourceRunId)
             """,
-            new { Id = runId, FlowId = flowId, FlowName = flowName, TriggerKey = triggerKey, TriggerDataJson = triggerData, BackgroundJobId = jobId });
+            new { Id = runId, FlowId = flowId, FlowName = flowName, TriggerKey = triggerKey, TriggerDataJson = triggerData, BackgroundJobId = jobId, SourceRunId = sourceRunId });
 
         return (await GetRunCoreAsync(conn, runId))!;
+    }
+
+    public async Task<IReadOnlyList<FlowRunRecord>> GetDerivedRunsAsync(Guid sourceRunId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<FlowRunRecord>(
+            """
+            SELECT id AS Id, flow_id AS FlowId, flow_name AS FlowName, status AS Status,
+                   trigger_key AS TriggerKey, trigger_data_json AS TriggerDataJson,
+                   background_job_id AS BackgroundJobId, started_at AS StartedAt,
+                   completed_at AS CompletedAt, source_run_id AS SourceRunId
+            FROM flow_runs
+            WHERE source_run_id = @SourceRunId
+            ORDER BY started_at DESC
+            """,
+            new { SourceRunId = sourceRunId });
+        return rows.AsList();
     }
 
     public async Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
@@ -174,7 +191,8 @@ public sealed class PostgreSqlFlowRunStore :
             SELECT fr.id AS "Id", fr.flow_id AS "FlowId", fr.flow_name AS "FlowName",
                    fr.status AS "Status", fr.trigger_key AS "TriggerKey",
                    fr.trigger_data_json AS "TriggerDataJson", fr.background_job_id AS "BackgroundJobId",
-                   fr.started_at AS "StartedAt", fr.completed_at AS "CompletedAt"
+                   fr.started_at AS "StartedAt", fr.completed_at AS "CompletedAt",
+                   fr.source_run_id AS "SourceRunId"
             FROM flow_runs AS fr
             """ + whereSql + """
              ORDER BY fr.started_at DESC
@@ -247,7 +265,8 @@ public sealed class PostgreSqlFlowRunStore :
             SELECT id AS "Id", flow_id AS "FlowId", flow_name AS "FlowName",
                    status AS "Status", trigger_key AS "TriggerKey",
                    trigger_data_json AS "TriggerDataJson", background_job_id AS "BackgroundJobId",
-                   started_at AS "StartedAt", completed_at AS "CompletedAt"
+                   started_at AS "StartedAt", completed_at AS "CompletedAt",
+                   source_run_id AS "SourceRunId"
             FROM flow_runs
             WHERE status = 'Running'
             ORDER BY started_at DESC
@@ -557,7 +576,8 @@ public sealed class PostgreSqlFlowRunStore :
             SELECT id AS "Id", flow_id AS "FlowId", flow_name AS "FlowName",
                    status AS "Status", trigger_key AS "TriggerKey",
                    trigger_data_json AS "TriggerDataJson", background_job_id AS "BackgroundJobId",
-                   started_at AS "StartedAt", completed_at AS "CompletedAt"
+                   started_at AS "StartedAt", completed_at AS "CompletedAt",
+                   source_run_id AS "SourceRunId"
             FROM flow_runs
             WHERE id = @Id
             """,

@@ -47,10 +47,10 @@ public class HangfireFlowOrchestratorTests
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger);
-        return new HangfireFlowOrchestrator(engine);
+        return new HangfireFlowOrchestrator(engine, _flowRepo);
     }
 
-    private static IFlowDefinition CreateFlow()
+    private IFlowDefinition CreateFlow()
     {
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(Guid.NewGuid());
@@ -61,7 +61,21 @@ public class HangfireFlowOrchestratorTests
                 ["step1"] = new StepMetadata { Type = "LogMessage" }
             }
         });
+        // Register with the IFlowRepository substitute so HangfireFlowOrchestrator can rehydrate it from flow.Id.
+        RegisterFlowWithRepo(flow);
         return flow;
+    }
+
+    private readonly List<IFlowDefinition> _registeredFlows = new();
+
+    private void RegisterFlowWithRepo(IFlowDefinition flow)
+    {
+        if (!_registeredFlows.Any(f => f.Id == flow.Id))
+        {
+            _registeredFlows.Add(flow);
+        }
+        IReadOnlyList<IFlowDefinition> snapshot = _registeredFlows.ToList();
+        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(snapshot));
     }
 
     [Fact]
@@ -70,7 +84,7 @@ public class HangfireFlowOrchestratorTests
         // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
-        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+        _runStore.StartRunAsync(default, default!, default, default!, default, default, default)
             .ReturnsForAnyArgs(new FlowRunRecord());
 
         var ctx = new TriggerContext
@@ -95,7 +109,7 @@ public class HangfireFlowOrchestratorTests
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
 
-        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+        _runStore.StartRunAsync(default, default!, default, default!, default, default, default)
             .ReturnsForAnyArgs(new FlowRunRecord());
 
         var ctx = new TriggerContext
@@ -115,7 +129,8 @@ public class HangfireFlowOrchestratorTests
             runId,
             "manual",
             Arg.Any<string?>(),
-            Arg.Any<string?>());
+            Arg.Any<string?>(),
+            Arg.Any<Guid?>());
         Assert.NotEmpty(_dispatcher.ReceivedCalls());
     }
 
@@ -125,7 +140,7 @@ public class HangfireFlowOrchestratorTests
         // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
-        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+        _runStore.StartRunAsync(default, default!, default, default!, default, default, default)
             .ReturnsForAnyArgs(new FlowRunRecord());
 
         var ctx = new TriggerContext
@@ -156,7 +171,7 @@ public class HangfireFlowOrchestratorTests
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
         await _outputsRepo.Received(1).SaveStepOutputAsync(ctx, flow, step, stepResult);
@@ -180,7 +195,7 @@ public class HangfireFlowOrchestratorTests
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
         await _runStore.Received(1).RecordStepCompleteAsync(
@@ -202,7 +217,7 @@ public class HangfireFlowOrchestratorTests
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
         await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Succeeded");
@@ -222,7 +237,7 @@ public class HangfireFlowOrchestratorTests
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
         // Act
-        var act = () => sut.RunStepAsync(ctx, flow, step).AsTask();
+        var act = () => sut.RunStepAsync(ctx, flow.Id, step).AsTask();
 
         // Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
@@ -304,7 +319,7 @@ public class HangfireFlowOrchestratorTests
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
         await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Cancelled");
@@ -334,6 +349,7 @@ public class HangfireFlowOrchestratorTests
                 }
             }
         });
+        RegisterFlowWithRepo(flow);
 
         var runId = Guid.NewGuid();
         var ctx = new Core.Execution.ExecutionContext { RunId = runId };
@@ -353,7 +369,7 @@ public class HangfireFlowOrchestratorTests
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: run must complete as Failed, not Skipped
         await _runStore.Received(1).CompleteRunAsync(runId, "Failed");
@@ -392,6 +408,7 @@ public class HangfireFlowOrchestratorTests
                 }
             }
         });
+        RegisterFlowWithRepo(flow);
 
         var runId = Guid.NewGuid();
         var ctx = new Core.Execution.ExecutionContext { RunId = runId };
@@ -414,7 +431,7 @@ public class HangfireFlowOrchestratorTests
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: all leaves Skipped → run = Skipped, not Succeeded
         await _runStore.Received(1).CompleteRunAsync(runId, "Skipped");
@@ -448,6 +465,7 @@ public class HangfireFlowOrchestratorTests
                 }
             }
         });
+        RegisterFlowWithRepo(flow);
 
         var runId = Guid.NewGuid();
         var ctx = new Core.Execution.ExecutionContext { RunId = runId };
@@ -469,7 +487,7 @@ public class HangfireFlowOrchestratorTests
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
         // Act
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: mixed leaves (one Succeeded, one Skipped) → run = Succeeded
         await _runStore.Received(1).CompleteRunAsync(runId, "Succeeded");
@@ -494,13 +512,13 @@ public class HangfireFlowOrchestratorTests
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
         _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns((IStepInstance?)null);
 
-        await sut.RunStepAsync(ctx, flow, step);
+        await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Should dispatch one immediate + one delayed child
         var calls = _dispatcher.ReceivedCalls().ToList();
         Assert.Equal(2, calls.Count);
-        Assert.True(calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync)));
-        Assert.True(calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync)));
+        Assert.Contains(calls, c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync));
+        Assert.Contains(calls, c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync));
     }
 
     [Fact]
@@ -520,7 +538,7 @@ public class HangfireFlowOrchestratorTests
         var stepResult = new StepResult { Key = "loop1", Status = StepStatus.Succeeded, DispatchHint = hint };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
 
-        var act = () => sut.RunStepAsync(ctx, flow, step).AsTask();
+        var act = () => sut.RunStepAsync(ctx, flow.Id, step).AsTask();
 
         // Act + Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);

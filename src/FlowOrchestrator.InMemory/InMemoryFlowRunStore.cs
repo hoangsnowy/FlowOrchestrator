@@ -24,7 +24,7 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
     private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
 
-    public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId)
+    public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null)
     {
         var record = new FlowRunRecord
         {
@@ -35,10 +35,20 @@ public sealed class InMemoryFlowRunStore :
             TriggerKey = triggerKey,
             TriggerDataJson = triggerData,
             BackgroundJobId = jobId,
-            StartedAt = DateTimeOffset.UtcNow
+            StartedAt = DateTimeOffset.UtcNow,
+            SourceRunId = sourceRunId
         };
         _runs[runId] = record;
         return Task.FromResult(record);
+    }
+
+    public Task<IReadOnlyList<FlowRunRecord>> GetDerivedRunsAsync(Guid sourceRunId)
+    {
+        IReadOnlyList<FlowRunRecord> result = _runs.Values
+            .Where(r => r.SourceRunId == sourceRunId)
+            .OrderByDescending(r => r.StartedAt)
+            .ToList();
+        return Task.FromResult(result);
     }
 
     public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
@@ -274,8 +284,32 @@ public sealed class InMemoryFlowRunStore :
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
     {
+        await RecordSkippedStepAsync(runId, stepKey, stepType, reason, evaluationTraceJson: null).ConfigureAwait(false);
+    }
+
+    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
+    {
         await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
         await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+
+        if (string.IsNullOrEmpty(evaluationTraceJson))
+        {
+            return;
+        }
+
+        if (_steps.TryGetValue((runId, stepKey), out var step))
+        {
+            step.EvaluationTraceJson = evaluationTraceJson;
+        }
+
+        var latestAttempt = _stepAttempts.Values
+            .Where(a => a.RunId == runId && string.Equals(a.StepKey, stepKey, StringComparison.Ordinal))
+            .OrderByDescending(a => a.Attempt)
+            .FirstOrDefault();
+        if (latestAttempt is not null)
+        {
+            latestAttempt.EvaluationTraceJson = evaluationTraceJson;
+        }
     }
 
     public Task<string?> GetRunStatusAsync(Guid runId)
@@ -460,7 +494,8 @@ public sealed class InMemoryFlowRunStore :
         JobId = step.JobId,
         StartedAt = step.StartedAt,
         CompletedAt = step.CompletedAt,
-        AttemptCount = step.AttemptCount
+        AttemptCount = step.AttemptCount,
+        EvaluationTraceJson = step.EvaluationTraceJson
     };
 
     private static FlowStepAttemptRecord CloneStepAttemptRecord(FlowStepAttemptRecord attempt) => new()
@@ -475,7 +510,8 @@ public sealed class InMemoryFlowRunStore :
         ErrorMessage = attempt.ErrorMessage,
         JobId = attempt.JobId,
         StartedAt = attempt.StartedAt,
-        CompletedAt = attempt.CompletedAt
+        CompletedAt = attempt.CompletedAt,
+        EvaluationTraceJson = attempt.EvaluationTraceJson
     };
 
     private static FlowStepAttemptRecord CreateSyntheticAttempt(FlowStepRecord step) => new()
@@ -490,7 +526,8 @@ public sealed class InMemoryFlowRunStore :
         ErrorMessage = step.ErrorMessage,
         JobId = step.JobId,
         StartedAt = step.StartedAt,
-        CompletedAt = step.CompletedAt
+        CompletedAt = step.CompletedAt,
+        EvaluationTraceJson = step.EvaluationTraceJson
     };
 
     private static StepStatus ParseStepStatus(string status)

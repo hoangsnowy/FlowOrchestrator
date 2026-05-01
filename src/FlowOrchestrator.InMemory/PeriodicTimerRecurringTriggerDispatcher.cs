@@ -123,10 +123,12 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             await orchestrator.TriggerByScheduleAsync(state.FlowId, state.TriggerKey, jobId, ct).ConfigureAwait(false);
 
             state.LastExecution = _timeProvider.GetUtcNow();
+            state.LastJobId = jobId;
             state.LastJobState = "Succeeded";
         }
         catch (Exception ex)
         {
+            state.LastJobId = jobId;
             state.LastJobState = "Failed";
             _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", jobId, state.FlowId);
             // Swallow so a single failure cannot kill the timer loop.

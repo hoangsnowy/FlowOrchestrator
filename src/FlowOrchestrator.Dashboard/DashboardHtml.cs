@@ -597,6 +597,8 @@ function getStepAttemptCount(step) {
 function renderStepDebugPanels(step) {
   // Blocked steps never executed — no input/output/error panels to show
   if (step.status === 'Skipped') {
+    const tracePanel = renderWhyWhenSkippedPanel(step);
+    if (tracePanel) return tracePanel;
     return '<div style="margin-top:5px;font-size:11px;color:var(--skip-text);font-style:italic">'
       + 'Not executed \u2014 retry the failed step above to resume this flow.'
       + '</div>';
@@ -609,6 +611,25 @@ function renderStepDebugPanels(step) {
   const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
   const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
   return attemptsPanel + inputPanel + outputPanel + errorPanel;
+}
+function renderWhyWhenSkippedPanel(step) {
+  const traceJson = step && step.evaluationTraceJson;
+  if (!traceJson) return '';
+  let trace;
+  try { trace = JSON.parse(traceJson); } catch { return ''; }
+  if (!trace || typeof trace.expression !== 'string') return '';
+  const expression = esc(trace.expression);
+  const resolved = esc(trace.resolved || '');
+  const result = trace.result === true ? 'true' : 'false';
+  return '<div class="step-detail">'
+    + '<div class="step-detail-title"><span>Why skipped</span></div>'
+    + '<div class="step-detail-body" style="font-family:var(--font-mono);font-size:12px;line-height:1.6">'
+    +   '<div style="color:var(--text-muted)">Expression</div>'
+    +   '<div style="margin-bottom:6px">' + expression + '</div>'
+    +   '<div style="color:var(--text-muted)">Resolved</div>'
+    +   '<div>' + resolved + ' \u2192 <strong style="color:var(--error-text)">' + result + '</strong></div>'
+    + '</div>'
+    + '</div>';
 }
 function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
 function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }
@@ -1157,8 +1178,25 @@ async function toggleFlow(id, enable) {
 }
 
 async function triggerFlow(id) {
+  // Prompt for an optional JSON body so flows that read @triggerBody().xxx in
+  // their When clauses or step inputs can be exercised from the dashboard.
+  const raw = prompt(
+    'Trigger body (JSON). Leave blank for an empty payload.\nExample: {"amount": 1500}',
+    '{}'
+  );
+  if (raw === null) return; // user cancelled
+  let body = '{}';
+  if (raw.trim().length > 0) {
+    try {
+      JSON.parse(raw); // validate
+      body = raw;
+    } catch (e) {
+      alert('Invalid JSON: ' + e.message);
+      return;
+    }
+  }
   try {
-    const res = await fetch(BASE+'/flows/'+id+'/trigger', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const res = await fetch(BASE+'/flows/'+id+'/trigger', {method:'POST', headers:{'Content-Type':'application/json'}, body});
     const data = await res.json();
     if (data.runId) {
       alert('Flow triggered! Run ID: '+data.runId);
@@ -1316,7 +1354,9 @@ function renderRunHeader(run, steps) {
     +'<span>Trigger: <b style="color:var(--text)">'+esc(run.triggerKey||'\u2014')+'</b></span>'
     +'<span>Started: <b style="color:var(--text)">'+fmtDate(run.startedAt)+'</b></span>'
     +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
+    +(run.sourceRunId ? '<span>Re-run of: <a href="#/runs/'+run.sourceRunId+'" style="color:var(--accent);font-family:var(--font-mono);text-decoration:underline">'+run.sourceRunId.substring(0,8)+'\u2026</a></span>' : '')
     +'</div>'
+    +'<div id="lineage-derived" style="font-size:12px;color:var(--text-dim);margin-top:4px"></div>'
     +(progress || liveDot || actions.length
       ? '<div class="run-header-actions">'+liveDot+progress+actions.join('')+'</div>'
       : '')
@@ -1721,7 +1761,30 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
     if (currentRunView === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
     if (currentRunView === 'events') openEventsDrawer(id);
     else closeEventsDrawer();
+
+    // Lineage — fire-and-forget; "Re-run of" link is in the header from server-side
+    // sourceRunId; this fills in "Re-run as" descendants asynchronously.
+    loadLineage(id);
   } catch(e) { console.error('Run detail error', e); }
+}
+
+async function loadLineage(runId) {
+  try {
+    const lineage = await fetchJSON(BASE+'/runs/'+runId+'/lineage');
+    if (selectedRunId !== runId) return; // user navigated away
+    const target = $('lineage-derived');
+    if (!target) return;
+    if (!lineage || !lineage.derived || lineage.derived.length === 0) {
+      target.innerHTML = '';
+      return;
+    }
+    const items = lineage.derived.map(d =>
+      '<a href="#/runs/'+d.id+'" style="color:var(--accent);font-family:var(--font-mono);text-decoration:underline;margin-right:10px" title="'+esc(d.flowName||'')+' — '+esc(d.status)+'">'
+      + d.id.substring(0,8) + '… <span style="color:var(--text-dim)">('+esc(d.status)+')</span>'
+      + '</a>'
+    ).join('');
+    target.innerHTML = '<span>Re-run as: </span>' + items;
+  } catch(e) { /* lineage is optional */ }
 }
 
 function renderTimeline(steps, runId) {

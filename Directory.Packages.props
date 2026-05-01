@@ -1,0 +1,71 @@
+<Project>
+
+  <!--
+    Central Package Management — single source of truth for every NuGet version
+    used in this solution. Adding a NEW package: declare it here as
+    <PackageVersion …/>, then reference it from a project's csproj WITHOUT a
+    Version attribute.
+
+    For docs see https://learn.microsoft.com/en-us/nuget/consume-packages/Central-Package-Management
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!-- Aspire (orchestrator AppHost only) -->
+  <ItemGroup>
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.2.4" />
+    <PackageVersion Include="Aspire.Hosting.SqlServer" Version="13.2.4" />
+  </ItemGroup>
+
+  <!--
+    Runtime dependencies.
+
+    Newtonsoft.Json is pinned to 13.0.4 because Hangfire.Core pulls in 11.0.1, which
+    has a known high-severity ReDoS vulnerability. CPM with CentralPackageTransitivePinningEnabled=true
+    propagates this pin to every transitive consumer. FlowOrchestrator.Core also takes
+    a direct reference (only for the [Newtonsoft.Json.JsonConverter] attribute on
+    RunAfterCondition); all internal serialisation still uses System.Text.Json end-to-end.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageVersion Include="Cronos" Version="0.13.0" />
+    <PackageVersion Include="Dapper" Version="2.1.72" />
+    <PackageVersion Include="Hangfire.AspNetCore" Version="1.8.23" />
+    <PackageVersion Include="Hangfire.Core" Version="1.8.23" />
+    <PackageVersion Include="Hangfire.InMemory" Version="1.0.0" />
+    <PackageVersion Include="Hangfire.SqlServer" Version="1.8.23" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
+    <PackageVersion Include="Npgsql" Version="9.0.3" />
+    <PackageVersion Include="System.Text.Json" Version="10.0.7" />
+  </ItemGroup>
+
+  <!-- Observability — keep all OpenTelemetry packages on the same release line. -->
+  <ItemGroup>
+    <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.12.0" />
+  </ItemGroup>
+
+  <!-- Test infrastructure -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="8.0.15" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.4.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.4.0" />
+    <PackageVersion Include="coverlet.collector" Version="10.0.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+</Project>

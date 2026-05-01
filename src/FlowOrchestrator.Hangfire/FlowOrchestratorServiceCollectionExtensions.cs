@@ -86,6 +86,8 @@ public static class FlowOrchestratorServiceCollectionExtensions
         {
             services.AddTransient<IHangfireFlowTrigger, HangfireFlowOrchestrator>();
             services.AddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();
+            // Newtonsoft uses RunAfterCondition's [JsonConverter] attribute automatically.
+            // No global serializer settings to mutate — keeps Hangfire's defaults intact.
         }
 
         services.AddStepHandler<ForEachStepHandler>("ForEach");

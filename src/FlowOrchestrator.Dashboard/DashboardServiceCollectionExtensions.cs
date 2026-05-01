@@ -447,13 +447,45 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var accepted = await controlStore.RequestCancelAsync(runId, reason);
+
+            // If the run has no active steps (zombie / stuck before first dispatch / orphaned
+            // by host crash), no engine worker will ever check the cancel flag — close it
+            // immediately. We do this even when `accepted == false`, because
+            // `RequestCancelAsync` returns false in TWO cases:
+            //   (a) cancel was already requested previously (legitimate "already cancelled")
+            //   (b) no FlowRunControls row exists for this run (old runs created before the
+            //       control store was wired, or runs whose row insertion failed)
+            // For (b), the cancel flag UPDATE is a no-op but the user's intent is clear.
+            // For (a), force-closing a stuck-Running run is also the right thing to do.
+            var closedImmediately = false;
+            if (run.Status == "Running")
+            {
+                var runtimeStore = services.GetService<IFlowRunRuntimeStore>();
+                var hasActiveSteps = false;
+                if (runtimeStore is not null)
+                {
+                    var statuses = await runtimeStore.GetStepStatusesAsync(runId);
+                    hasActiveSteps = statuses.Values.Any(s =>
+                        s is StepStatus.Running or StepStatus.Pending);
+                }
+
+                if (!hasActiveSteps)
+                {
+                    await store.CompleteRunAsync(runId, "Cancelled");
+                    closedImmediately = true;
+                }
+            }
+
             await WriteJsonAsync(http.Response,new
             {
                 success = true,
-                accepted,
-                message = accepted
-                    ? $"Cancellation requested for run '{runId}'."
-                    : $"Run '{runId}' was already cancelled."
+                accepted = accepted || closedImmediately,
+                closedImmediately,
+                message = closedImmediately
+                    ? $"Run '{runId}' cancelled and closed immediately (no active steps)."
+                    : accepted
+                        ? $"Cancellation requested for run '{runId}'."
+                        : $"Run '{runId}' was already cancelled."
             });
         });
 
@@ -510,10 +542,53 @@ public static class DashboardServiceCollectionExtensions
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders)
+                Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders),
+                SourceRunId = runId  // lineage — links the new run back to the one being re-run
             };
             await engine.TriggerAsync(ctx);
             await WriteJsonAsync(http.Response, new { runId = ctx.RunId, sourceRunId = runId, message = $"Run '{runId}' re-triggered as '{ctx.RunId}'." });
+        });
+
+        group.MapGet("/api/runs/{runId:guid}/lineage", async (HttpContext http, IFlowRunStore store, Guid runId) =>
+        {
+            var run = await store.GetRunDetailAsync(runId);
+            if (run is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await WriteJsonAsync(http.Response, new { error = "Run not found." });
+                return;
+            }
+
+            // Source — the run this one was re-run from (if any).
+            FlowRunRecord? source = null;
+            if (run.SourceRunId is { } sourceId)
+            {
+                source = await store.GetRunDetailAsync(sourceId);
+            }
+
+            // Derived — runs that were re-run from THIS run (children).
+            var derived = await store.GetDerivedRunsAsync(runId);
+
+            await WriteJsonAsync(http.Response, new
+            {
+                runId,
+                source = source is null ? null : new
+                {
+                    id = source.Id,
+                    status = source.Status,
+                    startedAt = source.StartedAt,
+                    completedAt = source.CompletedAt,
+                    flowName = source.FlowName
+                },
+                derived = derived.Select(d => new
+                {
+                    id = d.Id,
+                    status = d.Status,
+                    startedAt = d.StartedAt,
+                    completedAt = d.CompletedAt,
+                    flowName = d.FlowName
+                })
+            });
         });
 
         // ── Schedule management endpoints ──
@@ -564,9 +639,11 @@ public static class DashboardServiceCollectionExtensions
                 cron = s.CronOverride ?? "",
                 nextExecution = (DateTime?)null,
                 lastExecution = (DateTime?)null,
-                lastJobId = "",
-                lastJobState = "Paused",
-                timeZoneId = "",
+                // Cast to string? so the anonymous type matches activeJobs' nullable shape
+                // — keeps Concat happy without relaxing nullability annotations elsewhere.
+                lastJobId = (string?)"",
+                lastJobState = (string?)"Paused",
+                timeZoneId = (string?)"",
                 paused = true
             });
 
