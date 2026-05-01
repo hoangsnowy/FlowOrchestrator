@@ -20,6 +20,7 @@ public sealed class DashboardTestServer : IDisposable
     public IFlowStore FlowStore { get; } = Substitute.For<IFlowStore>();
     public IFlowRunStore FlowRunStore { get; } = Substitute.For<IFlowRunStore>();
     public IFlowRunControlStore RunControlStore { get; } = Substitute.For<IFlowRunControlStore>();
+    public IFlowRunRuntimeStore RuntimeStore { get; } = Substitute.For<IFlowRunRuntimeStore>();
     public IFlowRepository FlowRepository { get; } = Substitute.For<IFlowRepository>();
     public IOutputsRepository OutputsRepository { get; } = Substitute.For<IOutputsRepository>();
     public IFlowEventReader EventReader { get; } = Substitute.For<IFlowEventReader>();
@@ -43,6 +44,8 @@ public sealed class DashboardTestServer : IDisposable
             .Returns(Array.Empty<FlowEventRecord>());
         RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).Returns((FlowRunControlRecord?)null);
         TriggerInspector.GetJobsAsync().Returns(Array.Empty<RecurringTriggerInfo>());
+        RuntimeStore.GetStepStatusesAsync(Arg.Any<Guid>())
+            .Returns(new Dictionary<string, StepStatus>());
 
         // Default TriggerAsync returns a non-null object so dashboard can serialize runId from ctx.
         FlowOrchestrator.TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>())
@@ -55,6 +58,7 @@ public sealed class DashboardTestServer : IDisposable
         builder.Services.AddSingleton(FlowStore);
         builder.Services.AddSingleton(FlowRunStore);
         builder.Services.AddSingleton(RunControlStore);
+        builder.Services.AddSingleton(RuntimeStore);
         builder.Services.AddSingleton(FlowRepository);
         builder.Services.AddSingleton(OutputsRepository);
         builder.Services.AddSingleton(EventReader);
