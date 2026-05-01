@@ -6,9 +6,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-05-01
+
 ### Added
 
-- **`When` boolean condition on `RunAfter`** (Plan 05). Steps can now branch on
+- **`When` boolean condition on `RunAfter`**. Steps can now branch on
   *values* of prior step outputs or the trigger payload, not just on predecessor
   status. A step whose `When` evaluates to `false` is recorded as `Skipped`
   (not `Failed`), and the dashboard's new **"Why skipped"** panel shows the
