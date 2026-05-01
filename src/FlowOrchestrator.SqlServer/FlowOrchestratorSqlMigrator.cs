@@ -220,6 +220,23 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
             );
         END
 
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowSignalWaiters')
+        BEGIN
+            CREATE TABLE [FlowSignalWaiters] (
+                [RunId]       UNIQUEIDENTIFIER NOT NULL,
+                [StepKey]     NVARCHAR(256)    NOT NULL,
+                [SignalName]  NVARCHAR(256)    NOT NULL,
+                [CreatedAt]   DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+                [ExpiresAt]   DATETIMEOFFSET   NULL,
+                [DeliveredAt] DATETIMEOFFSET   NULL,
+                [PayloadJson] NVARCHAR(MAX)    NULL,
+                CONSTRAINT PK_FlowSignalWaiters PRIMARY KEY ([RunId], [StepKey])
+            );
+
+            CREATE INDEX IX_FlowSignalWaiters_RunId_SignalName
+                ON [FlowSignalWaiters] ([RunId], [SignalName]);
+        END
+
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowScheduleStates')
         BEGIN
             CREATE TABLE [FlowScheduleStates] (

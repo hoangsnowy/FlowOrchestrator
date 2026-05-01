@@ -22,6 +22,9 @@
 - name: Polling Steps
   href: polling.md
 
+- name: WaitForSignal
+  href: wait-for-signal.md
+
 - name: ForEach Loops
   href: foreach.md
 

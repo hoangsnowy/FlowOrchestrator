@@ -29,6 +29,9 @@ public sealed class DashboardTestServer : IDisposable
     /// <summary>Mock engine used to verify trigger and retry calls from dashboard endpoints.</summary>
     public IFlowOrchestrator FlowOrchestrator { get; } = Substitute.For<IFlowOrchestrator>();
 
+    /// <summary>Mock signal dispatcher used to verify signal endpoint behaviour.</summary>
+    public IFlowSignalDispatcher SignalDispatcher { get; } = Substitute.For<IFlowSignalDispatcher>();
+
     public IRecurringTriggerSync TriggerSync { get; } = Substitute.For<IRecurringTriggerSync>();
     public IRecurringTriggerDispatcher TriggerDispatcher { get; } = Substitute.For<IRecurringTriggerDispatcher>();
     public IRecurringTriggerInspector TriggerInspector { get; } = Substitute.For<IRecurringTriggerInspector>();
@@ -64,6 +67,7 @@ public sealed class DashboardTestServer : IDisposable
         builder.Services.AddSingleton(EventReader);
         builder.Services.AddSingleton(ScheduleStateStore);
         builder.Services.AddSingleton(FlowOrchestrator);
+        builder.Services.AddSingleton(SignalDispatcher);
         builder.Services.AddSingleton(TriggerSync);
         builder.Services.AddSingleton(TriggerDispatcher);
         builder.Services.AddSingleton(TriggerInspector);

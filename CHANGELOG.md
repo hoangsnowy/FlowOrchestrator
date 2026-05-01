@@ -6,6 +6,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-05-01
+
+### Added
+
+- **`WaitForSignal` built-in step type for human-in-the-loop workflows.** A step parks
+  in `StepStatus.Pending` until an external HTTP signal is delivered, then resumes with
+  the signal's JSON payload as its output — available to downstream steps via
+  `@steps('wait_for_approval').output.fieldName`. This unlocks the entire approval
+  workflow category (order fulfillment, content moderation, contract sign-off, manual
+  QA gates) without forcing users to fake it via long-polling steps.
+  - New `IFlowSignalStore` abstraction (Core) with implementations for in-memory, SQL
+    Server, and PostgreSQL. Migrations add `FlowSignalWaiters` / `flow_signal_waiters`
+    idempotently on existing databases — no data loss.
+  - New `IFlowSignalDispatcher` service plus `POST /flows/api/runs/{runId}/signals/{signalName}`
+    endpoint with the documented status-code matrix (200 / 400 / 404 / 409).
+  - Dashboard run-detail page renders a **Send Signal** button on every parked
+    `WaitForSignal` step; the button auto-resolves the configured signal name from the
+    step input so users do not need to know it.
+  - Optional `timeoutSeconds` input transitions the step to `Failed` with a descriptive
+    reason when no signal arrives in time. The handler is idempotent across stale
+    re-dispatches: leaving the waiter row as a tombstone after delivery / expiry
+    prevents the polling loop from re-registering a fresh waiter.
+  - Sample: `samples/FlowOrchestrator.SampleApp/Flows/ApprovalWorkflowFlow.cs`.
+  - Documentation: [WaitForSignal](docs/articles/wait-for-signal.md).
+
 ## [1.17.0] - 2026-05-01
 
 ### Added

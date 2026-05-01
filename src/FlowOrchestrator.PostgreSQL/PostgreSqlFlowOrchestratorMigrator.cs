@@ -153,6 +153,20 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
             PRIMARY KEY (run_id, step_key)
         );
 
+        CREATE TABLE IF NOT EXISTS flow_signal_waiters (
+            run_id        UUID         NOT NULL,
+            step_key      VARCHAR(256) NOT NULL,
+            signal_name   VARCHAR(256) NOT NULL,
+            created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            expires_at    TIMESTAMPTZ  NULL,
+            delivered_at  TIMESTAMPTZ  NULL,
+            payload_json  TEXT         NULL,
+            PRIMARY KEY (run_id, step_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_flow_signal_waiters_run_id_signal_name
+            ON flow_signal_waiters (run_id, signal_name);
+
         CREATE TABLE IF NOT EXISTS flow_schedule_states (
             job_id         VARCHAR(256) NOT NULL PRIMARY KEY,
             flow_id        UUID         NOT NULL,

@@ -512,6 +512,72 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 
+        group.MapPost("/api/runs/{runId:guid}/signals/{signalName}", async (HttpContext http, IFlowRunStore runStore, IFlowSignalDispatcher signals, Guid runId, string signalName) =>
+        {
+            if (string.IsNullOrWhiteSpace(signalName))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Signal name is required." });
+                return;
+            }
+
+            string body;
+            using (var reader = new StreamReader(http.Request.Body, Encoding.UTF8))
+            {
+                body = await reader.ReadToEndAsync();
+            }
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                body = "{}";
+            }
+
+            try
+            {
+                using var _ = JsonDocument.Parse(body);
+            }
+            catch (JsonException)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Request body must be valid JSON." });
+                return;
+            }
+
+            var run = await runStore.GetRunDetailAsync(runId);
+            if (run is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await WriteJsonAsync(http.Response, new { error = "Run not found." });
+                return;
+            }
+            if (!string.Equals(run.Status, "Running", StringComparison.OrdinalIgnoreCase))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = $"Run is not active (status: {run.Status})." });
+                return;
+            }
+
+            var result = await signals.DispatchAsync(runId, signalName, body, http.RequestAborted);
+            switch (result.Status)
+            {
+                case SignalDeliveryStatus.Delivered:
+                    await WriteJsonAsync(http.Response, new
+                    {
+                        delivered = true,
+                        stepKey = result.StepKey,
+                        deliveredAt = result.DeliveredAt
+                    });
+                    return;
+                case SignalDeliveryStatus.AlreadyDelivered:
+                    http.Response.StatusCode = StatusCodes.Status409Conflict;
+                    await WriteJsonAsync(http.Response, new { error = "Signal already delivered.", stepKey = result.StepKey });
+                    return;
+                default:
+                    http.Response.StatusCode = StatusCodes.Status404NotFound;
+                    await WriteJsonAsync(http.Response, new { error = $"No waiter registered for signal '{signalName}' on this run." });
+                    return;
+            }
+        });
+
         group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IFlowOrchestrator engine, Guid runId) =>
         {
             var run = await runStore.GetRunDetailAsync(runId);
