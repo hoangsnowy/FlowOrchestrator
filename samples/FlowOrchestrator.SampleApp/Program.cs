@@ -149,6 +149,11 @@ builder.Services.AddFlowOrchestrator(options =>
     // Trigger with { "amount": 1500 } → high_value_approve runs; { "amount": 500 } → auto_approve runs.
     options.AddFlow<AmountThresholdFlow>();
 
+    // WaitForSignal demo — submit_request → wait_for_approval (parked) → notify_approver.
+    // Drive it by clicking "Send Signal" on the parked step in the dashboard, or POSTing to
+    // /flows/api/runs/{runId}/signals/approval with a JSON body like {"approver":"manager"}.
+    options.AddFlow<ApprovalWorkflowFlow>();
+
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();
 });

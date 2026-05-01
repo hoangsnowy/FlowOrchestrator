@@ -32,6 +32,8 @@ public static class PostgreSqlServiceCollectionExtensions
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
         builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
 
+        builder.Services.AddSingleton<IFlowSignalStore>(_ => new PostgreSqlFlowSignalStore(connectionString));
+
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new PostgreSqlFlowScheduleStateStore(connectionString));
         builder.Services.AddHostedService(sp =>
             new PostgreSqlFlowOrchestratorMigrator(connectionString, sp.GetRequiredService<ILogger<PostgreSqlFlowOrchestratorMigrator>>()));
@@ -59,6 +61,8 @@ public static class PostgreSqlServiceCollectionExtensions
         services.AddSingleton<PostgreSqlOutputsRepository>(_ => new PostgreSqlOutputsRepository(connectionString));
         services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
         services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
+
+        services.AddSingleton<IFlowSignalStore>(_ => new PostgreSqlFlowSignalStore(connectionString));
 
         services.AddSingleton<IFlowScheduleStateStore>(_ => new PostgreSqlFlowScheduleStateStore(connectionString));
         services.AddHostedService(sp =>

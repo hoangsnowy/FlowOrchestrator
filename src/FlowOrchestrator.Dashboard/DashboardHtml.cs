@@ -1802,6 +1802,7 @@ function renderTimeline(steps, runId) {
       +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+stepStatusLabel(s.status)+'</span>'
       +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
       +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\')">&#8635; Retry</button>':'')
+      +(s.status==='Pending' && s.stepType==='WaitForSignal'?'<button class="btn-retry" onclick="sendSignal(\''+runId+'\',\''+esc(s.stepKey)+'\')">Send Signal</button>':'')
       +(s.status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>':'')
       +'</div></div>'
       +(s.status==='Skipped'?'':('<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'))
@@ -1822,6 +1823,43 @@ async function retryStep(runId, stepKey) {
       alert(data.error || 'Retry failed.');
     }
   } catch(e) { alert('Failed to retry step: '+e.message); }
+}
+
+async function sendSignal(runId, stepKey) {
+  // Resolve the configured signalName from the step input so the user does not have to know it.
+  // BASE already ends in '/api' — do NOT prefix '/api/' again.
+  let signalName = stepKey;
+  try {
+    const detail = await (await fetch(BASE+'/runs/'+runId)).json();
+    const step = (detail.steps||[]).find(x=>x.stepKey===stepKey);
+    if (step && step.inputJson) {
+      try { const inputs = JSON.parse(step.inputJson); if (inputs && inputs.signalName) signalName = inputs.signalName; }
+      catch {}
+    }
+  } catch {}
+
+  const raw = prompt('Payload JSON for signal "'+signalName+'":', '{"approved":true}');
+  if (raw === null) return;
+
+  let body = raw && raw.trim() ? raw : '{}';
+  try { JSON.parse(body); }
+  catch (e) { alert('Invalid JSON: '+e.message); return; }
+
+  try {
+    const res = await fetch(BASE+'/runs/'+runId+'/signals/'+encodeURIComponent(signalName), {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: body
+    });
+    const data = await res.json();
+    if (res.ok && data.delivered) {
+      await selectRun(runId);
+    } else if (res.status === 409) {
+      alert('Signal was already delivered to step "'+(data.stepKey||stepKey)+'".');
+    } else {
+      alert(data.error || ('Signal delivery failed (status '+res.status+').'));
+    }
+  } catch(e) { alert('Failed to send signal: '+e.message); }
 }
 
 // Scheduled Jobs

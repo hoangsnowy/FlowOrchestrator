@@ -32,6 +32,8 @@ public static class SqlServerServiceCollectionExtensions
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<SqlOutputsRepository>());
         builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<SqlOutputsRepository>());
 
+        builder.Services.AddSingleton<IFlowSignalStore>(_ => new SqlFlowSignalStore(connectionString));
+
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new SqlFlowScheduleStateStore(connectionString));
         builder.Services.AddHostedService(sp =>
             new FlowOrchestratorSqlMigrator(connectionString, sp.GetRequiredService<ILogger<FlowOrchestratorSqlMigrator>>()));
@@ -59,6 +61,8 @@ public static class SqlServerServiceCollectionExtensions
         services.AddSingleton<SqlOutputsRepository>(_ => new SqlOutputsRepository(connectionString));
         services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<SqlOutputsRepository>());
         services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<SqlOutputsRepository>());
+
+        services.AddSingleton<IFlowSignalStore>(_ => new SqlFlowSignalStore(connectionString));
 
         services.AddSingleton<IFlowScheduleStateStore>(_ => new SqlFlowScheduleStateStore(connectionString));
         services.AddHostedService(sp =>

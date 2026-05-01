@@ -30,6 +30,8 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
         builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
 
+        builder.Services.AddSingleton<IFlowSignalStore, InMemoryFlowSignalStore>();
+
         builder.Services.AddSingleton<IFlowScheduleStateStore, InMemoryFlowScheduleStateStore>();
         return builder;
     }
