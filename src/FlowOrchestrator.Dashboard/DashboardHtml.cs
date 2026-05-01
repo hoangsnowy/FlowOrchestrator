@@ -1178,8 +1178,25 @@ async function toggleFlow(id, enable) {
 }
 
 async function triggerFlow(id) {
+  // Prompt for an optional JSON body so flows that read @triggerBody().xxx in
+  // their When clauses or step inputs can be exercised from the dashboard.
+  const raw = prompt(
+    'Trigger body (JSON). Leave blank for an empty payload.\nExample: {"amount": 1500}',
+    '{}'
+  );
+  if (raw === null) return; // user cancelled
+  let body = '{}';
+  if (raw.trim().length > 0) {
+    try {
+      JSON.parse(raw); // validate
+      body = raw;
+    } catch (e) {
+      alert('Invalid JSON: ' + e.message);
+      return;
+    }
+  }
   try {
-    const res = await fetch(BASE+'/flows/'+id+'/trigger', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const res = await fetch(BASE+'/flows/'+id+'/trigger', {method:'POST', headers:{'Content-Type':'application/json'}, body});
     const data = await res.json();
     if (data.runId) {
       alert('Flow triggered! Run ID: '+data.runId);
