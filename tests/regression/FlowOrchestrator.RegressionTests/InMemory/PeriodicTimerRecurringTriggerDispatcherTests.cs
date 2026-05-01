@@ -440,7 +440,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     }
 
     [Fact]
-    public void SyncTriggers_FlowNotFound_DoesNothing()
+    public async Task SyncTriggers_FlowNotFound_DoesNothing()
     {
         // Arrange
         var repo = Substitute.For<IFlowRepository>();
@@ -453,7 +453,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         dispatcher.SyncTriggers(Guid.NewGuid(), isEnabled: true);
 
         // Assert — no jobs registered when flow lookup misses.
-        var jobs = dispatcher.GetJobsAsync().GetAwaiter().GetResult();
+        var jobs = await dispatcher.GetJobsAsync();
         Assert.Empty(jobs);
     }
 

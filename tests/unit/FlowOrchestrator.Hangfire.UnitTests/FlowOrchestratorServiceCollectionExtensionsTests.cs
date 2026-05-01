@@ -81,9 +81,9 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         services.AddFlowOrchestrator(b => b.UseInMemory());
 
         // Assert
-        Assert.Single(services.Where(sd => sd.ServiceType == typeof(IFlowStore)));
-        Assert.Single(services.Where(sd => sd.ServiceType == typeof(IFlowRunStore)));
-        Assert.Single(services.Where(sd => sd.ServiceType == typeof(IOutputsRepository)));
+        Assert.Single(services, sd => sd.ServiceType == typeof(IFlowStore));
+        Assert.Single(services, sd => sd.ServiceType == typeof(IFlowRunStore));
+        Assert.Single(services, sd => sd.ServiceType == typeof(IOutputsRepository));
     }
 
     // ─── SQL Server backend ───────────────────────────────────────────────────
@@ -143,7 +143,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
 
         // Assert
-        Assert.Single(services.Where(sd => sd.ServiceType == typeof(IFlowStore)));
+        Assert.Single(services, sd => sd.ServiceType == typeof(IFlowStore));
 
         var storeDescriptor = services.Single(sd => sd.ServiceType == typeof(IFlowStore));
         if (storeDescriptor.ImplementationType is not null)

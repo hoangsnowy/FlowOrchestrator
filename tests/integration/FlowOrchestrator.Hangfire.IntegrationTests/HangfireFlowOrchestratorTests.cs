@@ -517,8 +517,8 @@ public class HangfireFlowOrchestratorTests
         // Should dispatch one immediate + one delayed child
         var calls = _dispatcher.ReceivedCalls().ToList();
         Assert.Equal(2, calls.Count);
-        Assert.True(calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync)));
-        Assert.True(calls.Any(c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync)));
+        Assert.Contains(calls, c => c.GetMethodInfo().Name == nameof(IStepDispatcher.EnqueueStepAsync));
+        Assert.Contains(calls, c => c.GetMethodInfo().Name == nameof(IStepDispatcher.ScheduleStepAsync));
     }
 
     [Fact]

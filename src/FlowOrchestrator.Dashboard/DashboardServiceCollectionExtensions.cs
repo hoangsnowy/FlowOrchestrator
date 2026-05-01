@@ -639,9 +639,11 @@ public static class DashboardServiceCollectionExtensions
                 cron = s.CronOverride ?? "",
                 nextExecution = (DateTime?)null,
                 lastExecution = (DateTime?)null,
-                lastJobId = "",
-                lastJobState = "Paused",
-                timeZoneId = "",
+                // Cast to string? so the anonymous type matches activeJobs' nullable shape
+                // — keeps Concat happy without relaxing nullability annotations elsewhere.
+                lastJobId = (string?)"",
+                lastJobState = (string?)"Paused",
+                timeZoneId = (string?)"",
                 paused = true
             });
 
