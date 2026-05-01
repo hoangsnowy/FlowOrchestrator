@@ -448,10 +448,17 @@ public static class DashboardServiceCollectionExtensions
 
             var accepted = await controlStore.RequestCancelAsync(runId, reason);
 
-            // If the run has no active steps (zombie / stuck before first dispatch),
-            // no engine worker will ever check the cancel flag — close it immediately.
+            // If the run has no active steps (zombie / stuck before first dispatch / orphaned
+            // by host crash), no engine worker will ever check the cancel flag — close it
+            // immediately. We do this even when `accepted == false`, because
+            // `RequestCancelAsync` returns false in TWO cases:
+            //   (a) cancel was already requested previously (legitimate "already cancelled")
+            //   (b) no FlowRunControls row exists for this run (old runs created before the
+            //       control store was wired, or runs whose row insertion failed)
+            // For (b), the cancel flag UPDATE is a no-op but the user's intent is clear.
+            // For (a), force-closing a stuck-Running run is also the right thing to do.
             var closedImmediately = false;
-            if (accepted)
+            if (run.Status == "Running")
             {
                 var runtimeStore = services.GetService<IFlowRunRuntimeStore>();
                 var hasActiveSteps = false;
@@ -472,7 +479,7 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response,new
             {
                 success = true,
-                accepted,
+                accepted = accepted || closedImmediately,
                 closedImmediately,
                 message = closedImmediately
                     ? $"Run '{runId}' cancelled and closed immediately (no active steps)."
