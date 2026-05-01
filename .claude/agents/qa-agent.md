@@ -38,12 +38,14 @@ Layers and their responsibilities:
 
 | Layer | Path | Bug-prone surface |
 |---|---|---|
-| **Engine** | `src/FlowOrchestrator.Core/Execution/` | DAG planning, dispatch, claim, polling reschedule, idempotency, run completion |
-| **Storage abstractions** | `src/FlowOrchestrator.Core/Storage/` | Contract: `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore`, `IOutputsRepository`, `IFlowEventReader` |
-| **Hangfire adapter** | `src/FlowOrchestrator.Hangfire/` | `HangfireFlowOrchestrator` shim, recurring-job sync, dashboard endpoint mapping |
+| **Engine** | `src/FlowOrchestrator.Core/Execution/` | DAG planning, dispatch, claim, polling reschedule, idempotency, run completion, **When-clause post-filter** |
+| **Expression evaluation** | `src/FlowOrchestrator.Core/Expressions/` | `BooleanExpressionEvaluator` (recursive-descent parser), `WhenClauseEvaluator`, `TriggerExpressionResolver`, `StepOutputResolver`, `WhenEvaluationTrace` |
+| **Abstractions** | `src/FlowOrchestrator.Core/Abstractions/` | `RunAfterCondition` (Statuses + When), `RunAfterCollection`, STJ + Newtonsoft converters |
+| **Storage abstractions** | `src/FlowOrchestrator.Core/Storage/` | Contract: `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore`, `IOutputsRepository`, `IFlowEventReader`; `EvaluationTraceJson` column |
+| **Hangfire adapter** | `src/FlowOrchestrator.Hangfire/` | `HangfireFlowOrchestrator` (Guid-based flow rehydration), recurring-job sync, dashboard endpoint mapping |
 | **InMemory runtime** | `src/FlowOrchestrator.InMemory/` | `InMemoryStepDispatcher`, `InMemoryStepRunnerHostedService`, `PeriodicTimerRecurringTriggerDispatcher`, full storage |
-| **SQL stores** | `src/FlowOrchestrator.SqlServer/`, `src/FlowOrchestrator.PostgreSQL/` | Dapper queries, migrations, Docker-gated tests via Testcontainers |
-| **Dashboard** | `src/FlowOrchestrator.Dashboard/` | REST + embedded SPA, BasicAuth, webhooks |
+| **SQL stores** | `src/FlowOrchestrator.SqlServer/`, `src/FlowOrchestrator.PostgreSQL/` | Dapper queries, migrations, Docker-gated tests via Testcontainers; `EvaluationTraceJson` ALTER TABLE migration |
+| **Dashboard** | `src/FlowOrchestrator.Dashboard/` | REST + embedded SPA, BasicAuth, webhooks; **"Why skipped" + "Run when" panels** |
 | **Testing helper** | `src/FlowOrchestrator.Testing/` | `FlowTestHost`, `FastPollingStepDispatcher`, `FrozenTimeProvider`, `PermissiveRuntimeStore` |
 
 # C. Project Conventions (binding — see `CLAUDE.md`)
@@ -79,13 +81,23 @@ Layers and their responsibilities:
 Approximate counts as of the last audit. Re-grep before quoting in a report:
 
 ```bash
-for proj in tests/FlowOrchestrator.*.Tests samples/FlowOrchestrator.SampleApp.Tests; do
-  count=$(grep -rE "^\s*\[Fact\]|^\s*\[Theory\]" "$proj" 2>/dev/null | wc -l)
-  echo "$(basename "$proj"): ~$count"
-done
+grep -rn "\[Fact\]\|\[Theory\]" tests/unit/ | wc -l
+grep -rn "\[Fact\]\|\[Theory\]" tests/integration/ | wc -l
+grep -rn "\[Fact\]\|\[Theory\]" tests/regression/ | wc -l
 ```
 
-Last seen: Core 121, Dashboard 65, Hangfire 61, InMemory 73, PostgreSQL 26, SqlServer 28, Testing 9, SampleApp 3 → **~386 [Fact]/[Theory] declarations** (data-driven `[InlineData]` expand at runtime). `dotnet test` reports actual run counts higher.
+Last seen (2026-05-01, after Plan 05):
+| Project | [Fact]/[Theory] decls |
+|---|---|
+| `unit/FlowOrchestrator.Core.UnitTests` | 157 (+30 Plan 05: BooleanExpressionEvaluatorTests×17, RunAfterConditionTests×13) |
+| `unit/FlowOrchestrator.Hangfire.UnitTests` | 39 |
+| `unit/FlowOrchestrator.InMemory.UnitTests` | 39 |
+| `unit/FlowOrchestrator.SqlServer.UnitTests` | 4 |
+| `integration/` (all) | 239 |
+| `regression/` | 35 |
+| **Total** | **~513** |
+
+`dotnet test` reports higher counts due to `[InlineData]`/`[MemberData]` expansion.
 
 # E. Standard Test Patterns
 
@@ -204,6 +216,11 @@ For every invariant: search for an existing test (grep the invariant's keyword, 
 | 10 | **Trigger-data persistence atomicity** — Trigger data and headers are saved before any step is dispatched, so handlers reading `@triggerBody()` always find them. | `FlowOrchestratorEngine.TriggerAsync` line ~190–198 | Inject a step handler that reads via `IOutputsRepository.GetTriggerDataAsync`; assert non-null. |
 | 11 | **Dispatcher decoration ordering (Testing)** — `FlowTestHostBuilder.WithFastPolling()` clamps `ScheduleStepAsync(delay)` and replaces `IFlowRunRuntimeStore` with `PermissiveRuntimeStore`. | `FlowTestHostBuilder.BuildAsync` | Resolve services from a built host; assert decorator types. |
 | 12 | **Frozen clock injection (Testing)** — `WithSystemClock(now)` causes `PeriodicTimerRecurringTriggerDispatcher`'s constructor to receive the registered `TimeProvider`. | `FlowTestHostBuilder.BuildAsync` | Resolve `TimeProvider`; assert it's `FrozenTimeProvider`. |
+| 13 | **When = false → Skipped, never Failed** — A step whose `When` expression evaluates to `false` is recorded as `Skipped` with a `WhenEvaluationTrace`, and dependents cascade via existing planner skip rules. The run must not end `Failed` if a non-When branch covers it. | `FlowOrchestratorEngine.TryEvaluateWhenAndSkipAsync` | Build two-branch flow with `When`; trigger; assert branch step `Skipped`, run `Succeeded`. |
+| 14 | **When = true → step executes normally** — A step whose `When` evaluates to `true` must not be skipped; engine dispatches it via the normal path. | `FlowOrchestratorEngine` | Same setup; trigger; assert branch step `Succeeded`. |
+| 15 | **When expression type-mismatch → FlowExpressionException** — Comparing a string LHS to a numeric literal (or vice versa) must throw `FlowExpressionException`, not silently return `false`. | `BooleanExpressionEvaluator` | Feed mismatched operand types; assert exception. |
+| 16 | **Zombie-run closure** — `FlowRunRecoveryHostedService` closes a run where all steps are terminal but `FlowRuns.Status = "Running"` (host crashed between persist and `CompleteRunAsync`). | `FlowRunRecoveryHostedService.RecoverRunAsync` | Seed an active run with all steps `Succeeded`; run service; assert run status `Succeeded`. |
+| 17 | **Hangfire flow-ID rehydration** — `HangfireFlowOrchestrator.RunStepAsync(ctx, Guid, step)` looks up the flow from `IFlowRepository` by ID; if the flow is not found, the step must fail with a clear error rather than NRE. | `HangfireFlowOrchestrator` | Call `RunStepAsync` with an unknown GUID; assert it logs + throws/returns failure. |
 
 # G. Edge-Case Taxonomy — your imagination scaffold
 
@@ -263,6 +280,23 @@ When auditing **any** method/component, walk this taxonomy. Each row is a questi
 - Mismatched quote styles: `["X-Foo']`, `[X-Foo]` (no quotes), `[ 'X-Foo' ]` (extra spaces)
 - Expressions in nested objects/arrays inside `Inputs`
 - Expression that resolves to a complex object (handler expects a primitive)
+
+## G6b. When / BooleanExpressionEvaluator edge cases (Plan 05)
+- `When = null` or empty string — must be treated as "no condition" (step runs)
+- `When = "true"` / `"false"` literals — sanity check parser doesn't choke on keywords
+- Deeply nested parens: `"(((@steps('x').output.v > 0)))"` — parser must not stack-overflow
+- `&&` short-circuit: RHS resolver not called when LHS is `false` — verify via mock
+- `||` short-circuit: RHS resolver not called when LHS is `true`
+- `!true` → `false`; `!!false` → `false`; `!!!true` → `false`
+- `null == null` → `true`; `null != null` → `false`; `null > 5` → `FlowExpressionException`
+- Number precision: `1.0 == 1` → `true` (decimal compare); `0.1 + 0.2 == 0.3` (not a bug — inputs are literals, not arithmetic)
+- String compare: `"abc" > "abd"` → `false` (ordinal)
+- LHS resolves to `JsonElement.ValueKind.Null` (step returned null output) — must not NRE
+- LHS resolves to array/object — compare with `==` should throw `FlowExpressionException`
+- Multiple `When` clauses on the same `RunAfterCondition` entry (currently only one per entry — confirm engine picks it up)
+- `When` on an entry step (no `RunAfter` predecessor) — engine must still evaluate and may skip at entry time
+- Two `When`-skipped siblings; downstream step requires both `[Succeeded, Skipped]` — run must still complete `Succeeded`
+- `WhenEvaluationTrace` JSON roundtrip — deserialize and check `Expression`, `Resolved`, `Result` fields survive STJ roundtrip
 
 ## G7. Manifest validation
 - Cycle: A → B → A; A → B → C → A (longer cycle)
@@ -391,9 +425,10 @@ Tests must exist for every entry below. If absent, write them as part of the ses
 
 | # | Issue | Status | Test guard |
 |---|---|---|---|
-| 1 | **v2 in-memory runtime never releases per-step claim after a `Pending` result** — `PollableStepHandler` reschedules silently no-op without `PermissiveRuntimeStore` workaround. | OPEN — scheduled investigation routine `trig_01CFT7Ec87WVseHqP5V9zg8S` (2026-05-14) | After fix lands, add: `tests/FlowOrchestrator.InMemory.Tests/` test that uses real `InMemoryFlowRunStore` (no `PermissiveRuntimeStore`) and confirms a `PollableStepHandler` succeeds after ≥2 attempts. |
+| 1 | **v2 in-memory runtime never releases per-step claim after a `Pending` result** — `PollableStepHandler` reschedules silently no-op without `PermissiveRuntimeStore` workaround. | OPEN — scheduled investigation routine `trig_01CFT7Ec87WVseHqP5V9zg8S` (2026-05-14) | After fix lands, add: `tests/unit/FlowOrchestrator.InMemory.UnitTests/` test that uses real `InMemoryFlowRunStore` (no `PermissiveRuntimeStore`) and confirms a `PollableStepHandler` succeeds after ≥2 attempts. |
 | 2 | `PeriodicTimerRecurringTriggerDispatcher` uses real-time `PeriodicTimer(1s)` regardless of `TimeProvider` — `FrozenTimeProvider.Advance` is not enough; tests must wait ≥1.1 s real time. | DOCUMENTED — `articles/testing.md` and `CronTests.cs` use 15-s window | Re-evaluate when .NET ships a virtual `PeriodicTimer`. |
 | 3 | `_webOptions` (camelCase) for `IOutputsRepository` vs default `JsonSerializer.Serialize` (PascalCase) for `FlowStepRecord.OutputJson` — same value persists in two casings depending on read path. | DOCUMENTED in section G5 | Add a regression test asserting both reads of the same step output return semantically equal values. |
+| 4 | **`When` expression gaps not yet covered by tests** — Invariants 13–17 (section F) were added in Plan 05 but only `BooleanExpressionEvaluatorTests` and `RunAfterConditionTests` exist. Engine-level When integration tests (two-branch flow, zombie-run closure, Hangfire flow-ID rehydration error path) have no dedicated test yet. | OPEN | Priority for next QA session: `FlowOrchestrator.Core.UnitTests/Execution/WhenConditionEngineTests.cs` and `FlowRunRecoveryHostedServiceTests` zombie-run case. |
 
 When you discover a new bug during an audit:
 1. Add it to this table with status OPEN.
@@ -435,15 +470,27 @@ Engine:
   src/FlowOrchestrator.Core/Execution/PollableStepHandler.cs
   src/FlowOrchestrator.Core/Execution/ForEachStepHandler.cs
 
+Expression evaluation (Plan 05):
+  src/FlowOrchestrator.Core/Expressions/BooleanExpressionEvaluator.cs   ← recursive-descent parser (&&, ||, !, ==, !=, >, <, >=, <=)
+  src/FlowOrchestrator.Core/Expressions/WhenClauseEvaluator.cs          ← combines StepOutputResolver + TriggerExpressionResolver
+  src/FlowOrchestrator.Core/Expressions/TriggerExpressionResolver.cs    ← shared helper extracted from DefaultStepExecutor
+  src/FlowOrchestrator.Core/Expressions/WhenEvaluationTrace.cs          ← trace record (Expression, Resolved, Result)
+  src/FlowOrchestrator.Core/Abstractions/RunAfterCondition.cs           ← Statuses? + When? + implicit op from StepStatus[]
+  src/FlowOrchestrator.Core/Serialization/RunAfterConditionJsonConverter.cs
+  src/FlowOrchestrator.Core/Serialization/RunAfterConditionNewtonsoftConverter.cs
+  src/FlowOrchestrator.Core/Serialization/RunAfterCollectionJsonConverter.cs
+
 Storage abstractions:
   src/FlowOrchestrator.Core/Storage/IFlowRunStore.cs
-  src/FlowOrchestrator.Core/Storage/IFlowRunRuntimeStore.cs
+  src/FlowOrchestrator.Core/Storage/IFlowRunRuntimeStore.cs   ← RecordSkippedStepAsync(…, evaluationTraceJson)
   src/FlowOrchestrator.Core/Storage/IFlowRunControlStore.cs
   src/FlowOrchestrator.Core/Storage/IOutputsRepository.cs
   src/FlowOrchestrator.Core/Storage/IFlowEventReader.cs
+  src/FlowOrchestrator.Core/Storage/FlowStepRecord.cs         ← EvaluationTraceJson property
+  src/FlowOrchestrator.Core/Storage/FlowStepAttemptRecord.cs  ← EvaluationTraceJson property
 
 Recovery / hosting:
-  src/FlowOrchestrator.Core/Hosting/FlowRunRecoveryHostedService.cs
+  src/FlowOrchestrator.Core/Hosting/FlowRunRecoveryHostedService.cs   ← zombie-run detection + ComputeTerminalStatus
 
 InMemory runtime:
   src/FlowOrchestrator.InMemory/InMemoryFlowRunStore.cs
@@ -475,13 +522,15 @@ Testing helper:
   src/FlowOrchestrator.Testing/Internal/FrozenTimeProvider.cs
 
 Test infrastructure to mirror when adding tests:
-  tests/FlowOrchestrator.Core.Tests/Execution/FlowOrchestratorEngineInvariantTests.cs   ← engine invariants pattern
-  tests/FlowOrchestrator.Core.Tests/Execution/FlowGraphPlannerValidationTests.cs        ← planner validation pattern
-  tests/FlowOrchestrator.Core.Tests/Storage/FlowRunStoreDispatchContractTests.cs        ← storage contract pattern
-  tests/FlowOrchestrator.Core.Tests/Hosting/FlowRunRecoveryHostedServiceTests.cs        ← recovery pattern
-  tests/FlowOrchestrator.Hangfire.Tests/HangfireFlowOrchestratorTests.cs                ← engine + Hangfire integration pattern
-  tests/FlowOrchestrator.Dashboard.Tests/DashboardTestServer.cs                          ← in-memory ASP.NET test server
-  tests/FlowOrchestrator.Testing.Tests/HappyPathTests.cs                                 ← FlowTestHost-based integration
+  tests/unit/FlowOrchestrator.Core.UnitTests/Execution/FlowOrchestratorEngineInvariantTests.cs   ← engine invariants pattern
+  tests/unit/FlowOrchestrator.Core.UnitTests/Execution/FlowGraphPlannerValidationTests.cs        ← planner validation pattern
+  tests/unit/FlowOrchestrator.Core.UnitTests/Storage/FlowRunStoreDispatchContractTests.cs        ← storage contract pattern
+  tests/unit/FlowOrchestrator.Core.UnitTests/Hosting/FlowRunRecoveryHostedServiceTests.cs        ← recovery pattern
+  tests/unit/FlowOrchestrator.Core.UnitTests/Expressions/BooleanExpressionEvaluatorTests.cs     ← Plan 05: boolean eval (17 tests)
+  tests/unit/FlowOrchestrator.Core.UnitTests/Planning/RunAfterConditionTests.cs                  ← Plan 05: RunAfterCondition (13 tests)
+  tests/integration/FlowOrchestrator.Hangfire.IntegrationTests/HangfireFlowOrchestratorTests.cs  ← engine + Hangfire integration pattern
+  tests/integration/FlowOrchestrator.Dashboard.IntegrationTests/DashboardTestServer.cs            ← in-memory ASP.NET test server
+  tests/integration/FlowOrchestrator.Testing.IntegrationTests/HappyPathTests.cs                   ← FlowTestHost-based integration
 ```
 
 # M. Reporting template
