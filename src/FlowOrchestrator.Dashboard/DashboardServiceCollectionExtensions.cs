@@ -447,13 +447,38 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var accepted = await controlStore.RequestCancelAsync(runId, reason);
+
+            // If the run has no active steps (zombie / stuck before first dispatch),
+            // no engine worker will ever check the cancel flag — close it immediately.
+            var closedImmediately = false;
+            if (accepted)
+            {
+                var runtimeStore = services.GetService<IFlowRunRuntimeStore>();
+                var hasActiveSteps = false;
+                if (runtimeStore is not null)
+                {
+                    var statuses = await runtimeStore.GetStepStatusesAsync(runId);
+                    hasActiveSteps = statuses.Values.Any(s =>
+                        s is StepStatus.Running or StepStatus.Pending);
+                }
+
+                if (!hasActiveSteps)
+                {
+                    await store.CompleteRunAsync(runId, "Cancelled");
+                    closedImmediately = true;
+                }
+            }
+
             await WriteJsonAsync(http.Response,new
             {
                 success = true,
                 accepted,
-                message = accepted
-                    ? $"Cancellation requested for run '{runId}'."
-                    : $"Run '{runId}' was already cancelled."
+                closedImmediately,
+                message = closedImmediately
+                    ? $"Run '{runId}' cancelled and closed immediately (no active steps)."
+                    : accepted
+                        ? $"Cancellation requested for run '{runId}'."
+                        : $"Run '{runId}' was already cancelled."
             });
         });
 
