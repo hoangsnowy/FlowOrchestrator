@@ -24,7 +24,7 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
     private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
 
-    public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId)
+    public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null)
     {
         var record = new FlowRunRecord
         {
@@ -35,10 +35,20 @@ public sealed class InMemoryFlowRunStore :
             TriggerKey = triggerKey,
             TriggerDataJson = triggerData,
             BackgroundJobId = jobId,
-            StartedAt = DateTimeOffset.UtcNow
+            StartedAt = DateTimeOffset.UtcNow,
+            SourceRunId = sourceRunId
         };
         _runs[runId] = record;
         return Task.FromResult(record);
+    }
+
+    public Task<IReadOnlyList<FlowRunRecord>> GetDerivedRunsAsync(Guid sourceRunId)
+    {
+        IReadOnlyList<FlowRunRecord> result = _runs.Values
+            .Where(r => r.SourceRunId == sourceRunId)
+            .OrderByDescending(r => r.StartedAt)
+            .ToList();
+        return Task.FromResult(result);
     }
 
     public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)

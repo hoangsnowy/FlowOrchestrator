@@ -84,7 +84,7 @@ public class HangfireFlowOrchestratorTests
         // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
-        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+        _runStore.StartRunAsync(default, default!, default, default!, default, default, default)
             .ReturnsForAnyArgs(new FlowRunRecord());
 
         var ctx = new TriggerContext
@@ -109,7 +109,7 @@ public class HangfireFlowOrchestratorTests
         var flow = CreateFlow();
         var runId = Guid.NewGuid();
 
-        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+        _runStore.StartRunAsync(default, default!, default, default!, default, default, default)
             .ReturnsForAnyArgs(new FlowRunRecord());
 
         var ctx = new TriggerContext
@@ -129,7 +129,8 @@ public class HangfireFlowOrchestratorTests
             runId,
             "manual",
             Arg.Any<string?>(),
-            Arg.Any<string?>());
+            Arg.Any<string?>(),
+            Arg.Any<Guid?>());
         Assert.NotEmpty(_dispatcher.ReceivedCalls());
     }
 
@@ -139,7 +140,7 @@ public class HangfireFlowOrchestratorTests
         // Arrange
         var sut = CreateSut();
         var flow = CreateFlow();
-        _runStore.StartRunAsync(default, default!, default, default!, default, default)
+        _runStore.StartRunAsync(default, default!, default, default!, default, default, default)
             .ReturnsForAnyArgs(new FlowRunRecord());
 
         var ctx = new TriggerContext

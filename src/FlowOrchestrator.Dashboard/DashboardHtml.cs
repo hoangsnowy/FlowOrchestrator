@@ -1354,7 +1354,9 @@ function renderRunHeader(run, steps) {
     +'<span>Trigger: <b style="color:var(--text)">'+esc(run.triggerKey||'\u2014')+'</b></span>'
     +'<span>Started: <b style="color:var(--text)">'+fmtDate(run.startedAt)+'</b></span>'
     +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
+    +(run.sourceRunId ? '<span>Re-run of: <a href="#/runs/'+run.sourceRunId+'" style="color:var(--accent);font-family:var(--font-mono);text-decoration:underline">'+run.sourceRunId.substring(0,8)+'\u2026</a></span>' : '')
     +'</div>'
+    +'<div id="lineage-derived" style="font-size:12px;color:var(--text-dim);margin-top:4px"></div>'
     +(progress || liveDot || actions.length
       ? '<div class="run-header-actions">'+liveDot+progress+actions.join('')+'</div>'
       : '')
@@ -1759,7 +1761,30 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
     if (currentRunView === 'timeline' && selectedStepKey) scrollToStep(selectedStepKey);
     if (currentRunView === 'events') openEventsDrawer(id);
     else closeEventsDrawer();
+
+    // Lineage — fire-and-forget; "Re-run of" link is in the header from server-side
+    // sourceRunId; this fills in "Re-run as" descendants asynchronously.
+    loadLineage(id);
   } catch(e) { console.error('Run detail error', e); }
+}
+
+async function loadLineage(runId) {
+  try {
+    const lineage = await fetchJSON(BASE+'/runs/'+runId+'/lineage');
+    if (selectedRunId !== runId) return; // user navigated away
+    const target = $('lineage-derived');
+    if (!target) return;
+    if (!lineage || !lineage.derived || lineage.derived.length === 0) {
+      target.innerHTML = '';
+      return;
+    }
+    const items = lineage.derived.map(d =>
+      '<a href="#/runs/'+d.id+'" style="color:var(--accent);font-family:var(--font-mono);text-decoration:underline;margin-right:10px" title="'+esc(d.flowName||'')+' — '+esc(d.status)+'">'
+      + d.id.substring(0,8) + '… <span style="color:var(--text-dim)">('+esc(d.status)+')</span>'
+      + '</a>'
+    ).join('');
+    target.innerHTML = '<span>Re-run as: </span>' + items;
+  } catch(e) { /* lineage is optional */ }
 }
 
 function renderTimeline(steps, runId) {

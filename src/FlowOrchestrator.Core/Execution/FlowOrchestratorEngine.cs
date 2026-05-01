@@ -172,7 +172,8 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                     triggerContext.RunId,
                     triggerContext.Trigger.Key,
                     triggerDataJson,
-                    triggerContext.JobId).ConfigureAwait(false);
+                    triggerContext.JobId,
+                    triggerContext.SourceRunId).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

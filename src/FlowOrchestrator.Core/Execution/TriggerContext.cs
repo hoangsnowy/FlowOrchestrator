@@ -27,5 +27,8 @@ public sealed class TriggerContext : ITriggerContext
     public ITrigger Trigger { get; set; } = default!;
 
     /// <inheritdoc/>
+    public Guid? SourceRunId { get; set; }
+
+    /// <inheritdoc/>
     public string? JobId { get; set; }
 }

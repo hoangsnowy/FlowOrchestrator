@@ -542,10 +542,53 @@ public static class DashboardServiceCollectionExtensions
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders)
+                Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders),
+                SourceRunId = runId  // lineage — links the new run back to the one being re-run
             };
             await engine.TriggerAsync(ctx);
             await WriteJsonAsync(http.Response, new { runId = ctx.RunId, sourceRunId = runId, message = $"Run '{runId}' re-triggered as '{ctx.RunId}'." });
+        });
+
+        group.MapGet("/api/runs/{runId:guid}/lineage", async (HttpContext http, IFlowRunStore store, Guid runId) =>
+        {
+            var run = await store.GetRunDetailAsync(runId);
+            if (run is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await WriteJsonAsync(http.Response, new { error = "Run not found." });
+                return;
+            }
+
+            // Source — the run this one was re-run from (if any).
+            FlowRunRecord? source = null;
+            if (run.SourceRunId is { } sourceId)
+            {
+                source = await store.GetRunDetailAsync(sourceId);
+            }
+
+            // Derived — runs that were re-run from THIS run (children).
+            var derived = await store.GetDerivedRunsAsync(runId);
+
+            await WriteJsonAsync(http.Response, new
+            {
+                runId,
+                source = source is null ? null : new
+                {
+                    id = source.Id,
+                    status = source.Status,
+                    startedAt = source.StartedAt,
+                    completedAt = source.CompletedAt,
+                    flowName = source.FlowName
+                },
+                derived = derived.Select(d => new
+                {
+                    id = d.Id,
+                    status = d.Status,
+                    startedAt = d.StartedAt,
+                    completedAt = d.CompletedAt,
+                    flowName = d.FlowName
+                })
+            });
         });
 
         // ── Schedule management endpoints ──

@@ -10,7 +10,15 @@ public interface IFlowRunStore
     /// Creates a new run record in <c>Running</c> status and returns it.
     /// Called once per <c>TriggerAsync</c> invocation.
     /// </summary>
-    Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId);
+    /// <param name="sourceRunId">When this run was created via "Re-run all" on a previous run, the ID of that run; otherwise <see langword="null"/>.</param>
+    Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null);
+
+    /// <summary>
+    /// Returns runs whose <see cref="FlowRunRecord.SourceRunId"/> equals <paramref name="sourceRunId"/>,
+    /// i.e. all re-runs derived from a given run. Used by the dashboard to render lineage.
+    /// </summary>
+    Task<IReadOnlyList<FlowRunRecord>> GetDerivedRunsAsync(Guid sourceRunId)
+        => Task.FromResult<IReadOnlyList<FlowRunRecord>>(Array.Empty<FlowRunRecord>());
 
     /// <summary>
     /// Records the start of a step attempt: sets status to <c>Running</c>, persists inputs, and associates the Hangfire job ID.

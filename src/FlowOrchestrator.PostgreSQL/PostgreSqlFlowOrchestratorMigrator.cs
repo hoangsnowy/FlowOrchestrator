@@ -171,5 +171,9 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
         CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_run_id ON flow_steps (step_key, run_id);
         CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_started_at ON flow_step_attempts (run_id, started_at);
         CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_step_key_attempt_no ON flow_step_attempts (run_id, step_key, attempt_no);
+
+        -- Re-run lineage column (idempotent — Postgres ADD COLUMN IF NOT EXISTS).
+        ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
+        CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
         """;
 }
