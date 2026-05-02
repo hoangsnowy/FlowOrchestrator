@@ -16,6 +16,7 @@ public class HangfireFlowOrchestratorTests
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
     private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
+    private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
@@ -38,6 +39,7 @@ public class HangfireFlowOrchestratorTests
             _flowExecutor,
             _graphPlanner,
             _stepExecutor,
+            _flowStore,
             _runStore,
             _outputsRepo,
             _ctxAccessor,

@@ -29,6 +29,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
     private readonly IFlowExecutor _flowExecutor;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepExecutor _stepExecutor;
+    private readonly IFlowStore _flowStore;
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepository;
     private readonly IExecutionContextAccessor _contextAccessor;
@@ -47,6 +48,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         IFlowExecutor flowExecutor,
         IFlowGraphPlanner graphPlanner,
         IStepExecutor stepExecutor,
+        IFlowStore flowStore,
         IFlowRunStore runStore,
         IOutputsRepository outputsRepository,
         IExecutionContextAccessor contextAccessor,
@@ -62,6 +64,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         _flowExecutor = flowExecutor;
         _graphPlanner = graphPlanner;
         _stepExecutor = stepExecutor;
+        _flowStore = flowStore;
         _runStore = runStore;
         _outputsRepository = outputsRepository;
         _contextAccessor = contextAccessor;
@@ -135,6 +138,17 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
         try
         {
+            // Reject the trigger early if the flow has been disabled via the dashboard / API.
+            // Silent skip (no exception) so a webhook caller doesn't see a 5xx, and so cron
+            // ticks racing the disable propagation don't spam alerts.
+            var record = await _flowStore.GetByIdAsync(triggerContext.Flow.Id).ConfigureAwait(false);
+            if (record is { IsEnabled: false })
+            {
+                EngineLog.TriggerRejectedDisabledFlow(_logger, triggerContext.Flow.Id, triggerContext.Trigger.Key);
+                activity?.SetTag("flow.disabled", true);
+                return new { runId = (Guid?)null, disabled = true };
+            }
+
             var idempotencyKey = TryGetIdempotencyKey(triggerContext.TriggerHeaders);
             if (_runControlStore is not null && !string.IsNullOrWhiteSpace(idempotencyKey))
             {

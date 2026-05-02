@@ -27,6 +27,7 @@
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.SqlServer\\FlowOrchestrator.SqlServer.csproj" />
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.PostgreSQL\\FlowOrchestrator.PostgreSQL.csproj" />
     <ProjectReference Include="..\\..\\src\\FlowOrchestrator.InMemory\\FlowOrchestrator.InMemory.csproj" />
+    <ProjectReference Include="..\\..\\src\\FlowOrchestrator.ServiceBus\\FlowOrchestrator.ServiceBus.csproj" />
   </ItemGroup>
 
 </Project>

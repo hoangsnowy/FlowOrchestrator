@@ -57,6 +57,46 @@ builder.Services.AddFlowOrchestrator(options =>
 > [!TIP]
 > Storage and runtime are independent. `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but durable run state.
 
+**Azure Service Bus runtime** (v1.22+ — cloud-native, multi-replica, multi-region):
+
+```csharp
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connStr);     // (or UsePostgreSql / UseInMemory)
+    options.UseAzureServiceBusRuntime(sb =>
+    {
+        sb.ConnectionString   = builder.Configuration.GetConnectionString("ServiceBus")!;
+        sb.AutoCreateTopology = true;        // creates topic + sub-per-flow at startup
+        // sb.StepTopicName    = "flow-steps";          // defaults shown
+        // sb.CronQueueName    = "flow-cron-triggers";
+        // sb.SubscriptionPrefix = "flow-";
+        // sb.MaxConcurrentCallsPerSubscription = 8;
+    });
+    options.AddFlow<MyFlow>();
+});
+```
+
+The Service Bus runtime publishes step messages to a shared topic (`flow-steps`) with one
+SQL-filtered subscription per registered flow (filter: `FlowId = '{flowId}'`), and runs cron
+triggers as self-perpetuating scheduled messages on a dedicated queue (`flow-cron-triggers`).
+The engine's *Dispatch many, Execute once* invariant (dispatch ledger + claim guard) makes
+the at-least-once delivery model of Service Bus correct.
+
+`AutoCreateTopology = true` (default) creates topic / queue / subscriptions via
+`ServiceBusAdministrationClient` at startup — requires Manage rights on the connection
+string. Set to `false` when topology is provisioned via IaC (Bicep / Terraform) and the
+deploy identity has only Send / Listen rights.
+
+For local development, the included Aspire AppHost wires the official Microsoft Service Bus
+emulator via `AddAzureServiceBus("servicebus").RunAsEmulator()` — see
+[`FlowOrchestrator.AppHost/Program.cs`](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/FlowOrchestrator.AppHost/Program.cs)
+for the wiring; run `dotnet run --project ./FlowOrchestrator.AppHost` and the
+`flow-servicebus` instance comes up on port 5104. Note: Aspire 13.2's emulator integration
+cannot yet declare SQL filters on subscriptions ([dotnet/aspire#11708](https://github.com/dotnet/aspire/issues/11708)),
+so dev-mode topic broadcast is mitigated by an in-process dedup map in the SB processor —
+production with `AutoCreateTopology = true` uses real filtered subscriptions and has no
+broadcast overhead.
+
 ---
 
 ## FlowSchedulerOptions

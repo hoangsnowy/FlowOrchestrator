@@ -24,6 +24,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
     private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
+    private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
@@ -49,6 +50,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
             _flowExecutor,
             _graphPlanner,
             _stepExecutor,
+            _flowStore,
             runStoreOverride ?? _runStore,
             _outputsRepo,
             _ctxAccessor,
@@ -251,5 +253,106 @@ public sealed class FlowOrchestratorEngineInvariantTests
         // Assert
         var status = await realStore.GetRunStatusAsync(runId);
         Assert.Equal("Skipped", status);
+    }
+
+    // ── Invariant 5: Disabled flow rejection ──────────────────────────────────
+    // Engine must silently reject TriggerAsync for a flow whose store record is IsEnabled=false.
+    // This is the runtime-agnostic gate that closes the gap discovered when designing the
+    // ServiceBus runtime (per-flow subscriptions can leak in-flight messages); putting the
+    // check at the engine layer covers Hangfire / InMemory / ServiceBus in one place.
+
+    [Fact]
+    public async Task TriggerAsync_WhenFlowIsDisabled_ReturnsDisabledMarkerWithoutDispatching()
+    {
+        // Arrange — use a hand-rolled IFlowStore stub instead of NSubstitute because
+        // Task<T?> return-type matching trips NSubstitute when stubbing concrete records.
+        var flow = MakeFlow("step1");
+        var disabledStore = new SingleRecordFlowStore(
+            new FlowDefinitionRecord { Id = flow.Id, IsEnabled = false });
+        var engine = CreateEngineWithStore(disabledStore);
+        var ctx = MakeTriggerCtx(flow);
+
+        // Act
+        var result = await engine.TriggerAsync(ctx);
+
+        // Assert — silent skip: no dispatch, no run record, response shape carries `disabled=true`.
+        Assert.Empty(_dispatcher.ReceivedCalls());
+        await _runStore.DidNotReceiveWithAnyArgs().StartRunAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<Guid>(),
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<Guid?>());
+        var json = System.Text.Json.JsonSerializer.SerializeToNode(result);
+        Assert.NotNull(json);
+        Assert.Equal(true, json!["disabled"]?.GetValue<bool>());
+        Assert.Null(json!["runId"]?.GetValue<Guid?>());
+    }
+
+    [Fact]
+    public async Task TriggerAsync_WhenFlowIsEnabled_DispatchesNormally()
+    {
+        // Arrange
+        var flow = MakeFlow("step1");
+        var enabledStore = new SingleRecordFlowStore(
+            new FlowDefinitionRecord { Id = flow.Id, IsEnabled = true });
+        var engine = CreateEngineWithStore(enabledStore);
+        var ctx = MakeTriggerCtx(flow);
+
+        // Act
+        await engine.TriggerAsync(ctx);
+
+        // Assert
+        await _dispatcher.ReceivedWithAnyArgs().EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
+            Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerAsync_WhenFlowStoreReturnsNull_DispatchesNormally()
+    {
+        // Arrange — flow not yet in IFlowStore (e.g. first trigger before FlowSyncHostedService
+        // has run, or a code-only flow in tests). Falling back to "enabled" is the safe default.
+        var flow = MakeFlow("step1");
+        var emptyStore = new SingleRecordFlowStore(record: null);
+        var engine = CreateEngineWithStore(emptyStore);
+        var ctx = MakeTriggerCtx(flow);
+
+        // Act
+        await engine.TriggerAsync(ctx);
+
+        // Assert
+        await _dispatcher.ReceivedWithAnyArgs().EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
+            Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
+    }
+
+    private FlowOrchestratorEngine CreateEngineWithStore(IFlowStore store) =>
+        new FlowOrchestratorEngine(
+            _dispatcher,
+            _flowExecutor,
+            _graphPlanner,
+            _stepExecutor,
+            store,
+            _runStore,
+            _outputsRepo,
+            _ctxAccessor,
+            _flowRepo,
+            [],
+            [],
+            new FlowRunControlOptions(),
+            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowOrchestratorTelemetry(),
+            _logger);
+
+    private sealed class SingleRecordFlowStore : IFlowStore
+    {
+        private readonly FlowDefinitionRecord? _record;
+        public SingleRecordFlowStore(FlowDefinitionRecord? record) => _record = record;
+        public Task<IReadOnlyList<FlowDefinitionRecord>> GetAllAsync() =>
+            Task.FromResult<IReadOnlyList<FlowDefinitionRecord>>(_record is null ? Array.Empty<FlowDefinitionRecord>() : new[] { _record });
+        public Task<FlowDefinitionRecord?> GetByIdAsync(Guid id) =>
+            Task.FromResult(_record?.Id == id ? _record : null);
+        public Task<FlowDefinitionRecord> SaveAsync(FlowDefinitionRecord record) => Task.FromResult(record);
+        public Task DeleteAsync(Guid id) => Task.CompletedTask;
+        public Task<FlowDefinitionRecord> SetEnabledAsync(Guid id, bool enabled) =>
+            Task.FromResult(_record ?? new FlowDefinitionRecord { Id = id, IsEnabled = enabled });
     }
 }

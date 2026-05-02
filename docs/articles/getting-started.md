@@ -16,8 +16,9 @@ Pick the storage backend that matches your environment:
 dotnet add package FlowOrchestrator.Core
 
 # Runtime adapter — choose one
-dotnet add package FlowOrchestrator.Hangfire   # Hangfire-backed execution
-dotnet add package FlowOrchestrator.InMemory   # In-process Channel<T>-backed execution (no Hangfire needed)
+dotnet add package FlowOrchestrator.Hangfire     # Hangfire-backed execution
+dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T>-backed execution (no Hangfire needed)
+dotnet add package FlowOrchestrator.ServiceBus   # Azure Service Bus (cloud-native, multi-replica)
 
 # Storage backend — choose one
 dotnet add package FlowOrchestrator.SqlServer     # SQL Server via Dapper

@@ -42,4 +42,7 @@ internal static partial class EngineLog
 
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
+
+    [LoggerMessage(EventId = 1010, Level = LogLevel.Warning, Message = "Trigger rejected: flow {FlowId} ('{TriggerKey}') is disabled.")]
+    public static partial void TriggerRejectedDisabledFlow(ILogger logger, Guid flowId, string triggerKey);
 }
