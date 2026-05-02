@@ -102,7 +102,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`_stepKeysByRun`, `_claimsByRun`, `_dispatchesByRun`) hold per-run
   sets of step keys, maintained alongside the flat dictionaries on every
   write. Engine reads now run in O(steps_in_run) — asymptotic
-  improvement, not just constant-factor.
+  improvement, not just constant-factor. Measured: at 10,000 runs in
+  store, `GetStepStatusesAsync` drops from **1.5 ms / 393 KB allocated**
+  to **744 ns / 592 B** (2,059× faster, 663× less allocation). At 1,000
+  runs the speedup is 70×; at 100 runs, 13×. Per-call cost stays flat
+  regardless of total run history. Full table:
+  [docs/benchmarks/inmemory-store-runscale-2026-05-02.md](docs/benchmarks/inmemory-store-runscale-2026-05-02.md).
 - **FlowGraphPlanner: cache the manifest sorted-key list per flow.**
   `BuildKnownStepKeys` previously rebuilt a fresh `SortedSet<string>`
   from `flow.Manifest.Steps.Keys` and called `ToArray()` on every
@@ -113,7 +118,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   foreach (the common case), the cached array is returned directly — no
   SortedSet allocation, no per-call sort. Flows with runtime scope
   expansion fall back to the original full-build path with identical
-  semantics.
+  semantics. Measured: 2-3× faster Evaluate across all manifest sizes;
+  allocation reduction grows with manifest size (3.6× at 5 steps, 10.2×
+  at 100 steps). Full table:
+  [docs/benchmarks/flowgraph-planner-2026-05-02.md](docs/benchmarks/flowgraph-planner-2026-05-02.md).
 
 ### Conscious deferrals
 
