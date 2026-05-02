@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>{{PAGE_TITLE}}</title>
+<style>{{INLINE_CSS}}</style>
+</head>
+<body>
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="logo">{{BRAND_LOGO}}</div>
+    <h1>{{BRAND_TITLE}}<span>{{BRAND_SUBTITLE}}</span></h1>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-item active" data-page="overview" onclick="navigate('overview')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Overview
+    </div>
+    <div class="nav-item" data-page="flows" onclick="navigate('flows')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Flows
+    </div>
+    <div class="nav-item" data-page="runs" onclick="navigate('runs')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Runs
+    </div>
+    <div class="nav-item" data-page="scheduled" onclick="navigate('scheduled')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Scheduled
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="refresh-row">
+      <span class="pulse-dot" id="refresh-pulse"></span>
+      <span class="refresh-label">Auto-refresh</span>
+    </div>
+    <div class="refresh-row">
+      <label class="refresh-toggle" for="auto-refresh-enabled">
+        <input id="auto-refresh-enabled" type="checkbox" checked onchange="onAutoRefreshEnabledChange()"/>
+        On
+      </label>
+      <select class="refresh-select" id="auto-refresh-seconds" onchange="onAutoRefreshIntervalChange()">
+        <option value="5">5s</option>
+        <option value="10">10s</option>
+        <option value="15">15s</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+      </select>
+    </div>
+    <div class="refresh-status" id="refresh-status">Every 5s</div>
+  </div>
+</aside>
+
+<div class="main-area">
+  <!-- Overview Page -->
+  <div class="page active" id="page-overview">
+    <div class="page-header"><div class="page-title">Overview</div></div>
+    <div class="page-content">
+      <div class="stats-grid" style="grid-template-columns:repeat(5,1fr)">
+        <div class="stat-card"><div class="val" style="color:var(--accent)" id="ov-flows">-</div><div class="lbl">Registered Flows</div></div>
+        <div class="stat-card"><div class="val" style="color:var(--warn)" id="ov-active">-</div><div class="lbl">Active Runs</div></div>
+        <div class="stat-card"><div class="val" style="color:var(--success)" id="ov-done">-</div><div class="lbl">Completed Today</div></div>
+        <div class="stat-card"><div class="val" style="color:var(--danger)" id="ov-fail">-</div><div class="lbl">Failed Today</div></div>
+        <div class="stat-card"><div class="val" style="color:#8b5cf6" id="ov-scheduled">-</div><div class="lbl">Scheduled Jobs</div></div>
+      </div>
+      <div class="stats-grid" style="grid-template-columns:repeat(2,1fr)">
+        <div class="recent-section">
+          <div class="recent-header">Registered Flows</div>
+          <div id="ov-flows-table"></div>
+        </div>
+        <div class="recent-section">
+          <div class="recent-header">Recent Runs</div>
+          <div id="ov-runs-table"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flows Page -->
+  <div class="page" id="page-flows">
+    <div class="flow-list-panel" id="flow-list-panel">
+      <div class="page-header">
+        <div class="page-title">Flows</div>
+        <div style="font-size:12px;color:var(--text-dim)" id="flow-count-label">0 flows</div>
+      </div>
+      <div class="page-content">
+        <div class="flows-grid" id="flows-grid"></div>
+      </div>
+    </div>
+    <div class="flow-detail-panel" id="flow-detail-panel">
+      <div class="page-header">
+        <div>
+          <div class="back-btn" onclick="closeFlowDetail()">&#8592; Back to Flows</div>
+          <div class="page-title" id="fd-name">Flow Name</div>
+        </div>
+        <div class="flow-actions" id="fd-actions"></div>
+      </div>
+      <div class="detail-tabs">
+        <div class="detail-tab active" data-tab="fd-manifest" onclick="switchFlowTab('fd-manifest')">Manifest</div>
+        <div class="detail-tab" data-tab="fd-steps" onclick="switchFlowTab('fd-steps')">Steps</div>
+        <div class="detail-tab" data-tab="fd-triggers" onclick="switchFlowTab('fd-triggers')">Triggers</div>
+        <div class="detail-tab" data-tab="fd-schedule" onclick="switchFlowTab('fd-schedule')">Schedule</div>
+        <div class="detail-tab" data-tab="fd-dag" onclick="switchFlowTab('fd-dag')">DAG</div>
+        <div class="detail-tab" data-tab="fd-mermaid" onclick="switchFlowTab('fd-mermaid')">Mermaid</div>
+        <div class="detail-tab" data-tab="fd-json" onclick="switchFlowTab('fd-json')">Raw JSON</div>
+      </div>
+      <div class="tab-content active" id="fd-manifest"></div>
+      <div class="tab-content" id="fd-steps"></div>
+      <div class="tab-content" id="fd-triggers"></div>
+      <div class="tab-content" id="fd-schedule"></div>
+      <div class="tab-content" id="fd-dag"></div>
+      <div class="tab-content" id="fd-mermaid"></div>
+      <div class="tab-content" id="fd-json"></div>
+    </div>
+  </div>
+
+  <!-- Runs Page -->
+  <div class="page" id="page-runs">
+    <div id="runs-list-panel" class="runs-list-panel">
+      <div class="page-header">
+        <div class="page-title">Runs</div>
+        <div class="runs-filters">
+          <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)"/>
+          <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()"><option value="">All Flows</option></select>
+          <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()">
+            <option value="">All Statuses</option>
+            <option value="Running">Running</option>
+            <option value="Succeeded">Succeeded</option>
+            <option value="Skipped">Blocked</option>
+            <option value="Failed">Failed</option>
+          </select>
+        </div>
+      </div>
+      <div class="runs-list" id="runs-list"></div>
+      <div class="runs-pagination" id="runs-pagination"></div>
+    </div>
+    <div id="runs-detail-panel" class="runs-detail-panel">
+      <div class="runs-detail-back">
+        <div class="back-btn" onclick="backToRunsList()">&#8592; Back to Runs</div>
+      </div>
+      <div id="runs-detail">
+        <div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scheduled Page -->
+  <div class="page" id="page-scheduled">
+    <div class="page-header">
+      <div class="page-title">Scheduled Jobs</div>
+      <div style="font-size:12px;color:var(--text-dim)" id="scheduled-count-label">0 jobs</div>
+    </div>
+    <div class="page-content">
+      <div class="schedule-section">
+        <div id="scheduled-table"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>{{INLINE_JS}}</script>
+</body>
+</html>

@@ -97,13 +97,15 @@ public static class DashboardServiceCollectionExtensions
             group.AddEndpointFilter(new FlowDashboardBasicAuthFilter(options.BasicAuth));
         }
 
-        var html = DashboardHtml.Render(basePath, options.Branding);
+        // Render once at startup and cache the page in three pre-compressed forms
+        // (raw / Brotli / Gzip). The MapGet handler picks the best available
+        // encoding for each client, writing the matching byte buffer directly to
+        // the response stream — no per-request CPU spent on serialization or
+        // compression. The shape stays identical to the previous "render once"
+        // behaviour: still a single HTTP roundtrip, still no static-file pipeline.
+        var page = DashboardHtml.RenderPrecompressed(basePath, options.Branding);
 
-        group.MapGet("", (HttpContext http) =>
-        {
-            http.Response.ContentType = "text/html; charset=utf-8";
-            return http.Response.WriteAsync(html);
-        });
+        group.MapGet("", (HttpContext http) => WriteCompressedHtmlAsync(http, page));
 
         // ── Flow catalog endpoints ──
 
@@ -889,6 +891,104 @@ public static class DashboardServiceCollectionExtensions
     {
         response.ContentType = "application/json; charset=utf-8";
         return response.WriteAsync(JsonSerializer.Serialize(value, _camelCaseOptions));
+    }
+
+    /// <summary>
+    /// Writes the dashboard root HTML to the response, picking the best
+    /// pre-compressed buffer for the client's <c>Accept-Encoding</c> header.
+    /// </summary>
+    /// <remarks>
+    /// Brotli is preferred when advertised; Gzip is the universal fallback;
+    /// the raw UTF-8 string is served when neither is supported.
+    /// <c>Vary: Accept-Encoding</c> is set on every response so any cache
+    /// (CDN, browser, reverse proxy) keys the variant correctly.
+    /// </remarks>
+    private static Task WriteCompressedHtmlAsync(HttpContext http, PrecompressedDashboardPage page)
+    {
+        http.Response.ContentType = "text/html; charset=utf-8";
+        http.Response.Headers.Vary = "Accept-Encoding";
+
+        var accept = http.Request.Headers.AcceptEncoding.ToString();
+
+        if (HasEncoding(accept, "br"))
+        {
+            http.Response.Headers.ContentEncoding = "br";
+            return http.Response.Body.WriteAsync(page.BrotliBytes, 0, page.BrotliBytes.Length);
+        }
+
+        if (HasEncoding(accept, "gzip"))
+        {
+            http.Response.Headers.ContentEncoding = "gzip";
+            return http.Response.Body.WriteAsync(page.GzipBytes, 0, page.GzipBytes.Length);
+        }
+
+        return http.Response.WriteAsync(page.Html);
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="acceptEncoding"/> advertises
+    /// <paramref name="token"/> as a coding with q-value &gt; 0.
+    /// </summary>
+    /// <remarks>
+    /// Per RFC 7231 §5.3.4, an entry like <c>br;q=0</c> means "do not use Brotli
+    /// even if you support it". This parser honors that: an explicit zero
+    /// q-value excludes the coding; any other (or omitted) q-value accepts it.
+    /// Full q-value precedence between codings (e.g. preferring <c>br;q=0.9</c>
+    /// over <c>gzip;q=0.5</c>) is not implemented because real-world browsers
+    /// only emit unweighted lists or the q=0 disable form.
+    /// </remarks>
+    private static bool HasEncoding(string acceptEncoding, string token)
+    {
+        if (string.IsNullOrEmpty(acceptEncoding))
+        {
+            return false;
+        }
+
+        foreach (var part in acceptEncoding.Split(','))
+        {
+            var entry = part.Trim();
+            if (entry.Length == 0)
+            {
+                continue;
+            }
+
+            // Split "<coding>" from "<coding>;<params>".
+            var semi = entry.IndexOf(';');
+            var coding = (semi < 0 ? entry : entry[..semi]).Trim();
+            if (!coding.Equals(token, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (semi < 0)
+            {
+                return true; // bare coding — implicitly q=1
+            }
+
+            // Walk the ";q=<value>" parameter list. Anything that's not a
+            // valid double, or any q-value > 0, is treated as accepted.
+            foreach (var rawParam in entry[(semi + 1)..].Split(';'))
+            {
+                var p = rawParam.Trim();
+                if (!p.StartsWith("q=", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var value = p[2..].Trim();
+                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var q)
+                    && q <= 0d)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            return true; // matched coding, no q parameter
+        }
+
+        return false;
     }
 
     private static async ValueTask<(bool IsValidBody, object? Body)> TryReadJsonBodyAsync(HttpRequest request)
