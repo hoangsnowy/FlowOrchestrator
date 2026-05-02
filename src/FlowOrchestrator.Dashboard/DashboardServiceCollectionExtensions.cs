@@ -280,7 +280,12 @@ public static class DashboardServiceCollectionExtensions
             {
                 var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
                     ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
-                if (!string.Equals(providedKey, expectedSecret, StringComparison.Ordinal))
+                // Constant-time compare — string.Equals short-circuits at the first
+                // differing character, leaking the secret's prefix through per-request
+                // timing measurements. SecureEquals delegates to
+                // CryptographicOperations.FixedTimeEquals over the UTF-8 encoded
+                // bytes, the same primitive used for the BasicAuth path.
+                if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
                 {
                     http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                     await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
