@@ -6,6 +6,51 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-05-02
+
+### Added
+
+- **Design-system token palette inlined in the dashboard.** `DashboardHtml.cs`
+  now ships the full `--fo-*` token set from
+  `.claude/designs/FlowOrchestrator Design System/colors_and_type.css`
+  (terracotta/parchment/ivory/warm-sand/etc.), plus the type, radius, and
+  ring-shadow tokens. Existing `--bg`, `--accent`, `--surface`, ... names are
+  kept as back-compat aliases so the 197 `var(--*)` usages in the rest of the
+  file keep working unchanged. Source Serif 4 was added to the inline Google
+  Fonts import so future serif-driven UI (cost cards, run titles, etc.) needs
+  no extra network request.
+- **Dashboard SPA assets split into embedded resources.** `DashboardHtml.cs`
+  shrunk from 2103 to 131 lines. The HTML shell, CSS, and JS now live as three
+  embedded resources (`Assets/index.html`, `Assets/dashboard.css`,
+  `Assets/dashboard.js`) loaded once at static-init and inlined into the
+  cached template. Output HTML is byte-identical to the previous monolithic
+  raw-string-literal version (verified by 246 dashboard integration tests
+  before-and-after across net8/9/10).
+- **Pre-compressed dashboard root response.** The dashboard root page is
+  now rendered once at startup and cached in three forms — raw UTF-8, Brotli,
+  and Gzip — via the new `PrecompressedDashboardPage` type. The `MapGet("")`
+  handler picks the best variant based on the inbound `Accept-Encoding` header,
+  honors `q=0` overrides per RFC 7231 §5.3.4, and emits `Vary: Accept-Encoding`
+  on every response so caches key the variants correctly. Typical dashboard
+  payload drops from ~80 KB to ~12 KB on the wire (≥4× reduction asserted in
+  tests). Compression cost is paid once at process start, never per request.
+- **Expression-resolution fast paths and process-wide parse cache.**
+  `StepOutputResolver.IsStepExpression` and the `TriggerExpressionResolver`
+  helpers now reject non-`@` strings with a single character walk — sub-1 ns,
+  zero allocation — so the resolver can be called against every input value
+  cheaply. `StepOutputResolver` keeps a `ConcurrentDictionary` parse cache for
+  successful regex matches; first call parses, subsequent calls do a dictionary
+  lookup. Duplicated `TryResolveTrigger{Body,Headers}Expression` private statics
+  in `DefaultStepExecutor` now delegate to the canonical
+  `TriggerExpressionResolver` (single source of truth). See
+  [docs/benchmarks/expression-resolver-2026-05-02.md](docs/benchmarks/expression-resolver-2026-05-02.md)
+  for measured numbers.
+- **`tests/benchmarks/FlowOrchestrator.Benchmarks` project (new).** First
+  BenchmarkDotNet harness in the repo, with the expression-resolver suite as
+  its first set of cases. `FlowOrchestrator.Core` exposes internals to the
+  benchmark assembly via `InternalsVisibleTo` so internal helpers can be
+  measured without expanding the public API surface.
+
 ## [1.19.0] - 2026-05-01
 
 ### Added
