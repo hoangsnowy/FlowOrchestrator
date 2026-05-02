@@ -67,8 +67,11 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
     public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null)
     {
         ctx.JobId = performContext?.BackgroundJob?.Id;
+        // Allocation-free for-loop scan via FindById. The old call site used
+        // flows.FirstOrDefault(f => f.Id == flowId) which captures flowId in
+        // a closure on every dispatch — visible churn under load.
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FirstOrDefault(f => f.Id == flowId)
+        var flow = flows.FindById(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} is not registered. Cannot dispatch step '{step.Key}'.");
         return await _engine.RunStepAsync(ctx, flow, step).ConfigureAwait(false);
     }

@@ -87,11 +87,73 @@ public sealed class DefaultStepExecutor : IStepExecutor
         if (inputs.Count == 0)
             return inputs;
 
+        // Most steps have purely literal inputs (numbers, plain strings, bools).
+        // For those the resolution is a no-op but the original code still
+        // allocated a fresh Dictionary copy. Pre-scan the values: if none can
+        // possibly be — or contain — a trigger expression, return the original
+        // dictionary unchanged. This makes the common case zero-allocation.
+        if (!ContainsResolvableValue(inputs))
+        {
+            return inputs;
+        }
+
         var resolved = new Dictionary<string, object?>(inputs.Count);
         foreach (var (key, value) in inputs)
             resolved[key] = ResolveValue(value, triggerData, triggerHeaders);
 
         return resolved;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when at least one value in
+    /// <paramref name="inputs"/> could plausibly need expression resolution —
+    /// a string starting with <c>@</c>, a <see cref="JsonElement"/>, or a
+    /// nested collection. Strings that don't start with <c>@</c> and primitive
+    /// values are skipped entirely.
+    /// </summary>
+    private static bool ContainsResolvableValue(IDictionary<string, object?> inputs)
+    {
+        foreach (var value in inputs.Values)
+        {
+            switch (value)
+            {
+                case string s when StartsWithAt(s):
+                    return true;
+                case JsonElement:
+                case IDictionary<string, object?>:
+                case IEnumerable<object?>:
+                    // Nested structures may contain expressions — fall through
+                    // to the full resolution path.
+                    return true;
+                default:
+                    continue;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Mirrors the fast-path used by <see cref="Expressions.TriggerExpressionResolver"/>:
+    /// returns <see langword="true"/> when the first non-whitespace character
+    /// of <paramref name="value"/> is <c>@</c>. Avoids the full <c>Trim</c>
+    /// allocation for the common literal-string case.
+    /// </summary>
+    private static bool StartsWithAt(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (char.IsWhiteSpace(c))
+            {
+                continue;
+            }
+            return c == '@';
+        }
+        return false;
     }
 
     private static object? ResolveValue(object? value, object? triggerData, IReadOnlyDictionary<string, string>? triggerHeaders)

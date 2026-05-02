@@ -266,7 +266,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
     public async ValueTask<object?> TriggerByScheduleAsync(Guid flowId, string triggerKey, string? jobId = null, CancellationToken ct = default)
     {
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FirstOrDefault(f => f.Id == flowId)
+        var flow = flows.FindById(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var ctx = new TriggerContext
@@ -510,7 +510,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         }
 
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FirstOrDefault(f => f.Id == flowId)
+        var flow = flows.FindById(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
