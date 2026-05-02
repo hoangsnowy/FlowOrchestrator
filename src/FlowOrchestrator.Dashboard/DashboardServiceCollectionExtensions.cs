@@ -370,6 +370,60 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response,stats);
         });
 
+        group.MapGet("/api/runs/timeseries", async (HttpContext http, IFlowRunStore store) =>
+        {
+            var query = http.Request.Query;
+
+            var bucketRaw = query.TryGetValue("bucket", out var bucketValues) ? bucketValues.ToString() : "hour";
+            var granularity = string.Equals(bucketRaw, "day", StringComparison.OrdinalIgnoreCase)
+                ? RunTimeseriesGranularity.Day
+                : RunTimeseriesGranularity.Hour;
+
+            // Resolve [since, until). Caller may pass "hours"/"days" for the canonical
+            // "trailing window" case, or "since"/"until" for absolute ISO timestamps.
+            // When using hours/days, both endpoints are aligned to the granularity boundary
+            // so the response carries exactly N buckets (not N+1 if "now" is mid-bucket).
+            var now = DateTimeOffset.UtcNow;
+            var until = now;
+            DateTimeOffset since;
+
+            if (query.TryGetValue("since", out var sinceValues) && DateTimeOffset.TryParse(sinceValues, out var sinceParsed))
+            {
+                since = sinceParsed;
+                if (query.TryGetValue("until", out var untilValues) && DateTimeOffset.TryParse(untilValues, out var untilParsed))
+                {
+                    until = untilParsed;
+                }
+            }
+            else if (granularity == RunTimeseriesGranularity.Hour)
+            {
+                var hours = query.TryGetValue("hours", out var hoursValues) && int.TryParse(hoursValues, out var h) && h > 0 ? Math.Min(h, 720) : 24;
+                // Align `until` to the next hour boundary so the trailing window contains
+                // exactly `hours` buckets (current hour included as the last bucket).
+                until = new DateTimeOffset(now.UtcDateTime.Year, now.UtcDateTime.Month, now.UtcDateTime.Day, now.UtcDateTime.Hour, 0, 0, TimeSpan.Zero) + TimeSpan.FromHours(1);
+                since = until - TimeSpan.FromHours(hours);
+            }
+            else
+            {
+                var days = query.TryGetValue("days", out var daysValues) && int.TryParse(daysValues, out var d) && d > 0 ? Math.Min(d, 365) : 30;
+                // Same idea — align both ends to the day boundary so the calendar shows N rows.
+                until = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero) + TimeSpan.FromDays(1);
+                since = until - TimeSpan.FromDays(days);
+            }
+
+            Guid? flowId = query.TryGetValue("flowId", out var flowIdValues) && Guid.TryParse(flowIdValues, out var fid) ? fid : null;
+
+            var buckets = await store.GetRunTimeseriesAsync(granularity, since, until, flowId);
+            await WriteJsonAsync(http.Response, new
+            {
+                bucket = granularity.ToString().ToLowerInvariant(),
+                since,
+                until,
+                flowId,
+                buckets
+            });
+        });
+
         group.MapGet("/api/runs/{id:guid}", async (HttpContext http, IFlowRunStore store, IOutputsRepository outputsRepository, Guid id) =>
         {
             var run = await store.GetRunDetailAsync(id);

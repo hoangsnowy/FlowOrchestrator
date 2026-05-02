@@ -1,3 +1,4 @@
+using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
 
 namespace FlowOrchestrator.InMemory.Tests;
@@ -349,5 +350,112 @@ public class InMemoryFlowRunStoreTests
         // Assert
         Assert.Single(active);
         Assert.Equal(runId2, active[0].Id);
+    }
+
+    [Fact]
+    public async Task GetRunTimeseriesAsync_HourlyBuckets_CountsByStatusAndComputesPercentiles()
+    {
+        // Arrange
+        var until = DateTimeOffset.UtcNow;
+        var since = until - TimeSpan.FromHours(3);
+        var flowId = Guid.NewGuid();
+
+        // Two succeeded runs in bucket 0 (3h ago) with durations 100ms / 300ms.
+        // One failed run in bucket 1 (2h ago) with duration 500ms.
+        // One running run in bucket 2 (1h ago) — no completion.
+        await SeedRun(flowId, since.AddMinutes(5), "Succeeded", durationMs: 100);
+        await SeedRun(flowId, since.AddMinutes(10), "Succeeded", durationMs: 300);
+        await SeedRun(flowId, since.AddHours(1).AddMinutes(20), "Failed", durationMs: 500);
+        await SeedRun(flowId, since.AddHours(2).AddMinutes(15), "Running", durationMs: null);
+
+        // Act
+        var buckets = await _sut.GetRunTimeseriesAsync(RunTimeseriesGranularity.Hour, since, until);
+
+        // Assert
+        Assert.True(buckets.Count >= 3, $"Expected at least 3 buckets, got {buckets.Count}");
+        Assert.Equal(2, buckets[0].Total);
+        Assert.Equal(2, buckets[0].Succeeded);
+        Assert.Equal(0, buckets[0].Failed);
+        Assert.Equal(200, buckets[0].P50DurationMs);
+        Assert.Equal(290, buckets[0].P95DurationMs);
+
+        Assert.Equal(1, buckets[1].Total);
+        Assert.Equal(1, buckets[1].Failed);
+        Assert.Equal(500, buckets[1].P50DurationMs);
+
+        Assert.Equal(1, buckets[2].Total);
+        Assert.Equal(1, buckets[2].Running);
+        Assert.Null(buckets[2].P50DurationMs);
+    }
+
+    [Fact]
+    public async Task GetRunTimeseriesAsync_FlowIdFilter_ExcludesOtherFlows()
+    {
+        // Arrange
+        var until = DateTimeOffset.UtcNow;
+        var since = until - TimeSpan.FromHours(2);
+        var flowA = Guid.NewGuid();
+        var flowB = Guid.NewGuid();
+        await SeedRun(flowA, since.AddMinutes(15), "Succeeded", 100);
+        await SeedRun(flowB, since.AddMinutes(20), "Succeeded", 200);
+        await SeedRun(flowA, since.AddHours(1).AddMinutes(5), "Failed", 300);
+
+        // Act
+        var seriesA = await _sut.GetRunTimeseriesAsync(RunTimeseriesGranularity.Hour, since, until, flowId: flowA);
+        var seriesB = await _sut.GetRunTimeseriesAsync(RunTimeseriesGranularity.Hour, since, until, flowId: flowB);
+
+        // Assert
+        Assert.Equal(2, seriesA.Sum(b => b.Total));
+        Assert.Equal(1, seriesB.Sum(b => b.Total));
+    }
+
+    [Fact]
+    public async Task GetRunTimeseriesAsync_EmptyWindow_ReturnsZeroFilledBuckets()
+    {
+        // Arrange — no runs seeded for this window.
+        var until = DateTimeOffset.UtcNow;
+        var since = until - TimeSpan.FromHours(4);
+
+        // Act
+        var buckets = await _sut.GetRunTimeseriesAsync(RunTimeseriesGranularity.Hour, since, until);
+
+        // Assert — buckets are returned even when empty so the timeline has no gaps.
+        Assert.True(buckets.Count >= 4);
+        Assert.All(buckets, b => Assert.Equal(0, b.Total));
+        Assert.All(buckets, b => Assert.Null(b.P50DurationMs));
+    }
+
+    [Fact]
+    public async Task GetRunTimeseriesAsync_DayGranularity_30DayWindow_AggregatesByDay()
+    {
+        // Arrange
+        var until = DateTimeOffset.UtcNow;
+        var since = until - TimeSpan.FromDays(30);
+        var flowId = Guid.NewGuid();
+        await SeedRun(flowId, until - TimeSpan.FromDays(15), "Succeeded", 100);
+        await SeedRun(flowId, until - TimeSpan.FromDays(15) - TimeSpan.FromHours(2), "Failed", 200);
+        await SeedRun(flowId, until - TimeSpan.FromDays(2), "Succeeded", 150);
+
+        // Act
+        var buckets = await _sut.GetRunTimeseriesAsync(RunTimeseriesGranularity.Day, since, until);
+
+        // Assert
+        Assert.True(buckets.Count >= 30);
+        Assert.Equal(3, buckets.Sum(b => b.Total));
+        Assert.Equal(2, buckets.Sum(b => b.Succeeded));
+        Assert.Equal(1, buckets.Sum(b => b.Failed));
+    }
+
+    private async Task SeedRun(Guid flowId, DateTimeOffset startedAt, string status, double? durationMs)
+    {
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(flowId, "Flow", runId, "manual", null, null);
+        var record = (await _sut.GetRunDetailAsync(runId))!;
+        record.StartedAt = startedAt;
+        if (status != "Running" && durationMs.HasValue)
+        {
+            record.CompletedAt = startedAt + TimeSpan.FromMilliseconds(durationMs.Value);
+            record.Status = status;
+        }
     }
 }
