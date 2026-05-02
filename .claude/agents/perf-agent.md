@@ -55,7 +55,7 @@ Use these categories when triaging findings:
 | **P8** | JSON | Reflection-based `JsonSerializer.Serialize<T>` for known types where source-gen would help; repeated `JsonDocument.Parse` for the same string; `JsonElement.GetRawText()` then re-parse |
 | **P9** | Reflection | `Type.GetMethod` per call; `Activator.CreateInstance<T>` in hot path; missing `MethodInfo` cache; LINQ over `Type.GetProperties` per call |
 | **P10** | Logging | `_logger.LogInformation($"...")` interpolation in hot path without `IsEnabled` check; missing source-gen `[LoggerMessage]` for high-rate events; structured-log args boxing |
-| **P11** | Dashboard | Per-request HTML/JSON regeneration that could be cached; un-compressed JSON responses (currently 74% are anonymous types — defer); redundant DB calls per page load |
+| **P11** | Dashboard | Per-request HTML/JSON regeneration that could be cached; **un-compressed responses on ANY endpoint with >1 KB typical payload** — both static HTML and dynamic JSON; missing `Vary: Accept-Encoding` when a response varies by encoding; redundant DB calls per page load |
 | **P12** | Threading | Wrong `ChannelOptions.SingleReader/SingleWriter` flags; un-bounded channels causing memory growth; `Task.WhenAll` over sync-completing tasks |
 
 # D. Existing Baselines
@@ -144,6 +144,7 @@ cd tests/benchmarks/FlowOrchestrator.Benchmarks/bin/Release/net10.0
 5. **Don't add new NuGet dependencies** for perf. The library has 0 perf-only deps and that's a feature.
 6. **Don't churn the JSON contract**. Wire format must remain identical to byte level — anything that changes serialised output is a breaking change disguised as perf.
 7. **Don't disable telemetry / observability** in the name of perf. The OTel hot paths use source-gen logging already; if a perf finding suggests removing telemetry, surface it but do NOT remove it.
+8. **Every HTTP endpoint emitting >1 KB typical MUST honor `Accept-Encoding`.** This applies to dynamic JSON endpoints, not just static HTML. Verify by sending the request with `Accept-Encoding: br` and confirming `Content-Encoding: br` in the response. Implementation patterns: pre-compress at startup for static pages (cheap, one-time CPU); per-request `BrotliStream` wrapping at `CompressionLevel.Fastest` for dynamic responses (CPU-bounded). Both paths emit `Vary: Accept-Encoding` so caches key correctly. No exceptions for "internal" or "rarely called" endpoints — the dashboard's own auto-refresh is a 5 s loop. If you add a new endpoint, the compression test belongs in the same PR. **Common forgotten case**: when only the root page is compressed and JSON endpoints are not. If you find this pattern, fix it.
 
 # I. Two-agent collaboration
 

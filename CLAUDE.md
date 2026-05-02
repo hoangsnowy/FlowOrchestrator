@@ -33,6 +33,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Before reporting a task complete: `dotnet build` must show 0 errors, 0 warnings (or document why warnings are acceptable).
 - If build fails after a fix, keep iterating — do not stop and ask unless truly stuck after 3+ attempts.
 
+### HTTP endpoints — small things AI keeps forgetting
+
+When adding ANY HTTP endpoint that returns >1 KB typical payload (HTML page, JSON API, file download, etc.), verify the following before declaring the task complete:
+
+1. **Honor `Accept-Encoding`** — return Brotli when client sends `br`, Gzip otherwise, raw if neither. Don't compress only the root page; JSON endpoints are hit far more often by the dashboard's 5 s auto-refresh loop.
+2. **Emit `Vary: Accept-Encoding`** on every response so CDNs / browser caches / reverse proxies key the variants correctly.
+3. **Add a test** asserting that the compressed variant decompresses to the same bytes as the uncompressed variant. Cheap insurance against accidentally double-compressing or skipping the wrap.
+4. **Pick the right compression level** — `CompressionLevel.Optimal` for *pre-compressed* static pages (one-time CPU at startup); `CompressionLevel.Fastest` for *per-request* dynamic responses (the encoder runs on every hit).
+
+If you're modifying `DashboardServiceCollectionExtensions.WriteJsonAsync` or `WriteCompressedHtmlAsync`, this checklist applies. If you're adding a new endpoint that uses neither, the same rules still apply — implement them inline.
+
 ## Commands
 
 ```bash

@@ -905,10 +905,54 @@ public static class DashboardServiceCollectionExtensions
     // is used in both paths.
     private static readonly JsonSerializerOptions _camelCaseOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    private static Task WriteJsonAsync<T>(HttpResponse response, T value)
+    /// <summary>
+    /// Writes <paramref name="value"/> as camelCase JSON, transparently
+    /// negotiating Brotli or Gzip per the request's <c>Accept-Encoding</c>
+    /// header. Sets <c>Vary: Accept-Encoding</c> on every response so any
+    /// cache (CDN, browser, reverse proxy) keys the variants correctly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Per-request compression uses <see cref="CompressionLevel.Fastest"/>
+    /// rather than <see cref="CompressionLevel.Optimal"/>: the dashboard
+    /// auto-refreshes every 5 s and a typical /api/runs response is
+    /// 5-60 KB, so CPU per request matters more than the last few percent
+    /// of compression ratio. Fastest gives ~70% reduction at a fraction of
+    /// the CPU; Optimal would give ~90% but at 5-10× the CPU cost per
+    /// request — net loss under realistic load.
+    /// </para>
+    /// <para>
+    /// Wire format is byte-identical to the uncompressed variant — same
+    /// <see cref="JsonSerializerOptions"/>, same camelCase policy, only
+    /// the transfer encoding differs.
+    /// </para>
+    /// </remarks>
+    private static async Task WriteJsonAsync<T>(HttpResponse response, T value)
     {
         response.ContentType = "application/json; charset=utf-8";
-        return JsonSerializer.SerializeAsync(response.Body, value, _camelCaseOptions);
+        response.Headers.Vary = "Accept-Encoding";
+
+        var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
+
+        if (HasEncoding(accept, "br"))
+        {
+            response.Headers.ContentEncoding = "br";
+            await using var brotli = new System.IO.Compression.BrotliStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await JsonSerializer.SerializeAsync(brotli, value, _camelCaseOptions).ConfigureAwait(false);
+            return;
+        }
+
+        if (HasEncoding(accept, "gzip"))
+        {
+            response.Headers.ContentEncoding = "gzip";
+            await using var gzip = new System.IO.Compression.GZipStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await JsonSerializer.SerializeAsync(gzip, value, _camelCaseOptions).ConfigureAwait(false);
+            return;
+        }
+
+        await JsonSerializer.SerializeAsync(response.Body, value, _camelCaseOptions).ConfigureAwait(false);
     }
 
     /// <summary>

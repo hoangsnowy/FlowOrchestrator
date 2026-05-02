@@ -196,4 +196,113 @@ public sealed class DashboardCompressionTests : IDisposable
         using var reader = new StreamReader(decompressor, Encoding.UTF8);
         return await reader.ReadToEndAsync();
     }
+
+    // ── JSON endpoint compression (D1 — extends Accept-Encoding to /api/*) ────
+
+    [Fact]
+    public async Task ApiFlows_WithBrotli_ReturnsBrotliEncoding()
+    {
+        // Arrange
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/flows/api/flows");
+        request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("br"));
+
+        // Act
+        using var response = await _client.SendAsync(request);
+
+        // Assert
+        Assert.True(response.IsSuccessStatusCode);
+        Assert.Equal("br", response.Content.Headers.ContentEncoding.SingleOrDefault());
+        Assert.Contains(response.Headers.Vary, v => string.Equals(v, "Accept-Encoding", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ApiFlows_WithGzipOnly_ReturnsGzipEncoding()
+    {
+        // Arrange
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/flows/api/flows");
+        request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
+
+        // Act
+        using var response = await _client.SendAsync(request);
+
+        // Assert
+        Assert.Equal("gzip", response.Content.Headers.ContentEncoding.SingleOrDefault());
+    }
+
+    [Fact]
+    public async Task ApiFlows_WithoutAcceptEncoding_ReturnsUncompressed()
+    {
+        // Arrange
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/flows/api/flows");
+
+        // Act
+        using var response = await _client.SendAsync(request);
+
+        // Assert
+        Assert.Empty(response.Content.Headers.ContentEncoding);
+        // Vary is still emitted so a downstream cache that DOES see varying
+        // Accept-Encoding from other clients keys correctly.
+        Assert.Contains(response.Headers.Vary, v => string.Equals(v, "Accept-Encoding", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ApiRuns_BrotliPayload_IsSignificantlySmallerThanRaw()
+    {
+        // Arrange — seed a realistic run-list payload (50 records).
+        var runs = Enumerable.Range(0, 50).Select(i => new FlowRunRecord
+        {
+            Id = Guid.NewGuid(),
+            FlowId = Guid.NewGuid(),
+            FlowName = $"BenchmarkFlow_{i}",
+            Status = i % 3 == 0 ? "Failed" : "Succeeded",
+            TriggerKey = "manual",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+            CompletedAt = DateTimeOffset.UtcNow.AddMinutes(-i).AddSeconds(30)
+        }).ToArray();
+        _server.FlowRunStore.GetRunsAsync(Arg.Any<Guid?>(), Arg.Any<int>(), Arg.Any<int>())
+            .Returns(runs);
+
+        using var rawRequest = new HttpRequestMessage(HttpMethod.Get, "/flows/api/runs");
+        using var rawResponse = await _client.SendAsync(rawRequest);
+        var rawSize = (await rawResponse.Content.ReadAsByteArrayAsync()).Length;
+
+        using var brRequest = new HttpRequestMessage(HttpMethod.Get, "/flows/api/runs");
+        brRequest.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("br"));
+        using var brResponse = await _client.SendAsync(brRequest);
+        var brSize = (await brResponse.Content.ReadAsByteArrayAsync()).Length;
+
+        // Act — done above.
+
+        // Assert — Brotli at CompressionLevel.Fastest typically produces
+        // ~70% reduction on JSON payloads. Conservative 3× lower bound to
+        // keep the test stable as the payload shape evolves.
+        Assert.True(
+            brSize * 3 < rawSize,
+            $"Brotli output ({brSize} bytes) should be < 1/3 of raw ({rawSize} bytes).");
+    }
+
+    [Fact]
+    public async Task ApiFlows_BrotliAndGzipDecompressToSameJson()
+    {
+        // Arrange — fetch raw JSON once for the baseline.
+        using var rawRequest = new HttpRequestMessage(HttpMethod.Get, "/flows/api/flows");
+        using var rawResponse = await _client.SendAsync(rawRequest);
+        var rawJson = await rawResponse.Content.ReadAsStringAsync();
+
+        using var brRequest = new HttpRequestMessage(HttpMethod.Get, "/flows/api/flows");
+        brRequest.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("br"));
+        using var brResponse = await _client.SendAsync(brRequest);
+        var brJson = await DecodeBrotliAsync(brResponse);
+
+        using var gzRequest = new HttpRequestMessage(HttpMethod.Get, "/flows/api/flows");
+        gzRequest.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
+        using var gzResponse = await _client.SendAsync(gzRequest);
+        var gzJson = await DecodeGzipAsync(gzResponse);
+
+        // Act — already done in arrange.
+
+        // Assert — every transport variant decodes to the same JSON string.
+        Assert.Equal(rawJson, brJson);
+        Assert.Equal(rawJson, gzJson);
+    }
 }

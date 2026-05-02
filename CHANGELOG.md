@@ -86,6 +86,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   extension — a plain for-loop over
   `IReadOnlyList<IFlowDefinition>`. Eliminates the closure capture
   allocated on every step dispatch.
+- **Dashboard JSON endpoints now honor `Accept-Encoding`.**
+  Previously only the static HTML root page (`GET /flows`) was
+  compressed; every JSON API endpoint (`/api/flows`, `/api/runs`,
+  `/api/runs/{id}`, etc.) emitted raw bytes regardless of what the
+  client requested. The dashboard SPA polls `/api/runs` every 5 s and
+  payloads commonly land between 5 KB and 60 KB — cumulative bandwidth
+  waste over a long session was significant. `WriteJsonAsync` now wraps
+  the response stream in a `BrotliStream` (or `GZipStream` fallback) at
+  `CompressionLevel.Fastest` based on the inbound `Accept-Encoding`
+  header, emits `Vary: Accept-Encoding` on every response, and reuses
+  the existing RFC 7231 q-value parser. Wire format is byte-identical
+  to the uncompressed variant. Measured ~5× reduction on a 50-run
+  list payload (test
+  `ApiRuns_BrotliPayload_IsSignificantlySmallerThanRaw` asserts a
+  conservative 3× minimum). See
+  [docs/benchmarks/dashboard-json-compression-2026-05-02.md](docs/benchmarks/dashboard-json-compression-2026-05-02.md).
 - **Engine termination check in a single pass.** The classifier that
   decides Run.Status at the end of a flow ran three separate
   `LINQ.Any` passes over `statuses.Values` plus a
