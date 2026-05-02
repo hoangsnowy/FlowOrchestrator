@@ -50,6 +50,79 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   its first set of cases. `FlowOrchestrator.Core` exposes internals to the
   benchmark assembly via `InternalsVisibleTo` so internal helpers can be
   measured without expanding the public API surface.
+- **`perf-agent` specialist agent definition** at
+  `.claude/agents/perf-agent.md`. Twelve performance bug-class categories
+  (P1 Allocation through P12 Threading), explicit hard rules around
+  no-new-deps / no-public-API / no-wire-format / no-unsafe /
+  no-disabling-telemetry, and a two-agent collaboration section to
+  coordinate with `qa-agent` on overlapping concurrency concerns.
+  Reusable across sessions — invoke before tagging or after large
+  refactors. Surfaced findings F1–F9 during the post-1.20.0 audit;
+  F1 (InMemoryFlowRunStore secondary indexes), F2 (FlowGraphPlanner
+  memoisation), and F7 (ForEachStepHandler dedupe) are deferred to a
+  follow-up release that ships dedicated benchmarks for the engine
+  hot path.
+
+### Performance
+
+- **Dashboard JSON responses write directly to the response Stream.**
+  `WriteJsonAsync` previously round-tripped through an intermediate
+  UTF-16 string (`JsonSerializer.Serialize` followed by
+  `response.WriteAsync(string)`). For a typical /api/runs response
+  (~60 KB) the intermediate allocation dominated the request's GC
+  pressure. Now uses
+  `JsonSerializer.SerializeAsync(response.Body, value, opts)` — ~10×
+  lower per-request allocation on larger endpoints. Wire format is
+  byte-identical.
+- **DefaultStepExecutor pre-scan for clean inputs.** `ResolveInputs` no
+  longer allocates a fresh `Dictionary<string, object?>` when none of
+  the step's input values could possibly need expression resolution
+  (the common static-input case). A pre-scan checks for `@`-prefixed
+  strings, nested `JsonElement`s, dicts, or sequences; when none are
+  present, the original IDictionary is returned unchanged.
+- **Allocation-free flow lookup at dispatch.** Replaced
+  `flows.FirstOrDefault(f => f.Id == flowId)` at the engine and
+  Hangfire call sites with the new `FlowRepositoryExtensions.FindById`
+  extension — a plain for-loop over
+  `IReadOnlyList<IFlowDefinition>`. Eliminates the closure capture
+  allocated on every step dispatch.
+- **Engine termination check in a single pass.** The classifier that
+  decides Run.Status at the end of a flow ran three separate
+  `LINQ.Any` passes over `statuses.Values` plus a
+  `Where + ToHashSet + All` chain to derive the leaf set. Coalesced
+  into a single foreach with three booleans plus an allocation-free
+  `IsLeaf` helper.
+
+### Security
+
+- **Constant-time webhook secret comparison.** The webhook handler at
+  `DashboardServiceCollectionExtensions.cs` previously used
+  `string.Equals(providedKey, expectedSecret, StringComparison.Ordinal)`,
+  which short-circuits at the first differing character — an attacker
+  could recover the secret one byte at a time through response-time
+  measurement. The handler now delegates to the existing `SecureEquals`
+  helper (`CryptographicOperations.FixedTimeEquals` over UTF-8 bytes),
+  the same primitive used for the dashboard's BasicAuth path. Severity:
+  medium-high — webhook secrets are typically high-entropy strings, but
+  the comparison sits on the request hot path and is the dashboard's
+  advertised webhook-authentication mechanism.
+
+### Tests
+
+- 13 new unit tests for the `StepOutputResolver` fast path and parse
+  cache: boundary inputs (null, empty, whitespace, `@`, `@step`,
+  `@steps(`, leading whitespace, uppercase prefix, non-`@` literal);
+  64-task concurrent resolution against a shared static parse cache;
+  cross-instance cache equivalence; whitespace normalisation.
+- 13 new dashboard integration tests: 100-parallel-request
+  byte-identical hashes for Brotli + Gzip; pre-compressed buffer
+  immutability before and after a concurrent burst; webhook security
+  hardening (slug case-insensitivity, secret case-sensitivity,
+  lowercase `bearer` prefix, structural regression for the
+  timing-attack fix); RFC 7231 q-value parser edge cases (`q=1.0`,
+  `q=0.0`, negative q, `*` wildcard, duplicate-coding first-wins,
+  OWS tolerance).
+- Total: 26 new tests × 3 frameworks = 78 new test runs.
 
 ## [1.19.0] - 2026-05-01
 
