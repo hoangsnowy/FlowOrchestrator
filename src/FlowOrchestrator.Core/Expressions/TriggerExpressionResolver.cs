@@ -12,6 +12,32 @@ internal static class TriggerExpressionResolver
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
+    /// Fast-path check: every <c>@triggerBody()</c> / <c>@triggerHeaders()</c> token starts
+    /// with <c>@</c>, possibly preceded by whitespace. Skip the trim allocation and
+    /// the prefix <see cref="string.StartsWith(string, StringComparison)"/> call when the
+    /// first non-whitespace character isn't <c>@</c>.
+    /// </summary>
+    private static bool StartsWithAt(string? expression)
+    {
+        if (string.IsNullOrEmpty(expression))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < expression.Length; i++)
+        {
+            var c = expression[i];
+            if (char.IsWhiteSpace(c))
+            {
+                continue;
+            }
+            return c == '@';
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Resolves an <c>@triggerBody()</c> expression (with optional <c>.path</c> trail) against
     /// <paramref name="triggerData"/>.
     /// </summary>
@@ -19,11 +45,13 @@ internal static class TriggerExpressionResolver
     public static bool TryResolveTriggerBodyExpression(string? expression, object? triggerData, out object? resolved)
     {
         resolved = null;
-        if (string.IsNullOrWhiteSpace(expression))
+        if (!StartsWithAt(expression))
+        {
             return false;
+        }
 
         const string prefix = "@triggerBody()";
-        var trimmed = expression.Trim();
+        var trimmed = expression!.Trim();
         if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return false;
 
@@ -66,11 +94,13 @@ internal static class TriggerExpressionResolver
     public static bool TryResolveTriggerHeadersExpression(string? expression, IReadOnlyDictionary<string, string>? headers, out object? resolved)
     {
         resolved = null;
-        if (string.IsNullOrWhiteSpace(expression))
+        if (!StartsWithAt(expression))
+        {
             return false;
+        }
 
         const string prefix = "@triggerHeaders()";
-        var trimmed = expression.Trim();
+        var trimmed = expression!.Trim();
         if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return false;
 

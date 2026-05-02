@@ -164,81 +164,16 @@ public sealed class DefaultStepExecutor : IStepExecutor
         }
     }
 
+    // Trigger-body / trigger-headers expression resolution lives in the canonical
+    // TriggerExpressionResolver. The thin pass-through methods below preserve the
+    // historical local-call call sites in this file without re-implementing the
+    // logic. Both gain the StartsWithAt fast-path and the trim-elision wins for
+    // free.
     private static bool TryResolveTriggerBodyExpression(string? expression, object? triggerData, out object? resolved)
-    {
-        resolved = null;
-        if (string.IsNullOrWhiteSpace(expression))
-            return false;
-
-        const string prefix = "@triggerBody()";
-        var trimmed = expression.Trim();
-        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var remainder = trimmed[prefix.Length..].Trim();
-        if (string.IsNullOrEmpty(remainder))
-        {
-            resolved = triggerData is null ? null : ExpressionPathHelper.ToJsonElement(triggerData, _jsonOptions);
-            return true;
-        }
-
-        if (remainder.StartsWith("?.", StringComparison.Ordinal))
-            remainder = remainder[2..];
-        else if (remainder.StartsWith(".", StringComparison.Ordinal))
-            remainder = remainder[1..];
-        else
-            return false;
-
-        if (string.IsNullOrWhiteSpace(remainder) || triggerData is null)
-        {
-            resolved = null;
-            return true;
-        }
-
-        var payload = ExpressionPathHelper.ToJsonElement(triggerData, _jsonOptions);
-        if (ExpressionPathHelper.TryResolvePath(payload, remainder, out var target))
-        {
-            resolved = target;
-            return true;
-        }
-
-        resolved = null;
-        return true;
-    }
+        => TriggerExpressionResolver.TryResolveTriggerBodyExpression(expression, triggerData, out resolved);
 
     private static bool TryResolveTriggerHeadersExpression(string? expression, IReadOnlyDictionary<string, string>? headers, out object? resolved)
-    {
-        resolved = null;
-        if (string.IsNullOrWhiteSpace(expression))
-            return false;
-
-        const string prefix = "@triggerHeaders()";
-        var trimmed = expression.Trim();
-        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var remainder = trimmed[prefix.Length..].Trim();
-        if (string.IsNullOrEmpty(remainder))
-        {
-            resolved = headers is null ? null : ExpressionPathHelper.ToJsonElement(headers, _jsonOptions);
-            return true;
-        }
-
-        // Support ['Header-Name'] and ["Header-Name"] notation.
-        string? headerName = null;
-        if (remainder.StartsWith("['", StringComparison.Ordinal) && remainder.EndsWith("']", StringComparison.Ordinal))
-            headerName = remainder[2..^2];
-        else if (remainder.StartsWith("[\"", StringComparison.Ordinal) && remainder.EndsWith("\"]", StringComparison.Ordinal))
-            headerName = remainder[2..^2];
-
-        if (headerName is not null)
-        {
-            resolved = headers is not null && headers.TryGetValue(headerName, out var val) ? val : null;
-            return true;
-        }
-
-        return false;
-    }
+        => TriggerExpressionResolver.TryResolveTriggerHeadersExpression(expression, headers, out resolved);
 
     // ── Step-output expression resolution (async) ─────────────────────────────
 
