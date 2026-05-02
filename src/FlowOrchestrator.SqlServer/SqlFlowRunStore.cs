@@ -219,6 +219,28 @@ public sealed class SqlFlowRunStore :
         return stats;
     }
 
+    public async Task<IReadOnlyList<RunTimeseriesBucket>> GetRunTimeseriesAsync(
+        RunTimeseriesGranularity granularity,
+        DateTimeOffset since,
+        DateTimeOffset until,
+        Guid? flowId = null)
+    {
+        // Pull only the columns needed for bucket assignment + percentile calc and aggregate
+        // in-process. Doing the percentile in SQL Server (PERCENTILE_CONT as a window) is much
+        // slower than streaming a few thousand (StartedAt, Status, durationMs) rows back.
+        await using var conn = new SqlConnection(_connectionString);
+        var rows = (await conn.QueryAsync<(DateTimeOffset StartedAt, string Status, double? DurationMs)>(
+            $@"SELECT StartedAt, Status,
+                      CASE WHEN CompletedAt IS NULL THEN NULL
+                           ELSE DATEDIFF_BIG(MILLISECOND, StartedAt, CompletedAt) END AS DurationMs
+                 FROM FlowRuns
+                WHERE StartedAt >= @Since AND StartedAt < @Until
+                  {(flowId.HasValue ? "AND FlowId = @FlowId" : string.Empty)}",
+            new { Since = since, Until = until, FlowId = flowId })).AsList();
+
+        return TimeseriesAggregator.Aggregate(rows, granularity, since, until);
+    }
+
     public async Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync()
     {
         await using var conn = new SqlConnection(_connectionString);

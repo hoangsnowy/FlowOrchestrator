@@ -322,7 +322,10 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         // Act
         await dispatcher.EnqueueTriggerAsync(flowId, "schedule");
         // Allow fire-and-forget task to complete.
-        for (var i = 0; i < 50; i++)
+        // Wait up to 30s for the fire-and-forget continuation. The previous
+        // 50×20ms=1s budget intermittently fired before the orchestrator was
+        // invoked under CI CPU contention.
+        for (var i = 0; i < 1500; i++)
         {
             if (orchestrator.ReceivedCalls().Any()) break;
             await Task.Delay(20);
@@ -378,7 +381,10 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         // Act
         dispatcher.TriggerOnce("job1");
         // Allow the fire-and-forget Task.Run to complete.
-        for (var i = 0; i < 50; i++)
+        // Wait up to 30s for the fire-and-forget continuation. The previous
+        // 50×20ms=1s budget intermittently fired before the orchestrator was
+        // invoked under CI CPU contention.
+        for (var i = 0; i < 1500; i++)
         {
             if (orchestrator.ReceivedCalls().Any()) break;
             await Task.Delay(20);
@@ -427,7 +433,10 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         // Act
         var ex = await Record.ExceptionAsync(() => dispatcher.EnqueueTriggerAsync(Guid.NewGuid(), "schedule"));
         // Allow fire-and-forget task to complete and swallow.
-        for (var i = 0; i < 50; i++)
+        // Wait up to 30s for the fire-and-forget continuation. The previous
+        // 50×20ms=1s budget intermittently fired before the orchestrator was
+        // invoked under CI CPU contention.
+        for (var i = 0; i < 1500; i++)
         {
             if (orchestrator.ReceivedCalls().Any()) break;
             await Task.Delay(20);

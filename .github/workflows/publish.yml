@@ -3,12 +3,17 @@ name: Publish NuGet Packages
 on:
   push:
     branches: [main]
-  create:
-    tags:
-      - 'v*.*.*'
+    tags: ['v*.*.*']
 
 jobs:
   publish:
+    # The `create` trigger used to fire on every dependabot branch creation
+    # because `on.create` does not support tag/branch filters — that's why
+    # this workflow ran with empty NUGET_API_KEY on `dependabot/*` branches.
+    # Switching to `on.push.tags` covers the tag-release case cleanly. Belt-
+    # and-suspenders: also skip the job entirely when run by Dependabot, so
+    # any future trigger surprise can't push without secrets.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read

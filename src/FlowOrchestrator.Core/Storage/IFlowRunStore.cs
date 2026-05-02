@@ -64,6 +64,24 @@ public interface IFlowRunStore
     /// <summary>Returns aggregate counts used by the dashboard overview panel.</summary>
     Task<DashboardStatistics> GetStatisticsAsync();
 
+    /// <summary>
+    /// Returns time-bucketed run counts and duration percentiles for the half-open
+    /// interval [<paramref name="since"/>, <paramref name="until"/>). Buckets that contain
+    /// no runs are still returned (with zero counts) so the caller can render a contiguous
+    /// timeline without gap-filling. When <paramref name="flowId"/> is supplied, only runs
+    /// for that flow are included.
+    /// </summary>
+    /// <param name="granularity">Hour or Day bucket size.</param>
+    /// <param name="since">UTC start of the window (inclusive). Aligned to the granularity boundary.</param>
+    /// <param name="until">UTC end of the window (exclusive). Aligned to the granularity boundary.</param>
+    /// <param name="flowId">Optional filter — when non-null, only runs for this flow are counted.</param>
+    Task<IReadOnlyList<RunTimeseriesBucket>> GetRunTimeseriesAsync(
+        RunTimeseriesGranularity granularity,
+        DateTimeOffset since,
+        DateTimeOffset until,
+        Guid? flowId = null)
+        => Task.FromResult<IReadOnlyList<RunTimeseriesBucket>>(Array.Empty<RunTimeseriesBucket>());
+
     /// <summary>Returns all runs currently in <c>Running</c> status (used for timeout enforcement).</summary>
     Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync();
 

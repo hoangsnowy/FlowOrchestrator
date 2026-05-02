@@ -147,13 +147,21 @@ public sealed class TraceContextPropagationTests : IDisposable
             _tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        public static Task<bool> WaitForCompletionAsync(TimeSpan timeout)
+        public static async Task<bool> WaitForCompletionAsync(TimeSpan timeout)
         {
-            return Task.Run(async () =>
+            // WaitAsync on a TaskCompletionSource avoids the Task.WhenAny+Task.Delay
+            // race where the delay branch can win under CI CPU contention even when
+            // the work has just completed. This pattern uses the timer pool's
+            // monotonic clock under the hood, which is immune to wall-clock skew.
+            try
             {
-                var winner = await Task.WhenAny(_tcs.Task, Task.Delay(timeout));
-                return winner == _tcs.Task;
-            });
+                await _tcs.Task.WaitAsync(timeout);
+                return true;
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
         }
 
         public void Run()

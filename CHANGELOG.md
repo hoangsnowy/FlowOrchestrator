@@ -6,6 +6,74 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-05-02
+
+### Added
+
+- **`GET /api/runs/timeseries` — server-side time-bucketed run aggregation.**
+  Replaces the prior client-side trick where the dashboard pulled the last 500
+  raw runs and bucketed them in JavaScript. New endpoint accepts
+  `bucket=hour|day`, `hours|days` for trailing windows (or absolute
+  `since`/`until` ISO timestamps), and an optional `flowId` filter. Returns a
+  contiguous timeline of buckets — including empty ones so the UI can render
+  without gap-filling — each carrying `total`, `succeeded`, `failed`,
+  `cancelled`, `running`, and `p50DurationMs` / `p95DurationMs`. Window is
+  hour/day-aligned at the endpoint so a `hours=24` request always returns
+  exactly 24 buckets (the previous mid-bucket `since` produced 25). Caps:
+  720h for hour granularity, 365d for day. Implemented across all three
+  storage backends (`InMemoryFlowRunStore`, `SqlFlowRunStore`,
+  `PostgreSqlFlowRunStore`); SQL stores stream
+  `(StartedAt, Status, DurationMs)` rows back and aggregate via the new
+  `TimeseriesAggregator` rather than running `PERCENTILE_CONT` server-side.
+  Method added to `IFlowRunStore` with a default no-op implementation so
+  existing custom stores keep compiling.
+- **30-day GitHub-style activity calendar on Overview.** New section below
+  the 24h heatmap renders a 7-row × N-column grid keyed by day-bucket run
+  volume (5-quantile colour scale, data-relative so a quiet codebase still
+  shows contrast). Cells with any failed runs carry a coral underline so
+  bad days surface at a glance. Mon/Wed/Fri row labels, hover tooltip with
+  exact day + counts, full dark-mode-tuned palette, `prefers-reduced-motion`
+  honoured. Uses `bucket=day&days=30` against the new timeseries endpoint.
+- **Per-flow health badge on Flow cards.** Each card now shows a state-aware
+  health pill computed from a per-flow `bucket=hour&hours=24&flowId={id}`
+  fetch: green `100% ok` when all completed runs succeeded, warn `≥90% ok`
+  when failure rate is ≤10 %, danger `<90% ok` (with pulsing dot) otherwise.
+  The pill flips to a neutral `25 running` when the window has runs but
+  nothing has reached terminal state yet — previously this case rendered as
+  a misleading "0% ok green". Adjacent stat chips show `p95 {duration}` and
+  `{N} runs` for the trailing 24h window.
+- **Enhanced Runs pagination.** Replaced the Prev/Next-only footer with:
+  numbered page buttons + ellipsis (`1 … 4 [5] 6 … 9`), page-size selector
+  (10 / 20 / 50 / 100, persisted to localStorage and the `size` URL param),
+  jump-to-page input on wider viewports, keyboard navigation
+  (`←/→`/`Home`/`End` on the pagination region), bold-emphasis count display
+  (`Showing 41–50 of 84`), and full ARIA wiring (`role="navigation"`,
+  `aria-current="page"`, `aria-label`s). Page size is anchored on the
+  current first row when changing — the user keeps the row they were
+  looking at, the surrounding window resizes around it. Deep-linkable via
+  `#/runs?size=50&page=2`.
+
+### Changed
+
+- **Dashboard Overview now consumes the timeseries endpoint instead of
+  pulling raw run history.** `loadOverview` issues two `Promise.all`
+  requests (`bucket=hour&hours=24` + `bucket=day&days=30`) replacing the
+  prior `take=500&since=24h_ago` trick. Same goes for `loadFlows`, which
+  fans out one per-flow timeseries call instead of bucketing a shared
+  500-run response client-side. Net effect: backend does the aggregation
+  once with proper indexes, client stops shipping kilobytes of raw run
+  rows over the wire just to count them.
+
+### Tests
+
+- 4 unit tests in `InMemoryFlowRunStoreTests` covering hourly buckets +
+  percentile interpolation (NIST type 7), `flowId` filter exclusion, empty
+  windows returning zero-filled buckets, and 30-day daily aggregation.
+- 5 integration tests in `DashboardTimeseriesEndpointTests` covering
+  default-24h response shape, `bucket=day` granularity dispatch, `flowId`
+  filter pass-through, the 720h safety clamp on absurd `hours` values,
+  and `Vary: Accept-Encoding` emission per the dashboard endpoint contract.
+
 ## [1.20.0] - 2026-05-02
 
 ### Added

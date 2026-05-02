@@ -257,6 +257,25 @@ public sealed class PostgreSqlFlowRunStore :
         return stats;
     }
 
+    public async Task<IReadOnlyList<RunTimeseriesBucket>> GetRunTimeseriesAsync(
+        RunTimeseriesGranularity granularity,
+        DateTimeOffset since,
+        DateTimeOffset until,
+        Guid? flowId = null)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = (await conn.QueryAsync<(DateTimeOffset StartedAt, string Status, double? DurationMs)>(
+            $@"SELECT started_at AS ""StartedAt"", status AS ""Status"",
+                      CASE WHEN completed_at IS NULL THEN NULL
+                           ELSE EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000 END AS ""DurationMs""
+                 FROM flow_runs
+                WHERE started_at >= @Since AND started_at < @Until
+                  {(flowId.HasValue ? "AND flow_id = @FlowId" : string.Empty)}",
+            new { Since = since, Until = until, FlowId = flowId })).AsList();
+
+        return TimeseriesAggregator.Aggregate(rows, granularity, since, until);
+    }
+
     public async Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync()
     {
         await using var conn = new NpgsqlConnection(_connectionString);

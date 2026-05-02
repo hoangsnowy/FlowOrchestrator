@@ -4,36 +4,54 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>{{PAGE_TITLE}}</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'&gt;&lt;rect width='64' height='64' rx='14' fill='%23c96442'/&gt;&lt;path d='M34 8L18 36h12l-4 20 18-30H32z' fill='%23faf9f5'/&gt;&lt;/svg&gt;"/>
+<script>
+// Theme + density bootstrap — runs before paint to avoid a light-theme flash.
+(function(){
+  try {
+    var root = document.documentElement;
+    var theme = localStorage.getItem('fo-theme');
+    if (!theme) {
+      theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    if (theme === 'dark') root.setAttribute('data-theme', 'dark');
+    var density = localStorage.getItem('fo-density') || 'cozy';
+    if (density && density !== 'cozy') root.setAttribute('data-density', density);
+  } catch(e) {}
+})();
+</script>
 <style>{{INLINE_CSS}}</style>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()" aria-hidden="true"></div>
 <!-- Sidebar -->
-<aside class="sidebar">
+<aside class="sidebar" id="sidebar" aria-label="Primary">
   <div class="sidebar-brand">
-    <div class="logo">{{BRAND_LOGO}}</div>
+    <div class="logo" aria-hidden="true">{{BRAND_LOGO}}</div>
     <h1>{{BRAND_TITLE}}<span>{{BRAND_SUBTITLE}}</span></h1>
   </div>
-  <nav class="sidebar-nav">
-    <div class="nav-item active" data-page="overview" onclick="navigate('overview')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+  <nav class="sidebar-nav" aria-label="Primary navigation">
+    <button type="button" class="nav-item active" data-page="overview" onclick="navigate('overview')" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       Overview
-    </div>
-    <div class="nav-item" data-page="flows" onclick="navigate('flows')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    </button>
+    <button type="button" class="nav-item" data-page="flows" onclick="navigate('flows')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       Flows
-    </div>
-    <div class="nav-item" data-page="runs" onclick="navigate('runs')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    </button>
+    <button type="button" class="nav-item" data-page="runs" onclick="navigate('runs')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       Runs
-    </div>
-    <div class="nav-item" data-page="scheduled" onclick="navigate('scheduled')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+    </button>
+    <button type="button" class="nav-item" data-page="scheduled" onclick="navigate('scheduled')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
       Scheduled
-    </div>
+    </button>
   </nav>
   <div class="sidebar-footer">
     <div class="refresh-row">
-      <span class="pulse-dot" id="refresh-pulse"></span>
+      <span class="pulse-dot" id="refresh-pulse" aria-hidden="true"></span>
       <span class="refresh-label">Auto-refresh</span>
     </div>
     <div class="refresh-row">
@@ -41,6 +59,7 @@
         <input id="auto-refresh-enabled" type="checkbox" checked onchange="onAutoRefreshEnabledChange()"/>
         On
       </label>
+      <label class="visually-hidden" for="auto-refresh-seconds">Refresh interval</label>
       <select class="refresh-select" id="auto-refresh-seconds" onchange="onAutoRefreshIntervalChange()">
         <option value="5">5s</option>
         <option value="10">10s</option>
@@ -49,23 +68,84 @@
         <option value="60">60s</option>
       </select>
     </div>
-    <div class="refresh-status" id="refresh-status">Every 5s</div>
+    <div class="refresh-status" id="refresh-status" aria-live="polite">Every 5s</div>
+    <div class="sidebar-controls">
+      <div class="icon-toggle-row">
+        <button type="button" class="icon-btn" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        </button>
+        <div class="density-group" role="group" aria-label="Display density">
+          <button type="button" class="icon-btn" data-density="compact" onclick="setDensity('compact')" aria-label="Compact density" title="Compact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="11" x2="20" y2="11"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="4" y1="19" x2="20" y2="19"/></svg></button>
+          <button type="button" class="icon-btn" data-density="cozy" onclick="setDensity('cozy')" aria-label="Cozy density" title="Cozy" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
+          <button type="button" class="icon-btn" data-density="comfortable" onclick="setDensity('comfortable')" aria-label="Comfortable density" title="Comfortable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="5" x2="20" y2="5"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="19" x2="20" y2="19"/></svg></button>
+        </div>
+        <button type="button" class="icon-btn" id="cmdk-trigger" onclick="openCmdK()" aria-label="Open command palette (Ctrl+K)" title="Command palette · Ctrl+K">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
+      </div>
+    </div>
   </div>
 </aside>
 
-<div class="main-area">
+<main class="main-area" id="main-content" role="main">
   <!-- Overview Page -->
-  <div class="page active" id="page-overview">
-    <div class="page-header"><div class="page-title">Overview</div></div>
+  <section class="page active" id="page-overview" aria-labelledby="page-overview-title">
+    <header class="page-header">
+      <div class="page-header-leading">
+        <button type="button" class="hamburger" id="hamburger-overview" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <h2 class="page-title" id="page-overview-title">Overview</h2>
+      </div>
+    </header>
     <div class="page-content">
-      <div class="stats-grid" style="grid-template-columns:repeat(5,1fr)">
+      <div class="stats-grid stats-grid--5col">
         <div class="stat-card"><div class="val" style="color:var(--accent)" id="ov-flows">-</div><div class="lbl">Registered Flows</div></div>
         <div class="stat-card"><div class="val" style="color:var(--warn)" id="ov-active">-</div><div class="lbl">Active Runs</div></div>
         <div class="stat-card"><div class="val" style="color:var(--success)" id="ov-done">-</div><div class="lbl">Completed Today</div></div>
         <div class="stat-card"><div class="val" style="color:var(--danger)" id="ov-fail">-</div><div class="lbl">Failed Today</div></div>
-        <div class="stat-card"><div class="val" style="color:#8b5cf6" id="ov-scheduled">-</div><div class="lbl">Scheduled Jobs</div></div>
+        <div class="stat-card"><div class="val" style="color:var(--fo-coral)" id="ov-scheduled">-</div><div class="lbl">Scheduled Jobs</div></div>
       </div>
-      <div class="stats-grid" style="grid-template-columns:repeat(2,1fr)">
+      <!-- 24h Activity heatmap — bar-per-hour, success/fail/skipped stacked -->
+      <div class="recent-section ov-heatmap-section">
+        <div class="recent-header">
+          <span>Last 24 Hours</span>
+          <span class="recent-header-sub" id="ov-heatmap-summary">—</span>
+        </div>
+        <div class="ov-heatmap" id="ov-heatmap" aria-label="Run activity over the last 24 hours"></div>
+        <div class="ov-heatmap-legend" aria-hidden="true">
+          <span><span class="legend-swatch success"></span>Succeeded</span>
+          <span><span class="legend-swatch failed"></span>Failed</span>
+          <span><span class="legend-swatch running"></span>Running</span>
+          <span><span class="legend-swatch skipped"></span>Cancelled</span>
+        </div>
+      </div>
+      <!-- 30-day calendar: GitHub-style activity grid keyed by run volume + failure share. -->
+      <div class="recent-section ov-calendar-section">
+        <div class="recent-header">
+          <span>Last 30 Days</span>
+          <span class="recent-header-sub" id="ov-calendar-summary">—</span>
+        </div>
+        <div class="ov-calendar-wrap">
+          <div class="ov-calendar-weekdays" aria-hidden="true">
+            <span>Mon</span><span>Wed</span><span>Fri</span>
+          </div>
+          <div class="ov-calendar" id="ov-calendar" role="img" aria-label="Run activity over the last 30 days"></div>
+        </div>
+        <div class="ov-calendar-legend" aria-hidden="true">
+          <span class="legend-label">Less</span>
+          <span class="cal-cell cal-l0"></span>
+          <span class="cal-cell cal-l1"></span>
+          <span class="cal-cell cal-l2"></span>
+          <span class="cal-cell cal-l3"></span>
+          <span class="cal-cell cal-l4"></span>
+          <span class="legend-label">More</span>
+          <span class="legend-divider">·</span>
+          <span class="cal-cell cal-failure" title="Day with failures"></span>
+          <span class="legend-label">Failures</span>
+        </div>
+      </div>
+      <div class="stats-grid stats-grid--2col">
         <div class="recent-section">
           <div class="recent-header">Registered Flows</div>
           <div id="ov-flows-table"></div>
@@ -76,55 +156,68 @@
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
   <!-- Flows Page -->
-  <div class="page" id="page-flows">
+  <section class="page" id="page-flows" aria-labelledby="page-flows-title">
     <div class="flow-list-panel" id="flow-list-panel">
-      <div class="page-header">
-        <div class="page-title">Flows</div>
+      <header class="page-header">
+        <div class="page-header-leading">
+          <button type="button" class="hamburger" id="hamburger-flows" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <h2 class="page-title" id="page-flows-title">Flows</h2>
+        </div>
         <div style="font-size:12px;color:var(--text-dim)" id="flow-count-label">0 flows</div>
-      </div>
+      </header>
       <div class="page-content">
         <div class="flows-grid" id="flows-grid"></div>
       </div>
     </div>
-    <div class="flow-detail-panel" id="flow-detail-panel">
-      <div class="page-header">
+    <div class="flow-detail-panel" id="flow-detail-panel" role="region" aria-label="Flow detail" tabindex="-1">
+      <header class="page-header">
         <div>
-          <div class="back-btn" onclick="closeFlowDetail()">&#8592; Back to Flows</div>
-          <div class="page-title" id="fd-name">Flow Name</div>
+          <button type="button" class="back-btn" onclick="closeFlowDetail()" aria-label="Back to flows list">&#8592; Back to Flows</button>
+          <h2 class="page-title" id="fd-name">Flow Name</h2>
         </div>
         <div class="flow-actions" id="fd-actions"></div>
+      </header>
+      <div class="detail-tabs" role="tablist" aria-label="Flow detail sections">
+        <button type="button" class="detail-tab active" role="tab" aria-selected="true" aria-controls="fd-manifest" id="tab-fd-manifest" tabindex="0" data-tab="fd-manifest" onclick="switchFlowTab('fd-manifest')">Manifest</button>
+        <button type="button" class="detail-tab" role="tab" aria-selected="false" aria-controls="fd-steps" id="tab-fd-steps" tabindex="-1" data-tab="fd-steps" onclick="switchFlowTab('fd-steps')">Steps</button>
+        <button type="button" class="detail-tab" role="tab" aria-selected="false" aria-controls="fd-triggers" id="tab-fd-triggers" tabindex="-1" data-tab="fd-triggers" onclick="switchFlowTab('fd-triggers')">Triggers</button>
+        <button type="button" class="detail-tab" role="tab" aria-selected="false" aria-controls="fd-schedule" id="tab-fd-schedule" tabindex="-1" data-tab="fd-schedule" onclick="switchFlowTab('fd-schedule')">Schedule</button>
+        <button type="button" class="detail-tab" role="tab" aria-selected="false" aria-controls="fd-dag" id="tab-fd-dag" tabindex="-1" data-tab="fd-dag" onclick="switchFlowTab('fd-dag')">DAG</button>
+        <button type="button" class="detail-tab" role="tab" aria-selected="false" aria-controls="fd-mermaid" id="tab-fd-mermaid" tabindex="-1" data-tab="fd-mermaid" onclick="switchFlowTab('fd-mermaid')">Mermaid</button>
+        <button type="button" class="detail-tab" role="tab" aria-selected="false" aria-controls="fd-json" id="tab-fd-json" tabindex="-1" data-tab="fd-json" onclick="switchFlowTab('fd-json')">Raw JSON</button>
       </div>
-      <div class="detail-tabs">
-        <div class="detail-tab active" data-tab="fd-manifest" onclick="switchFlowTab('fd-manifest')">Manifest</div>
-        <div class="detail-tab" data-tab="fd-steps" onclick="switchFlowTab('fd-steps')">Steps</div>
-        <div class="detail-tab" data-tab="fd-triggers" onclick="switchFlowTab('fd-triggers')">Triggers</div>
-        <div class="detail-tab" data-tab="fd-schedule" onclick="switchFlowTab('fd-schedule')">Schedule</div>
-        <div class="detail-tab" data-tab="fd-dag" onclick="switchFlowTab('fd-dag')">DAG</div>
-        <div class="detail-tab" data-tab="fd-mermaid" onclick="switchFlowTab('fd-mermaid')">Mermaid</div>
-        <div class="detail-tab" data-tab="fd-json" onclick="switchFlowTab('fd-json')">Raw JSON</div>
-      </div>
-      <div class="tab-content active" id="fd-manifest"></div>
-      <div class="tab-content" id="fd-steps"></div>
-      <div class="tab-content" id="fd-triggers"></div>
-      <div class="tab-content" id="fd-schedule"></div>
-      <div class="tab-content" id="fd-dag"></div>
-      <div class="tab-content" id="fd-mermaid"></div>
-      <div class="tab-content" id="fd-json"></div>
+      <div class="tab-content active" id="fd-manifest" role="tabpanel" aria-labelledby="tab-fd-manifest" tabindex="0"></div>
+      <div class="tab-content" id="fd-steps" role="tabpanel" aria-labelledby="tab-fd-steps" tabindex="0"></div>
+      <div class="tab-content" id="fd-triggers" role="tabpanel" aria-labelledby="tab-fd-triggers" tabindex="0"></div>
+      <div class="tab-content" id="fd-schedule" role="tabpanel" aria-labelledby="tab-fd-schedule" tabindex="0"></div>
+      <div class="tab-content" id="fd-dag" role="tabpanel" aria-labelledby="tab-fd-dag" tabindex="0"></div>
+      <div class="tab-content" id="fd-mermaid" role="tabpanel" aria-labelledby="tab-fd-mermaid" tabindex="0"></div>
+      <div class="tab-content" id="fd-json" role="tabpanel" aria-labelledby="tab-fd-json" tabindex="0"></div>
     </div>
-  </div>
+  </section>
 
   <!-- Runs Page -->
-  <div class="page" id="page-runs">
+  <section class="page" id="page-runs" aria-labelledby="page-runs-title">
     <div id="runs-list-panel" class="runs-list-panel">
-      <div class="page-header">
-        <div class="page-title">Runs</div>
-        <div class="runs-filters">
-          <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)"/>
-          <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()"><option value="">All Flows</option></select>
-          <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()">
+      <header class="page-header">
+        <div class="page-header-leading">
+          <button type="button" class="hamburger" id="hamburger-runs" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <h2 class="page-title" id="page-runs-title">Runs</h2>
+        </div>
+        <div class="runs-filters" role="search" aria-label="Filter runs">
+          <label class="visually-hidden" for="runs-filter-search">Search runs</label>
+          <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)" aria-label="Search runs"/>
+          <label class="visually-hidden" for="runs-filter-flow">Filter by flow</label>
+          <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()" aria-label="Filter by flow"><option value="">All Flows</option></select>
+          <label class="visually-hidden" for="runs-filter-status">Filter by status</label>
+          <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()" aria-label="Filter by status">
             <option value="">All Statuses</option>
             <option value="Running">Running</option>
             <option value="Succeeded">Succeeded</option>
@@ -132,31 +225,54 @@
             <option value="Failed">Failed</option>
           </select>
         </div>
-      </div>
-      <div class="runs-list" id="runs-list"></div>
+      </header>
+      <div class="runs-filter-chips" id="runs-filter-chips" aria-label="Active filters"></div>
+      <div class="runs-list" id="runs-list" role="region" aria-label="Run list" aria-live="polite" aria-busy="false"></div>
       <div class="runs-pagination" id="runs-pagination"></div>
     </div>
-    <div id="runs-detail-panel" class="runs-detail-panel">
+    <div id="runs-detail-panel" class="runs-detail-panel" role="region" aria-label="Run detail" tabindex="-1">
       <div class="runs-detail-back">
-        <div class="back-btn" onclick="backToRunsList()">&#8592; Back to Runs</div>
+        <button type="button" class="back-btn" onclick="backToRunsList()" aria-label="Back to runs list">&#8592; Back to Runs</button>
       </div>
       <div id="runs-detail">
-        <div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>
+        <div class="detail-empty"><div class="icon" aria-hidden="true">&#x2B21;</div><div>Select a run to see its steps</div></div>
       </div>
     </div>
-  </div>
+  </section>
 
   <!-- Scheduled Page -->
-  <div class="page" id="page-scheduled">
-    <div class="page-header">
-      <div class="page-title">Scheduled Jobs</div>
+  <section class="page" id="page-scheduled" aria-labelledby="page-scheduled-title">
+    <header class="page-header">
+      <div class="page-header-leading">
+        <button type="button" class="hamburger" id="hamburger-scheduled" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <h2 class="page-title" id="page-scheduled-title">Scheduled Jobs</h2>
+      </div>
       <div style="font-size:12px;color:var(--text-dim)" id="scheduled-count-label">0 jobs</div>
-    </div>
+    </header>
     <div class="page-content">
       <div class="schedule-section">
         <div id="scheduled-table"></div>
       </div>
     </div>
+  </section>
+</main>
+
+<!-- Live region for transient toast notifications -->
+<div id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- Command palette (Cmd/Ctrl+K) -->
+<div class="cmdk-backdrop" id="cmdk-backdrop" onclick="closeCmdK()" aria-hidden="true"></div>
+<div class="cmdk" id="cmdk" role="dialog" aria-modal="true" aria-labelledby="cmdk-input" hidden>
+  <div class="cmdk-input-wrap">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input id="cmdk-input" class="cmdk-input" type="search" placeholder="Search flows, runs, or actions..." autocomplete="off" autocorrect="off" spellcheck="false" aria-controls="cmdk-list" aria-expanded="true" aria-activedescendant=""/>
+  </div>
+  <div class="cmdk-list" id="cmdk-list" role="listbox" aria-label="Command results"></div>
+  <div class="cmdk-footer">
+    <span><span class="kbd-hint">↑↓</span> navigate · <span class="kbd-hint">↵</span> select · <span class="kbd-hint">Esc</span> close</span>
+    <span class="kbd-hint">Ctrl+K</span>
   </div>
 </div>
 

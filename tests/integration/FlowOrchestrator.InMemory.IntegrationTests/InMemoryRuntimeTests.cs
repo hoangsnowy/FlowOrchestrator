@@ -80,7 +80,11 @@ public sealed class InMemoryRuntimeTests
 
         // Act
         var jobId = await dispatcher.ScheduleStepAsync(ctx, flow, step, TimeSpan.Zero);
-        await Task.Delay(100);
+        // Wait on a logical signal — channel write completes synchronously on
+        // unbounded channels, but WaitToReadAsync still gives us a hard guarantee
+        // without depending on a wall-clock sleep that flakes under CI load.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        Assert.True(await channel.Reader.WaitToReadAsync(cts.Token), "Envelope was not written within 30s.");
 
         // Assert
         Assert.True(channel.Reader.TryRead(out var envelope));
@@ -107,12 +111,18 @@ public sealed class InMemoryRuntimeTests
     [Fact]
     public async Task Runner_WhenEnvelopeWritten_CallsEngineRunStepAsync()
     {
-        // Arrange
+        // Arrange — drive the assertion off a logical signal (TaskCompletionSource)
+        // rather than `await Task.Delay(N); engine.Received(1)…`, which races under CI load.
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var engine = Substitute.For<IFlowOrchestrator>();
+        var firstCallTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         engine.RunStepAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
                             Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>())
-              .Returns(new ValueTask<object?>((object?)null));
+              .Returns(_ =>
+              {
+                  firstCallTcs.TrySetResult();
+                  return new ValueTask<object?>((object?)null);
+              });
 
         var services = new ServiceCollection();
         services.AddLogging();
@@ -130,7 +140,7 @@ public sealed class InMemoryRuntimeTests
         // Act
         var runTask = runner.StartAsync(cts.Token);
         await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, step, "e1"));
-        await Task.Delay(200);
+        await firstCallTcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cts.Cancel();
 
         // Assert
@@ -144,17 +154,20 @@ public sealed class InMemoryRuntimeTests
     [Fact]
     public async Task Runner_EngineThrows_ContinuesProcessingNextEnvelope()
     {
-        // Arrange
+        // Arrange — wait on a logical signal that fires after the second call
+        // arrives, instead of a hardcoded Task.Delay sleep.
         var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
         var engine = Substitute.For<IFlowOrchestrator>();
         var callCount = 0;
+        var secondCallTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         engine.RunStepAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
                             Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>())
               .Returns(ci =>
               {
-                  callCount++;
-                  if (callCount == 1)
+                  var n = Interlocked.Increment(ref callCount);
+                  if (n == 1)
                       throw new InvalidOperationException("Simulated step failure");
+                  secondCallTcs.TrySetResult();
                   return new ValueTask<object?>((object?)null);
               });
 
@@ -174,7 +187,7 @@ public sealed class InMemoryRuntimeTests
         await runner.StartAsync(cts.Token);
         await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, MakeStep("failing"), "e1"));
         await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, MakeStep("ok"), "e2"));
-        await Task.Delay(300);
+        await secondCallTcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cts.Cancel();
 
         // Assert
