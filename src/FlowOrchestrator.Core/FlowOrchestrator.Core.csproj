@@ -31,4 +31,14 @@
     <PackageReference Include="OpenTelemetry.Api" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Expose internals to the benchmark harness so it can measure performance
+      of the internal expression resolvers without forcing them into the public
+      API surface. Tests should rely on the public API; only benchmarks need
+      this access.
+    -->
+    <InternalsVisibleTo Include="FlowOrchestrator.Benchmarks" />
+  </ItemGroup>
+
 </Project>

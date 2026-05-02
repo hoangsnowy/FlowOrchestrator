@@ -310,3 +310,37 @@ What makes Claude's design truly distinctive is its warm neutral palette. Every 
 5. For shadows, use "ring shadow (0px 0px 0px 1px)" or "whisper shadow" — never generic "drop shadow"
 6. Specify the warm background — "on Parchment (#f5f4ed)" or "on Near Black (#141413)"
 7. Keep illustrations organic and conceptual — describe "hand-drawn-feeling" style
+
+## 10. Token Reference
+
+This document is the prose spec. The machine-readable token palette is the
+**single source of truth** for code:
+
+| Surface | File | Notes |
+|---|---|---|
+| Dashboard SPA | `src/FlowOrchestrator.Dashboard/DashboardHtml.cs` (`:root{}` block) | Inlined token palette + back-compat aliases. New rules use `--fo-*`. |
+| Docs site (DocFX) | `docs/styles/main.css` | Same `--fo-*` palette, plus a warm `[data-bs-theme="dark"]` block (`#1c1b18` near-black). |
+| Skill bundle | `.claude/designs/FlowOrchestrator Design System/colors_and_type.css` | Canonical token file used by the `flow-orchestrator-design` Claude Skill. |
+
+### Token naming convention
+
+All design-system tokens are prefixed `--fo-*`:
+
+- `--fo-terracotta`, `--fo-terracotta-hover`, `--fo-coral`, `--fo-accent-tint`
+- `--fo-parchment`, `--fo-ivory`, `--fo-warm-sand`, `--fo-pure-white`, `--fo-dark-surface`, `--fo-deep-dark`
+- `--fo-near-black`, `--fo-charcoal`, `--fo-olive`, `--fo-stone`, `--fo-warm-silver`
+- `--fo-border-cream`, `--fo-border-warm`, `--fo-ring-warm`, `--fo-ring-deep`
+- `--fo-success`, `--fo-warn`, `--fo-danger`, `--fo-skip` (each with `-bg`, `-border`, `-text` siblings)
+- `--fo-serif`, `--fo-sans`, `--fo-mono`
+- `--r-sharp` `4px`, `--r-subtle` `6px`, `--r-comfy` `8px`, `--r-generous` `12px`, `--r-very` `16px`
+- `--shadow-ring`, `--shadow-ring-deep`, `--shadow-ring-accent`, `--shadow-whisper`
+
+### Adding a new token
+
+1. Add it to `.claude/designs/FlowOrchestrator Design System/colors_and_type.css` first.
+2. Mirror the addition into `src/FlowOrchestrator.Dashboard/DashboardHtml.cs`
+   (`:root{}` block) and `docs/styles/main.css`.
+3. Document the semantic meaning in a one-line CSS comment alongside the value.
+
+Legacy tokens (`--bg`, `--accent`, `--surface`, ...) are kept as aliases of the
+`--fo-*` palette for back-compat. Do **not** add new legacy-style tokens.

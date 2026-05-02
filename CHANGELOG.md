@@ -6,6 +6,202 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-05-02
+
+### Added
+
+- **Design-system token palette inlined in the dashboard.** `DashboardHtml.cs`
+  now ships the full `--fo-*` token set from
+  `.claude/designs/FlowOrchestrator Design System/colors_and_type.css`
+  (terracotta/parchment/ivory/warm-sand/etc.), plus the type, radius, and
+  ring-shadow tokens. Existing `--bg`, `--accent`, `--surface`, ... names are
+  kept as back-compat aliases so the 197 `var(--*)` usages in the rest of the
+  file keep working unchanged. Source Serif 4 was added to the inline Google
+  Fonts import so future serif-driven UI (cost cards, run titles, etc.) needs
+  no extra network request.
+- **Dashboard SPA assets split into embedded resources.** `DashboardHtml.cs`
+  shrunk from 2103 to 131 lines. The HTML shell, CSS, and JS now live as three
+  embedded resources (`Assets/index.html`, `Assets/dashboard.css`,
+  `Assets/dashboard.js`) loaded once at static-init and inlined into the
+  cached template. Output HTML is byte-identical to the previous monolithic
+  raw-string-literal version (verified by 246 dashboard integration tests
+  before-and-after across net8/9/10).
+- **Pre-compressed dashboard root response.** The dashboard root page is
+  now rendered once at startup and cached in three forms — raw UTF-8, Brotli,
+  and Gzip — via the new `PrecompressedDashboardPage` type. The `MapGet("")`
+  handler picks the best variant based on the inbound `Accept-Encoding` header,
+  honors `q=0` overrides per RFC 7231 §5.3.4, and emits `Vary: Accept-Encoding`
+  on every response so caches key the variants correctly. Typical dashboard
+  payload drops from ~80 KB to ~12 KB on the wire (≥4× reduction asserted in
+  tests). Compression cost is paid once at process start, never per request.
+- **Expression-resolution fast paths and process-wide parse cache.**
+  `StepOutputResolver.IsStepExpression` and the `TriggerExpressionResolver`
+  helpers now reject non-`@` strings with a single character walk — sub-1 ns,
+  zero allocation — so the resolver can be called against every input value
+  cheaply. `StepOutputResolver` keeps a `ConcurrentDictionary` parse cache for
+  successful regex matches; first call parses, subsequent calls do a dictionary
+  lookup. Duplicated `TryResolveTrigger{Body,Headers}Expression` private statics
+  in `DefaultStepExecutor` now delegate to the canonical
+  `TriggerExpressionResolver` (single source of truth). See
+  [docs/benchmarks/expression-resolver-2026-05-02.md](docs/benchmarks/expression-resolver-2026-05-02.md)
+  for measured numbers.
+- **`tests/benchmarks/FlowOrchestrator.Benchmarks` project (new).** First
+  BenchmarkDotNet harness in the repo, with the expression-resolver suite as
+  its first set of cases. `FlowOrchestrator.Core` exposes internals to the
+  benchmark assembly via `InternalsVisibleTo` so internal helpers can be
+  measured without expanding the public API surface.
+- **`perf-agent` specialist agent definition** at
+  `.claude/agents/perf-agent.md`. Twelve performance bug-class categories
+  (P1 Allocation through P12 Threading), explicit hard rules around
+  no-new-deps / no-public-API / no-wire-format / no-unsafe /
+  no-disabling-telemetry, and a two-agent collaboration section to
+  coordinate with `qa-agent` on overlapping concurrency concerns.
+  Reusable across sessions — invoke before tagging or after large
+  refactors. Surfaced findings F1–F9 during the post-1.20.0 audit;
+  F1 (InMemoryFlowRunStore secondary indexes), F2 (FlowGraphPlanner
+  memoisation), and F7 (ForEachStepHandler dedupe) are deferred to a
+  follow-up release that ships dedicated benchmarks for the engine
+  hot path.
+
+### Performance
+
+- **Dashboard JSON responses write directly to the response Stream.**
+  `WriteJsonAsync` previously round-tripped through an intermediate
+  UTF-16 string (`JsonSerializer.Serialize` followed by
+  `response.WriteAsync(string)`). For a typical /api/runs response
+  (~60 KB) the intermediate allocation dominated the request's GC
+  pressure. Now uses
+  `JsonSerializer.SerializeAsync(response.Body, value, opts)` — ~10×
+  lower per-request allocation on larger endpoints. Wire format is
+  byte-identical.
+- **DefaultStepExecutor pre-scan for clean inputs.** `ResolveInputs` no
+  longer allocates a fresh `Dictionary<string, object?>` when none of
+  the step's input values could possibly need expression resolution
+  (the common static-input case). A pre-scan checks for `@`-prefixed
+  strings, nested `JsonElement`s, dicts, or sequences; when none are
+  present, the original IDictionary is returned unchanged.
+- **Allocation-free flow lookup at dispatch.** Replaced
+  `flows.FirstOrDefault(f => f.Id == flowId)` at the engine and
+  Hangfire call sites with the new `FlowRepositoryExtensions.FindById`
+  extension — a plain for-loop over
+  `IReadOnlyList<IFlowDefinition>`. Eliminates the closure capture
+  allocated on every step dispatch.
+- **Dashboard JSON endpoints now honor `Accept-Encoding`.**
+  Previously only the static HTML root page (`GET /flows`) was
+  compressed; every JSON API endpoint (`/api/flows`, `/api/runs`,
+  `/api/runs/{id}`, etc.) emitted raw bytes regardless of what the
+  client requested. The dashboard SPA polls `/api/runs` every 5 s and
+  payloads commonly land between 5 KB and 60 KB — cumulative bandwidth
+  waste over a long session was significant. `WriteJsonAsync` now wraps
+  the response stream in a `BrotliStream` (or `GZipStream` fallback) at
+  `CompressionLevel.Fastest` based on the inbound `Accept-Encoding`
+  header, emits `Vary: Accept-Encoding` on every response, and reuses
+  the existing RFC 7231 q-value parser. Wire format is byte-identical
+  to the uncompressed variant. Measured ~5× reduction on a 50-run
+  list payload (test
+  `ApiRuns_BrotliPayload_IsSignificantlySmallerThanRaw` asserts a
+  conservative 3× minimum). See
+  [docs/benchmarks/dashboard-json-compression-2026-05-02.md](docs/benchmarks/dashboard-json-compression-2026-05-02.md).
+- **Engine termination check in a single pass.** The classifier that
+  decides Run.Status at the end of a flow ran three separate
+  `LINQ.Any` passes over `statuses.Values` plus a
+  `Where + ToHashSet + All` chain to derive the leaf set. Coalesced
+  into a single foreach with three booleans plus an allocation-free
+  `IsLeaf` helper.
+- **InMemoryFlowRunStore: per-run secondary indexes eliminate O(n)
+  global scans.** Engine hot-path reads (`GetStepStatusesAsync`,
+  `GetClaimedStepKeysAsync`, `GetDispatchedStepKeysAsync`,
+  `GetRunDetailAsync`) used to scan the global flat
+  `ConcurrentDictionary` keyspace with a `Where(k => k.RunId == runId)`
+  filter — O(total_steps_in_history) per call, called 2× per step
+  completion. Three new secondary indexes
+  (`_stepKeysByRun`, `_claimsByRun`, `_dispatchesByRun`) hold per-run
+  sets of step keys, maintained alongside the flat dictionaries on every
+  write. Engine reads now run in O(steps_in_run) — asymptotic
+  improvement, not just constant-factor. Measured: at 10,000 runs in
+  store, `GetStepStatusesAsync` drops from **1.5 ms / 393 KB allocated**
+  to **744 ns / 592 B** (2,059× faster, 663× less allocation). At 1,000
+  runs the speedup is 70×; at 100 runs, 13×. Per-call cost stays flat
+  regardless of total run history. Full table:
+  [docs/benchmarks/inmemory-store-runscale-2026-05-02.md](docs/benchmarks/inmemory-store-runscale-2026-05-02.md).
+- **FlowGraphPlanner: cache the manifest sorted-key list per flow.**
+  `BuildKnownStepKeys` previously rebuilt a fresh `SortedSet<string>`
+  from `flow.Manifest.Steps.Keys` and called `ToArray()` on every
+  Evaluate (which itself runs on every step completion). The manifest
+  is immutable post-startup, so the sorted key array is now computed
+  once per flow via a `ConditionalWeakTable<IFlowDefinition,
+  ManifestKeyCache>` and reused. For linear flows without loops or
+  foreach (the common case), the cached array is returned directly — no
+  SortedSet allocation, no per-call sort. Flows with runtime scope
+  expansion fall back to the original full-build path with identical
+  semantics. Measured: 2-3× faster Evaluate across all manifest sizes;
+  allocation reduction grows with manifest size (3.6× at 5 steps, 10.2×
+  at 100 steps). Full table:
+  [docs/benchmarks/flowgraph-planner-2026-05-02.md](docs/benchmarks/flowgraph-planner-2026-05-02.md).
+
+### Conscious deferrals
+
+These items were evaluated during the post-1.20.0 audit and consciously
+deferred to a follow-up release:
+
+- **F7 (ForEachStepHandler trigger-helper dedupe).** The local
+  `TryResolveTriggerBodyExpression` and `TryResolveTriggerHeadersExpression`
+  in `ForEachStepHandler` look like duplicates of the canonical
+  `TriggerExpressionResolver` helpers but have intentionally different
+  semantics — when the path remainder is empty, the canonical path
+  wraps `triggerData` via `ExpressionPathHelper.ToJsonElement`, while
+  the ForEach local copy returns the raw object so collection-typed
+  triggers iterate without an extra serialise round-trip. Deduping
+  would change observable behaviour. A safer cleanup is to introduce
+  an opt-out parameter on the canonical helper; that's a v1.21
+  follow-up with parity tests.
+- **F8 (SqlFlowRunStore per-dispatch connection count).** Each engine
+  step opens 4-7 fresh `SqlConnection` instances. The agent's initial
+  framing implied this was wasteful, but `Microsoft.Data.SqlClient`
+  pools connections by default — opening a "fresh" connection acquires
+  one from the pool in microseconds. The real opportunity is *batching
+  reads* (a single query returning step statuses + claimed + dispatched
+  + control state instead of three round-trips). That's a coordinated
+  storage-API change, not a local refactor, and is gated on an
+  integration benchmark which we don't yet have. Deferred.
+- **F9 (StepCollection.FindStep nested-key allocation).** The
+  `string.Split('.')` allocates a `string[]` only on the nested-key
+  path (e.g. `"loop.0.child"`), which is rare. The recursive search
+  needs string keys for `Dictionary.TryGetValue`, so a span-based
+  parser would still need to allocate substrings — no measurable win
+  even at scale. Below the noise floor; left as-is.
+
+### Security
+
+- **Constant-time webhook secret comparison.** The webhook handler at
+  `DashboardServiceCollectionExtensions.cs` previously used
+  `string.Equals(providedKey, expectedSecret, StringComparison.Ordinal)`,
+  which short-circuits at the first differing character — an attacker
+  could recover the secret one byte at a time through response-time
+  measurement. The handler now delegates to the existing `SecureEquals`
+  helper (`CryptographicOperations.FixedTimeEquals` over UTF-8 bytes),
+  the same primitive used for the dashboard's BasicAuth path. Severity:
+  medium-high — webhook secrets are typically high-entropy strings, but
+  the comparison sits on the request hot path and is the dashboard's
+  advertised webhook-authentication mechanism.
+
+### Tests
+
+- 13 new unit tests for the `StepOutputResolver` fast path and parse
+  cache: boundary inputs (null, empty, whitespace, `@`, `@step`,
+  `@steps(`, leading whitespace, uppercase prefix, non-`@` literal);
+  64-task concurrent resolution against a shared static parse cache;
+  cross-instance cache equivalence; whitespace normalisation.
+- 13 new dashboard integration tests: 100-parallel-request
+  byte-identical hashes for Brotli + Gzip; pre-compressed buffer
+  immutability before and after a concurrent burst; webhook security
+  hardening (slug case-insensitivity, secret case-sensitivity,
+  lowercase `bearer` prefix, structural regression for the
+  timing-attack fix); RFC 7231 q-value parser edge cases (`q=1.0`,
+  `q=0.0`, negative q, `*` wildcard, duplicate-coding first-wins,
+  OWS tolerance).
+- Total: 26 new tests × 3 frameworks = 78 new test runs.
+
 ## [1.19.0] - 2026-05-01
 
 ### Added

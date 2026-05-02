@@ -24,6 +24,31 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
     private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
 
+    // ── Secondary per-run indexes ─────────────────────────────────────────────
+    //
+    // Engine hot-path methods (GetStepStatusesAsync / GetClaimedStepKeysAsync /
+    // GetDispatchedStepKeysAsync / GetRunDetailAsync) used to scan the global
+    // ConcurrentDictionaries above with a `Where(k => k.RunId == runId)` filter.
+    // That's O(total_steps_in_history) per call — fine for the unit-test scale,
+    // but throughput degrades linearly as run history grows in long-lived
+    // processes. The engine calls these methods 2x per step completion, so the
+    // cost compounds.
+    //
+    // The secondary indexes below are (Guid runId) → set of step keys for that
+    // run. They are maintained alongside the flat dictionaries on every write,
+    // and read by the hot-path methods to enumerate just one run's keys in
+    // O(steps_in_run). Concurrency: each per-run inner dictionary is its own
+    // ConcurrentDictionary, so concurrent step starts / claims / dispatches on
+    // the SAME run are race-safe; eventual consistency between the flat dict
+    // and the index is acceptable because the engine reads after writing on
+    // the same logical thread.
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _stepKeysByRun = new();
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _claimsByRun = new();
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _dispatchesByRun = new();
+
+    private static readonly Func<Guid, ConcurrentDictionary<string, byte>> _newRunStringSet =
+        static _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+
     public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null)
     {
         var record = new FlowRunRecord
@@ -84,6 +109,10 @@ public sealed class InMemoryFlowRunStore :
             AttemptCount = attempt
         };
 
+        // Maintain the per-run secondary index so GetStepStatusesAsync and
+        // GetRunDetailAsync can enumerate without scanning _steps globally.
+        _stepKeysByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+
         return Task.CompletedTask;
     }
 
@@ -99,12 +128,11 @@ public sealed class InMemoryFlowRunStore :
             step.CompletedAt = completedAt;
         }
 
-        var latestAttempt = _stepAttempts.Values
-            .Where(a => a.RunId == runId && string.Equals(a.StepKey, stepKey, StringComparison.Ordinal))
-            .OrderByDescending(a => a.Attempt)
-            .FirstOrDefault();
-
-        if (latestAttempt is not null)
+        // The latest attempt number is already tracked in _stepAttemptCounters
+        // by RecordStepStartAsync — no need to scan _stepAttempts.Values to
+        // find it. O(1) lookup vs O(total_attempts_in_history).
+        if (_stepAttemptCounters.TryGetValue((runId, stepKey), out var latestAttemptNum)
+            && _stepAttempts.TryGetValue((runId, stepKey, latestAttemptNum), out var latestAttempt))
         {
             latestAttempt.Status = status;
             latestAttempt.OutputJson = outputJson;
@@ -152,32 +180,47 @@ public sealed class InMemoryFlowRunStore :
         if (!_runs.TryGetValue(runId, out var run))
             return Task.FromResult<FlowRunRecord?>(null);
 
-        var steps = _steps.Values
-            .Where(s => s.RunId == runId)
-            .OrderBy(s => s.StartedAt)
-            .Select(CloneStepRecord)
-            .ToList();
+        // Enumerate step keys for this run via the secondary index, then
+        // direct-look-up each step record. O(steps_in_run) vs the prior
+        // O(total_steps_in_history) global scan.
+        var stepKeys = _stepKeysByRun.TryGetValue(runId, out var keySet)
+            ? keySet.Keys.ToList()
+            : new List<string>();
 
-        var attempts = _stepAttempts.Values
-            .Where(a => a.RunId == runId)
-            .OrderBy(a => a.StartedAt)
-            .ThenBy(a => a.Attempt)
-            .Select(CloneStepAttemptRecord)
-            .ToList();
+        var steps = new List<FlowStepRecord>(stepKeys.Count);
+        foreach (var stepKey in stepKeys)
+        {
+            if (_steps.TryGetValue((runId, stepKey), out var record))
+            {
+                steps.Add(CloneStepRecord(record));
+            }
+        }
+        steps.Sort(static (a, b) => a.StartedAt.CompareTo(b.StartedAt));
 
-        var attemptsLookup = attempts
-            .GroupBy(a => a.StepKey, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<FlowStepAttemptRecord>)g.OrderBy(a => a.Attempt).ToList(), StringComparer.Ordinal);
-
+        // Attempts: use _stepAttemptCounters for the per-step attempt count,
+        // then iterate attempts 1..count for each step. Replaces the prior
+        // global scan + GroupBy.
         foreach (var step in steps)
         {
-            if (!attemptsLookup.TryGetValue(step.StepKey, out var stepAttempts) || stepAttempts.Count == 0)
+            var attempts = new List<FlowStepAttemptRecord>();
+            if (_stepAttemptCounters.TryGetValue((runId, step.StepKey), out var maxAttempt))
             {
-                stepAttempts = [CreateSyntheticAttempt(step)];
+                for (var i = 1; i <= maxAttempt; i++)
+                {
+                    if (_stepAttempts.TryGetValue((runId, step.StepKey, i), out var attempt))
+                    {
+                        attempts.Add(CloneStepAttemptRecord(attempt));
+                    }
+                }
             }
 
-            step.Attempts = stepAttempts;
-            step.AttemptCount = stepAttempts.Count;
+            if (attempts.Count == 0)
+            {
+                attempts.Add(CreateSyntheticAttempt(step));
+            }
+
+            step.Attempts = attempts;
+            step.AttemptCount = attempts.Count;
         }
 
         run.Steps = steps;
@@ -229,56 +272,78 @@ public sealed class InMemoryFlowRunStore :
     public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         var added = _stepDispatches.TryAdd((runId, stepKey), null);
+        if (added)
+        {
+            _dispatchesByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+        }
         return Task.FromResult(added);
     }
 
     public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
     {
         _stepDispatches[(runId, stepKey)] = jobId;
+        // Annotate is called only after a successful TryRecordDispatch so the
+        // per-run index already contains this step key; no maintenance needed.
         return Task.CompletedTask;
     }
 
     public Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
-        _stepDispatches.TryRemove((runId, stepKey), out _);
+        if (_stepDispatches.TryRemove((runId, stepKey), out _)
+            && _dispatchesByRun.TryGetValue(runId, out var set))
+        {
+            set.TryRemove(stepKey, out _);
+        }
         return Task.CompletedTask;
     }
 
     public Task<IReadOnlySet<string>> GetDispatchedStepKeysAsync(Guid runId)
     {
-        IReadOnlySet<string> keys = _stepDispatches.Keys
-            .Where(k => k.RunId == runId)
-            .Select(k => k.StepKey)
-            .ToHashSet(StringComparer.Ordinal);
+        // O(steps_in_run) via the secondary index instead of O(total_steps_in_history).
+        IReadOnlySet<string> keys = _dispatchesByRun.TryGetValue(runId, out var set)
+            ? set.Keys.ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
         return Task.FromResult(keys);
     }
 
     public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
-        var map = _steps.Values
-            .Where(s => s.RunId == runId)
-            .GroupBy(s => s.StepKey, StringComparer.Ordinal)
-            .ToDictionary(
-                g => g.Key,
-                g => ParseStepStatus(g.OrderByDescending(x => x.StartedAt).First().Status),
-                StringComparer.Ordinal);
+        // O(steps_in_run) via the secondary index. Each step key is unique per
+        // (runId, stepKey) so the prior GroupBy + OrderByDescending(StartedAt)
+        // pattern collapses to a direct dictionary lookup.
+        if (!_stepKeysByRun.TryGetValue(runId, out var stepKeys))
+        {
+            return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(
+                new Dictionary<string, StepStatus>(StringComparer.Ordinal));
+        }
 
+        var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
+        foreach (var stepKey in stepKeys.Keys)
+        {
+            if (_steps.TryGetValue((runId, stepKey), out var record))
+            {
+                map[stepKey] = ParseStepStatus(record.Status);
+            }
+        }
         return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
     }
 
     public Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
     {
-        IReadOnlyCollection<string> claimed = _stepClaims.Keys
-            .Where(k => k.RunId == runId)
-            .Select(k => k.StepKey)
-            .ToArray();
-
+        // O(claimed_steps_in_run) via the secondary index.
+        IReadOnlyCollection<string> claimed = _claimsByRun.TryGetValue(runId, out var set)
+            ? set.Keys.ToArray()
+            : Array.Empty<string>();
         return Task.FromResult(claimed);
     }
 
     public Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
     {
         var claimed = _stepClaims.TryAdd((runId, stepKey), 1);
+        if (claimed)
+        {
+            _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+        }
         return Task.FromResult(claimed);
     }
 
@@ -302,11 +367,9 @@ public sealed class InMemoryFlowRunStore :
             step.EvaluationTraceJson = evaluationTraceJson;
         }
 
-        var latestAttempt = _stepAttempts.Values
-            .Where(a => a.RunId == runId && string.Equals(a.StepKey, stepKey, StringComparison.Ordinal))
-            .OrderByDescending(a => a.Attempt)
-            .FirstOrDefault();
-        if (latestAttempt is not null)
+        // O(1) latest-attempt lookup via the per-(runId, stepKey) counter.
+        if (_stepAttemptCounters.TryGetValue((runId, stepKey), out var latestAttemptNum)
+            && _stepAttempts.TryGetValue((runId, stepKey, latestAttemptNum), out var latestAttempt))
         {
             latestAttempt.EvaluationTraceJson = evaluationTraceJson;
         }

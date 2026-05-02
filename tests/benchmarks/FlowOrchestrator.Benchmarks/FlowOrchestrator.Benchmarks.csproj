@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Benchmarks always run on the latest available TFM — perf characteristics
+      shift between LTS releases and the most recent STS, and we measure on the
+      newest one. CI builds use the SDK pinned in global.json (or whatever the
+      developer has installed); the conditional matches the same gating logic
+      used in Directory.Build.props for sample projects.
+    -->
+    <TargetFramework>$(FlowOrchestratorSampleTargetFramework)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- Release-only: BenchmarkDotNet refuses to run from Debug builds anyway. -->
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <!-- Suppress the "test framework not found" warnings that surface when this project
+         is included in `dotnet test` discovery — it isn't a test project. -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.InMemory\FlowOrchestrator.InMemory.csproj" />
+  </ItemGroup>
+
+</Project>

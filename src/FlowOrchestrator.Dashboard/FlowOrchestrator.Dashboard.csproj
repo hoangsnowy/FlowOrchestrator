@@ -18,4 +18,18 @@
     <ProjectReference Include="..\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The dashboard SPA is shipped as three sibling assets — HTML shell, CSS,
+      and JS — embedded as resources inside the assembly. DashboardHtml loads
+      them at static-init, inlines the CSS and JS into the shell, and caches
+      the assembled template. This keeps the dashboard a single self-contained
+      page (one HTTP roundtrip) while making the source files maintainable in
+      any editor instead of as one 2000-line C# raw string literal.
+    -->
+    <EmbeddedResource Include="Assets\index.html" LogicalName="FlowOrchestrator.Dashboard.Assets.index.html" />
+    <EmbeddedResource Include="Assets\dashboard.css" LogicalName="FlowOrchestrator.Dashboard.Assets.dashboard.css" />
+    <EmbeddedResource Include="Assets\dashboard.js" LogicalName="FlowOrchestrator.Dashboard.Assets.dashboard.js" />
+  </ItemGroup>
+
 </Project>

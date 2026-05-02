@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using FlowOrchestrator.Core.Abstractions;
 
 namespace FlowOrchestrator.Core.Execution;
@@ -8,6 +9,41 @@ namespace FlowOrchestrator.Core.Execution;
 /// </summary>
 public sealed class FlowGraphPlanner : IFlowGraphPlanner
 {
+    /// <summary>
+    /// Cached pre-sorted manifest step keys per flow definition.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BuildKnownStepKeys"/> is called on every step completion via
+    /// <see cref="Evaluate"/>. The flow manifest is immutable post-startup, so
+    /// the sorted set of its step keys can be computed once per flow and reused.
+    /// For linear flows without loops or foreach (the common case),
+    /// <c>statuses.Keys</c> is a subset of the manifest keys and the cached
+    /// array can be returned directly — no SortedSet allocation, no
+    /// per-call sort.
+    /// <para>
+    /// <see cref="ConditionalWeakTable{TKey,TValue}"/> keys on the
+    /// <see cref="IFlowDefinition"/> reference and lets the GC reclaim the
+    /// cache entry when the flow is unregistered.
+    /// </para>
+    /// </remarks>
+    private sealed class ManifestKeyCache
+    {
+        public required string[] SortedKeys { get; init; }
+        public required HashSet<string> KeySet { get; init; }
+    }
+
+    private static readonly ConditionalWeakTable<IFlowDefinition, ManifestKeyCache> _manifestCache = new();
+
+    private static ManifestKeyCache GetManifestCache(IFlowDefinition flow)
+    {
+        return _manifestCache.GetValue(flow, static f =>
+        {
+            var sortedKeys = f.Manifest.Steps.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var keySet = new HashSet<string>(sortedKeys, StringComparer.Ordinal);
+            return new ManifestKeyCache { SortedKeys = sortedKeys, KeySet = keySet };
+        });
+    }
+
     /// <inheritdoc/>
     /// <remarks>
     /// A step is an entry step when its <c>RunAfter</c> is empty OR contains only the
@@ -229,8 +265,31 @@ public sealed class FlowGraphPlanner : IFlowGraphPlanner
 
     private static IReadOnlyList<string> BuildKnownStepKeys(IFlowDefinition flow, IEnumerable<string> runtimeStepKeys)
     {
-        var known = new SortedSet<string>(flow.Manifest.Steps.Keys, StringComparer.Ordinal);
+        var cache = GetManifestCache(flow);
 
+        // Fast path: a flow without loops/foreach has runtime keys that are
+        // all already in the manifest. In that case the known-key set is
+        // exactly the manifest's sorted keys — return the cached array
+        // directly. Avoids the SortedSet allocation, the sort, and the
+        // ToArray copy on every call.
+        var needsExpansion = false;
+        foreach (var runtimeKey in runtimeStepKeys)
+        {
+            if (!cache.KeySet.Contains(runtimeKey))
+            {
+                needsExpansion = true;
+                break;
+            }
+        }
+
+        if (!needsExpansion)
+        {
+            return cache.SortedKeys;
+        }
+
+        // Slow path: at least one runtime key is from a scope expansion
+        // (e.g. "loop.0.child"). Build the full sorted set as before.
+        var known = new SortedSet<string>(cache.KeySet, StringComparer.Ordinal);
         foreach (var runtimeKey in runtimeStepKeys)
         {
             known.Add(runtimeKey);
