@@ -46,7 +46,7 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
-    <PackageVersion Include="Npgsql" Version="9.0.3" />
+    <PackageVersion Include="Npgsql" Version="10.0.2" />
     <PackageVersion Include="System.Text.Json" Version="10.0.7" />
   </ItemGroup>
 
