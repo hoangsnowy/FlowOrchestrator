@@ -92,6 +92,60 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Where + ToHashSet + All` chain to derive the leaf set. Coalesced
   into a single foreach with three booleans plus an allocation-free
   `IsLeaf` helper.
+- **InMemoryFlowRunStore: per-run secondary indexes eliminate O(n)
+  global scans.** Engine hot-path reads (`GetStepStatusesAsync`,
+  `GetClaimedStepKeysAsync`, `GetDispatchedStepKeysAsync`,
+  `GetRunDetailAsync`) used to scan the global flat
+  `ConcurrentDictionary` keyspace with a `Where(k => k.RunId == runId)`
+  filter — O(total_steps_in_history) per call, called 2× per step
+  completion. Three new secondary indexes
+  (`_stepKeysByRun`, `_claimsByRun`, `_dispatchesByRun`) hold per-run
+  sets of step keys, maintained alongside the flat dictionaries on every
+  write. Engine reads now run in O(steps_in_run) — asymptotic
+  improvement, not just constant-factor.
+- **FlowGraphPlanner: cache the manifest sorted-key list per flow.**
+  `BuildKnownStepKeys` previously rebuilt a fresh `SortedSet<string>`
+  from `flow.Manifest.Steps.Keys` and called `ToArray()` on every
+  Evaluate (which itself runs on every step completion). The manifest
+  is immutable post-startup, so the sorted key array is now computed
+  once per flow via a `ConditionalWeakTable<IFlowDefinition,
+  ManifestKeyCache>` and reused. For linear flows without loops or
+  foreach (the common case), the cached array is returned directly — no
+  SortedSet allocation, no per-call sort. Flows with runtime scope
+  expansion fall back to the original full-build path with identical
+  semantics.
+
+### Conscious deferrals
+
+These items were evaluated during the post-1.20.0 audit and consciously
+deferred to a follow-up release:
+
+- **F7 (ForEachStepHandler trigger-helper dedupe).** The local
+  `TryResolveTriggerBodyExpression` and `TryResolveTriggerHeadersExpression`
+  in `ForEachStepHandler` look like duplicates of the canonical
+  `TriggerExpressionResolver` helpers but have intentionally different
+  semantics — when the path remainder is empty, the canonical path
+  wraps `triggerData` via `ExpressionPathHelper.ToJsonElement`, while
+  the ForEach local copy returns the raw object so collection-typed
+  triggers iterate without an extra serialise round-trip. Deduping
+  would change observable behaviour. A safer cleanup is to introduce
+  an opt-out parameter on the canonical helper; that's a v1.21
+  follow-up with parity tests.
+- **F8 (SqlFlowRunStore per-dispatch connection count).** Each engine
+  step opens 4-7 fresh `SqlConnection` instances. The agent's initial
+  framing implied this was wasteful, but `Microsoft.Data.SqlClient`
+  pools connections by default — opening a "fresh" connection acquires
+  one from the pool in microseconds. The real opportunity is *batching
+  reads* (a single query returning step statuses + claimed + dispatched
+  + control state instead of three round-trips). That's a coordinated
+  storage-API change, not a local refactor, and is gated on an
+  integration benchmark which we don't yet have. Deferred.
+- **F9 (StepCollection.FindStep nested-key allocation).** The
+  `string.Split('.')` allocates a `string[]` only on the nested-key
+  path (e.g. `"loop.0.child"`), which is rare. The recursive search
+  needs string keys for `Dictionary.TryGetValue`, so a span-based
+  parser would still need to allocate substrings — no measurable win
+  even at scale. Below the noise floor; left as-is.
 
 ### Security
 
