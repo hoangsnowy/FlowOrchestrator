@@ -311,6 +311,9 @@ public class HangfireFlowOrchestratorTests
             .Returns(new Dictionary<string, StepStatus>());
         runtimeStore.GetClaimedStepKeysAsync(Arg.Any<Guid>())
             .Returns(Array.Empty<string>());
+        // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
+        // The downstream cascade behavior is controlled by the statuses dict, not by claim.
+        runtimeStore.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>()).Returns(true);
 
         var controlStore = Substitute.For<IFlowRunControlStore>();
         controlStore.GetRunControlAsync(Arg.Any<Guid>())
@@ -368,7 +371,9 @@ public class HangfireFlowOrchestratorTests
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
-        runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(false);
+        // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
+        // Downstream-blocking is controlled by the statuses dict above, not by the claim.
+        runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(true);
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
         // Act
@@ -430,7 +435,9 @@ public class HangfireFlowOrchestratorTests
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
-        runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(false);
+        // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
+        // Downstream-blocking is controlled by the statuses dict above, not by the claim.
+        runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(true);
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
         // Act
@@ -486,7 +493,9 @@ public class HangfireFlowOrchestratorTests
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
-        runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(false);
+        // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
+        // Downstream-blocking is controlled by the statuses dict above, not by the claim.
+        runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(true);
         runtimeStore.GetRunStatusAsync(runId).Returns((string?)null);
 
         // Act
