@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
@@ -33,6 +34,16 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton<IFlowSignalStore, InMemoryFlowSignalStore>();
 
         builder.Services.AddSingleton<IFlowScheduleStateStore, InMemoryFlowScheduleStateStore>();
+
+        // Code-defined flow registry (populated from the IFlowDefinition instances
+        // registered via AddFlow<T>()).
+        builder.Services.TryAddSingleton<IFlowRepository>(sp =>
+        {
+            var repo = new InMemoryFlowRepository();
+            foreach (var flow in sp.GetServices<IFlowDefinition>())
+                repo.Add(flow);
+            return repo;
+        });
         return builder;
     }
 

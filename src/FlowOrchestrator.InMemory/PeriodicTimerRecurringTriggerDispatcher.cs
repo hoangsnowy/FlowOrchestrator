@@ -70,13 +70,16 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     /// <inheritdoc/>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Cancel first, then drain the loop, then dispose the timer.
+        // Disposing the timer before the loop drains can race WaitForNextTickAsync into
+        // an unobserved ObjectDisposedException, separate from the expected OCE.
         _cts?.Cancel();
-        _timer?.Dispose();
         if (_loop is not null)
         {
             try { await _loop.ConfigureAwait(false); }
             catch (OperationCanceledException) { /* expected on shutdown */ }
         }
+        _timer?.Dispose();
     }
 
     /// <inheritdoc/>

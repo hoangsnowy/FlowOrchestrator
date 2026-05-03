@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
   </ItemGroup>
 
 </Project>

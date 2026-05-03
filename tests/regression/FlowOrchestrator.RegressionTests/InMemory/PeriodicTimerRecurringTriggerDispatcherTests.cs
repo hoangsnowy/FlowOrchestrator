@@ -315,21 +315,29 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     [Fact]
     public async Task EnqueueTriggerAsync_FiresImmediately_BypassingSchedule()
     {
-        // Arrange
-        var (dispatcher, orchestrator, _) = CreateSut();
+        // Arrange — wire a TCS so the test deterministically waits for the fire-and-forget
+        // continuation rather than polling on a wall-clock budget (CLAUDE.md anti-flakiness §28).
+        var fired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var orchestrator = Substitute.For<IFlowOrchestrator>();
+        orchestrator
+            .TriggerByScheduleAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { fired.TrySetResult(); return new ValueTask<object?>((object?)null); });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(orchestrator);
+        using var sp = services.BuildServiceProvider();
+        var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
+            sp,
+            Substitute.For<IFlowRepository>(),
+            Substitute.For<IFlowScheduleStateStore>(),
+            new FlowSchedulerOptions(),
+            NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
+
         var flowId = Guid.NewGuid();
 
         // Act
         await dispatcher.EnqueueTriggerAsync(flowId, "schedule");
-        // Allow fire-and-forget task to complete.
-        // Wait up to 30s for the fire-and-forget continuation. The previous
-        // 50×20ms=1s budget intermittently fired before the orchestrator was
-        // invoked under CI CPU contention.
-        for (var i = 0; i < 1500; i++)
-        {
-            if (orchestrator.ReceivedCalls().Any()) break;
-            await Task.Delay(20);
-        }
+        await fired.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Assert
         await orchestrator.Received(1).TriggerByScheduleAsync(
@@ -373,22 +381,29 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     [Fact]
     public async Task TriggerOnce_ExistingJob_FiresOrchestrator()
     {
-        // Arrange
-        var (dispatcher, orchestrator, _) = CreateSut();
+        // Arrange — TCS-driven wait, see EnqueueTriggerAsync_FiresImmediately for rationale.
+        var fired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var orchestrator = Substitute.For<IFlowOrchestrator>();
+        orchestrator
+            .TriggerByScheduleAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { fired.TrySetResult(); return new ValueTask<object?>((object?)null); });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(orchestrator);
+        using var sp = services.BuildServiceProvider();
+        var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
+            sp,
+            Substitute.For<IFlowRepository>(),
+            Substitute.For<IFlowScheduleStateStore>(),
+            new FlowSchedulerOptions(),
+            NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
+
         var flowId = Guid.NewGuid();
         dispatcher.RegisterOrUpdate("job1", flowId, "schedule", "0 * * * *");
 
         // Act
         dispatcher.TriggerOnce("job1");
-        // Allow the fire-and-forget Task.Run to complete.
-        // Wait up to 30s for the fire-and-forget continuation. The previous
-        // 50×20ms=1s budget intermittently fired before the orchestrator was
-        // invoked under CI CPU contention.
-        for (var i = 0; i < 1500; i++)
-        {
-            if (orchestrator.ReceivedCalls().Any()) break;
-            await Task.Delay(20);
-        }
+        await fired.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Assert
         await orchestrator.Received(1).TriggerByScheduleAsync(
@@ -413,11 +428,12 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     [Fact]
     public async Task EnqueueTriggerAsync_OrchestratorThrows_ExceptionIsSwallowed()
     {
-        // Arrange
+        // Arrange — TCS fires before the throw so we can deterministically wait for invocation.
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var orchestrator = Substitute.For<IFlowOrchestrator>();
         orchestrator
             .TriggerByScheduleAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns<ValueTask<object?>>(_ => throw new InvalidOperationException("boom"));
+            .Returns<ValueTask<object?>>(_ => { invoked.TrySetResult(); throw new InvalidOperationException("boom"); });
 
         var services = new ServiceCollection();
         services.AddSingleton(orchestrator);
@@ -432,15 +448,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
 
         // Act
         var ex = await Record.ExceptionAsync(() => dispatcher.EnqueueTriggerAsync(Guid.NewGuid(), "schedule"));
-        // Allow fire-and-forget task to complete and swallow.
-        // Wait up to 30s for the fire-and-forget continuation. The previous
-        // 50×20ms=1s budget intermittently fired before the orchestrator was
-        // invoked under CI CPU contention.
-        for (var i = 0; i < 1500; i++)
-        {
-            if (orchestrator.ReceivedCalls().Any()) break;
-            await Task.Delay(20);
-        }
+        await invoked.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Assert — caller never sees the exception (logged internally).
         Assert.Null(ex);

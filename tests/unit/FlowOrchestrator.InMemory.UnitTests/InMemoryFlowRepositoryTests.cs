@@ -1,8 +1,8 @@
 using FlowOrchestrator.Core.Abstractions;
-using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.InMemory;
 using NSubstitute;
 
-namespace FlowOrchestrator.Core.Tests.Storage;
+namespace FlowOrchestrator.InMemory.UnitTests;
 
 public class InMemoryFlowRepositoryTests
 {
