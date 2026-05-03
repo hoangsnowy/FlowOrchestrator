@@ -146,6 +146,31 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 | `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative cancellation |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
 
+### Realtime Event Stream (SSE)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/flows/api/events/stream` | Server-Sent Events stream of run / step lifecycle events |
+
+The dashboard SPA subscribes to this endpoint via `EventSource`; state
+changes (`run.started`, `step.completed`, `step.retried`, `run.completed`)
+are pushed within milliseconds of the engine recording them. Polling
+runs only as a fallback when the stream stalls (>20 s without events,
+or 3+ failed reconnects) and stops on the next live event.
+
+- **Content-Type:** `text/event-stream; charset=utf-8`
+- **No compression:** Brotli/Gzip would buffer chunks; the endpoint
+  always writes uncompressed.
+- **Heartbeat:** every 15 s as a comment line — beats nginx's 60 s and
+  Azure Front Door's 240 s default proxy idle timeouts.
+- **Filter:** `?runId={guid}` scopes the stream to a single run for the
+  detail page.
+
+Custom realtime consumers (log sinks, custom UIs, Slack notifiers) can
+implement `IFlowEventNotifier` from `FlowOrchestrator.Core.Notifications`
+and replace the dashboard's broadcaster registration. The default
+`NoopFlowEventNotifier` makes apps without the dashboard pay zero overhead.
+
 ### Schedule Management
 
 | Method | Path | Description |

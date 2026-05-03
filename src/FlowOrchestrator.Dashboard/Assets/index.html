@@ -52,23 +52,15 @@
   <div class="sidebar-footer">
     <div class="refresh-row">
       <span class="pulse-dot" id="refresh-pulse" aria-hidden="true"></span>
-      <span class="refresh-label">Auto-refresh</span>
+      <span class="refresh-label">Live updates</span>
     </div>
     <div class="refresh-row">
       <label class="refresh-toggle" for="auto-refresh-enabled">
         <input id="auto-refresh-enabled" type="checkbox" checked onchange="onAutoRefreshEnabledChange()"/>
         On
       </label>
-      <label class="visually-hidden" for="auto-refresh-seconds">Refresh interval</label>
-      <select class="refresh-select" id="auto-refresh-seconds" onchange="onAutoRefreshIntervalChange()">
-        <option value="5">5s</option>
-        <option value="10">10s</option>
-        <option value="15">15s</option>
-        <option value="30">30s</option>
-        <option value="60">60s</option>
-      </select>
     </div>
-    <div class="refresh-status" id="refresh-status" aria-live="polite">Every 5s</div>
+    <div class="refresh-status" id="refresh-status" aria-live="polite" title="Live = realtime SSE push. Polling = fallback when stream is unavailable.">Live</div>
     <div class="sidebar-controls">
       <div class="icon-toggle-row">
         <button type="button" class="icon-btn" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" title="Toggle dark mode">
@@ -168,7 +160,7 @@
           </button>
           <h2 class="page-title" id="page-flows-title">Flows</h2>
         </div>
-        <div style="font-size:12px;color:var(--text-dim)" id="flow-count-label">0 flows</div>
+        <div class="page-count" id="flow-count-label"><span class="num">0</span>flows</div>
       </header>
       <div class="page-content">
         <div class="flows-grid" id="flows-grid"></div>
@@ -249,7 +241,7 @@
         </button>
         <h2 class="page-title" id="page-scheduled-title">Scheduled Jobs</h2>
       </div>
-      <div style="font-size:12px;color:var(--text-dim)" id="scheduled-count-label">0 jobs</div>
+      <div class="page-count" id="scheduled-count-label"><span class="num">0</span>jobs</div>
     </header>
     <div class="page-content">
       <div class="schedule-section">

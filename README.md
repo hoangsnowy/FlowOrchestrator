@@ -142,7 +142,7 @@ public sealed class OrderFlow : IFlowDefinition
 
 - **Zero new infrastructure (or your choice)** — runs inside your existing Hangfire app on SQL Server / PostgreSQL, in-process with a `Channel<T>` and zero deps, or on Azure Service Bus for cloud-native scale-out.
 - **Code-first, always** — flows are plain C# classes; no YAML, no JSON files, no designer to learn.
-- **Built-in dashboard** — Timeline, DAG, and Gantt views with retry, cancel, and re-run controls.
+- **Built-in dashboard with realtime updates** — Timeline, DAG, and Gantt views with retry, cancel, and re-run controls; state changes stream over Server-Sent Events the moment they happen, polling only kicks in if the stream stalls.
 - **Runtime-agnostic core** — three runtimes ship today (Hangfire, in-process, Azure Service Bus); add your own without touching flow definitions.
 
 ---

@@ -25,12 +25,25 @@ let eventsDrawerOpen = false;
 let runsView = 'list'; // 'list' | 'detail'
 let selectedFlowDetail = null;
 const autoRefreshStorageEnabledKey = 'flow-dashboard:auto-refresh-enabled';
-const autoRefreshStorageSecondsKey = 'flow-dashboard:auto-refresh-seconds';
-const autoRefreshDefaultSeconds = 5;
-const autoRefreshAllowedSeconds = [5, 10, 15, 30, 60];
+// Fixed fallback cadence — the user-tunable interval dropdown was removed when SSE
+// became primary. Polling now only runs as a fallback for stalled streams, so a
+// single sensible default beats giving users a knob with no everyday effect.
+const fallbackPollingSeconds = 5;
 let autoRefreshEnabled = true;
-let autoRefreshSeconds = autoRefreshDefaultSeconds;
 let autoRefreshTimer = null;
+
+// ── Realtime (SSE) state ─────────────────────────────────────────────
+// Strategy: Server-Sent Events is the primary live channel. Polling
+// (setInterval(refresh, fallbackPollingSeconds * 1000)) is the FALLBACK,
+// activated only when the SSE stream goes silent for >20s or fails to
+// reconnect 3+ times. On the next successful event, polling stops.
+const sseStaleThresholdMs = 20000;
+const sseDegradedFailureThreshold = 3;
+let eventStream = null;
+let sseLastEventAt = 0;
+let sseFailedReconnects = 0;
+let sseDegraded = false;
+let sseWatchdogTimer = null;
 
 function $(id) { return document.getElementById(id); }
 async function fetchJSON(url, opts) {
@@ -179,12 +192,6 @@ function renderWhyWhenSkippedPanel(step) {
 function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
 function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }
 
-function normalizeAutoRefreshSeconds(value) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return autoRefreshDefaultSeconds;
-  return autoRefreshAllowedSeconds.includes(parsed) ? parsed : autoRefreshDefaultSeconds;
-}
-
 function readAutoRefreshEnabled() {
   try {
     const stored = localStorage.getItem(autoRefreshStorageEnabledKey);
@@ -195,36 +202,26 @@ function readAutoRefreshEnabled() {
   }
 }
 
-function readAutoRefreshSeconds() {
-  try {
-    const stored = localStorage.getItem(autoRefreshStorageSecondsKey);
-    if (!stored) return autoRefreshDefaultSeconds;
-    return normalizeAutoRefreshSeconds(stored);
-  } catch {
-    return autoRefreshDefaultSeconds;
-  }
-}
-
 function persistAutoRefreshSettings() {
   try {
     localStorage.setItem(autoRefreshStorageEnabledKey, autoRefreshEnabled ? 'true' : 'false');
-    localStorage.setItem(autoRefreshStorageSecondsKey, String(autoRefreshSeconds));
   } catch {}
 }
 
 function updateAutoRefreshUI() {
   const enabledEl = $('auto-refresh-enabled');
-  const secondsEl = $('auto-refresh-seconds');
   const statusEl = $('refresh-status');
   const pulseEl = $('refresh-pulse');
 
   if (enabledEl) enabledEl.checked = autoRefreshEnabled;
-  if (secondsEl) {
-    secondsEl.value = String(autoRefreshSeconds);
-    secondsEl.disabled = !autoRefreshEnabled;
-  }
   if (statusEl) {
-    statusEl.textContent = autoRefreshEnabled ? ('Every ' + autoRefreshSeconds + 's') : 'Paused';
+    if (!autoRefreshEnabled) {
+      statusEl.textContent = 'Paused';
+    } else if (sseDegraded) {
+      statusEl.textContent = 'Polling';
+    } else {
+      statusEl.textContent = 'Live';
+    }
   }
   if (pulseEl) {
     pulseEl.style.animationPlayState = autoRefreshEnabled ? 'running' : 'paused';
@@ -232,20 +229,134 @@ function updateAutoRefreshUI() {
   }
 }
 
-function restartAutoRefreshTimer() {
+// Starts the FALLBACK polling timer. Called by the SSE watchdog when the realtime
+// stream is unavailable. On its own, this no longer runs — SSE is the primary path.
+function startFallbackPolling() {
+  if (autoRefreshTimer) return; // already running
+  if (!autoRefreshEnabled) return;
+  autoRefreshTimer = setInterval(refresh, fallbackPollingSeconds * 1000);
+}
+
+function stopFallbackPolling() {
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
     autoRefreshTimer = null;
   }
-  if (!autoRefreshEnabled) return;
-  autoRefreshTimer = setInterval(refresh, autoRefreshSeconds * 1000);
 }
+
+// SSE event stream — owns the EventSource lifecycle, fan-out to page handlers,
+// and the watchdog that flips us to polling fallback when the stream stalls.
+const FlowEventStream = (function () {
+  let es = null;
+
+  function url() {
+    return BASE + '/events/stream';
+  }
+
+  function dispatch(type, evt) {
+    sseLastEventAt = Date.now();
+    if (sseDegraded) exitDegraded();
+
+    // Targeted refetch instead of full page re-render. The same state will
+    // also be picked up by the next polling tick if we ever drop back, so
+    // these handlers can fail silently without leaving the UI stale.
+    try {
+      if (type === 'run.started' || type === 'run.completed') {
+        if (currentPage === 'overview') refresh({ silent: true });
+        if (currentPage === 'runs' && runsView === 'list') refresh({ silent: true });
+        if (currentPage === 'runs' && runsView === 'detail' && evt && evt.runId === selectedRunId) {
+          selectRun(selectedRunId, true, selectedStepKey, currentRunView);
+        }
+      } else if (type === 'step.completed' || type === 'step.retried') {
+        if (currentPage === 'runs' && runsView === 'detail' && evt && evt.runId === selectedRunId) {
+          selectRun(selectedRunId, true, selectedStepKey, currentRunView);
+        }
+      }
+    } catch (e) { console.error('sse.dispatch', e); }
+  }
+
+  function attachListeners() {
+    if (!es) return;
+    // Heartbeat comments fire onmessage with empty data — track liveness either way.
+    es.onmessage = () => { sseLastEventAt = Date.now(); };
+    es.onopen = () => { sseFailedReconnects = 0; sseLastEventAt = Date.now(); };
+    es.onerror = () => {
+      sseFailedReconnects++;
+      // EventSource auto-reconnects; we only act if the stream stays stale long enough.
+      if (sseFailedReconnects >= sseDegradedFailureThreshold) enterDegraded();
+    };
+    ['run.started', 'run.completed', 'step.completed', 'step.retried'].forEach((type) => {
+      es.addEventListener(type, (ev) => {
+        let payload = null;
+        try { payload = JSON.parse(ev.data); } catch {}
+        dispatch(type, payload);
+      });
+    });
+  }
+
+  function enterDegraded() {
+    if (sseDegraded) return;
+    sseDegraded = true;
+    startFallbackPolling();
+    updateAutoRefreshUI();
+  }
+
+  function exitDegraded() {
+    if (!sseDegraded) return;
+    sseDegraded = false;
+    stopFallbackPolling();
+    updateAutoRefreshUI();
+  }
+
+  function ensureWatchdog() {
+    if (sseWatchdogTimer) return;
+    sseWatchdogTimer = setInterval(() => {
+      if (!autoRefreshEnabled) return;
+      if (!es) return;
+      const stale = sseLastEventAt > 0 && (Date.now() - sseLastEventAt) > sseStaleThresholdMs;
+      if (stale) enterDegraded();
+    }, 5000);
+  }
+
+  function stopWatchdog() {
+    if (sseWatchdogTimer) {
+      clearInterval(sseWatchdogTimer);
+      sseWatchdogTimer = null;
+    }
+  }
+
+  function connect() {
+    if (es) return;
+    if (!autoRefreshEnabled) return;
+    if (typeof EventSource === 'undefined') {
+      // Old browser — fall straight back to polling.
+      enterDegraded();
+      return;
+    }
+    try {
+      es = new EventSource(url());
+      sseLastEventAt = Date.now();
+      attachListeners();
+      ensureWatchdog();
+    } catch (e) {
+      console.error('sse.connect', e);
+      enterDegraded();
+    }
+  }
+
+  function close() {
+    if (es) { try { es.close(); } catch {} es = null; }
+    stopWatchdog();
+    exitDegraded();
+  }
+
+  return { connect, close };
+})();
 
 function initAutoRefreshSettings() {
   autoRefreshEnabled = readAutoRefreshEnabled();
-  autoRefreshSeconds = readAutoRefreshSeconds();
   updateAutoRefreshUI();
-  restartAutoRefreshTimer();
+  if (autoRefreshEnabled) FlowEventStream.connect();
 }
 
 function onAutoRefreshEnabledChange() {
@@ -253,16 +364,13 @@ function onAutoRefreshEnabledChange() {
   autoRefreshEnabled = !!(enabledEl && enabledEl.checked);
   persistAutoRefreshSettings();
   updateAutoRefreshUI();
-  restartAutoRefreshTimer();
-  if (autoRefreshEnabled) refresh();
-}
-
-function onAutoRefreshIntervalChange() {
-  const secondsEl = $('auto-refresh-seconds');
-  autoRefreshSeconds = normalizeAutoRefreshSeconds(secondsEl ? secondsEl.value : autoRefreshDefaultSeconds);
-  persistAutoRefreshSettings();
-  updateAutoRefreshUI();
-  restartAutoRefreshTimer();
+  if (autoRefreshEnabled) {
+    FlowEventStream.connect();
+    refresh();
+  } else {
+    FlowEventStream.close();
+    stopFallbackPolling();
+  }
 }
 
 function _navigate(page) {
@@ -587,7 +695,7 @@ async function loadFlows(opts) {
       fetchJSON(BASE+'/runs?take=200', { signal }).catch(() => [])
     ]);
     allFlows = flows;
-    $('flow-count-label').textContent = allFlows.length + ' flow' + (allFlows.length!==1?'s':'');
+    $('flow-count-label').innerHTML = '<span class="num">' + allFlows.length + '</span>flow' + (allFlows.length!==1?'s':'');
 
     const sel = $('runs-filter-flow');
     const curVal = sel.value;
@@ -2247,7 +2355,7 @@ async function loadScheduled(opts) {
   const signal = newPageController().signal;
   try {
     allSchedules = await fetchJSON(BASE+'/schedules', { signal });
-    $('scheduled-count-label').textContent = allSchedules.length + ' job' + (allSchedules.length!==1?'s':'');
+    $('scheduled-count-label').innerHTML = '<span class="num">' + allSchedules.length + '</span>job' + (allSchedules.length!==1?'s':'');
     tableEl.innerHTML = renderScheduleTable(allSchedules, false);
   } catch(e) {
     if (isAbortError(e)) return;
@@ -2363,22 +2471,34 @@ async function refresh(opts) {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && autoRefreshEnabled) {
-    // Resume: fire one immediate tick, then let the interval continue.
+  if (document.visibilityState === 'hidden') {
+    // Drop the SSE connection while the tab is hidden — no point keeping a server
+    // resource open for a viewer who can't see updates. Reopened on visibility return.
+    FlowEventStream.close();
+    stopFallbackPolling();
+    return;
+  }
+  if (autoRefreshEnabled) {
+    FlowEventStream.connect();
+    // Single snapshot refresh so the user immediately sees the current state; SSE
+    // delivers deltas from this point forward.
     refresh({ force: true });
   }
 });
 
 // Window focus / pageshow fire when the user alt-tabs back to the browser, or returns
-// from BFCache. visibilitychange alone misses these — the tab stays visible (only the
-// browser window lost OS-level focus) but Chrome aggressively throttles setInterval
-// while the window is unfocused, so the chart appears frozen. Force an immediate refresh
-// on focus so users always see fresh data the moment they look back at the dashboard.
+// from BFCache. SSE may have been killed by the OS during sleep; reconnecting here is cheap.
 window.addEventListener('focus', () => {
-  if (autoRefreshEnabled) refresh({ force: true });
+  if (autoRefreshEnabled) {
+    FlowEventStream.connect();
+    refresh({ force: true });
+  }
 });
 window.addEventListener('pageshow', (e) => {
-  if (e.persisted && autoRefreshEnabled) refresh({ force: true });
+  if (e.persisted && autoRefreshEnabled) {
+    FlowEventStream.connect();
+    refresh({ force: true });
+  }
 });
 
 // ── Router — single IIFE owning hash routing, query params, subscribers ──

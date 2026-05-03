@@ -1,6 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Dashboard.Notifications;
 using Hangfire;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -83,6 +84,12 @@ public sealed class DashboardTestServer : IDisposable
     }
 
     public HttpClient CreateClient() => _app.GetTestClient();
+
+    /// <summary>
+    /// Resolved SSE broadcaster — tests use this to publish events into the dashboard's
+    /// realtime channel without going through the engine. Registered by <c>AddFlowDashboard()</c>.
+    /// </summary>
+    public SseFlowEventBroadcaster Broadcaster => _app.Services.GetRequiredService<SseFlowEventBroadcaster>();
 
     public void Dispose()
     {

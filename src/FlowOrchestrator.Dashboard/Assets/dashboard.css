@@ -212,9 +212,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .refresh-label{color:#5e5d59}
 .refresh-toggle{display:flex;align-items:center;gap:6px;color:#5e5d59;cursor:pointer;user-select:none}
 .refresh-toggle input{accent-color:var(--accent)}
-.refresh-select{background:rgba(255,255,255,.05);border:1px solid var(--sidebar-surface);border-radius:var(--r-subtle);padding:2px 6px;color:#87867f;font-size:10px;font-family:'JetBrains Mono',monospace;outline:none}
-.refresh-select:disabled{opacity:.4;cursor:not-allowed}
-.refresh-select option{background:var(--sidebar-bg);color:#87867f}
 .refresh-status{color:#3d3d3a}
 .pulse-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s infinite;transition:opacity .15s}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -240,6 +237,12 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 
 /* Visually-hidden — for screen-reader-only labels */
 .visually-hidden{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Page-header count chip — small warm pill on Flows / Scheduled / Runs page headers.
+   Replaces the plain "0 jobs" / "12 flows" inline text. Number uses Anthropic Mono +
+   accent color to draw the eye, label stays muted. */
+.page-count{display:inline-flex;align-items:baseline;gap:6px;padding:4px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:999px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;font-weight:600;line-height:1;box-shadow:var(--shadow-whisper)}
+.page-count .num{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--accent);letter-spacing:0;text-transform:none}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:box-shadow .2s,border-color .2s;box-shadow:var(--shadow-whisper)}
 .stat-card:hover{box-shadow:var(--surface) 0px 0px 0px 0px,var(--ring) 0px 0px 0px 1px,var(--shadow-whisper)}
 .stat-card .val{font-size:32px;font-weight:500;line-height:1;letter-spacing:-.4px;font-family:Georgia,'Anthropic Serif',serif}

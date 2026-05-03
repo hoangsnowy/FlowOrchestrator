@@ -6,8 +6,10 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Diagnostics;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Dashboard.Notifications;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -39,6 +41,15 @@ public static class DashboardServiceCollectionExtensions
     {
         services.AddOptions<FlowDashboardOptions>();
         services.TryAddSingleton<IFlowScheduleStateStore, InMemoryScheduleStateStore>();
+
+        // Realtime push: register the broadcaster as a singleton and bind it as the
+        // IFlowEventNotifier that the engine resolves. Replace() (not TryAdd) overrides
+        // the noop default registered by AddFlowOrchestrator — this is what activates
+        // SSE delivery for any process that calls AddFlowDashboard().
+        services.AddSingleton<SseFlowEventBroadcaster>();
+        services.Replace(ServiceDescriptor.Singleton<IFlowEventNotifier>(
+            sp => sp.GetRequiredService<SseFlowEventBroadcaster>()));
+
         return services;
     }
 
@@ -106,6 +117,29 @@ public static class DashboardServiceCollectionExtensions
         var page = DashboardHtml.RenderPrecompressed(basePath, options.Branding);
 
         group.MapGet("", (HttpContext http) => WriteCompressedHtmlAsync(http, page));
+
+        // ── Realtime event stream (SSE) ──
+        // Long-lived response — must NOT use WriteJsonAsync (compression breaks streaming).
+        // Resolves SseFlowEventBroadcaster from request services so the test server can
+        // override it without touching the Core IFlowEventNotifier registration.
+        group.MapGet("/api/events/stream", async (HttpContext http) =>
+        {
+            var broadcaster = http.RequestServices.GetService<SseFlowEventBroadcaster>();
+            if (broadcaster is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return;
+            }
+
+            Guid? runIdFilter = null;
+            if (http.Request.Query.TryGetValue("runId", out var runIdValues)
+                && Guid.TryParse(runIdValues.ToString(), out var parsed))
+            {
+                runIdFilter = parsed;
+            }
+
+            await SseEndpointHandler.HandleAsync(http, broadcaster, runIdFilter);
+        });
 
         // ── Flow catalog endpoints ──
 
