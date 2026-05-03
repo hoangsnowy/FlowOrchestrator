@@ -1021,6 +1021,20 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             {
                 return;
             }
+
+            // Dispatch ledger check — closes a CI-only race observed in the v1.23.0 publish run
+            // (HappyPathTests.LinearFlow_runs_to_completion: Expected 3 steps, got 2). A step
+            // can have been dispatched (TryRecordDispatchAsync = true, EnqueueStepAsync queued
+            // the work) but not yet picked up by the consumer — in that window neither the step
+            // status nor the claim ledger reflects it, so the prior two checks pass and the
+            // engine completes the run prematurely. Under CI CPU contention the gap between
+            // dispatch and claim widens enough for this to fire. Guarding against it makes
+            // termination strictly safer with no production downside.
+            var dispatched = await _runStore.GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
+            if (dispatched.Except(statuses.Keys, StringComparer.Ordinal).Any())
+            {
+                return;
+            }
         }
 
         await _runStore.CompleteRunAsync(runId, status).ConfigureAwait(false);

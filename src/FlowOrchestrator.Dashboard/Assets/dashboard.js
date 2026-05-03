@@ -25,16 +25,16 @@ let eventsDrawerOpen = false;
 let runsView = 'list'; // 'list' | 'detail'
 let selectedFlowDetail = null;
 const autoRefreshStorageEnabledKey = 'flow-dashboard:auto-refresh-enabled';
-const autoRefreshStorageSecondsKey = 'flow-dashboard:auto-refresh-seconds';
-const autoRefreshDefaultSeconds = 5;
-const autoRefreshAllowedSeconds = [5, 10, 15, 30, 60];
+// Fixed fallback cadence — the user-tunable interval dropdown was removed when SSE
+// became primary. Polling now only runs as a fallback for stalled streams, so a
+// single sensible default beats giving users a knob with no everyday effect.
+const fallbackPollingSeconds = 5;
 let autoRefreshEnabled = true;
-let autoRefreshSeconds = autoRefreshDefaultSeconds;
 let autoRefreshTimer = null;
 
 // ── Realtime (SSE) state ─────────────────────────────────────────────
 // Strategy: Server-Sent Events is the primary live channel. Polling
-// (setInterval(refresh, autoRefreshSeconds * 1000)) is the FALLBACK,
+// (setInterval(refresh, fallbackPollingSeconds * 1000)) is the FALLBACK,
 // activated only when the SSE stream goes silent for >20s or fails to
 // reconnect 3+ times. On the next successful event, polling stops.
 const sseStaleThresholdMs = 20000;
@@ -192,12 +192,6 @@ function renderWhyWhenSkippedPanel(step) {
 function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
 function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }
 
-function normalizeAutoRefreshSeconds(value) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return autoRefreshDefaultSeconds;
-  return autoRefreshAllowedSeconds.includes(parsed) ? parsed : autoRefreshDefaultSeconds;
-}
-
 function readAutoRefreshEnabled() {
   try {
     const stored = localStorage.getItem(autoRefreshStorageEnabledKey);
@@ -208,39 +202,23 @@ function readAutoRefreshEnabled() {
   }
 }
 
-function readAutoRefreshSeconds() {
-  try {
-    const stored = localStorage.getItem(autoRefreshStorageSecondsKey);
-    if (!stored) return autoRefreshDefaultSeconds;
-    return normalizeAutoRefreshSeconds(stored);
-  } catch {
-    return autoRefreshDefaultSeconds;
-  }
-}
-
 function persistAutoRefreshSettings() {
   try {
     localStorage.setItem(autoRefreshStorageEnabledKey, autoRefreshEnabled ? 'true' : 'false');
-    localStorage.setItem(autoRefreshStorageSecondsKey, String(autoRefreshSeconds));
   } catch {}
 }
 
 function updateAutoRefreshUI() {
   const enabledEl = $('auto-refresh-enabled');
-  const secondsEl = $('auto-refresh-seconds');
   const statusEl = $('refresh-status');
   const pulseEl = $('refresh-pulse');
 
   if (enabledEl) enabledEl.checked = autoRefreshEnabled;
-  if (secondsEl) {
-    secondsEl.value = String(autoRefreshSeconds);
-    secondsEl.disabled = !autoRefreshEnabled;
-  }
   if (statusEl) {
     if (!autoRefreshEnabled) {
       statusEl.textContent = 'Paused';
     } else if (sseDegraded) {
-      statusEl.textContent = 'Polling (every ' + autoRefreshSeconds + 's)';
+      statusEl.textContent = 'Polling';
     } else {
       statusEl.textContent = 'Live';
     }
@@ -256,23 +234,13 @@ function updateAutoRefreshUI() {
 function startFallbackPolling() {
   if (autoRefreshTimer) return; // already running
   if (!autoRefreshEnabled) return;
-  autoRefreshTimer = setInterval(refresh, autoRefreshSeconds * 1000);
+  autoRefreshTimer = setInterval(refresh, fallbackPollingSeconds * 1000);
 }
 
 function stopFallbackPolling() {
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
     autoRefreshTimer = null;
-  }
-}
-
-// Legacy entry kept for callers (interval change UI). Toggles the fallback timer if
-// fallback is currently active; otherwise just records the new interval — SSE doesn't
-// care about this knob.
-function restartAutoRefreshTimer() {
-  if (autoRefreshTimer) {
-    stopFallbackPolling();
-    if (sseDegraded) startFallbackPolling();
   }
 }
 
@@ -387,7 +355,6 @@ const FlowEventStream = (function () {
 
 function initAutoRefreshSettings() {
   autoRefreshEnabled = readAutoRefreshEnabled();
-  autoRefreshSeconds = readAutoRefreshSeconds();
   updateAutoRefreshUI();
   if (autoRefreshEnabled) FlowEventStream.connect();
 }
@@ -404,15 +371,6 @@ function onAutoRefreshEnabledChange() {
     FlowEventStream.close();
     stopFallbackPolling();
   }
-}
-
-function onAutoRefreshIntervalChange() {
-  const secondsEl = $('auto-refresh-seconds');
-  autoRefreshSeconds = normalizeAutoRefreshSeconds(secondsEl ? secondsEl.value : autoRefreshDefaultSeconds);
-  persistAutoRefreshSettings();
-  updateAutoRefreshUI();
-  // Only matters if fallback is active; SSE doesn't poll.
-  restartAutoRefreshTimer();
 }
 
 function _navigate(page) {
