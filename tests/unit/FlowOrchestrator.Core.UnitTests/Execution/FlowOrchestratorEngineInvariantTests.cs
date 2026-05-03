@@ -102,22 +102,45 @@ public sealed class FlowOrchestratorEngineInvariantTests
         Assert.Empty(_dispatcher.ReceivedCalls());
     }
 
-    // ── Invariant 2: Claim exclusion ──────────────────────────────────────────
+    // ── Invariant 2: Claim exclusion (v1.22+ at execute time, not schedule time) ──
 
     [Fact]
-    public async Task TriggerAsync_WhenTryClaimStepReturnsFalse_DispatcherIsNeverCalled()
+    public async Task RunStepAsync_WhenTryClaimStepReturnsFalse_StepExecutorIsNeverCalled()
     {
-        // Arrange
+        // Arrange — pre-1.22 the claim was at schedule time so this test verified that no
+        // dispatch happened. Post-1.22 the claim moved to RunStepAsync entry; we now verify the
+        // claim losers exit silently and never invoke IStepExecutor (the heavy bit).
         var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
         runtimeStore.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>())
             .ReturnsForAnyArgs(Task.FromResult(false));
+        var flow = MakeFlow("step1");
+        var runId = Guid.NewGuid();
+        var ctx = MakeCtx(runId);
+        var step = new StepInstance("step1", "Work") { RunId = runId };
+
+        // Act
+        await CreateEngine(runtimeStore: runtimeStore).RunStepAsync(ctx, flow, step);
+
+        // Assert — claim lost ⇒ executor not called, no step.started event recorded.
+        Assert.Empty(_stepExecutor.ReceivedCalls());
+    }
+
+    [Fact]
+    public async Task TriggerAsync_DoesNotConsultRuntimeClaim_PerV122ScheduleSemantics()
+    {
+        // Arrange — explicit pin: schedule path no longer touches the runtime claim. The claim
+        // belongs to RunStepAsync execution. This test guards against accidentally re-introducing
+        // schedule-time claiming, which would re-break broadcast delivery scenarios.
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        runtimeStore.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>())
+            .ReturnsForAnyArgs(Task.FromResult(true));
         var ctx = MakeTriggerCtx(MakeFlow("step1"));
 
         // Act
         await CreateEngine(runtimeStore: runtimeStore).TriggerAsync(ctx);
 
         // Assert
-        Assert.Empty(_dispatcher.ReceivedCalls());
+        await runtimeStore.DidNotReceiveWithAnyArgs().TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>());
     }
 
     // ── Invariant 3: Polling rescheduling order ───────────────────────────────
@@ -175,6 +198,36 @@ public sealed class FlowOrchestratorEngineInvariantTests
             Arg.Is<TimeSpan>(d => d == TimeSpan.FromSeconds(5)),
             Arg.Any<CancellationToken>());
         Assert.True(scheduleObservedReleaseFirst);
+    }
+
+    [Fact]
+    public async Task RunStepAsync_WhenPending_AlsoReleasesStepClaim_v122()
+    {
+        // Arrange — pre-1.22 the claim leaked across Pending re-schedules and the next poll
+        // attempt couldn't re-claim. Post-1.22 the engine releases the claim alongside the
+        // dispatch ledger so the polling loop actually progresses.
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        runtimeStore.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>())
+            .ReturnsForAnyArgs(Task.FromResult(true));
+
+        _stepExecutor.ExecuteAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
+            .ReturnsForAnyArgs(new ValueTask<IStepResult>(new StepResult
+            {
+                Key = "step1",
+                Status = StepStatus.Pending,
+                DelayNextStep = TimeSpan.FromSeconds(2),
+            }));
+
+        var runId = Guid.NewGuid();
+        var flow = MakeFlow("step1");
+
+        // Act
+        await CreateEngine(runtimeStore: runtimeStore).RunStepAsync(
+            MakeCtx(runId), flow, new StepInstance("step1", "Work") { RunId = runId });
+
+        // Assert
+        await runtimeStore.Received(1).ReleaseStepClaimAsync(runId, "step1");
     }
 
     // ── Invariant 6: DispatchHint targeting static DAG step throws ────────────

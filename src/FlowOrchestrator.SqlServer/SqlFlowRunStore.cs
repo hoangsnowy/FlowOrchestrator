@@ -261,6 +261,13 @@ public sealed class SqlFlowRunStore :
         await conn.ExecuteAsync(
             "UPDATE FlowRuns SET Status = 'Running', CompletedAt = NULL WHERE Id = @Id",
             new { Id = runId });
+
+        // v1.22: clear the execute-time claim + dispatch-ledger entry so the retried step
+        // can re-claim and re-dispatch. Without this the engine's gates would silent-skip.
+        await conn.ExecuteAsync(
+            "DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey;" +
+            "DELETE FROM FlowStepDispatches WHERE RunId = @RunId AND StepKey = @StepKey;",
+            new { RunId = runId, StepKey = stepKey });
     }
 
     public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
@@ -338,6 +345,14 @@ public sealed class SqlFlowRunStore :
             new { RunId = runId, StepKey = stepKey });
 
         return affected > 0;
+    }
+
+    public async Task ReleaseStepClaimAsync(Guid runId, string stepKey)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            "DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
     }
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)

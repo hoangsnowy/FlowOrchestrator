@@ -96,12 +96,20 @@ internal sealed class ServiceBusCronProcessorHostedService : BackgroundService
             // CompleteMessageAsync, the message is redelivered and duplicate detection swallows
             // the next-fire enqueue, so we don't get two fires for the same tick.
             //
-            // Note on cron drift under backlog: ComputeNext uses the consumer's wall-clock
-            // (drain time) rather than envelope.ScheduledFor. A backlogged consumer skips
-            // ticks instead of bursting catch-up — by design.
+            // v1.22.0 cron-drift fix: compute the next fire from envelope.ScheduledFor (the
+            // tick we just consumed), not from the consumer's wall-clock. Otherwise a backlogged
+            // consumer skips ticks. Clamp to "now or later" so a cron whose schedule already
+            // passed (e.g. processed late) still fires the upcoming tick rather than the past one.
             if (!string.IsNullOrEmpty(envelope.Cron))
             {
-                var nextFire = ServiceBusRecurringTriggerHub.ComputeNext(envelope.Cron, _timeProvider.GetUtcNow());
+                var fromInstant = envelope.ScheduledFor == default
+                    ? _timeProvider.GetUtcNow()
+                    : envelope.ScheduledFor;
+                var nextFire = ServiceBusRecurringTriggerHub.ComputeNext(envelope.Cron, fromInstant);
+                if (nextFire <= _timeProvider.GetUtcNow())
+                {
+                    nextFire = ServiceBusRecurringTriggerHub.ComputeNext(envelope.Cron, _timeProvider.GetUtcNow());
+                }
                 await _hub.ScheduleNextAsync(envelope.JobId, envelope.FlowId, envelope.TriggerKey, envelope.Cron, nextFire, args.CancellationToken)
                            .ConfigureAwait(false);
             }

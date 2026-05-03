@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using FlowOrchestrator.Core.Storage;
@@ -35,15 +34,6 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
     private readonly ILogger<ServiceBusFlowProcessorHostedService> _logger;
 
     private readonly Dictionary<Guid, ServiceBusProcessor> _processors = new();
-
-    // In-process execute-time dedup. Catches the Aspire-emulator broadcast case where ALL
-    // subscriptions on a topic receive every message because Aspire 13.2 cannot declare SQL
-    // filters on subscriptions yet (dotnet/aspire#11708). All N processors live in the same
-    // host process and share this dictionary, so the first concurrent OnMessage wins and the
-    // rest complete silently. In production with AutoCreateTopology=true, ServiceBusTopologyManager
-    // creates filtered subscriptions via the admin client and broadcast doesn't happen — this
-    // map stays empty and adds no overhead.
-    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), byte> _inFlight = new();
 
     /// <summary>Initialises the service.</summary>
     public ServiceBusFlowProcessorHostedService(
@@ -143,18 +133,11 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
             return;
         }
 
-        // Execute-time dedup: in the Aspire emulator broadcast scenario, every subscription
-        // on the topic receives every message. We complete duplicates without invoking the
-        // engine — first arrival wins. In production (filtered subscriptions) this is never hit.
-        if (!TryStartProcessing(envelope.RunId, envelope.StepKey))
-        {
-            _logger.LogDebug(
-                "Suppressing duplicate delivery of step '{StepKey}' (run {RunId}) — already in-flight in this process.",
-                envelope.StepKey, envelope.RunId);
-            await args.CompleteMessageAsync(args.Message, args.CancellationToken).ConfigureAwait(false);
-            return;
-        }
-
+        // No in-process dedup needed: as of v1.22 the engine's RunStepAsync acquires an
+        // atomic claim at execute-time (FlowStepClaims row), so broadcast delivery (Aspire
+        // emulator without SQL filters, or any future at-least-once topology) is correctly
+        // serialised at the storage layer — only one concurrent caller wins the claim,
+        // others exit silently.
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
@@ -170,26 +153,7 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
             // Abandon — engine's claim guard prevents double-execution on redelivery.
             await args.AbandonMessageAsync(args.Message, propertiesToModify: null, args.CancellationToken).ConfigureAwait(false);
         }
-        finally
-        {
-            EndProcessing(envelope.RunId, envelope.StepKey);
-        }
     }
-
-    /// <summary>
-    /// Attempts to register a (RunId, StepKey) pair as in-flight in this process.
-    /// Returns <see langword="true"/> if this caller is the first; <see langword="false"/> if a
-    /// concurrent delivery has already been registered (the caller should drop the message).
-    /// </summary>
-    internal bool TryStartProcessing(Guid runId, string stepKey)
-        => _inFlight.TryAdd((runId, stepKey), 1);
-
-    /// <summary>
-    /// Releases the in-flight slot for a (RunId, StepKey) pair so a future genuine retry can
-    /// proceed. Idempotent — calling for a key that's not registered is a no-op.
-    /// </summary>
-    internal void EndProcessing(Guid runId, string stepKey)
-        => _inFlight.TryRemove((runId, stepKey), out _);
 
     private Task OnErrorAsync(ProcessErrorEventArgs args)
     {

@@ -92,23 +92,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   dead-lettered. Fixed by treating `Undefined` the same as `Null`
   (key present, value null) — same shape handlers see for explicit JSON nulls.
 
-- **`ServiceBusFlowProcessorHostedService` adds in-process execute-time dedup
-  for the Aspire-emulator broadcast scenario.** Aspire 13.2's
-  `AddAzureServiceBus().RunAsEmulator()` cannot yet declare SQL filters on
-  subscriptions ([dotnet/aspire#11708](https://github.com/dotnet/aspire/issues/11708)),
-  so a single dispatched step message is broadcast to every subscription on
-  the topic. The engine's claim guard sits at *schedule* time rather than
-  *execute* time (an existing 1:1 assumption that holds for Hangfire and
-  InMemory), so each subscription's processor would call `engine.RunStepAsync`
-  and the handler would run N times — visible in the dashboard event stream as
-  N × `STEP.STARTED` + N × `STEP.COMPLETED` for one logical run. Fixed by
-  adding a process-local `ConcurrentDictionary<(RunId,StepKey), byte>` in
-  `ServiceBusFlowProcessorHostedService` — the first concurrent delivery wins
-  and registers as in-flight; duplicates complete the message without invoking
-  the engine. In production with `AutoCreateTopology = true`, the admin client
-  creates filtered subscriptions and the broadcast doesn't happen, so this
-  dedup map stays empty and adds zero overhead. A proper engine-level
-  execute-time claim is filed for v1.23 (qa-agent.md known-issue #7).
+- **Engine claim guard moved from SCHEDULE time to EXECUTE time.** Pre-1.22
+  the runtime claim sat in `TryScheduleStepAsync`; this worked under
+  Hangfire's and InMemory's 1:1 enqueue→execute assumption but BROKE under
+  Service Bus topic broadcast (one enqueue → N consumers, all execute the
+  handler because the schedule-time claim was already taken by the original
+  scheduler). The claim now sits at the top of `RunStepAsync` where it
+  atomically guards execution: first concurrent worker wins, the rest exit
+  silently. New `IFlowRunRuntimeStore.ReleaseStepClaimAsync` clears the
+  claim row; the engine calls it from the Pending re-schedule path and
+  `RetryStepAsync` so the same step can claim again on a fresh attempt.
+  Implemented in InMemory, SQL Server, and PostgreSQL stores. Schedule
+  becomes purely "enqueue gate" (dispatch ledger), execute becomes purely
+  "exclusive run gate" (claim) — clean separation of responsibilities.
+
+  The earlier process-local dedup map in `ServiceBusFlowProcessorHostedService`
+  added as a tactical mitigation is removed in this same release; the engine
+  refactor obsoletes it. This also fixes the known v2-runtime-claim leak
+  on Pending poll re-schedules (`PollableStepHandler` reschedules now work
+  without the `PermissiveRuntimeStore` test workaround).
 
 - **`ServiceBusRecurringTriggerHub.ScheduleNextAsync` no longer silently
   swallows enqueue errors.** Discovered by qa-agent E2E audit before the
@@ -122,10 +124,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tick for retry. The registration-time call from `RegisterOrUpdate` keeps
   fire-and-forget semantics with a `ContinueWith(OnlyOnFaulted)` log so
   `FlowSyncHostedService` can re-attempt via the next sync cycle without
-  bringing down the host on an unobserved exception. Cron drift on consumer
-  backlog (next fire computed against drain-time, not envelope-scheduled-for)
-  is now explicitly documented in `OnMessageAsync` remarks (qa-agent.md
-  known-issue #10).
+  bringing down the host on an unobserved exception.
+
+- **Cron drift on consumer backlog fixed.** The cron consumer used to compute
+  the next fire from `_timeProvider.GetUtcNow()` (drain time) so a backlogged
+  consumer skipped ticks. The next fire is now computed from
+  `envelope.ScheduledFor` (the tick that was just consumed), with a
+  "now or later" clamp so a deeply-backlogged consumer takes at most ONE
+  catch-up tick per drain rather than bursting through hundreds of missed
+  ticks. Net effect: a 5 s cron stays on its 5 s cadence even when the
+  consumer was briefly slow, instead of becoming "5 s + drain delay" forever.
 
 ### Changed
 
