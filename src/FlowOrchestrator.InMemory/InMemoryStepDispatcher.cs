@@ -12,7 +12,7 @@ namespace FlowOrchestrator.InMemory;
 /// </summary>
 /// <remarks>
 /// Immediate enqueues write directly to the channel; delayed enqueues fire a background
-/// <see cref="Task.Delay"/> and then write, so <see cref="ScheduleStepAsync"/> returns
+/// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> and then write, so <see cref="ScheduleStepAsync"/> returns
 /// almost immediately while the step remains invisible to the runner until the delay elapses.
 /// </remarks>
 internal sealed class InMemoryStepDispatcher : IStepDispatcher

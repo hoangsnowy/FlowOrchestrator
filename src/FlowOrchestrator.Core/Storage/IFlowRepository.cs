@@ -21,7 +21,7 @@ public interface IFlowRepository
 /// Replaces <c>flows.FirstOrDefault(f =&gt; f.Id == flowId)</c> at every dispatch
 /// call site. The LINQ form allocates a closure capturing <c>flowId</c> on every
 /// call; the for-loop form does not. Visible from a Stopwatch on tight dispatch
-/// loops because <see cref="FlowOrchestratorEngine"/> hits this path on every
+/// loops because <see cref="FlowOrchestrator.Core.Execution.FlowOrchestratorEngine"/> hits this path on every
 /// step run and every retry, and <c>HangfireFlowOrchestrator</c> hits it on every
 /// dispatched job.
 /// </remarks>

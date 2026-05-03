@@ -58,8 +58,8 @@ public static class InMemoryServiceCollectionExtensions
     /// as an alternative to Hangfire. Provides cron-trigger feature parity with the
     /// Hangfire runtime via <see cref="PeriodicTimerRecurringTriggerDispatcher"/>.
     /// <para>
-    /// The runtime is registered with <see cref="ServiceCollectionDescriptorExtensions.TryAdd"/>
-    /// semantics so it can co-exist with other registrations without conflicting.
+    /// The runtime is registered with <c>TryAdd</c> semantics so it can co-exist with other
+    /// registrations without conflicting.
     /// </para>
     /// </remarks>
     /// <param name="builder">The FlowOrchestrator builder to register into.</param>

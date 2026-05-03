@@ -1,0 +1,95 @@
+# EditorConfig — enterprise baseline for FlowOrchestrator.
+# Loaded automatically by .NET SDK + Roslyn. Combined with
+# <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild> in Directory.Build.props,
+# the severities below are enforced at `dotnet build` time, not just in the IDE.
+
+root = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Whitespace / encoding — every file
+# ─────────────────────────────────────────────────────────────────────────────
+[*]
+charset                  = utf-8
+end_of_line              = lf
+insert_final_newline     = true
+trim_trailing_whitespace = true
+indent_style             = space
+indent_size              = 4
+
+# Markdown preserves trailing whitespace as <br/>.
+[*.md]
+trim_trailing_whitespace = false
+
+# Project / config files use 2-space indent (community standard).
+[*.{csproj,props,targets,json,yml,yaml,xml,ps1}]
+indent_size = 2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. C# language conventions
+# ─────────────────────────────────────────────────────────────────────────────
+[*.cs]
+# File-scoped namespaces (already used throughout the repo).
+csharp_style_namespace_declarations           = file_scoped:warning
+
+# `var` when the type is obvious from the right-hand side.
+csharp_style_var_when_type_is_apparent        = true:suggestion
+csharp_style_var_for_built_in_types           = true:suggestion
+csharp_style_var_elsewhere                    = true:suggestion
+
+# Modern C# preferences.
+csharp_prefer_braces                          = true:suggestion
+csharp_style_expression_bodied_methods        = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties     = true:suggestion
+csharp_style_pattern_matching_over_is_with_cast_check  = true:suggestion
+csharp_style_pattern_matching_over_as_with_null_check  = true:suggestion
+csharp_style_inlined_variable_declaration     = true:suggestion
+
+dotnet_sort_system_directives_first           = true
+dotnet_separate_import_directive_groups       = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Diagnostic severities — what `dotnet build` enforces
+#    (TreatWarningsAsErrors=true converts every `warning` here to a build error)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# XML documentation — broken cref / malformed XML must fail the build.
+# These were the warnings that slipped to CI before this config existed.
+dotnet_diagnostic.CS1570.severity = warning   # malformed XML doc
+dotnet_diagnostic.CS1574.severity = warning   # cref could not be resolved
+dotnet_diagnostic.CS1580.severity = warning   # invalid type for parameter in cref
+dotnet_diagnostic.CS1581.severity = warning   # invalid return type in cref
+dotnet_diagnostic.CS1584.severity = warning   # XML comment has syntactically incorrect cref
+dotnet_diagnostic.CS1587.severity = warning   # XML comment is not on a valid language element
+dotnet_diagnostic.CS1591.severity = none      # missing XML doc — opt-in per project (CLAUDE.md rule)
+dotnet_diagnostic.CS0419.severity = warning   # ambiguous cref — pick the overload explicitly
+
+# Obsolete API usage must surface immediately
+# (this is what flagged Testcontainers PostgreSqlBuilder() / MsSqlBuilder()).
+dotnet_diagnostic.CS0612.severity = warning   # obsolete (no message)
+dotnet_diagnostic.CS0618.severity = warning   # obsolete (with message)
+dotnet_diagnostic.CS0672.severity = warning   # member overrides obsolete member
+
+# Style hygiene — surfaced as IDE hints only. Enterprise rule of thumb:
+# strict on correctness/docs/security, soft on style. Promote to `warning`
+# per-project once the code has been cleaned up.
+dotnet_diagnostic.IDE0005.severity = suggestion # remove unnecessary using directives
+dotnet_diagnostic.IDE0011.severity = suggestion # add braces
+dotnet_diagnostic.IDE0051.severity = suggestion # unused private member
+dotnet_diagnostic.IDE0052.severity = suggestion # unread private member
+
+# ConfigureAwait noise — library code uses ValueTask + ASP.NET Core which
+# does not need ConfigureAwait(false). Disable so it does not pollute logs.
+dotnet_diagnostic.CA2007.severity = none
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Test projects — relax a couple of hygiene rules that fire on test patterns
+# ─────────────────────────────────────────────────────────────────────────────
+[**/tests/**/*.cs]
+dotnet_diagnostic.IDE0005.severity = suggestion
+dotnet_diagnostic.CS1591.severity  = none
+
+# Sample projects exist to demonstrate patterns; they intentionally show extra
+# annotations and may keep "unused" demo code.
+[**/samples/**/*.cs]
+dotnet_diagnostic.IDE0051.severity = none
+dotnet_diagnostic.IDE0052.severity = none

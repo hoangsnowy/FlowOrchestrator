@@ -47,8 +47,7 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
         _network = new NetworkBuilder().Build();
         await _network.CreateAsync();
 
-        _sqlEdge = new ContainerBuilder()
-            .WithImage("mcr.microsoft.com/azure-sql-edge:latest")
+        _sqlEdge = new ContainerBuilder("mcr.microsoft.com/azure-sql-edge:latest")
             .WithEnvironment("ACCEPT_EULA", "Y")
             .WithEnvironment("MSSQL_SA_PASSWORD", SqlPassword)
             .WithNetwork(_network)
@@ -65,8 +64,7 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
 
         var freeAmqp = GetFreeTcpPort();
 
-        _emulator = new ContainerBuilder()
-            .WithImage("mcr.microsoft.com/azure-messaging/servicebus-emulator:latest")
+        _emulator = new ContainerBuilder("mcr.microsoft.com/azure-messaging/servicebus-emulator:latest")
             .WithEnvironment("ACCEPT_EULA", "Y")
             .WithEnvironment("SQL_SERVER", "sb-sqledge")
             .WithEnvironment("MSSQL_SA_PASSWORD", SqlPassword)

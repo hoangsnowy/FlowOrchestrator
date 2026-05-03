@@ -20,7 +20,7 @@ public sealed class HangfireGlobalFiltersCollection
 /// global filter list and that double-registration is idempotent.
 /// </summary>
 /// <remarks>
-/// Direct unit tests of <see cref="IClientFilter.OnCreating"/> / <see cref="IServerFilter.OnPerforming"/>
+/// Direct unit tests of <c>IClientFilter.OnCreating</c> / <c>IServerFilter.OnPerforming</c>
 /// are deferred to the integration test suite because constructing Hangfire's
 /// <see cref="CreatingContext"/> / <c>PerformingContext</c> requires a live <see cref="JobStorage"/>
 /// connection. The filter logic itself is small, single-purpose, and exercised end-to-end by the
