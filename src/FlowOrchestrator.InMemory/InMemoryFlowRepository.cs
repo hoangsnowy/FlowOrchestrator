@@ -1,6 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Storage;
 
-namespace FlowOrchestrator.Core.Storage;
+namespace FlowOrchestrator.InMemory;
 
 /// <summary>
 /// In-memory implementation of <see cref="IFlowRepository"/> that holds code-defined

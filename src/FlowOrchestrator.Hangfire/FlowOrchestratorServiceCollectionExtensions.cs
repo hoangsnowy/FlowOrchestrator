@@ -49,6 +49,16 @@ public static class FlowOrchestratorServiceCollectionExtensions
                 "Call options.UseSqlServer(), options.UsePostgreSql(), or options.UseInMemory() " +
                 "inside AddFlowOrchestrator(options => ...).");
 
+        // IFlowRepository is the in-process registry of code-defined flow classes; each storage
+        // backend's Use*() extension is responsible for registering an implementation. Validate
+        // here so missing registration produces a clear error instead of a downstream NRE.
+        if (!services.Any(sd => sd.ServiceType == typeof(IFlowRepository)))
+            throw new InvalidOperationException(
+                "No IFlowRepository implementation registered. The storage backend's Use*() extension " +
+                "(UseInMemory / UseSqlServer / UsePostgreSql) is responsible for this; ensure you called " +
+                "one of them inside AddFlowOrchestrator(options => ...). If you implement a custom backend, " +
+                "register IFlowRepository yourself.");
+
         services.AddScoped<IExecutionContextAccessor, ExecutionContextAccessor>();
         services.AddSingleton<FlowOrchestratorTelemetry>();
         services.AddSingleton(builder.Scheduler);
@@ -56,14 +66,6 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.Retention);
         services.AddSingleton(builder.Observability);
         services.TryAddSingleton<IFlowScheduleStateStore, EphemeralFlowScheduleStateStore>();
-
-        services.AddSingleton<IFlowRepository>(sp =>
-        {
-            var repo = new InMemoryFlowRepository();
-            foreach (var flow in sp.GetServices<IFlowDefinition>())
-                repo.Add(flow);
-            return repo;
-        });
 
         services.AddHostedService<FlowSyncHostedService>();
         services.AddHostedService<FlowRetentionHostedService>();

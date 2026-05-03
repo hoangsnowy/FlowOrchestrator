@@ -267,7 +267,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         {
             // Mark the trigger activity as failed before propagating. Without this, APM tools
             // see a span that simply ended with no error indicator and never raise an alert.
-            activity.RecordError(ex);
+            activity?.RecordError(ex);
             throw;
         }
         finally
@@ -389,7 +389,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             {
                 if (handlerException is not null)
                 {
-                    activity.RecordError(handlerException);
+                    activity?.RecordError(handlerException);
                 }
                 else
                 {
@@ -517,7 +517,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         {
             // Engine-level failure outside the handler (storage, dispatch, continuation). The
             // inner catch already recorded handler exceptions; this guards everything else.
-            activity.RecordError(ex);
+            activity?.RecordError(ex);
             throw;
         }
         finally
@@ -855,7 +855,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         {
             EngineLog.WhenEvaluationFailed(_logger, ex, stepKey);
             // Surface to the parent flow.step activity (if any) so APMs see a failure event.
-            Activity.Current.RecordError(ex);
+            Activity.Current?.RecordError(ex);
             // A malformed expression is an authoring error. Skip with a synthetic trace
             // so the dashboard surfaces the problem to the user.
             trace = new WhenEvaluationTrace

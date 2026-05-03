@@ -44,6 +44,32 @@ When adding ANY HTTP endpoint that returns >1 KB typical payload (HTML page, JSO
 
 If you're modifying `DashboardServiceCollectionExtensions.WriteJsonAsync` or `WriteCompressedHtmlAsync`, this checklist applies. If you're adding a new endpoint that uses neither, the same rules still apply — implement them inline.
 
+### Dashboard endpoints — DI parameters that integration tests don't register
+
+Integration tests (`tests/integration/FlowOrchestrator.Dashboard.IntegrationTests`) bootstrap the dashboard via a minimal `DashboardTestServer` that intentionally **bypasses `AddFlowOrchestrator`** — it registers only the handful of services the dashboard endpoints directly need (Hangfire in-memory, fake `IFlowStore`, etc.). Adding a new constructor / minimal-API parameter pulled from DI silently breaks every test that exercises that endpoint:
+
+- Minimal-API parameter binding treats unknown service types as required `[FromServices]` and **400s the request** with no clear error.
+- The 400 surfaces as `Assert.Equal(OK, BadRequest)` in 4+ Dashboard tests at once — easy to misread as a flake on first sight.
+
+When adding/changing a Dashboard endpoint signature:
+
+1. **Resolve optional services from `HttpContext.RequestServices` with a default**, e.g.
+   `var opts = http.RequestServices.GetService<FlowRunControlOptions>() ?? new();`
+   instead of taking `FlowRunControlOptions opts` directly as a handler parameter.
+2. If the service is genuinely required (engine, flow store), it's already registered by every test — no fallback needed.
+3. **Verify locally** before pushing: `dotnet test tests/integration/FlowOrchestrator.Dashboard.IntegrationTests/...` (no Docker, ~3 s).
+
+This applies to **every minimal-API endpoint in `DashboardServiceCollectionExtensions.cs`**, not just rerun.
+
+### Integration-test flake taxonomy
+
+Two recurring flake patterns have caused red CI runs that turned green on retry. Treat any new test that triggers either pattern as a bug — fix it, do not just rerun.
+
+1. **Time-boundary flakes** — assertions that depend on `DateTimeOffset.UtcNow` falling inside a specific bucket (hour, minute, day). Fail at exactly `XX:00` when the bucketing crosses a boundary mid-test. Fix: snap your input timestamps to a known boundary (truncate to hour / floor / inject a `TimeProvider`), don't rely on wall-clock alignment.
+2. **NSubstitute `Received(N)` race on async/fire-and-forget paths** — asserting `mock.Received().CompleteRunAsync(runId, "Failed")` immediately after dispatching work that completes asynchronously. The call may not have landed yet when the assertion fires. Fix: wait on a logical event (`TaskCompletionSource` set inside the `When().Do(_ => tcs.TrySetResult())` callback) before asserting received-call counts. The 30 s `WaitAsync` budget from `tests/regression` rules applies here too.
+
+When CI shows red on a PR, FIRST inspect the failure output — do not reflexively assume flake. The ratio in this repo's history is roughly 1:1 between "real regression hidden as flake" and actual flake. Look at the test names and assertion messages before retrying.
+
 ## Commands
 
 ```bash

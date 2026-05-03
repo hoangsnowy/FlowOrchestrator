@@ -665,6 +665,13 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IFlowOrchestrator engine, Guid runId) =>
         {
+            // Resolve options from RequestServices with a fallback default so the endpoint does
+            // not require integration-test DI containers to register FlowRunControlOptions when
+            // they bypass AddFlowOrchestrator. Minimal-API parameter binding would otherwise
+            // 400 the request with "no service of type … registered."
+            var runControlOptions = http.RequestServices.GetService<FlowOrchestrator.Core.Configuration.FlowRunControlOptions>()
+                                    ?? new FlowOrchestrator.Core.Configuration.FlowRunControlOptions();
+
             var run = await runStore.GetRunDetailAsync(runId);
             if (run is null)
             {
@@ -688,12 +695,19 @@ public static class DashboardServiceCollectionExtensions
                 catch { data = null; }
             }
 
+            // Strip the caller-supplied idempotency header from the rehydrated headers.
+            // Without this, replaying a webhook trigger that originally carried an
+            // Idempotency-Key would hit the engine's dedup path, return the original
+            // RunId, and silently drop the rerun (the user would see the success message
+            // but no new run would actually start).
+            var rehydratedHeaders = StripIdempotencyHeader(run.TriggerHeaders, runControlOptions.IdempotencyHeaderName);
+
             var triggerKey = string.IsNullOrWhiteSpace(run.TriggerKey) ? "manual" : run.TriggerKey!;
             var ctx = new TriggerContext
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger(triggerKey, triggerKey, data, run.TriggerHeaders),
+                Trigger = new Trigger(triggerKey, triggerKey, data, rehydratedHeaders),
                 SourceRunId = runId  // lineage — links the new run back to the one being re-run
             };
             await engine.TriggerAsync(ctx);
@@ -1217,6 +1231,30 @@ public static class DashboardServiceCollectionExtensions
         var leftBytes = Encoding.UTF8.GetBytes(left);
         var rightBytes = Encoding.UTF8.GetBytes(right);
         return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="headers"/> with the configured idempotency header
+    /// removed. Used by the rerun endpoint so a replayed webhook trigger does not collide
+    /// with the original run's idempotency-key registration in the run-control store.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? StripIdempotencyHeader(
+        IReadOnlyDictionary<string, string>? headers,
+        string? idempotencyHeaderName)
+    {
+        if (headers is null || string.IsNullOrWhiteSpace(idempotencyHeaderName))
+        {
+            return headers;
+        }
+
+        if (!headers.ContainsKey(idempotencyHeaderName))
+        {
+            return headers;
+        }
+
+        var copy = new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+        copy.Remove(idempotencyHeaderName);
+        return copy;
     }
 
     private static bool ParseJobId(string jobId, out Guid flowId, out string triggerKey)

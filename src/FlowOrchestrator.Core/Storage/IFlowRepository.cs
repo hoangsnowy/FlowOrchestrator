@@ -4,8 +4,9 @@ namespace FlowOrchestrator.Core.Storage;
 
 /// <summary>
 /// Read-only interface for retrieving code-registered flow definitions.
-/// Implemented by <c>InMemoryFlowRepository</c>, which is populated at startup by
-/// <c>FlowSyncHostedService</c> from the flows registered via <c>AddFlow&lt;T&gt;()</c>.
+/// The default implementation lives in <c>FlowOrchestrator.InMemory.InMemoryFlowRepository</c>
+/// and is populated at startup by <c>FlowSyncHostedService</c> from the flows registered via
+/// <c>AddFlow&lt;T&gt;()</c>.
 /// </summary>
 public interface IFlowRepository
 {

@@ -1,5 +1,6 @@
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.HealthChecks;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Dashboard;
 using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;

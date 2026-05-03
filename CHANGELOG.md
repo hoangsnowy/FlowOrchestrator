@@ -6,6 +6,103 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-05-03
+
+### ⚠️ Breaking changes
+
+These changes remove or relocate previously public API surface. Strict
+semver would request a major bump; this release stays on the minor track
+because every change is either a removal of an item already marked
+`[Obsolete]` since v1.19 or a relocation of a single trivial helper class.
+Recompilation against this version is required for affected callers.
+
+- **Removed obsolete OTel forwarder** in
+  `FlowOrchestrator.Hangfire.FlowOrchestratorInstrumentationExtensions`
+  (marked `[Obsolete]` since v1.19). Update any
+  `using FlowOrchestrator.Hangfire;` followed by
+  `tracer.AddFlowOrchestratorInstrumentation()` /
+  `meter.AddFlowOrchestratorInstrumentation()` to
+  `using FlowOrchestrator.Core.Observability;` — the call site is
+  otherwise identical.
+- **`InMemoryFlowRepository` moved out of Core** to the
+  `FlowOrchestrator.InMemory` project / namespace. Direct callers
+  must update their `using` and (if they were referencing it from
+  `FlowOrchestrator.Core` only) add a project / package reference to
+  `FlowOrchestrator.InMemory`.
+- **`Hangfire.AddFlowOrchestrator` no longer auto-registers
+  `IFlowRepository`.** Each storage backend's `Use*()` extension is
+  now responsible for it; `UseInMemory` / `UseSqlServer` /
+  `UsePostgreSql` were updated to register a backend-local
+  implementation. Custom `IFlowStore` implementations must register
+  `IFlowRepository` themselves — `AddFlowOrchestrator` validates and
+  throws `InvalidOperationException` with a guiding message when the
+  registration is missing. The previous behaviour silently injected an
+  in-process registry from the Hangfire project, which forced an
+  unwanted `Hangfire → InMemory` dependency.
+
+### Fixed
+
+- **`Activity` null-dereference (4 sites)** in
+  `FlowOrchestratorEngine` when `EnableOpenTelemetry = false` and an
+  exception fires inside the protected block. Previously a
+  `NullReferenceException` masked the original failure during
+  `TriggerAsync`, the `RunStepAsync` handler-failed catch, the
+  `RunStepAsync` outer catch, and the When-evaluation path. All four
+  call sites now use `activity?.RecordError(ex)` /
+  `Activity.Current?.RecordError(ex)`. Three new unit facts in
+  `FlowOrchestratorEngineActivityNullSafetyTests` pin each call site.
+- **`ForEachStepHandler` slice bounds** at the
+  `@triggerHeaders()['…']` resolver. A malformed expression like
+  `@triggerHeaders()[']` (length 3) satisfied both
+  `StartsWith("['", …)` and `EndsWith("']", …)` and the `[2..^2]`
+  slice threw `ArgumentOutOfRangeException`. Added a `Length >= 4`
+  guard; the resolver now returns false for malformed inputs and the
+  ForEach source falls through to the literal pass-through path.
+  `ForEachStepHandlerExpressionEdgeCaseTests` covers seven malformed
+  inputs.
+- **`PeriodicTimerRecurringTriggerDispatcher.StopAsync` race**
+  between cancellation and timer disposal. Disposing the timer
+  *before* draining the loop could race
+  `WaitForNextTickAsync` into an unobserved `ObjectDisposedException`.
+  `StopAsync` now cancels, awaits the loop, then disposes the timer.
+- **Webhook rerun + idempotency-key dedup bug.** `POST /api/runs/{runId}/rerun`
+  rehydrated the original trigger headers verbatim. If the original
+  webhook carried an `Idempotency-Key`, the engine's dedup ledger
+  short-circuited the replay and returned the original RunId — making
+  the dashboard's "Re-run" button a no-op. The rerun endpoint now
+  strips the configured idempotency header (read from
+  `FlowRunControlOptions.IdempotencyHeaderName`) before re-invoking
+  `engine.TriggerAsync`. Three new regression facts in
+  `WebhookRerunIdempotencyKeyHandlingTests` pin both sides of the fix.
+
+### Tests
+
+- Added 11 new regression tests covering: webhook idempotency
+  (with-key and distinct-key), When-condition gating concurrency
+  (×2), disabled-flow silent skip (×2), ForEach sub-step dispatch
+  atomicity (×2), Hangfire dispatcher concurrency (×2), pending
+  poll-reschedule + cross-trigger idempotency scoping (×2),
+  trigger-body expression error handling (×2), manual retry state
+  reset, and webhook rerun + idempotency-key handling (×3).
+- Added 2 new unit-test files (Activity null-safety + ForEach
+  expression edge cases — 10 facts/theory-rows total).
+- Replaced 3 flaky `for (i < 1500) Task.Delay(20)` polling loops in
+  `PeriodicTimerRecurringTriggerDispatcherTests` with
+  `TaskCompletionSource`-driven 30 s waits per the CLAUDE.md
+  anti-flakiness rules.
+
+### Internal
+
+- Removed a stale `FlowOrchestrator.InMemory → FlowOrchestrator.Hangfire`
+  `ProjectReference` (zero actual code-level usage — only comment
+  mentions). Surfaced and fixed an unrelated transitive-dep
+  assumption in `Core.UnitTests` by adding an explicit
+  `Microsoft.Extensions.DependencyInjection` package reference.
+- Trimmed unused `.claude/skills/` entries (`bootstrap`,
+  `add-storage`, `release`); the remaining five (`build-fix`,
+  `fixandtest`, `new-flow`, `new-step`, `regression-test`) all map
+  to documented CLAUDE.md workflows.
+
 ## [1.22.0] - 2026-05-03
 
 ### Added
