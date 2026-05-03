@@ -40,6 +40,9 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3002, Level = LogLevel.Warning, Message = "Failed to record flow event {EventType}.")]
     public static partial void EventPersistenceFailed(ILogger logger, Exception ex, string eventType);
 
+    [LoggerMessage(EventId = 3003, Level = LogLevel.Warning, Message = "Realtime event notifier threw while publishing {EventType}; engine continuing.")]
+    public static partial void EventNotifierFailed(ILogger logger, Exception ex, string eventType);
+
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
 

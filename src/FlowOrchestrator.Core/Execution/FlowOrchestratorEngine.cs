@@ -3,6 +3,7 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Expressions;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
@@ -41,8 +42,15 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
     private readonly FlowOrchestratorTelemetry _telemetry;
     private readonly ILogger<FlowOrchestratorEngine> _logger;
     private readonly WhenClauseEvaluator _whenEvaluator;
+    private readonly IFlowEventNotifier _eventNotifier;
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
+    /// <remarks>
+    /// <paramref name="eventNotifier"/> is optional with a default of <see langword="null"/> so
+    /// existing positional callers (notably unit tests built before the realtime layer landed)
+    /// continue to compile unchanged. When <see langword="null"/>, <see cref="NoopFlowEventNotifier.Instance"/>
+    /// is substituted and lifecycle events are silently discarded.
+    /// </remarks>
     public FlowOrchestratorEngine(
         IStepDispatcher dispatcher,
         IFlowExecutor flowExecutor,
@@ -58,7 +66,8 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         FlowRunControlOptions runControlOptions,
         FlowObservabilityOptions observabilityOptions,
         FlowOrchestratorTelemetry telemetry,
-        ILogger<FlowOrchestratorEngine> logger)
+        ILogger<FlowOrchestratorEngine> logger,
+        IFlowEventNotifier? eventNotifier = null)
     {
         _dispatcher = dispatcher;
         _flowExecutor = flowExecutor;
@@ -75,6 +84,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         _observabilityOptions = observabilityOptions;
         _telemetry = telemetry;
         _logger = logger;
+        _eventNotifier = eventNotifier ?? NoopFlowEventNotifier.Instance;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
 
         if (_runtimeStore is null)
@@ -261,6 +271,14 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                 "run.started",
                 $"Flow run started via trigger '{triggerContext.Trigger.Key}'.").ConfigureAwait(false);
 
+            await PublishEventSafelyAsync(new RunStartedEvent
+            {
+                RunId = triggerContext.RunId,
+                FlowId = triggerContext.Flow.Id,
+                FlowName = triggerContext.Flow.GetType().Name,
+                TriggerKey = triggerContext.Trigger.Key
+            }, ct).ConfigureAwait(false);
+
             return new { runId = triggerContext.RunId, duplicate = false };
         }
         catch (Exception ex)
@@ -432,6 +450,18 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                     ? result.FailedReason ?? $"Step '{step.Key}' failed."
                     : $"Step '{step.Key}' completed with status {result.Status}.").ConfigureAwait(false);
 
+            // Pending is non-terminal — only publish step.completed for terminal statuses.
+            if (result.Status != StepStatus.Pending)
+            {
+                await PublishEventSafelyAsync(new StepCompletedEvent
+                {
+                    RunId = ctx.RunId,
+                    StepKey = step.Key,
+                    Status = result.Status.ToString(),
+                    FailedReason = result.Status == StepStatus.Failed ? result.FailedReason : null
+                }, ct).ConfigureAwait(false);
+            }
+
             if (result.Status == StepStatus.Pending)
             {
                 // A step returning Pending means a poll iteration completed without satisfying the
@@ -556,6 +586,12 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             ?? throw new InvalidOperationException($"Step '{stepKey}' not found in flow manifest.");
 
         await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
+
+        await PublishEventSafelyAsync(new StepRetriedEvent
+        {
+            RunId = runId,
+            StepKey = stepKey
+        }, ct).ConfigureAwait(false);
 
         var step = new StepInstance(stepKey, stepMeta.Type)
         {
@@ -994,6 +1030,29 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
             _telemetry.RunCompletedCounter.Add(
                 1,
                 new KeyValuePair<string, object?>("status", status));
+        }
+
+        await PublishEventSafelyAsync(new RunCompletedEvent
+        {
+            RunId = runId,
+            Status = status
+        }, default).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Publishes <paramref name="evt"/> through <see cref="IFlowEventNotifier"/>, swallowing any
+    /// exception. Telemetry must NEVER abort a flow — a misbehaving notifier (slow channel,
+    /// disposed broadcaster, transient backplane error) is logged and ignored.
+    /// </summary>
+    private async ValueTask PublishEventSafelyAsync(FlowLifecycleEvent evt, CancellationToken ct)
+    {
+        try
+        {
+            await _eventNotifier.PublishAsync(evt, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            EngineLog.EventNotifierFailed(_logger, ex, evt.Type);
         }
     }
 

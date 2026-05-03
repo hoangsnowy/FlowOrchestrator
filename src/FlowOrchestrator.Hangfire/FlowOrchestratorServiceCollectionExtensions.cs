@@ -2,6 +2,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Hosting;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Hangfire.Telemetry;
@@ -66,6 +67,10 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.Retention);
         services.AddSingleton(builder.Observability);
         services.TryAddSingleton<IFlowScheduleStateStore, EphemeralFlowScheduleStateStore>();
+
+        // Default no-op notifier so the engine can always resolve IFlowEventNotifier from DI.
+        // Realtime consumers (e.g. the dashboard SSE broadcaster) replace it with services.Replace().
+        services.TryAddSingleton<IFlowEventNotifier, NoopFlowEventNotifier>();
 
         services.AddHostedService<FlowSyncHostedService>();
         services.AddHostedService<FlowRetentionHostedService>();

@@ -60,4 +60,7 @@ public static class LogEvents
 
     /// <summary>A flow event could not be persisted. Engine continues; log is informational.</summary>
     public static readonly EventId EventPersistenceFailed = new(3002, nameof(EventPersistenceFailed));
+
+    /// <summary>The realtime <c>IFlowEventNotifier</c> threw while publishing. Engine continues; log is informational.</summary>
+    public static readonly EventId EventNotifierFailed = new(3003, nameof(EventNotifierFailed));
 }
