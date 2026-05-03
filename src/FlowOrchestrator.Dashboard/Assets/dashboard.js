@@ -695,7 +695,7 @@ async function loadFlows(opts) {
       fetchJSON(BASE+'/runs?take=200', { signal }).catch(() => [])
     ]);
     allFlows = flows;
-    $('flow-count-label').textContent = allFlows.length + ' flow' + (allFlows.length!==1?'s':'');
+    $('flow-count-label').innerHTML = '<span class="num">' + allFlows.length + '</span>flow' + (allFlows.length!==1?'s':'');
 
     const sel = $('runs-filter-flow');
     const curVal = sel.value;
@@ -2355,7 +2355,7 @@ async function loadScheduled(opts) {
   const signal = newPageController().signal;
   try {
     allSchedules = await fetchJSON(BASE+'/schedules', { signal });
-    $('scheduled-count-label').textContent = allSchedules.length + ' job' + (allSchedules.length!==1?'s':'');
+    $('scheduled-count-label').innerHTML = '<span class="num">' + allSchedules.length + '</span>job' + (allSchedules.length!==1?'s':'');
     tableEl.innerHTML = renderScheduleTable(allSchedules, false);
   } catch(e) {
     if (isAbortError(e)) return;

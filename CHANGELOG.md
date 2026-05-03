@@ -6,6 +6,42 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Realtime dashboard via Server-Sent Events.** New `IFlowEventNotifier`
+  abstraction in Core (with a no-op default that costs nothing for apps
+  without the dashboard) is invoked by the engine on `run.started`,
+  `step.completed`, `step.retried`, and `run.completed`. The dashboard
+  exposes `GET /flows/api/events/stream` (`text/event-stream`, no
+  compression, 15 s heartbeat, optional `?runId=` filter) and replaces
+  the 5 s polling loop with `EventSource`-driven push. Polling becomes a
+  fallback that activates only when the stream is silent for >20 s or
+  reconnects fail 3+ times. Multi-replica deployments stay process-local
+  in this release; a Service Bus backplane plugs in via the same
+  interface in a later release without engine changes.
+- **Page count chip** on the Flows / Scheduled list headers — the plain
+  "12 flows" / "1 job" text is now a styled pill with a mono-font number
+  in Terracotta and a muted uppercase label.
+
+### Changed
+
+- **Auto-refresh control simplified.** The 5/10/15/30/60 s interval
+  dropdown was removed; with realtime push as the primary channel the
+  knob only affected the rare polling fallback. The toggle is now a
+  single On/Off master switch, and the status displays
+  `Live` / `Polling` / `Paused`.
+
+### Fixed
+
+- **Run-termination race in `TryCompleteRunAsync`.** A step that had
+  been dispatched but not yet picked up by the consumer left a window
+  where neither the runtime status table nor the claim ledger reflected
+  it, allowing the run to be marked terminal with the queued step still
+  pending. Surfaced as the v1.23.0 publish-CI flake in
+  `HappyPathTests.LinearFlow_runs_to_completion` (`Expected 3, Actual 2`).
+  `TryCompleteRunAsync` now also consults the dispatch ledger; a
+  50-iteration regression stress test pins the behaviour.
+
 ## [1.23.0] - 2026-05-03
 
 ### ⚠️ Breaking changes
