@@ -58,10 +58,18 @@ horizontal scale safe.
 
 - `IFlowRunStore.TryRecordDispatchAsync` is an idempotent INSERT into `FlowStepDispatches`. Multiple workers may try; only one row lands. Backed by `SqlFlowRunStore` ([source](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/src/FlowOrchestrator.SqlServer/SqlFlowRunStore.cs)).
 - `TryClaimStepAsync` (the claim guard) ensures only one runtime instance executes a given step attempt; the others exit silently.
-- **Cron triggers** under the Hangfire runtime use `IRecurringJobManager`, which fires each schedule on exactly one server. No extra coordination is needed.
+- **Cron triggers** under the Hangfire runtime use `IRecurringJobManager`, which fires each schedule on exactly one server. The ServiceBus runtime fires cron via self-perpetuating scheduled messages on a queue — Service Bus's exactly-once-per-tick delivery handles cross-replica coordination without leader election. No extra coordination needed in either case.
 
 > [!WARNING]
-> **InMemory runtime + multi-instance is not supported.** The dispatcher is a `Channel<T>` inside one process — instance B has no way to observe a job that instance A enqueued. Always combine `UseInMemoryRuntime()` with a single instance.
+> **InMemory runtime + multi-instance is not supported.** The dispatcher is a `Channel<T>` inside one process — instance B has no way to observe a job that instance A enqueued. Always combine `UseInMemoryRuntime()` with a single instance. For multi-replica deployments use `UseHangfire()` (with shared Hangfire storage) or `UseAzureServiceBusRuntime()` (with shared SB namespace).
+
+> [!IMPORTANT]
+> **Disabled flows (v1.22+).** Toggling `IsEnabled = false` on a flow record (via dashboard
+> or API) silently rejects ALL trigger paths at the engine layer — manual, cron, webhook,
+> re-trigger. Cron jobs are additionally pulled from the scheduler. In-flight runs are not
+> cancelled; use the dashboard's Cancel run action for live work. Watch EventId 1010
+> `TriggerRejectedDisabledFlow` to track how often disabled-flow triggers are still being
+> attempted (a webhook producer or external cron not yet aware of the disable).
 
 ### Blue-green deployment
 

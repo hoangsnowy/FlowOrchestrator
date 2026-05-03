@@ -2369,6 +2369,18 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// Window focus / pageshow fire when the user alt-tabs back to the browser, or returns
+// from BFCache. visibilitychange alone misses these — the tab stays visible (only the
+// browser window lost OS-level focus) but Chrome aggressively throttles setInterval
+// while the window is unfocused, so the chart appears frozen. Force an immediate refresh
+// on focus so users always see fresh data the moment they look back at the dashboard.
+window.addEventListener('focus', () => {
+  if (autoRefreshEnabled) refresh({ force: true });
+});
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted && autoRefreshEnabled) refresh({ force: true });
+});
+
 // ── Router — single IIFE owning hash routing, query params, subscribers ──
 const Router = (function () {
   const subscribers = [];
@@ -2480,7 +2492,13 @@ async function applyRoute(route) {
       restoreRunsFiltersFromRoute(route.params || {});
       await loadRuns(false);
     }
+    return;
   }
+  // For non-runs pages, fire an immediate refresh so the user sees data right away
+  // instead of waiting up to one auto-refresh interval (5s by default). Pre-1.22.1 the
+  // page would render blank until the next refresh tick because applyRoute did not
+  // call any per-page loader for overview / flows / scheduled.
+  await refresh({ force: true });
 }
 
 function restoreRunsFiltersFromRoute(params) {

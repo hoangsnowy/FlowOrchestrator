@@ -338,6 +338,23 @@ public sealed class InMemoryFlowRunStore :
             run.CompletedAt = null;
         }
 
+        // Release any prior execute-time claim so the retried RunStepAsync can re-claim.
+        // Mirrored in SqlFlowRunStore + PostgreSqlFlowRunStore. Pre-v1.22 the schedule-time
+        // claim was orphaned across retries; the engine now treats the claim as exclusive to
+        // a single attempt, so retry must clear it.
+        _stepClaims.TryRemove((runId, stepKey), out _);
+        if (_claimsByRun.TryGetValue(runId, out var set))
+        {
+            set.TryRemove(stepKey, out _);
+        }
+        // Also clear the dispatch ledger entry so the engine's TryRecordDispatchAsync gate
+        // accepts the re-dispatch. Without this, retry would silent-skip enqueue.
+        _stepDispatches.TryRemove((runId, stepKey), out _);
+        if (_dispatchesByRun.TryGetValue(runId, out var dset))
+        {
+            dset.TryRemove(stepKey, out _);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -417,6 +434,16 @@ public sealed class InMemoryFlowRunStore :
             _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
         }
         return Task.FromResult(claimed);
+    }
+
+    public Task ReleaseStepClaimAsync(Guid runId, string stepKey)
+    {
+        _stepClaims.TryRemove((runId, stepKey), out _);
+        if (_claimsByRun.TryGetValue(runId, out var set))
+        {
+            set.TryRemove(stepKey, out _);
+        }
+        return Task.CompletedTask;
     }
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)

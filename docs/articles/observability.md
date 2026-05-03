@@ -83,7 +83,7 @@ red without any extra configuration.
 | `flow_step_skipped` | counter | steps | `flow_id`, `step_key`, `reason` (`when_false` / `prerequisites_unmet`) |
 | `flow_step_poll_attempts` | counter | attempts | `flow_id`, `step_key` |
 | `flow_signal_wait_ms` | histogram | ms | `flow_id`, `step_key`, `signal_name` — recorded by `FlowSignalDispatcher` on delivery |
-| `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory`) — gap between scheduled fire and actual dispatch |
+| `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory` / `service_bus`) — gap between scheduled fire and actual dispatch |
 
 ### Distributed tracing across the runtime
 
@@ -122,16 +122,22 @@ The engine wraps every public entry point (`TriggerAsync`, `RunStepAsync`, `Retr
 Stable `EventId` constants are defined in `FlowOrchestrator.Core.Observability.LogEvents` so production users can filter or alert on a specific log event without parsing the message template:
 
 ```csharp
-LogEvents.RunStarted        = 1000
-LogEvents.RunCompleted      = 1001
-LogEvents.StepStarted       = 2000
-LogEvents.StepCompleted     = 2001
-LogEvents.StepFailed        = 2002
-LogEvents.StepSkipped       = 2003
-LogEvents.WhenEvaluationFailed = 2005
-LogEvents.DispatchEnqueued  = 3000
+LogEvents.RunStarted                 = 1000
+LogEvents.RunCompleted               = 1001
+LogEvents.TriggerRejectedDisabledFlow = 1010   // v1.22+: TriggerAsync skipped because IFlowStore.IsEnabled = false
+LogEvents.StepStarted                = 2000
+LogEvents.StepCompleted              = 2001
+LogEvents.StepFailed                 = 2002
+LogEvents.StepSkipped                = 2003
+LogEvents.WhenEvaluationFailed       = 2005
+LogEvents.DispatchEnqueued           = 3000
 // …see the source for the full list.
 ```
+
+The `flow.trigger` activity also receives a `flow.disabled = true` tag when the engine
+silent-skips a trigger for a disabled flow (v1.22+). Filter your APM by this tag to count
+how often disabled-flow triggers are still being attempted (a useful signal that a webhook
+producer or cron job hasn't picked up the disable yet).
 
 ### Logging integrations
 

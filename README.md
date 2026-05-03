@@ -1,6 +1,6 @@
 # FlowOrchestrator
 
-**Code-first DAG orchestration for .NET. Runs on Hangfire — or in-process with zero infrastructure.**
+**Code-first DAG orchestration for .NET. Runs on Hangfire, in-process, or Azure Service Bus.**
 
 [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
 [![Downloads](https://img.shields.io/nuget/dt/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
@@ -15,7 +15,7 @@
 
 ---
 
-> **What's new in v1.19** — `AddFlowOrchestratorHealthChecks()` for storage reachability probes, plus two new docs: [Versioning Flows in Production](https://hoangsnowy.github.io/FlowOrchestrator/articles/versioning.html) and [Production Deployment Checklist](https://hoangsnowy.github.io/FlowOrchestrator/articles/production-checklist.html). v1.18 shipped [`WaitForSignal`](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html) for human-in-loop workflows; v1.17 shipped [`When` conditions](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html) on `RunAfter`. Full [CHANGELOG](CHANGELOG.md).
+> **What's new in v1.22** — Third runtime adapter: [`FlowOrchestrator.ServiceBus`](https://www.nuget.org/packages/FlowOrchestrator.ServiceBus) — Azure Service Bus topic + per-flow subscription dispatch, self-perpetuating scheduled-message cron, multi-replica safe by default. Also: engine now correctly rejects triggers for disabled flows across all runtimes (Hangfire / InMemory / ServiceBus), closing a gap where webhooks and manual triggers ignored `IsEnabled = false`. v1.21 shipped the server-side timeseries endpoint + 30-day activity calendar; v1.19 added health checks; v1.18 shipped [`WaitForSignal`](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html); v1.17 shipped [`When` conditions](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html). Full [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -27,7 +27,7 @@
 - You need conditional branching (`When`), polling, fan-out (`ForEach`), human-in-loop (`WaitForSignal`), and cron in one library
 - You want a built-in dashboard with Timeline, DAG, and Gantt views
 - You want flows that are unit-testable in-process (`FlowTestHost`) and renderable as Mermaid diagrams in a PR
-- You already use Hangfire — or you want zero infrastructure at all (in-process runtime works without Hangfire or a database)
+- You already use Hangfire — or want Azure Service Bus for cloud-native multi-replica scale-out — or want zero infrastructure at all (in-process runtime works without Hangfire or a database)
 
 ❌ **Choose something else if:**
 - You need multi-language workflows (Python + Go + .NET) → **[Temporal](https://temporal.io)**
@@ -53,7 +53,8 @@
 | Built-in DAG / Gantt / Timeline UI | ✗ | ✓ | ✓ Studio | ✓ Web UI | ✗ |
 | Polyglot SDK | .NET only | .NET only | .NET only | Go, Java, TS, Python, .NET | .NET, Python, JS, Java, Go |
 | Separate server / sidecar required | ✗ | ✗ | Optional | ✓ Required | ✓ Sidecar |
-| Storage you already have | SQL Server, PG, Redis | SQL Server, PG | SQL Server, PG, MongoDB | Cassandra, MySQL, PG | State store of choice |
+| Storage you already have | SQL Server, PG, Redis | SQL Server, PG, in-memory | SQL Server, PG, MongoDB | Cassandra, MySQL, PG | State store of choice |
+| Runtime / dispatcher options | n/a | Hangfire, in-process, Azure Service Bus | Hangfire, Quartz | Built-in cluster | Built-in actor system |
 | Deterministic replay | ✗ | ✗ | ✗ | ✓ | ✓ |
 | External signals / human-in-loop | ✗ | ✓ `WaitForSignal` | ✓ | ✓ | ✓ |
 | Operational complexity | Low | Low | Low–Medium | High | Medium |
@@ -139,10 +140,10 @@ public sealed class OrderFlow : IFlowDefinition
 
 ## Why FlowOrchestrator?
 
-- **Zero new infrastructure** — runs inside your existing Hangfire app on SQL Server or PostgreSQL.
+- **Zero new infrastructure (or your choice)** — runs inside your existing Hangfire app on SQL Server / PostgreSQL, in-process with a `Channel<T>` and zero deps, or on Azure Service Bus for cloud-native scale-out.
 - **Code-first, always** — flows are plain C# classes; no YAML, no JSON files, no designer to learn.
 - **Built-in dashboard** — Timeline, DAG, and Gantt views with retry, cancel, and re-run controls.
-- **Runtime-agnostic core** — swap Hangfire for in-process channels (or any future adapter) without touching flow definitions.
+- **Runtime-agnostic core** — three runtimes ship today (Hangfire, in-process, Azure Service Bus); add your own without touching flow definitions.
 
 ---
 
@@ -150,14 +151,14 @@ public sealed class OrderFlow : IFlowDefinition
 
 FlowOrchestrator separates **storage** (where flow definitions and run history live) from the **runtime adapter** (which dispatches and executes steps).
 
-| | Hangfire runtime | InMemory runtime |
-|---|---|---|
-| Step dispatcher | `IBackgroundJobClient` | `Channel<T>` inside the host process |
-| Cron triggers | `IRecurringJobManager` (multi-instance safe) | `PeriodicTimer` (single-instance only) |
-| Survives process restart | ✓ (jobs in Hangfire storage) | ✗ (in-memory queue) |
-| Multi-instance horizontal scale | ✓ | ✗ |
-| Extra infrastructure | Hangfire + SQL Server / PostgreSQL | None |
-| Best for | Production workloads | Local dev, integration tests, single-node side projects |
+| | Hangfire runtime | InMemory runtime | ServiceBus runtime |
+|---|---|---|---|
+| Step dispatcher | `IBackgroundJobClient` | `Channel<T>` inside the host process | Azure Service Bus topic + per-flow subscription |
+| Cron triggers | `IRecurringJobManager` (multi-instance safe) | `PeriodicTimer` (single-instance only) | Self-perpetuating scheduled messages on a queue (multi-instance safe) |
+| Survives process restart | ✓ (jobs in Hangfire storage) | ✗ (in-memory queue) | ✓ (messages survive in the SB namespace) |
+| Multi-instance horizontal scale | ✓ | ✗ | ✓ (workers compete on the subscription) |
+| Extra infrastructure | Hangfire + SQL Server / PostgreSQL | None | Azure Service Bus namespace (or local emulator) |
+| Best for | Production workloads on .NET infra | Local dev, integration tests, single-node side projects | Cloud-native deployments, multi-region scale-out |
 
 Storage is independent — InMemory storage works only for dev / tests, while SQL Server and PostgreSQL are production-ready under either runtime.
 
@@ -171,6 +172,7 @@ dotnet add package FlowOrchestrator.Core
 # Runtime adapter — pick one
 dotnet add package FlowOrchestrator.Hangfire     # Hangfire-backed (production default)
 dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T> (dev / testing / single-node)
+dotnet add package FlowOrchestrator.ServiceBus   # Azure Service Bus (cloud-native multi-instance)
 
 # Storage backend — pick one
 dotnet add package FlowOrchestrator.SqlServer    # or FlowOrchestrator.PostgreSQL
@@ -257,6 +259,35 @@ app.MapFlowDashboard("/flows");
 All run data is lost on restart — see [Storage Backends](https://hoangsnowy.github.io/FlowOrchestrator/articles/storage.html#in-memory) for the full picture, and [Production Checklist](https://hoangsnowy.github.io/FlowOrchestrator/articles/production-checklist.html) for why this combo is unsuitable for production.
 
 For PostgreSQL, see **[📖 Getting Started](https://hoangsnowy.github.io/FlowOrchestrator/articles/getting-started.html)**.
+
+---
+
+## Quick Start — Azure Service Bus
+
+For cloud-native deployments where workers scale horizontally across replicas/regions:
+
+```csharp
+// Program.cs — runtime is Azure Service Bus, storage stays in your existing DB.
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connectionString);              // (or UsePostgreSql / UseInMemory)
+    options.UseAzureServiceBusRuntime(sb =>
+    {
+        sb.ConnectionString   = builder.Configuration.GetConnectionString("ServiceBus")!;
+        sb.AutoCreateTopology = true;                    // creates topic + sub-per-flow at startup
+    });
+    options.AddFlow<OrderFulfillmentFlow>();
+});
+
+builder.Services.AddStepHandler<FetchOrdersStep>("FetchOrders");
+builder.Services.AddFlowDashboard(builder.Configuration);
+
+app.MapFlowDashboard("/flows");
+```
+
+Topology — one topic (`flow-steps`) with one subscription per registered flow (SQL filter on `FlowId`); plus one queue (`flow-cron-triggers`) for self-perpetuating cron schedules. The engine's *Dispatch many, Execute once* invariant (dispatch ledger + claim guard) handles Service Bus's at-least-once delivery model — duplicate messages cannot run a step twice.
+
+Local development uses the official Microsoft Service Bus emulator. The included [Aspire AppHost](FlowOrchestrator.AppHost/Program.cs) wires it via `AddAzureServiceBus("servicebus").RunAsEmulator()`; run with `dotnet run --project ./FlowOrchestrator.AppHost` and the `flow-servicebus` instance comes up on port 5104.
 
 ---
 

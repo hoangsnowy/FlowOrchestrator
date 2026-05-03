@@ -308,6 +308,15 @@ public sealed class PostgreSqlFlowRunStore :
         await conn.ExecuteAsync(
             "UPDATE flow_runs SET status = 'Running', completed_at = NULL WHERE id = @Id",
             new { Id = runId });
+
+        // v1.22: clear the execute-time claim + dispatch-ledger entry so the retried step
+        // can re-claim and re-dispatch. Without this the engine's gates would silent-skip.
+        await conn.ExecuteAsync(
+            """
+            DELETE FROM flow_step_claims WHERE run_id = @RunId AND step_key = @StepKey;
+            DELETE FROM flow_step_dispatches WHERE run_id = @RunId AND step_key = @StepKey;
+            """,
+            new { RunId = runId, StepKey = stepKey });
     }
 
     public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
@@ -387,6 +396,14 @@ public sealed class PostgreSqlFlowRunStore :
             new { RunId = runId, StepKey = stepKey });
 
         return affected > 0;
+    }
+
+    public async Task ReleaseStepClaimAsync(Guid runId, string stepKey)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            "DELETE FROM flow_step_claims WHERE run_id = @RunId AND step_key = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
     }
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)

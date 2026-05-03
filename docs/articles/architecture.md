@@ -27,6 +27,8 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 │    HangfireStepDispatcher       │  │  FlowOrchestrator.PostgreSQL       │
 │  FlowOrchestrator.InMemory      │  │  FlowOrchestrator.InMemory         │
 │    InMemoryStepDispatcher       │  └───────────────────────────────────┘
+│  FlowOrchestrator.ServiceBus    │
+│    ServiceBusStepDispatcher     │
 └─────────────────────────────────┘
 ┌────────────────────────────────────────────────────────────────┐
 │  FlowOrchestrator.Dashboard                                     │
@@ -41,6 +43,7 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 | `FlowOrchestrator.Core` | Engine, abstractions, DAG planning, `FlowOrchestratorEngine`, `IStepDispatcher`, `DefaultStepExecutor`, `PollableStepHandler<T>`, in-memory storage |
 | `FlowOrchestrator.Hangfire` | Hangfire adapter: `HangfireStepDispatcher`, `RecurringTriggerSync`, cron job management |
 | `FlowOrchestrator.InMemory` | Channel-based in-process runtime + storage: `InMemoryStepDispatcher`, `InMemoryStepRunnerHostedService`, `PeriodicTimerRecurringTriggerDispatcher` (Cronos cron parser), full `InMemoryFlowStore` / `InMemoryFlowRunStore` / `InMemoryOutputsRepository` |
+| `FlowOrchestrator.ServiceBus` | Azure Service Bus adapter (v1.22+): `ServiceBusStepDispatcher` (topic + per-flow subscription), `ServiceBusFlowProcessorHostedService` (one processor per enabled flow), `ServiceBusRecurringTriggerHub` + `ServiceBusCronProcessorHostedService` (self-perpetuating scheduled cron messages), `ServiceBusTopologyManager` (admin-client topology auto-create) |
 | `FlowOrchestrator.SqlServer` | Dapper + SQL Server persistence, auto-migration of 9 tables |
 | `FlowOrchestrator.PostgreSQL` | Dapper + Npgsql PostgreSQL persistence, auto-migration |
 | `FlowOrchestrator.Dashboard` | REST API endpoints + embedded SPA (HTML/JS/CSS) served at a configurable base path |
@@ -49,9 +52,9 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 
 The sequence from trigger to completion:
 
-1. **Trigger** — A call to `FlowOrchestratorEngine.TriggerAsync()` checks the idempotency key, generates a `RunId`, persists trigger headers/body, and calls `IFlowExecutor.TriggerFlow()` to find the first ready steps. Each entry step is dispatched via `IStepDispatcher.EnqueueStepAsync()`, guarded by `TryRecordDispatchAsync` to prevent duplicate dispatch.
+1. **Trigger** — A call to `FlowOrchestratorEngine.TriggerAsync()` first consults `IFlowStore.GetByIdAsync(flowId).IsEnabled`; when `false`, the call silent-skips and returns `{ runId: null, disabled: true }` without dispatching (EventId 1010 `TriggerRejectedDisabledFlow` warning). Otherwise it checks the idempotency key, generates a `RunId`, persists trigger headers/body, and calls `IFlowExecutor.TriggerFlow()` to find the first ready steps. Each entry step is dispatched via `IStepDispatcher.EnqueueStepAsync()`, guarded by `TryRecordDispatchAsync` to prevent duplicate dispatch.
 
-2. **Claim** — The runtime adapter (Hangfire job or InMemory channel consumer) calls `FlowOrchestratorEngine.RunStepAsync`. The engine calls `TryClaimStepAsync` first — if another worker has already claimed this step, the current call exits silently (the "Execute once" half of the **Dispatch many, Execute once** invariant).
+2. **Claim** — The runtime adapter (Hangfire job, InMemory channel consumer, or Service Bus message processor) calls `FlowOrchestratorEngine.RunStepAsync`. The engine calls `TryClaimStepAsync` first — if another worker has already claimed this step, the current call exits silently (the "Execute once" half of the **Dispatch many, Execute once** invariant).
 
 3. **Dispatch** — `DefaultStepExecutor` resolves `@triggerBody()` / `@triggerHeaders()` expressions against the persisted trigger data, then calls `IStepHandler.ExecuteAsync`.
 

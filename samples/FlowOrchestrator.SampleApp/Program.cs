@@ -4,6 +4,7 @@ using FlowOrchestrator.Dashboard;
 using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using FlowOrchestrator.PostgreSQL;
+using FlowOrchestrator.ServiceBus;
 using FlowOrchestrator.SqlServer;
 using FlowOrchestrator.SampleApp;
 using FlowOrchestrator.SampleApp.Flows;
@@ -32,11 +33,18 @@ var storageBackend = builder.Configuration["FLOW_STORAGE"] ?? "inmemory";
 
 // ── Runtime selection ─────────────────────────────────────────────────────────
 // Set via RUNTIME environment variable:
-//   "hangfire" — IBackgroundJobClient drives step dispatch; cron via RecurringJobManager (default).
-//   "inmemory" — Channel<T> drives step dispatch in-process; cron via PeriodicTimer.
+//   "hangfire"   — IBackgroundJobClient drives step dispatch; cron via RecurringJobManager (default).
+//   "inmemory"   — Channel<T> drives step dispatch in-process; cron via PeriodicTimer.
+//   "servicebus" — Azure Service Bus topic + per-flow subscription; cron via self-perpetuating
+//                  scheduled messages on a dedicated queue.
 // Storage and runtime are independent: any RUNTIME × FLOW_STORAGE combination is valid.
 var runtime = (builder.Configuration["RUNTIME"] ?? "hangfire").ToLowerInvariant();
 var useHangfireRuntime = runtime == "hangfire";
+var useServiceBusRuntime = runtime == "servicebus";
+
+// Connection string for the Service Bus runtime. Aspire injects ConnectionStrings__ServiceBus
+// when the AppHost wires the SB emulator resource via WithReference("servicebus").
+var serviceBusConnStr = builder.Configuration.GetConnectionString("ServiceBus");
 
 var sqlConnStr = builder.Configuration.GetConnectionString("FlowOrchestrator");
 var pgConnStr  = builder.Configuration.GetConnectionString("FlowOrchestratorPg");
@@ -83,9 +91,29 @@ builder.Services.AddFlowOrchestrator(options =>
         options.UseInMemory();
 
     if (useHangfireRuntime)
+    {
         options.UseHangfire();
+    }
+    else if (useServiceBusRuntime)
+    {
+        if (string.IsNullOrWhiteSpace(serviceBusConnStr))
+        {
+            throw new InvalidOperationException(
+                "RUNTIME=servicebus requires ConnectionStrings:ServiceBus. " +
+                "Either set it in appsettings or run via the AppHost which wires the SB emulator.");
+        }
+        options.UseAzureServiceBusRuntime(sb =>
+        {
+            sb.ConnectionString = serviceBusConnStr!;
+            // Emulator does NOT support administrative entity creation — provision via Config.json.
+            // For Azure cloud namespaces, flip this to true (or leave to IaC).
+            sb.AutoCreateTopology = builder.Configuration.GetValue("SERVICEBUS_AUTO_CREATE_TOPOLOGY", false);
+        });
+    }
     else
+    {
         options.UseInMemoryRuntime();
+    }
 
     // ── M1.5: Persistent schedule overrides ───────────────────────────────────
     // When true, cron overrides written via the dashboard or API survive process

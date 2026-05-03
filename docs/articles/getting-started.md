@@ -16,8 +16,9 @@ Pick the storage backend that matches your environment:
 dotnet add package FlowOrchestrator.Core
 
 # Runtime adapter — choose one
-dotnet add package FlowOrchestrator.Hangfire   # Hangfire-backed execution
-dotnet add package FlowOrchestrator.InMemory   # In-process Channel<T>-backed execution (no Hangfire needed)
+dotnet add package FlowOrchestrator.Hangfire     # Hangfire-backed execution
+dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T>-backed execution (no Hangfire needed)
+dotnet add package FlowOrchestrator.ServiceBus   # Azure Service Bus (cloud-native, multi-replica)
 
 # Storage backend — choose one
 dotnet add package FlowOrchestrator.SqlServer     # SQL Server via Dapper
@@ -231,3 +232,37 @@ GET /flows/api/runs/3fa85f64-5717-4562-b3fc-2c963f66afa6
 
 > [!TIP]
 > When you are ready for production, read **[Versioning Flows](versioning.md)** before changing any deployed flow, and walk through the **[Production Checklist](production-checklist.md)** before go-live.
+
+## Troubleshooting
+
+### Aspire AppHost: stuck "Running" runs after a hard kill
+
+If you're using the Aspire `AppHost` for local development and start seeing many runs
+stuck in `Running` status that never complete (especially after a force-kill of the host
+process or a Docker Desktop restart), the underlying SQL Server / PostgreSQL data volume
+is likely **corrupted**. Hangfire stores its job queue in the same database, and once
+the queue tables are damaged the worker can no longer dispatch step jobs.
+
+Symptoms:
+- Hangfire dashboard `/hangfire/retries` shows jobs failing with Postgres error codes
+  `XX001 missing chunk number 0 for toast value` or `XX002 right sibling's left-link
+  doesn't match`, or SQL Server errors complaining about consistency / corruption.
+- `/flows/api/runs/stats` shows `activeRuns` growing each minute while `completedToday`
+  stays flat.
+
+The cause is `WithDataVolume()` in the AppHost — it persists the database across
+restarts, and a hard kill (`Stop-Process -Force`, OOM, host crash) interrupts WAL flush.
+Containers stopped this way leave the database in a half-committed state.
+
+Fix — drop the corrupted volumes and let Aspire recreate them on next start:
+
+```bash
+# Stop the AppHost first, then:
+docker volume ls --filter "name=floworchestrator" -q | xargs -r docker volume rm
+dotnet run --project ./FlowOrchestrator.AppHost
+```
+
+Prevention — always shut down the AppHost with `Ctrl+C`, never `Stop-Process -Force`.
+The graceful path gives Postgres / SQL Server several seconds to flush WAL and unmount
+cleanly. For CI environments running Aspire on disposable runners, consider switching
+to `WithLifetime(ContainerLifetime.Session)` so volumes are wiped between runs.

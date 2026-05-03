@@ -113,6 +113,22 @@ FlowOrchestrator.InMemory      Pure in-process runtime + storage — no Hangfire
                                Cronos-backed dispatcher + inspector + sync; fires cron jobs
                                from a 1 s PeriodicTimer (parity with Hangfire RecurringJob)
 
+FlowOrchestrator.ServiceBus    Azure Service Bus runtime adapter — cloud-native multi-replica
+  ServiceBusStepDispatcher     IStepDispatcher → topic `flow-steps`; per-flow subscription
+                               with SQL filter on FlowId application property; ScheduledEnqueueTime
+                               for Pending/DelayNextStep
+  ServiceBusFlowOrchestrator   Shim: bridges ServiceBusReceivedMessage → engine.RunStepAsync,
+                               injects MessageId as JobId
+  ServiceBusFlowProcessorHostedService  One ServiceBusProcessor per registered+enabled flow,
+                                         drains messages, calls engine in a fresh DI scope
+  ServiceBusRecurringTriggerHub  IRecurringTriggerDispatcher + Inspector + Sync in one;
+                                 schedules cron messages on `flow-cron-triggers` queue
+  ServiceBusCronProcessorHostedService  Drains cron queue, fires TriggerByScheduleAsync,
+                                         self-perpetuates next firing as scheduled message
+                                         (multi-replica safe via SB single-delivery)
+  ServiceBusTopologyManager    Wraps ServiceBusAdministrationClient; idempotent
+                               EnsureTopic / EnsureQueue / EnsureSubscription
+
 FlowOrchestrator.SqlServer     Dapper-based SQL Server persistence (no EF Core)
   SqlFlowStore / SqlFlowRunStore / SqlOutputsRepository
   FlowOrchestratorSqlMigrator  Auto-creates tables on startup (FlowDefinitions, FlowRuns,
@@ -126,8 +142,8 @@ FlowOrchestrator.Dashboard     REST API + built-in HTML/JS SPA at /flows
 
 ### Execution Flow
 
-1. `FlowOrchestratorEngine.TriggerAsync` — checks idempotency key, generates RunId, saves trigger data, dispatches DAG entry steps via `IStepDispatcher`.
-2. Runtime adapter (Hangfire job or InMemory channel consumer) calls `FlowOrchestratorEngine.RunStepAsync`.
+1. `FlowOrchestratorEngine.TriggerAsync` — **checks `IFlowStore.GetByIdAsync(flowId).IsEnabled`** (silent skip when disabled, returns `{ runId: null, disabled: true }`); checks idempotency key, generates RunId, saves trigger data, dispatches DAG entry steps via `IStepDispatcher`.
+2. Runtime adapter (Hangfire job, InMemory channel consumer, or Service Bus message processor) calls `FlowOrchestratorEngine.RunStepAsync`.
 3. Engine calls `TryClaimStepAsync` (claim guard) — if another worker owns the step, exits silently.
 4. `DefaultStepExecutor` resolves `@triggerBody()` / `@triggerHeaders()` expressions, calls `IStepHandler.ExecuteAsync`, persists output.
 5. `FlowGraphPlanner.Evaluate` returns ready steps → each dispatched via `TryRecordDispatchAsync` + `IStepDispatcher` (idempotent).

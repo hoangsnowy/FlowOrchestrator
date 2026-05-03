@@ -29,8 +29,9 @@ Registers a recurring job with the active runtime adapter that fires the flow on
 
 - **Hangfire runtime** — maps to a Hangfire `RecurringJob` driven by `IRecurringJobManager`.
 - **InMemory runtime** — driven by an in-process `PeriodicTimer` (1 s tick) using [Cronos](https://github.com/HangfireIO/Cronos) for expression parsing. No external scheduler needed.
+- **ServiceBus runtime** (v1.22+) — schedules each cron firing as a Service Bus message with `ScheduledEnqueueTime` on the `flow-cron-triggers` queue. The cron consumer fires the trigger and self-perpetuates the next message. Single-delivery semantics across replicas — no leader election needed.
 
-Both runtimes implement the same `IRecurringTriggerDispatcher` / `IRecurringTriggerSync` abstractions, so cron behaviour (overrides, pause/resume, dashboard controls) is identical across them.
+All three runtimes implement the same `IRecurringTriggerDispatcher` / `IRecurringTriggerSync` abstractions, so cron behaviour (overrides, pause/resume, dashboard controls) is identical across them.
 
 ```csharp
 ["nightly"] = new TriggerMetadata
@@ -56,6 +57,21 @@ Common patterns:
 
 > [!TIP]
 > Cron overrides written via the dashboard or `PUT /flows/api/schedules/{jobId}/cron` are persisted when `Scheduler.PersistOverrides = true` and survive process restarts.
+
+### Disabled flows
+
+A flow whose `IFlowStore` record has `IsEnabled = false` (toggled via the dashboard's
+disable button or `PUT /flows/api/flows/{id}/disable`) silently rejects ALL trigger paths
+— manual, cron, webhook, and re-trigger — at the engine layer (v1.22+). The engine consults
+`IFlowStore.GetByIdAsync(flowId).IsEnabled` at the top of `TriggerAsync` and returns
+`{ runId: null, disabled: true }` without dispatching, emitting EventId 1010
+`TriggerRejectedDisabledFlow` and tagging the trigger activity with `flow.disabled = true`.
+
+Cron jobs are additionally removed from the scheduler when a flow is disabled, so cron ticks
+don't even reach the engine in normal operation; the engine-level gate catches the narrow
+race window where a tick fired just before the disable propagated. In-flight runs (those
+already started before disable) are NOT cancelled — disable is for stopping NEW work, not
+killing live work. To cancel a live run, use the dashboard's **Cancel run** action.
 
 ---
 

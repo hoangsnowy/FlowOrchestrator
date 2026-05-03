@@ -4,7 +4,7 @@ _layout: landing
 
 # FlowOrchestrator
 
-**Code-first workflow orchestration for .NET — powered by Hangfire.**
+**Code-first workflow orchestration for .NET — runs on Hangfire, in-process, or Azure Service Bus.**
 
 Define multi-step background workflows as plain C# classes. Connect them with `runAfter` dependencies. Run them on SQL Server, PostgreSQL, or in-memory. Monitor everything from a built-in dashboard.
 
@@ -20,8 +20,8 @@ Define multi-step background workflows as plain C# classes. Connect them with `r
 ### No YAML. No JSON files.
 Flows are C# classes — refactorable, IDE-navigable, and version-controlled alongside the code they orchestrate.
 
-### Hangfire under the hood
-Durable job execution you already trust. Automatic retries, distributed processing, and persistence — all from Hangfire's proven infrastructure.
+### Three runtime adapters
+Hangfire (production default — durable job execution you already trust), InMemory (`Channel<T>`-backed, zero-infra dev mode), or Azure Service Bus (cloud-native multi-replica with self-perpetuating scheduled cron messages). Same flow code on all three.
 
 ### Three trigger types
 Manual (dashboard/API), Cron (recurring schedule), and Webhook (external HTTP POST) — declared in the same manifest, no extra config.

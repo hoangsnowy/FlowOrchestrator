@@ -6,6 +6,178 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-05-03
+
+### Added
+
+- **`FlowOrchestrator.ServiceBus` — new runtime adapter for Azure Service Bus.**
+  Third runtime alongside Hangfire and InMemory: dispatches steps via a shared
+  topic (`flow-steps`) with one subscription per registered flow (SQL filter on
+  the `FlowId` application property), and runs cron triggers as
+  *self-perpetuating scheduled messages* on a dedicated queue
+  (`flow-cron-triggers`). Each cron consumer enqueues the next firing as a
+  `ScheduledEnqueueTime` message before completing the current one — Service
+  Bus's exactly-once-per-tick delivery guarantees no duplicate fires across
+  competing replicas, removing the need for DB-backed leader election the way
+  the InMemory `PeriodicTimer` model required.
+
+  Wires up via `options.UseAzureServiceBusRuntime(sb => sb.ConnectionString = ...)`
+  inside `AddFlowOrchestrator`. Topology can be auto-created at startup
+  (`AutoCreateTopology = true`, default; uses `ServiceBusAdministrationClient`)
+  or pre-provisioned via IaC for production namespaces lacking Manage rights.
+  `Pending` steps with `DelayNextStep` map naturally to
+  `ServiceBusMessage.ScheduledEnqueueTime`. The engine's *Dispatch many,
+  Execute once* invariant (dispatch ledger + claim guard) makes the at-least-
+  once delivery model of Service Bus correct without any new abstractions.
+
+  Local development uses the official Microsoft Service Bus emulator. The
+  Aspire AppHost wires it via `AddAzureServiceBus("servicebus").RunAsEmulator()`
+  with topic + queue + subscriptions declared programmatically; a fourth
+  sample instance (`flow-servicebus`, port 5104) demonstrates the full setup
+  alongside the existing SQL Server / PostgreSQL / InMemory instances.
+
+  9 integration tests run against a live emulator container (Testcontainers +
+  SQL Edge sidecar): DI wiring (×7), topic round-trip
+  (`TriggerAsync` → topic → subscription → handler), and `ScheduleStepAsync`
+  delay (`ScheduledEnqueueTime` honoured). All 14 unit tests cover envelope
+  serialisation, message-id format, and the disabled-flow processor skip.
+
+### Fixed
+
+- **Engine now rejects `TriggerAsync` for disabled flows.** Previously,
+  setting `FlowDefinitionRecord.IsEnabled = false` only stopped the cron
+  scheduler — webhooks, manual triggers, and re-trigger requests still
+  dispatched steps. Cron-and-step coverage was inconsistent across runtimes
+  (Hangfire / InMemory / ServiceBus all had the gap). The fix is a single
+  guard at `FlowOrchestratorEngine.TriggerAsync` that consults
+  `IFlowStore.GetByIdAsync` and silent-skips when `IsEnabled = false`,
+  returning `{ runId: null, disabled: true }` instead of starting a run.
+  Emits a structured warning log (EventId 1010
+  `TriggerRejectedDisabledFlow`) with `FlowId` + `TriggerKey`, and tags the
+  trigger activity with `flow.disabled = true` for trace inspection. Falls
+  through to "enabled" when the store has no record yet (e.g. before
+  `FlowSyncHostedService` runs on first startup) — safe default.
+
+  Because the gate sits at the runtime-neutral engine layer, it covers all
+  three runtimes uniformly. No per-runtime change was needed for Hangfire
+  or InMemory — both inherit the fix from the engine.
+
+- **`ServiceBusFlowProcessorHostedService` now skips disabled flows at
+  startup.** The new SB runtime creates one `ServiceBusProcessor` per
+  registered flow (subscription-per-flow topology). Without this fix, a
+  disabled flow would still get an idle processor consuming the connection
+  pool. The hosted service now consults `IFlowStore.GetAllAsync()` and skips
+  processor creation for any flow with `IsEnabled = false`. Re-enabling at
+  runtime requires an app restart for the SB processor to come up — full
+  hot-reload is a follow-up item.
+
+- **`ServiceBusRecurringTriggerHub.ScheduleNextAsync` short-circuits for
+  unregistered jobs.** Found via QA audit before the v1.22 tag: the cron
+  consumer self-perpetuates the next firing *before* invoking the engine,
+  so when a flow is disabled mid-flight (or a cron job is `Remove`d via
+  `SyncTriggers`) the engine `IsEnabled` gate above would reject every fire
+  while the consumer kept enqueuing fresh ticks every cycle — an infinite
+  loop of disabled-flow cron messages. Fix: `ScheduleNextAsync` consults
+  the in-memory `_jobs` dict (which `SyncTriggers(flowId, false)` already
+  clears) and skips enqueuing when the job is unregistered. One orphan
+  in-flight scheduled message still fires before the loop terminates;
+  the engine gate handles it cleanly. Regression tests in
+  `ServiceBusCronDisabledFlowTests`.
+
+- **`StepEnvelope.ToStepInstance` no longer throws on `JsonValueKind.Undefined`
+  inputs.** Found via the same audit: a poison message with a hand-crafted
+  envelope leaving an input field at `default(JsonElement)` would call
+  `Clone()` on an `Undefined` element, throw `InvalidOperationException`,
+  and abandon-redeliver until the message hit `MaxDeliveryCount` and
+  dead-lettered. Fixed by treating `Undefined` the same as `Null`
+  (key present, value null) — same shape handlers see for explicit JSON nulls.
+
+- **Engine claim guard moved from SCHEDULE time to EXECUTE time.** Pre-1.22
+  the runtime claim sat in `TryScheduleStepAsync`; this worked under
+  Hangfire's and InMemory's 1:1 enqueue→execute assumption but BROKE under
+  Service Bus topic broadcast (one enqueue → N consumers, all execute the
+  handler because the schedule-time claim was already taken by the original
+  scheduler). The claim now sits at the top of `RunStepAsync` where it
+  atomically guards execution: first concurrent worker wins, the rest exit
+  silently. New `IFlowRunRuntimeStore.ReleaseStepClaimAsync` clears the
+  claim row; the engine calls it from the Pending re-schedule path and
+  `RetryStepAsync` so the same step can claim again on a fresh attempt.
+  Implemented in InMemory, SQL Server, and PostgreSQL stores. Schedule
+  becomes purely "enqueue gate" (dispatch ledger), execute becomes purely
+  "exclusive run gate" (claim) — clean separation of responsibilities.
+
+  The earlier process-local dedup map in `ServiceBusFlowProcessorHostedService`
+  added as a tactical mitigation is removed in this same release; the engine
+  refactor obsoletes it. This also fixes the known v2-runtime-claim leak
+  on Pending poll re-schedules (`PollableStepHandler` reschedules now work
+  without the `PermissiveRuntimeStore` test workaround).
+
+- **`ServiceBusRecurringTriggerHub.ScheduleNextAsync` no longer silently
+  swallows enqueue errors.** Discovered by qa-agent E2E audit before the
+  v1.22 tag: the previous `try/catch/log` around `ScheduleMessageAsync`
+  meant a single transient broker blip (throttle, network interruption,
+  namespace failover) silently killed the cron loop until host restart —
+  the consumer would still complete the original message even though the
+  next fire was never enqueued. Fixed by letting the throw propagate; the
+  cron consumer's outer try/catch now wraps the schedule-next call too,
+  abandons the message on failure, and Service Bus redelivers the same
+  tick for retry. The registration-time call from `RegisterOrUpdate` keeps
+  fire-and-forget semantics with a `ContinueWith(OnlyOnFaulted)` log so
+  `FlowSyncHostedService` can re-attempt via the next sync cycle without
+  bringing down the host on an unobserved exception.
+
+- **Cron drift on consumer backlog fixed.** The cron consumer used to compute
+  the next fire from `_timeProvider.GetUtcNow()` (drain time) so a backlogged
+  consumer skipped ticks. The next fire is now computed from
+  `envelope.ScheduledFor` (the tick that was just consumed), with a
+  "now or later" clamp so a deeply-backlogged consumer takes at most ONE
+  catch-up tick per drain rather than bursting through hundreds of missed
+  ticks. Net effect: a 5 s cron stays on its 5 s cadence even when the
+  consumer was briefly slow, instead of becoming "5 s + drain delay" forever.
+
+- **Dashboard `applyRoute` now fires an immediate refresh for non-runs pages.**
+  Discovered during a live AppHost investigation: navigating directly to
+  `#/flows` or `#/scheduled` (via sidebar click, deep link, or page reload)
+  rendered a blank panel until the next 5-second auto-refresh tick. Root
+  cause: `applyRoute` only called the per-page loader for the `runs` route;
+  every other page relied on the auto-refresh timer, leaving the user
+  staring at an empty grid for up to 5 s on every navigation. Fixed by
+  calling `refresh({ force: true })` at the end of `applyRoute` for
+  overview / flows / scheduled. The Runs branch is unchanged — it still
+  invokes `loadRuns` / `selectRun` directly because those have additional
+  state to restore from the URL params.
+
+### Changed
+
+- **`FlowOrchestratorEngine` constructor now takes `IFlowStore`.** Required
+  dependency for the disabled-flow gate. Transparent for users who construct
+  the engine via `AddFlowOrchestrator(...)` (DI auto-resolves), but a
+  breaking change for any code that hand-constructs the engine — typically
+  test code only. Five existing test files were updated accordingly.
+- **`ServiceBusTopologyManager` is no longer `sealed`** and its three
+  `Ensure*Async` methods are `virtual`, enabling test seams without a wrapper
+  interface. Internal change; no public-API impact.
+
+### Tests
+
+- **3 new unit tests** in `FlowOrchestratorEngineInvariantTests` covering
+  the disabled-flow gate: silent-skip with `disabled=true` marker, normal
+  dispatch when enabled, and fall-through-to-enabled when the store has no
+  record.
+- **1 new unit test** in `ServiceBusFlowProcessorSkipDisabledTests` verifying
+  that a disabled flow does NOT trigger `EnsureSubscriptionAsync` at startup.
+- **10 new integration tests** in `FlowOrchestrator.ServiceBus.IntegrationTests`
+  (7 DI wiring + 2 step round-trip + 1 cron round-trip) running against a live
+  Service Bus emulator container (Testcontainers + SQL Edge sidecar). The cron
+  test fires `* * * * * *` and asserts ≥3 ticks reach the engine within ~30s,
+  proving the full schedule→deliver→fire→self-perpetuate loop end-to-end.
+- **13 additional unit tests from the QA audit**:
+  `ServiceBusCronDisabledFlowTests` (3 — disabled-flow cron self-perpetuation
+  short-circuit), `StepEnvelopeEdgeCaseTests` (6 — null/nested/array
+  roundtrip, header case-insensitivity, `JsonValueKind.Undefined` handling),
+  `ServiceBusStepDispatcherEdgeCaseTests` (4 — `MessageId` collision contract,
+  ApplicationProperties string types).
+
 ## [1.21.0] - 2026-05-02
 
 ### Added

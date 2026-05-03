@@ -8,12 +8,14 @@
       "src/FlowOrchestrator.SqlServer/FlowOrchestrator.SqlServer.csproj",
       "src/FlowOrchestrator.PostgreSQL/FlowOrchestrator.PostgreSQL.csproj",
       "src/FlowOrchestrator.InMemory/FlowOrchestrator.InMemory.csproj",
+      "src/FlowOrchestrator.ServiceBus/FlowOrchestrator.ServiceBus.csproj",
       "src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj",
       "tests/integration/FlowOrchestrator.Dashboard.IntegrationTests/FlowOrchestrator.Dashboard.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.PostgreSQL.IntegrationTests/FlowOrchestrator.PostgreSQL.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.SqlServer.IntegrationTests/FlowOrchestrator.SqlServer.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.Hangfire.IntegrationTests/FlowOrchestrator.Hangfire.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.InMemory.IntegrationTests/FlowOrchestrator.InMemory.IntegrationTests.csproj",
+      "tests/integration/FlowOrchestrator.ServiceBus.IntegrationTests/FlowOrchestrator.ServiceBus.IntegrationTests.csproj",
       "tests/integration/FlowOrchestrator.Testing.IntegrationTests/FlowOrchestrator.Testing.IntegrationTests.csproj"
     ]
   }

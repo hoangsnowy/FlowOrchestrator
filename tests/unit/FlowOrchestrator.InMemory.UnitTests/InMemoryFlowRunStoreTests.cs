@@ -355,9 +355,16 @@ public class InMemoryFlowRunStoreTests
     [Fact]
     public async Task GetRunTimeseriesAsync_HourlyBuckets_CountsByStatusAndComputesPercentiles()
     {
-        // Arrange
-        var until = DateTimeOffset.UtcNow;
-        var since = until - TimeSpan.FromHours(3);
+        // Arrange — align `since` to an hour boundary so the aggregator's anchor (which
+        // floors `since` to the hour) coincides with `since` itself, otherwise bucket 0
+        // is the floored hour, not `since`'s hour, and the assertions below shift by one.
+        // This was the date-flaky source: when run at e.g. 03:57:03 UTC, `since` was
+        // 00:57:03 → anchor floored to 00:00:00 → "since.AddMinutes(5)" landed in bucket 1
+        // (the 01:00 hour), not bucket 0. Tests passed only when minute==0.
+        var nowUtc = DateTimeOffset.UtcNow.UtcDateTime;
+        var nowHourFloor = new DateTimeOffset(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0, TimeSpan.Zero);
+        var until = nowHourFloor + TimeSpan.FromHours(1);
+        var since = until - TimeSpan.FromHours(3);     // since is now exactly on the hour
         var flowId = Guid.NewGuid();
 
         // Two succeeded runs in bucket 0 (3h ago) with durations 100ms / 300ms.

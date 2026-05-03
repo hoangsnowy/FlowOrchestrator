@@ -29,6 +29,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
     private readonly IFlowExecutor _flowExecutor;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepExecutor _stepExecutor;
+    private readonly IFlowStore _flowStore;
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepository;
     private readonly IExecutionContextAccessor _contextAccessor;
@@ -47,6 +48,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         IFlowExecutor flowExecutor,
         IFlowGraphPlanner graphPlanner,
         IStepExecutor stepExecutor,
+        IFlowStore flowStore,
         IFlowRunStore runStore,
         IOutputsRepository outputsRepository,
         IExecutionContextAccessor contextAccessor,
@@ -62,6 +64,7 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
         _flowExecutor = flowExecutor;
         _graphPlanner = graphPlanner;
         _stepExecutor = stepExecutor;
+        _flowStore = flowStore;
         _runStore = runStore;
         _outputsRepository = outputsRepository;
         _contextAccessor = contextAccessor;
@@ -135,6 +138,17 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
         try
         {
+            // Reject the trigger early if the flow has been disabled via the dashboard / API.
+            // Silent skip (no exception) so a webhook caller doesn't see a 5xx, and so cron
+            // ticks racing the disable propagation don't spam alerts.
+            var record = await _flowStore.GetByIdAsync(triggerContext.Flow.Id).ConfigureAwait(false);
+            if (record is { IsEnabled: false })
+            {
+                EngineLog.TriggerRejectedDisabledFlow(_logger, triggerContext.Flow.Id, triggerContext.Trigger.Key);
+                activity?.SetTag("flow.disabled", true);
+                return new { runId = (Guid?)null, disabled = true };
+            }
+
             var idempotencyKey = TryGetIdempotencyKey(triggerContext.TriggerHeaders);
             if (_runControlStore is not null && !string.IsNullOrWhiteSpace(idempotencyKey))
             {
@@ -308,6 +322,23 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
         try
         {
+            // Execute-time claim guard (v1.22+). Atomic INSERT into FlowStepClaims; only the first
+            // worker to call this for (runId, stepKey) wins, the rest exit silently. Critical for
+            // at-least-once delivery models where one enqueued message can reach multiple
+            // consumers (Service Bus topic-broadcast, redelivery after a worker timeout, etc.).
+            // Pre-1.22 the claim was at schedule time which assumed 1:1 enqueue→execute — broken
+            // under broadcast. Released by RetryStepAsync and the Pending re-schedule path so the
+            // SAME step can claim again on a fresh attempt.
+            if (_runtimeStore is not null)
+            {
+                var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                if (!claimed)
+                {
+                    activity?.SetTag("flow.step.claim_lost", true);
+                    return null;
+                }
+            }
+
             var controlStatus = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
             if (controlStatus is not null)
             {
@@ -421,8 +452,16 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
                 }
 
                 var retryDelay = result.DelayNextStep ?? TimeSpan.FromSeconds(10);
-                // Release the dispatch record so the next poll attempt can be dispatched idempotently.
+                // Release BOTH guards so the next poll attempt can claim + dispatch:
+                //   - Dispatch ledger: ReleaseDispatchAsync clears the FlowStepDispatches row
+                //   - Execute claim:   ReleaseStepClaimAsync clears the FlowStepClaims row (v1.22+)
+                // Pre-1.22 only the dispatch was released; the claim leaked across attempts and
+                // Pending poll silently no-op'd (the v2-runtime-claim-leak known issue).
                 await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                if (_runtimeStore is not null)
+                {
+                    await _runtimeStore.ReleaseStepClaimAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                }
                 step.ScheduledTime = DateTimeOffset.UtcNow + retryDelay;
                 await TryScheduleStepAsync(ctx, flow, step, retryDelay).ConfigureAwait(false);
 
@@ -741,17 +780,13 @@ public sealed class FlowOrchestratorEngine : IFlowOrchestrator
 
     private async Task<bool> TryScheduleStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
     {
-        // Guard 1: runtime claim — prevents two workers executing the same step concurrently.
-        if (_runtimeStore is not null)
-        {
-            var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
-            if (!claimed)
-            {
-                return false;
-            }
-        }
-
-        // Guard 2: dispatch ledger — prevents enqueueing the same step twice (recovery, retry, at-least-once queue).
+        // Guard: dispatch ledger — prevents enqueueing the same step twice (recovery, retry, at-least-once queue).
+        // Note (v1.22+): the runtime claim that used to also live here has moved to RunStepAsync entry.
+        // Schedule no longer claims because schedule-time claims break under at-least-once message delivery
+        // when one enqueue is broadcast to multiple consumers (Service Bus topic without SQL filter). Now:
+        //   - Schedule = "an execution attempt is queued" (idempotent ledger)
+        //   - Execute  = "this worker is running it" (atomic claim at top of RunStepAsync)
+        // The two responsibilities used to be conflated; splitting them makes broadcast delivery correct.
         if (!await _runStore.TryRecordDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false))
         {
             return false;

@@ -27,6 +27,7 @@ public sealed class EngineSpanCoverageTests
     private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
+    private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
@@ -47,6 +48,7 @@ public sealed class EngineSpanCoverageTests
             _flowExecutor,
             _graphPlanner,
             _stepExecutor,
+            _flowStore,
             _runStore,
             _outputsRepo,
             _ctxAccessor,

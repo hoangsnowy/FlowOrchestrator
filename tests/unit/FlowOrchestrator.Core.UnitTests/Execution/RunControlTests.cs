@@ -22,6 +22,7 @@ public sealed class RunControlTests
     private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
+    private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
     private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
@@ -36,6 +37,7 @@ public sealed class RunControlTests
             _flowExecutor,
             _graphPlanner,
             _stepExecutor,
+            _flowStore,
             store,
             _outputsRepo,
             _ctxAccessor,
