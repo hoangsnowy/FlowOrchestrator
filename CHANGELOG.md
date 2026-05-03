@@ -6,6 +6,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-05-03
+
 ### Added
 
 - **Realtime dashboard via Server-Sent Events.** New `IFlowEventNotifier`
