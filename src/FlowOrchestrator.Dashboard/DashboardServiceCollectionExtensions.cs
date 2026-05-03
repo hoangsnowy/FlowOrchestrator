@@ -1015,8 +1015,8 @@ public static class DashboardServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Per-request compression uses <see cref="CompressionLevel.Fastest"/>
-    /// rather than <see cref="CompressionLevel.Optimal"/>: the dashboard
+    /// Per-request compression uses <see cref="System.IO.Compression.CompressionLevel.Fastest"/>
+    /// rather than <see cref="System.IO.Compression.CompressionLevel.Optimal"/>: the dashboard
     /// auto-refreshes every 5 s and a typical /api/runs response is
     /// 5-60 KB, so CPU per request matters more than the last few percent
     /// of compression ratio. Fastest gives ~70% reduction at a fraction of

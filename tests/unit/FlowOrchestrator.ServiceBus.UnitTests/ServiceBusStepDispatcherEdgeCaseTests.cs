@@ -8,7 +8,7 @@ namespace FlowOrchestrator.ServiceBus.UnitTests;
 /// <summary>
 /// Edge-case checks on <see cref="ServiceBusStepDispatcher.BuildMessage"/> — specifically
 /// the MessageId construction, which is the duplicate-detection key on the topic. Two
-/// reschedules of the same step with identical <see cref="IStepInstance.ScheduledTime"/>
+/// reschedules of the same step with identical <c>IStepInstance.ScheduledTime</c>
 /// produce identical MessageIds, so the second is silently swallowed by SB. We document
 /// this contract so behaviour change is caught in code review.
 /// </summary>

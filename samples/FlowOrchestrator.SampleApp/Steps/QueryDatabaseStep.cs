@@ -17,7 +17,7 @@ namespace FlowOrchestrator.SampleApp.Steps;
 ///      the DI container automatically. Register your services alongside the handler:
 ///
 ///        builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
-///        builder.Services.AddStepHandler<QueryDatabaseStep>("QueryDatabase");
+///        builder.Services.AddStepHandler&lt;QueryDatabaseStep&gt;("QueryDatabase");
 ///
 ///   2. Typed + nullable inputs — QueryDatabaseStepInput maps the manifest's Inputs
 ///      dictionary. Fields are optional at the C# level; validation happens inside

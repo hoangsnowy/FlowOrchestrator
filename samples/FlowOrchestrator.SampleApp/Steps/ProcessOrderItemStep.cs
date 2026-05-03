@@ -33,7 +33,7 @@ namespace FlowOrchestrator.SampleApp.Steps;
 ///   e.g.  "process_orders.0.validate_order"
 ///           "process_orders.1.validate_order"
 ///
-/// The parent step key and index are embedded in <see cref="IStepInstance.Key"/>,
+/// The parent step key and index are embedded in <c>IStepInstance.Key</c>,
 /// so you can use <c>step.Index</c> as a shortcut without parsing the key string.
 ///
 /// Used by: OrderBatchFlow → process_orders scope → validate_order step.
@@ -106,7 +106,7 @@ public sealed class ProcessOrderItemInput
 
     /// <summary>
     /// Zero-based iteration index, injected by ForEachStepHandler as <c>__loopIndex</c>.
-    /// Mirrors <see cref="IStepInstance.Index"/>.
+    /// Mirrors <c>IStepInstance.Index</c>.
     /// </summary>
     [JsonPropertyName("__loopIndex")]
     public int Index { get; set; }

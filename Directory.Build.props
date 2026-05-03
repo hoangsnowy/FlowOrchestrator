@@ -24,6 +24,28 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);**/artifacts/**</DefaultItemExcludes>
   </PropertyGroup>
 
+  <!-- ── Enterprise warning policy ─────────────────────────────────────────────
+       1. TreatWarningsAsErrors      → every warning fails the build, no exceptions.
+       2. EnforceCodeStyleInBuild    → .editorconfig severities run at build time
+                                       (not just IDE), so style/analyzer rules ship CI errors.
+       3. GenerateDocumentationFile  → enables CS1574/CS1580/CS1581/CS1584 (broken cref) and
+                                       CS1570/CS1587 (malformed XML doc). Without this flag the
+                                       compiler skips XML doc validation entirely.
+       4. CS1591 (missing XML doc on public member) is INTENTIONALLY noWarn'd here — CLAUDE.md
+          requires doc on new files only; backfilling is opt-in per project. Promote to error
+          on a per-project basis when its docs are 100% covered (Core / Testing already do).
+       NU1903/NU1902 are NuGet audit warnings handled by the dedicated audit pipeline; they
+       must not break local builds because they fire on transitive dependencies we cannot fix
+       without an upstream release.
+  -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);CS1591;NU1903;NU1902</WarningsNotAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
   <!--
     Newtonsoft.Json pin moved to Directory.Packages.props as a GlobalPackageReference
     so Central Package Management owns every version. The reason we still ship it at
