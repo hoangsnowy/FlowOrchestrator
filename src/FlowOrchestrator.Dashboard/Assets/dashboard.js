@@ -2480,7 +2480,13 @@ async function applyRoute(route) {
       restoreRunsFiltersFromRoute(route.params || {});
       await loadRuns(false);
     }
+    return;
   }
+  // For non-runs pages, fire an immediate refresh so the user sees data right away
+  // instead of waiting up to one auto-refresh interval (5s by default). Pre-1.22.1 the
+  // page would render blank until the next refresh tick because applyRoute did not
+  // call any per-page loader for overview / flows / scheduled.
+  await refresh({ force: true });
 }
 
 function restoreRunsFiltersFromRoute(params) {

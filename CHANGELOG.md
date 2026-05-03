@@ -135,6 +135,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   ticks. Net effect: a 5 s cron stays on its 5 s cadence even when the
   consumer was briefly slow, instead of becoming "5 s + drain delay" forever.
 
+- **Dashboard `applyRoute` now fires an immediate refresh for non-runs pages.**
+  Discovered during a live AppHost investigation: navigating directly to
+  `#/flows` or `#/scheduled` (via sidebar click, deep link, or page reload)
+  rendered a blank panel until the next 5-second auto-refresh tick. Root
+  cause: `applyRoute` only called the per-page loader for the `runs` route;
+  every other page relied on the auto-refresh timer, leaving the user
+  staring at an empty grid for up to 5 s on every navigation. Fixed by
+  calling `refresh({ force: true })` at the end of `applyRoute` for
+  overview / flows / scheduled. The Runs branch is unchanged — it still
+  invokes `loadRuns` / `selectRun` directly because those have additional
+  state to restore from the URL params.
+
 ### Changed
 
 - **`FlowOrchestratorEngine` constructor now takes `IFlowStore`.** Required
