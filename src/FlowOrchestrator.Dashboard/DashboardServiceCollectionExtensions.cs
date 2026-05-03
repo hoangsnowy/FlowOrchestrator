@@ -663,14 +663,15 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/runs/{runId:guid}/rerun", async (
-            HttpContext http,
-            IFlowRunStore runStore,
-            IFlowRepository repo,
-            IFlowOrchestrator engine,
-            FlowOrchestrator.Core.Configuration.FlowRunControlOptions runControlOptions,
-            Guid runId) =>
+        group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IFlowOrchestrator engine, Guid runId) =>
         {
+            // Resolve options from RequestServices with a fallback default so the endpoint does
+            // not require integration-test DI containers to register FlowRunControlOptions when
+            // they bypass AddFlowOrchestrator. Minimal-API parameter binding would otherwise
+            // 400 the request with "no service of type … registered."
+            var runControlOptions = http.RequestServices.GetService<FlowOrchestrator.Core.Configuration.FlowRunControlOptions>()
+                                    ?? new FlowOrchestrator.Core.Configuration.FlowRunControlOptions();
+
             var run = await runStore.GetRunDetailAsync(runId);
             if (run is null)
             {
