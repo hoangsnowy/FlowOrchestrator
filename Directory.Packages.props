@@ -32,7 +32,7 @@
   -->
   <ItemGroup>
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.18.4" />
+    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Dapper" Version="2.1.72" />
     <PackageVersion Include="Hangfire.AspNetCore" Version="1.8.23" />
