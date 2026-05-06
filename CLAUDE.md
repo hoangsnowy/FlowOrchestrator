@@ -19,9 +19,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Framework: **xUnit + NSubstitute**. Use plain xUnit `Assert.*` — do **not** add FluentAssertions, Shouldly, or any fluent-assertion library.
 - **AAA pattern** is mandatory: every `[Fact]`/`[Theory]` body must contain three comment blocks, in order — `// Arrange`, `// Act`, `// Assert`. Shared fixture setup in fields/constructor is allowed and does not count as the body's Arrange (a body block may be empty if there is genuinely nothing to do).
 - **Solution filters** — pick the right one for what you're running:
-  - `dotnet test FlowOrchestrator.UnitTests.slnf` — fast feedback (~30 s).
-  - `dotnet test FlowOrchestrator.IntegrationTests.slnf` — needs Docker.
-  - `dotnet test FlowOrchestrator.RegressionTests.slnf` — slow, run before merging anything that touches scheduling, polling, or concurrency primitives.
+  - `dotnet test FlowOrchestrator.UnitTests.slnx` — fast feedback (~30 s).
+  - `dotnet test FlowOrchestrator.IntegrationTests.slnx` — needs Docker.
+  - `dotnet test FlowOrchestrator.RegressionTests.slnx` — slow, run before merging anything that touches scheduling, polling, or concurrency primitives.
 - **Anti-flakiness rules** (mandatory for any test you write):
   - Never assert an *upper bound* on `Stopwatch.Elapsed` — that pattern is the classic source of CI flakiness.
   - Never poll on a counter with a wall-clock deadline (`while (counter == 0) Task.Delay(...)`). Wait on a logical event — `TaskCompletionSource` set by the handler / store / dispatcher.
@@ -78,9 +78,9 @@ dotnet build
 dotnet build --configuration Release
 
 # Run tests by category (see "Testing" section above)
-dotnet test FlowOrchestrator.UnitTests.slnf            # fast — every change
-dotnet test FlowOrchestrator.IntegrationTests.slnf     # needs Docker
-dotnet test FlowOrchestrator.RegressionTests.slnf      # slow — before merging
+dotnet test FlowOrchestrator.UnitTests.slnx            # fast — every change
+dotnet test FlowOrchestrator.IntegrationTests.slnx     # needs Docker
+dotnet test FlowOrchestrator.RegressionTests.slnx      # slow — before merging
 
 # Run a single test project
 dotnet test ./tests/unit/FlowOrchestrator.Core.UnitTests/FlowOrchestrator.Core.UnitTests.csproj

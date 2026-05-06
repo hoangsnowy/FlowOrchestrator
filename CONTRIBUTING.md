@@ -17,7 +17,7 @@ cd FlowOrchestrator
 dotnet build
 
 # Run the fast unit-test suite (~30 s, no Docker needed)
-dotnet test FlowOrchestrator.UnitTests.slnf
+dotnet test FlowOrchestrator.UnitTests.slnx
 
 # Run the sample app (requires Docker — Aspire spins up SQL Server)
 dotnet run --project ./FlowOrchestrator.AppHost/FlowOrchestrator.AppHost.csproj
@@ -135,8 +135,8 @@ For a large plugin, open an issue **before** starting so we can align on naming,
 3. Before pushing:
    - `dotnet format --verify-no-changes` shows no diff.
    - `dotnet build` shows **0 errors, 0 warnings**.
-   - `dotnet test FlowOrchestrator.UnitTests.slnf` passes.
-   - If you touched scheduling, polling, or concurrency primitives, also run `dotnet test FlowOrchestrator.RegressionTests.slnf`.
+   - `dotnet test FlowOrchestrator.UnitTests.slnx` passes.
+   - If you touched scheduling, polling, or concurrency primitives, also run `dotnet test FlowOrchestrator.RegressionTests.slnx`.
 4. PR title follows **Conventional Commits** — `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`. The PR title becomes the squash-merge commit message, so make it scannable.
 5. Update [`CHANGELOG.md`](CHANGELOG.md) under the `## [Unreleased]` section if your change is user-facing.
 6. Update docs in `docs/` if you changed public behavior or added a new article-worthy feature.

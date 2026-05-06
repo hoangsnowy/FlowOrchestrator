@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FlowOrchestrator.Core/FlowOrchestrator.Core.csproj" />
+    <Project Path="src/FlowOrchestrator.Hangfire/FlowOrchestrator.Hangfire.csproj" />
+    <Project Path="src/FlowOrchestrator.Dashboard/FlowOrchestrator.Dashboard.csproj" />
+    <Project Path="src/FlowOrchestrator.SqlServer/FlowOrchestrator.SqlServer.csproj" />
+    <Project Path="src/FlowOrchestrator.PostgreSQL/FlowOrchestrator.PostgreSQL.csproj" />
+    <Project Path="src/FlowOrchestrator.InMemory/FlowOrchestrator.InMemory.csproj" />
+    <Project Path="src/FlowOrchestrator.ServiceBus/FlowOrchestrator.ServiceBus.csproj" />
+    <Project Path="src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj" />
+  </Folder>
+  <Folder Name="/tests/integration/">
+    <Project Path="tests/integration/FlowOrchestrator.Dashboard.IntegrationTests/FlowOrchestrator.Dashboard.IntegrationTests.csproj" />
+    <Project Path="tests/integration/FlowOrchestrator.PostgreSQL.IntegrationTests/FlowOrchestrator.PostgreSQL.IntegrationTests.csproj" />
+    <Project Path="tests/integration/FlowOrchestrator.SqlServer.IntegrationTests/FlowOrchestrator.SqlServer.IntegrationTests.csproj" />
+    <Project Path="tests/integration/FlowOrchestrator.Hangfire.IntegrationTests/FlowOrchestrator.Hangfire.IntegrationTests.csproj" />
+    <Project Path="tests/integration/FlowOrchestrator.InMemory.IntegrationTests/FlowOrchestrator.InMemory.IntegrationTests.csproj" />
+    <Project Path="tests/integration/FlowOrchestrator.ServiceBus.IntegrationTests/FlowOrchestrator.ServiceBus.IntegrationTests.csproj" />
+    <Project Path="tests/integration/FlowOrchestrator.Testing.IntegrationTests/FlowOrchestrator.Testing.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

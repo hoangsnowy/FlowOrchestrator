@@ -32,13 +32,13 @@ jobs:
             10.0.x
 
       - name: Restore
-        run: dotnet restore FlowOrchestrator.UnitTests.slnf
+        run: dotnet restore FlowOrchestrator.UnitTests.slnx
 
       - name: Build
-        run: dotnet build FlowOrchestrator.UnitTests.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }}
+        run: dotnet build FlowOrchestrator.UnitTests.slnx --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }}
 
       - name: Test (Unit)
-        run: dotnet test FlowOrchestrator.UnitTests.slnf --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
+        run: dotnet test FlowOrchestrator.UnitTests.slnx --no-restore --configuration Release -p:TargetFramework=${{ matrix.tfm }} --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
 
       - name: Upload coverage
         if: always()
@@ -66,13 +66,13 @@ jobs:
             10.0.x
 
       - name: Restore
-        run: dotnet restore FlowOrchestrator.IntegrationTests.slnf
+        run: dotnet restore FlowOrchestrator.IntegrationTests.slnx
 
       - name: Build
-        run: dotnet build FlowOrchestrator.IntegrationTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0
+        run: dotnet build FlowOrchestrator.IntegrationTests.slnx --no-restore --configuration Release -p:TargetFramework=net10.0
 
       - name: Test (Integration)
-        run: dotnet test FlowOrchestrator.IntegrationTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0 --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
+        run: dotnet test FlowOrchestrator.IntegrationTests.slnx --no-restore --configuration Release -p:TargetFramework=net10.0 --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./test-results
 
       - name: Upload coverage
         if: always()
@@ -106,10 +106,10 @@ jobs:
             10.0.x
 
       - name: Restore
-        run: dotnet restore FlowOrchestrator.RegressionTests.slnf
+        run: dotnet restore FlowOrchestrator.RegressionTests.slnx
 
       - name: Build
-        run: dotnet build FlowOrchestrator.RegressionTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0
+        run: dotnet build FlowOrchestrator.RegressionTests.slnx --no-restore --configuration Release -p:TargetFramework=net10.0
 
       - name: Test (Regression)
-        run: dotnet test FlowOrchestrator.RegressionTests.slnf --no-restore --configuration Release -p:TargetFramework=net10.0 --verbosity normal
+        run: dotnet test FlowOrchestrator.RegressionTests.slnx --no-restore --configuration Release -p:TargetFramework=net10.0 --verbosity normal
