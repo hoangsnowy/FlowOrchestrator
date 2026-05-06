@@ -31,10 +31,10 @@ jobs:
             10.0.x
 
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore FlowOrchestrator.slnx
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: dotnet build FlowOrchestrator.slnx --no-restore --configuration Release
 
       - name: Test (Unit)
         run: dotnet test FlowOrchestrator.UnitTests.slnx --no-build --configuration Release --verbosity normal
@@ -61,7 +61,7 @@ jobs:
       - name: Pack (preview)
         if: steps.version.outputs.is_preview == 'true'
         run: >
-          dotnet pack
+          dotnet pack FlowOrchestrator.slnx
           --configuration Release
           --no-build
           --output ./nupkgs
@@ -71,7 +71,7 @@ jobs:
       - name: Pack (official)
         if: steps.version.outputs.is_preview == 'false'
         run: >
-          dotnet pack
+          dotnet pack FlowOrchestrator.slnx
           --configuration Release
           --no-build
           --output ./nupkgs
