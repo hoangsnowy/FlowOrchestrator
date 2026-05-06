@@ -33,13 +33,13 @@ Examples:
 
 ```bash
 # Fast feedback while developing (≈ 30 s)
-dotnet test FlowOrchestrator.UnitTests.slnf
+dotnet test FlowOrchestrator.UnitTests.slnx
 
 # Before pushing anything that touches storage / dashboard / Hangfire wiring
-dotnet test FlowOrchestrator.IntegrationTests.slnf
+dotnet test FlowOrchestrator.IntegrationTests.slnx
 
 # Before merging anything that touches scheduling / polling / concurrency
-dotnet test FlowOrchestrator.RegressionTests.slnf
+dotnet test FlowOrchestrator.RegressionTests.slnx
 ```
 
 ## Anti-flakiness rules

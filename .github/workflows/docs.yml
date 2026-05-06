@@ -37,13 +37,13 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore libraries
-        run: dotnet restore FlowOrchestrator.Libraries.slnf
+        run: dotnet restore FlowOrchestrator.Libraries.slnx
 
       - name: Build libraries (generates XML documentation files)
         # Build only the library projects — docs only consume src/**/*.csproj XML
         # docs. Excluding SampleApp/AppHost dodges a parallel-MSBuild race on
         # `rpswa.dswa.cache.json` from the StaticWebAssets SDK on net10.0.
-        run: dotnet build FlowOrchestrator.Libraries.slnf --no-restore --configuration Release -p:TargetFramework=net10.0
+        run: dotnet build FlowOrchestrator.Libraries.slnx --no-restore --configuration Release -p:TargetFramework=net10.0
 
       - name: Restore .NET tools (pinned docfx version)
         run: dotnet tool restore

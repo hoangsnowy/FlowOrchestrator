@@ -37,10 +37,10 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test (Unit)
-        run: dotnet test FlowOrchestrator.UnitTests.slnf --no-build --configuration Release --verbosity normal
+        run: dotnet test FlowOrchestrator.UnitTests.slnx --no-build --configuration Release --verbosity normal
 
       - name: Test (Integration)
-        run: dotnet test FlowOrchestrator.IntegrationTests.slnf --no-build --configuration Release --verbosity normal
+        run: dotnet test FlowOrchestrator.IntegrationTests.slnx --no-build --configuration Release --verbosity normal
 
       - name: Determine version
         id: version

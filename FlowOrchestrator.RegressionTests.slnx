@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FlowOrchestrator.Core/FlowOrchestrator.Core.csproj" />
+    <Project Path="src/FlowOrchestrator.Hangfire/FlowOrchestrator.Hangfire.csproj" />
+    <Project Path="src/FlowOrchestrator.InMemory/FlowOrchestrator.InMemory.csproj" />
+    <Project Path="src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj" />
+  </Folder>
+  <Folder Name="/tests/regression/">
+    <Project Path="tests/regression/FlowOrchestrator.RegressionTests/FlowOrchestrator.RegressionTests.csproj" />
+  </Folder>
+</Solution>
