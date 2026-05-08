@@ -1,3 +1,5 @@
+using FlowOrchestrator.Dashboard.Webhooks;
+
 namespace FlowOrchestrator.Dashboard;
 
 /// <summary>
@@ -15,6 +17,25 @@ public sealed class FlowDashboardOptions
 
     /// <summary>UI branding settings (title, subtitle, logo URL).</summary>
     public FlowDashboardBrandingOptions Branding { get; set; } = new();
+
+    /// <summary>
+    /// Enterprise webhook hardening pipeline (HMAC signature verification, replay
+    /// protection, rate limiting, body-size cap, DLQ). Defaults to
+    /// <see cref="WebhookEnforcementMode.Off"/>; set
+    /// <c>UseWebhookSecurity(...)</c> to opt in.
+    /// </summary>
+    public WebhookSecurityOptions WebhookSecurity { get; set; } = new();
+
+    /// <summary>
+    /// Configures the webhook hardening pipeline through a fluent builder.
+    /// </summary>
+    /// <param name="configure">Configuration callback receiving a <see cref="WebhookSecurityOptionsBuilder"/>.</param>
+    public FlowDashboardOptions UseWebhookSecurity(Action<WebhookSecurityOptionsBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(new WebhookSecurityOptionsBuilder(WebhookSecurity));
+        return this;
+    }
 }
 
 /// <summary>

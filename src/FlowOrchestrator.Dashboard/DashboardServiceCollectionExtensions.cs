@@ -10,12 +10,16 @@ using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Dashboard.Notifications;
+using FlowOrchestrator.Dashboard.Webhooks;
+using FlowOrchestrator.Dashboard.Webhooks.Logging;
+using FlowOrchestrator.Dashboard.Webhooks.Signature;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace FlowOrchestrator.Dashboard;
@@ -49,6 +53,37 @@ public static class DashboardServiceCollectionExtensions
         services.AddSingleton<SseFlowEventBroadcaster>();
         services.Replace(ServiceDescriptor.Singleton<IFlowEventNotifier>(
             sp => sp.GetRequiredService<SseFlowEventBroadcaster>()));
+
+        // Webhook hardening pipeline. Verifier is constructed with the
+        // user-registered custom strategies (resolved lazily from options).
+        services.TryAddSingleton<IWebhookSignatureVerifier>(sp =>
+        {
+            var opts = sp.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
+            var custom = opts.WebhookSecurity.CustomSignatureStrategies;
+            return new HmacSignatureVerifier(custom.Count == 0
+                ? null
+                : new Dictionary<string, Func<WebhookSignatureContext, byte[]>>(custom));
+        });
+        services.TryAddSingleton<Webhooks.Replay.IWebhookReplayStore, Webhooks.Replay.InMemoryWebhookReplayStore>();
+        services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
+        services.TryAddSingleton<Webhooks.Replay.ReplayProtectionGate>(sp =>
+            new Webhooks.Replay.ReplayProtectionGate(
+                sp.GetRequiredService<Webhooks.Replay.IWebhookReplayStore>(),
+                sp.GetRequiredService<TimeProvider>()));
+        services.AddHostedService(sp => new Webhooks.Replay.WebhookReplayJanitor(
+            sp.GetRequiredService<Webhooks.Replay.IWebhookReplayStore>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetService<ILogger<Webhooks.Replay.WebhookReplayJanitor>>()));
+        services.TryAddSingleton<Webhooks.RateLimit.IWebhookRateLimiter, Webhooks.RateLimit.TokenBucketWebhookRateLimiter>();
+        services.TryAddSingleton<WebhookSecurityPipeline>(sp =>
+        {
+            var opts = sp.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
+            var verifier = sp.GetRequiredService<IWebhookSignatureVerifier>();
+            var replay = sp.GetService<Webhooks.Replay.ReplayProtectionGate>();
+            var rate = sp.GetService<Webhooks.RateLimit.IWebhookRateLimiter>();
+            var logger = sp.GetService<ILogger<WebhookSecurityPipeline>>();
+            return new WebhookSecurityPipeline(verifier, opts.WebhookSecurity, replay, rate, logger);
+        });
 
         return services;
     }
@@ -257,6 +292,7 @@ public static class DashboardServiceCollectionExtensions
             Core.Abstractions.IFlowDefinition? flow = null;
             string? triggerKey = null;
             string? expectedSecret = null;
+            IDictionary<string, object?>? triggerInputs = null;
 
             if (Guid.TryParse(idOrSlug, out var flowId))
             {
@@ -268,6 +304,7 @@ public static class DashboardServiceCollectionExtensions
                     if (webhookTrigger.Key is not null)
                     {
                         triggerKey = webhookTrigger.Key;
+                        triggerInputs = webhookTrigger.Value?.Inputs;
                         if (webhookTrigger.Value?.Inputs.TryGetValue("webhookSecret", out var secretObj) == true && secretObj is string s)
                             expectedSecret = s;
                     }
@@ -286,6 +323,7 @@ public static class DashboardServiceCollectionExtensions
                         {
                             flow = f;
                             triggerKey = key;
+                            triggerInputs = meta.Inputs;
                             if (meta.Inputs.TryGetValue("webhookSecret", out var secretObj) && secretObj is string sec)
                                 expectedSecret = sec;
                             break;
@@ -310,15 +348,52 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // Read body ONCE (raw bytes for HMAC + parsed JSON for trigger payload).
+            // Capped by WebhookSecurityOptions.MaxBodyBytes; falls back to a generous
+            // default when the dashboard has no security options configured.
+            var dashboardOpts = http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value;
+            var maxBodyBytes = dashboardOpts?.WebhookSecurity.MaxBodyBytes ?? 1_048_576;
+            var buffered = await WebhookRequestBuffer.ReadAsync(http.Request, maxBodyBytes, http.RequestAborted);
+
+            if (buffered.Status == WebhookRequestBuffer.BufferStatus.TooLarge)
+            {
+                http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+                await WriteJsonAsync(http.Response, new { error = $"Webhook payload exceeds the configured cap of {maxBodyBytes} bytes." });
+                return;
+            }
+            if (buffered.Status == WebhookRequestBuffer.BufferStatus.InvalidJson)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
+                return;
+            }
+
+            var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
+                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
+
+            // Run the webhook security pipeline (signature verification today;
+            // replay / rate-limit / IP allowlist plug into the same gate chain
+            // in later phases).
+            var pipeline = http.RequestServices.GetService<WebhookSecurityPipeline>();
+            if (pipeline is not null && triggerInputs is not null)
+            {
+                var inputsRo = (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>(triggerInputs, StringComparer.OrdinalIgnoreCase);
+                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, http.RequestAborted);
+                if (verdict.Decision == WebhookSecurityPipeline.Decision.Reject)
+                {
+                    http.Response.StatusCode = verdict.StatusCode;
+                    await WriteJsonAsync(http.Response, new { error = "Webhook rejected by security pipeline.", reason = verdict.Reason });
+                    return;
+                }
+            }
+
+            // Backwards-compat shared-secret check (kept after the pipeline so flows
+            // that haven't migrated to webhookSignatureScheme still authenticate).
             if (!string.IsNullOrEmpty(expectedSecret))
             {
                 var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
                     ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
-                // Constant-time compare — string.Equals short-circuits at the first
-                // differing character, leaking the secret's prefix through per-request
-                // timing measurements. SecureEquals delegates to
-                // CryptographicOperations.FixedTimeEquals over the UTF-8 encoded
-                // bytes, the same primitive used for the BasicAuth path.
                 if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
                 {
                     http.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -327,25 +402,16 @@ public static class DashboardServiceCollectionExtensions
                 }
             }
 
-            var (isValidBody, body) = await TryReadJsonBodyAsync(http.Request);
-            if (!isValidBody)
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
-                return;
-            }
-
-            var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
-                .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
-
             var ctx = new TriggerContext
             {
                 RunId = Guid.NewGuid(),
                 Flow = flow,
-                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), body, headers)
+                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), buffered.Parsed, headers)
             };
             await engine.TriggerAsync(ctx);
+            var webhookLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+            if (webhookLogger is not null)
+                WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, ctx.RunId);
             await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         });
 
