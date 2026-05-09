@@ -2,6 +2,7 @@ using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.HealthChecks;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Dashboard;
+using FlowOrchestrator.Dashboard.Webhooks;
 using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using FlowOrchestrator.PostgreSQL;
@@ -262,6 +263,20 @@ builder.Logging.AddOpenTelemetry(o =>
 });
 
 builder.Services.AddFlowDashboard(builder.Configuration);
+
+// v1.25 webhook hardening pipeline — Audit mode so the sample exercises every
+// gate (HMAC signature → IP allowlist → rate limit → replay → body cap) and
+// writes rejection rows to the DLQ + dashboard "Webhooks" tab, but the
+// endpoint still returns 2xx so legitimate publishers don't break during the
+// dry-run period.
+builder.Services.PostConfigure<FlowDashboardOptions>(opts => opts.UseWebhookSecurity(sec =>
+{
+    sec.UseEnforcementMode(WebhookEnforcementMode.Audit)
+       .UseMaxBodyBytes(1_048_576)
+       .UseReplayProtection(toleranceSeconds: 300)
+       .UseRateLimit(permitsPerSecond: 50, burstSize: 100, perIp: true)
+       .UseForwardedHeaders(depth: 1);
+}));
 
 // Storage-reachability probe so a load balancer can drop traffic when the flow store is down.
 builder.Services

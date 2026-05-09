@@ -52,8 +52,17 @@ public sealed class WebhookEnterpriseSampleFlow : IFlowDefinition
                     // Rate limit: 10 RPS per flow with burst of 20.
                     ["webhookRateLimitPermitsPerSecond"] = 10,
                     ["webhookRateLimitBurstSize"] = 20,
-                    // Restrict source IPs to GitHub's published webhook ranges.
-                    ["webhookIpAllowListPreset"] = "github",
+                    // Restrict source IPs. The sample includes the GitHub
+                    // published webhook ranges PLUS loopback so the dev AppHost
+                    // can fire test requests from `localhost`. In production
+                    // drop the loopback entries and use the curated preset:
+                    //   ["webhookIpAllowListPreset"] = "github"
+                    ["webhookIpAllowList"] = new[]
+                    {
+                        "127.0.0.0/8", "::1/128",
+                        "192.30.252.0/22", "185.199.108.0/22", "140.82.112.0/20",
+                        "143.55.64.0/20", "2a0a:a440::/29", "2606:50c0::/32",
+                    },
                 },
             },
         },
