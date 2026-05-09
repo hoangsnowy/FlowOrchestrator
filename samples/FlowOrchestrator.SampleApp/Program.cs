@@ -86,11 +86,23 @@ if (useHangfireRuntime)
 builder.Services.AddFlowOrchestrator(options =>
 {
     if (storageBackend == "sqlserver" && sqlConnStr is not null)
+    {
         options.UseSqlServer(sqlConnStr);
+        // Persist webhook DLQ + replay nonces in SQL Server so the dashboard
+        // "Webhooks" tab keeps history across restarts (and across replicas).
+        options.AddSqlServerWebhookHardening(sqlConnStr);
+    }
     else if (storageBackend == "postgresql" && pgConnStr is not null)
+    {
         options.UsePostgreSql(pgConnStr);
+        options.AddPostgreSqlWebhookHardening(pgConnStr);
+    }
     else
+    {
         options.UseInMemory();
+        // Webhook DLQ + replay store stay in-memory by default (single
+        // process only — entries are lost when the host restarts).
+    }
 
     if (useHangfireRuntime)
     {
