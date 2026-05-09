@@ -13,6 +13,9 @@
 - name: Triggers
   href: triggers.md
 
+- name: Webhook Hardening
+  href: webhook-hardening.md
+
 - name: Expressions
   href: expressions.md
 

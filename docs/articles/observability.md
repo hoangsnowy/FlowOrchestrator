@@ -84,6 +84,10 @@ red without any extra configuration.
 | `flow_step_poll_attempts` | counter | attempts | `flow_id`, `step_key` |
 | `flow_signal_wait_ms` | histogram | ms | `flow_id`, `step_key`, `signal_name` — recorded by `FlowSignalDispatcher` on delivery |
 | `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory` / `service_bus`) — gap between scheduled fire and actual dispatch |
+| `webhook_received_total` | counter | webhooks | `flow`, `result` (`accepted` / `rejected` / `off`), `scheme` — emitted on every webhook receive (v1.25) |
+| `webhook_rejected_total` | counter | webhooks | `flow`, `reason` (`signature_invalid` / `replay` / `rate_limited` / `payload_too_large` / `ip_denied` / `secret_invalid`) (v1.25) |
+| `webhook_body_bytes` | histogram | bytes | `flow` — body size of every webhook receive (v1.25) |
+| `webhook_processing_ms` | histogram | ms | `flow`, `result` — wall-clock pipeline processing time (v1.25) |
 
 ### Distributed tracing across the runtime
 
@@ -131,6 +135,19 @@ LogEvents.StepFailed                 = 2002
 LogEvents.StepSkipped                = 2003
 LogEvents.WhenEvaluationFailed       = 2005
 LogEvents.DispatchEnqueued           = 3000
+
+// Webhook hardening pipeline (4000–4099 reserved, v1.25+)
+WebhookLog.WebhookReceived               = 4000   // every receive — info
+WebhookLog.SignatureRejected             = 4001   // HMAC mismatch / malformed header — warning
+WebhookLog.ReplayRejected                = 4002   // skew or nonce reused — warning
+WebhookLog.RateLimited                   = 4003   // token bucket empty — warning
+WebhookLog.PayloadTooLarge               = 4004   // body cap exceeded — warning
+WebhookLog.IpDenied                      = 4005   // CIDR allow/deny miss — warning
+WebhookLog.SecretInvalid                 = 4006   // bearer-secret mismatch — warning
+WebhookLog.DeliveryAccepted              = 4007   // run dispatched — info
+WebhookLog.RejectionStoreFailed          = 4008   // DLQ write failed — warning
+WebhookLog.ReplayStoreFailed             = 4009   // replay store error — warning
+WebhookLog.RotationUsedPreviousKey       = 4010   // accepted with rotated-out key — info
 // …see the source for the full list.
 ```
 
