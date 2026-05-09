@@ -56,11 +56,29 @@ existing flows that don't set new manifest fields keep their pre-1.25 behaviour.
   curated `KnownPublisherCidrs` table. `X-Forwarded-For` is only consulted
   when `WebhookSecurityOptions.ForwardedHeaderDepth > 0`; clients are
   resolved at the configured trust depth.
-- **Body size cap (partial).** Webhook body now buffered exactly once via
-  the new `WebhookRequestBuffer.ReadAsync`, capped at
+- **Body size cap.** Webhook body now buffered exactly once via the new
+  `WebhookRequestBuffer.ReadAsync`, capped at
   `WebhookSecurityOptions.MaxBodyBytes` (default 1 MiB). Oversized requests
-  return HTTP 413 before the JSON parser sees a single byte. The DLQ /
-  rejection-store persistence step is deferred to a follow-up.
+  return HTTP 413 before the JSON parser sees a single byte.
+- **DLQ + recent-deliveries log (P4).** New `IWebhookRejectionStore` +
+  `InMemoryWebhookRejectionStore` (bounded ring buffer, default 1 000
+  entries) records every accepted and rejected delivery with reason chip,
+  IP, body excerpt (4 KiB cap), and processing time. Wired into the
+  pipeline so every gate failure persists a row.
+- **Receive metrics (P5).** New
+  `FlowOrchestratorTelemetry` counters / histograms:
+  `webhook_received_total{flow,result,scheme}`,
+  `webhook_rejected_total{flow,reason}`,
+  `webhook_body_bytes`, `webhook_processing_ms{flow,result}`.
+- **Dashboard "Webhooks" tab (P7).** New
+  `GET /flows/api/webhooks/recent?flowId=&reason=&rejectedOnly=&skip=&take=`
+  and `GET /flows/api/webhooks/stats?hours=24` endpoints; new SPA tab
+  with reason chips, accept/reject filter toggle, and a 24-hour reason
+  histogram. Follows DESIGN.md (warm palette, Terracotta accent on
+  rejection chips, ring shadows, no gradients).
+- **Sample flow.** `samples/.../WebhookEnterpriseSampleFlow.cs`
+  demonstrates GitHub-style HMAC verification with replay protection,
+  rate limit, and IP allowlist preset.
 - **Three enforcement modes.** `WebhookEnforcementMode`:
   `Off` (default — endpoint is byte-for-byte identical to v1.24),
   `Audit` (gates run + log + metrics fire but the endpoint always accepts —
@@ -125,15 +143,10 @@ services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 
 ### Deferred to follow-up
 
-- DLQ / rejection persistence store (`IWebhookRejectionStore`) and the
-  associated Sql Server + PostgreSQL implementations.
-- Webhook receive metrics (`webhook_received_total`,
-  `webhook_rejected_total`, `webhook_body_bytes`,
-  `webhook_processing_ms`).
-- Dashboard "Webhooks" UI tab + `/api/webhooks/recent`,
-  `/api/webhooks/stats` REST endpoints.
-- Multi-replica coordination of replay nonces (Sql/Redis-backed
-  `IWebhookReplayStore`).
+- Sql Server + PostgreSQL implementations of
+  `IWebhookReplayStore` and `IWebhookRejectionStore` (in-memory
+  defaults ship now; multi-replica + long-retention storage drops in
+  via the same interfaces in v1.25.1).
 
 ## [1.24.0] - 2026-05-03
 

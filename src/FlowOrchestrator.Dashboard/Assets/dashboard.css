@@ -742,3 +742,12 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
   .sidebar,.events-drawer{transition:none}
 }
+
+/* Webhooks page */
+.webhook-stats{margin-bottom:16px}
+.webhook-filters{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.webhook-chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:500;font-family:'JetBrains Mono','SF Mono',Consolas,monospace;background:var(--fo-warm-sand);color:var(--fo-text);box-shadow:inset 0 0 0 1px var(--fo-divider)}
+.chip strong{font-weight:700;color:var(--fo-coral)}
+.chip--accept{background:rgba(76,138,86,0.16);color:#3a6e44;box-shadow:inset 0 0 0 1px rgba(76,138,86,0.3)}
+.chip--reject{background:rgba(201,100,66,0.16);color:var(--fo-coral);box-shadow:inset 0 0 0 1px rgba(201,100,66,0.3)}

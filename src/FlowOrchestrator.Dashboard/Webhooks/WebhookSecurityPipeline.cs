@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json;
+using FlowOrchestrator.Core.Observability;
+using FlowOrchestrator.Dashboard.Webhooks.Dlq;
 using FlowOrchestrator.Dashboard.Webhooks.Logging;
 using FlowOrchestrator.Dashboard.Webhooks.Network;
 using FlowOrchestrator.Dashboard.Webhooks.RateLimit;
@@ -21,6 +24,9 @@ public sealed class WebhookSecurityPipeline
     private readonly IWebhookSignatureVerifier _verifier;
     private readonly ReplayProtectionGate? _replayGate;
     private readonly IWebhookRateLimiter? _rateLimiter;
+    private readonly IWebhookRejectionStore? _rejectionStore;
+    private readonly FlowOrchestratorTelemetry? _telemetry;
+    private readonly TimeProvider _clock;
     private readonly WebhookSecurityOptions _options;
     private readonly ILogger<WebhookSecurityPipeline>? _logger;
 
@@ -29,18 +35,27 @@ public sealed class WebhookSecurityPipeline
     /// <param name="options">Operator-supplied webhook security options.</param>
     /// <param name="replayGate">Optional replay-protection gate. <see langword="null"/> when not configured.</param>
     /// <param name="rateLimiter">Optional rate limiter; <see langword="null"/> falls back to "no rate-limit".</param>
+    /// <param name="rejectionStore">Optional DLQ + recent-deliveries store.</param>
+    /// <param name="telemetry">Optional metrics emitter; counters/histograms are no-ops when null.</param>
+    /// <param name="clock">Time provider used for receive timestamps.</param>
     /// <param name="logger">Optional logger for structured event emission.</param>
     public WebhookSecurityPipeline(
         IWebhookSignatureVerifier verifier,
         WebhookSecurityOptions options,
         ReplayProtectionGate? replayGate = null,
         IWebhookRateLimiter? rateLimiter = null,
+        IWebhookRejectionStore? rejectionStore = null,
+        FlowOrchestratorTelemetry? telemetry = null,
+        TimeProvider? clock = null,
         ILogger<WebhookSecurityPipeline>? logger = null)
     {
         _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _replayGate = replayGate;
         _rateLimiter = rateLimiter;
+        _rejectionStore = rejectionStore;
+        _telemetry = telemetry;
+        _clock = clock ?? TimeProvider.System;
         _logger = logger;
     }
 
@@ -80,16 +95,25 @@ public sealed class WebhookSecurityPipeline
         IReadOnlyDictionary<string, string> headers,
         CancellationToken ct = default)
     {
-        if (_options.EnforcementMode == WebhookEnforcementMode.Off)
-            return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", false);
-
+        var stopwatch = ValueStopwatch.StartNew();
         var clientIp = ResolveClientIp(http, _options.ForwardedHeaderDepth);
+
+        // Always emit body-size histogram + activity tag, even when enforcement off,
+        // so dashboards see traffic shape regardless of mode.
+        Activity.Current?.SetTag("flow.webhook.bytes", bodyBytes.Length);
         Activity.Current?.SetTag("flow.webhook.client_ip", clientIp?.ToString() ?? "(unknown)");
+        _telemetry?.WebhookBodyBytes.Record(bodyBytes.Length, new KeyValuePair<string, object?>("flow", flowId.ToString()));
+
+        if (_options.EnforcementMode == WebhookEnforcementMode.Off)
+        {
+            EmitAccept(flowId, triggerKey, "off", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, scheme: null);
+            return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", false);
+        }
 
         // ── IP allow / deny gate ──
         var ipVerdict = EvaluateIp(triggerInputs, clientIp);
         if (ipVerdict is { } reason)
-            return RejectIp(flowId, triggerKey, clientIp, reason);
+            return await PersistRejectIpAsync(flowId, triggerKey, clientIp, reason, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
 
         // ── Rate-limit gate (per flow [+ IP]) ──
         if (_rateLimiter is not null)
@@ -102,7 +126,7 @@ public sealed class WebhookSecurityPipeline
                     : flowId.ToString();
                 var rl = _rateLimiter.TryAcquire(key, rateOpts);
                 if (!rl.Allowed)
-                    return RejectRateLimit(flowId, triggerKey, key, rl.RetryAfter);
+                    return await PersistRejectRateLimitAsync(flowId, triggerKey, key, rl.RetryAfter, clientIp, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
             }
         }
 
@@ -122,10 +146,10 @@ public sealed class WebhookSecurityPipeline
             if (string.IsNullOrEmpty(key))
             {
                 _logger?.LogWarning("Webhook signature scheme set on flow {FlowId} but no key configured.", flowId);
-                return RejectSignature(flowId, triggerKey, "key_not_configured");
+                return await PersistRejectSignatureAsync(flowId, triggerKey, "key_not_configured", clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
             }
 
-            var ctx = new WebhookSignatureContext
+            var sigCtx = new WebhookSignatureContext
             {
                 Body = bodyBytes,
                 Headers = headers,
@@ -137,10 +161,10 @@ public sealed class WebhookSecurityPipeline
                 AllowLegacySha1 = _options.AllowLegacySha1,
             };
 
-            var sigResult = _verifier.Verify(ctx);
+            var sigResult = _verifier.Verify(sigCtx);
             Activity.Current?.SetTag("flow.webhook.scheme", spec.HeaderName);
             if (!sigResult.IsValid)
-                return RejectSignature(flowId, triggerKey, sigResult.Reason.ToString());
+                return await PersistRejectSignatureAsync(flowId, triggerKey, sigResult.Reason.ToString(), clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
             if (sigResult.UsedRotationKey && _logger is not null)
                 WebhookLog.RotationUsedPreviousKey(_logger, flowId, triggerKey);
             usedRotation = sigResult.UsedRotationKey;
@@ -169,37 +193,142 @@ public sealed class WebhookSecurityPipeline
                     case ReplayProtectionGate.Decision.SkewRejected:
                     case ReplayProtectionGate.Decision.ReplayRejected:
                     case ReplayProtectionGate.Decision.TimestampMissing:
-                        return RejectReplay(flowId, triggerKey, verdict.Reason ?? verdict.Decision.ToString());
+                        return await PersistRejectReplayAsync(flowId, triggerKey, verdict.Reason ?? verdict.Decision.ToString(), clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
                 }
             }
         }
 
         Activity.Current?.SetTag("flow.webhook.result", "accepted");
+        EmitAccept(flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, spec?.HeaderName);
         return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation);
     }
 
-    private PipelineResult RejectSignature(Guid flowId, string triggerKey, string reason)
+    private async ValueTask<PipelineResult> PersistRejectSignatureAsync(
+        Guid flowId, string triggerKey, string reason, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
     {
         if (_logger is not null) WebhookLog.SignatureRejected(_logger, flowId, triggerKey, reason);
-        return Reject(reason, StatusCodes.Status401Unauthorized);
+        return await PersistRejectAsync(flowId, triggerKey, reason, StatusCodes.Status401Unauthorized, ip, body, headers, spec, sw, ct).ConfigureAwait(false);
     }
 
-    private PipelineResult RejectReplay(Guid flowId, string triggerKey, string reason)
+    private async ValueTask<PipelineResult> PersistRejectReplayAsync(
+        Guid flowId, string triggerKey, string reason, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
     {
         if (_logger is not null) WebhookLog.ReplayRejected(_logger, flowId, triggerKey, reason);
-        return Reject(reason, StatusCodes.Status409Conflict);
+        return await PersistRejectAsync(flowId, triggerKey, reason, StatusCodes.Status409Conflict, ip, body, headers, spec, sw, ct).ConfigureAwait(false);
     }
 
-    private PipelineResult Reject(string reason, int statusCode)
+    private async ValueTask<PipelineResult> PersistRejectIpAsync(
+        Guid flowId, string triggerKey, IPAddress? ip, string reason,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        ValueStopwatch sw, CancellationToken ct)
+    {
+        if (_logger is not null) WebhookLog.IpDenied(_logger, flowId, triggerKey, ip?.ToString() ?? "(unknown)");
+        return await PersistRejectAsync(flowId, triggerKey, reason, StatusCodes.Status403Forbidden, ip, body, headers, spec: null, sw, ct).ConfigureAwait(false);
+    }
+
+    private async ValueTask<PipelineResult> PersistRejectRateLimitAsync(
+        Guid flowId, string triggerKey, string clientKey, TimeSpan retryAfter, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        ValueStopwatch sw, CancellationToken ct)
+    {
+        if (_logger is not null) WebhookLog.RateLimited(_logger, flowId, triggerKey, clientKey);
+        Activity.Current?.SetTag("flow.webhook.rate_limit.retry_after_ms", retryAfter.TotalMilliseconds);
+        return await PersistRejectAsync(flowId, triggerKey, "rate_limited", StatusCodes.Status429TooManyRequests, ip, body, headers, spec: null, sw, ct).ConfigureAwait(false);
+    }
+
+    private async ValueTask<PipelineResult> PersistRejectAsync(
+        Guid flowId, string triggerKey, string reason, int statusCode, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
     {
         Activity.Current?.SetTag("flow.webhook.result", "rejected");
         Activity.Current?.SetTag("flow.webhook.reject_reason", reason);
+
+        var processingMs = sw.Elapsed.TotalMilliseconds;
+        var flowTag = new KeyValuePair<string, object?>("flow", flowId.ToString());
+        var resultTag = new KeyValuePair<string, object?>("result", "rejected");
+        var reasonTag = new KeyValuePair<string, object?>("reason", reason);
+        var schemeTag = new KeyValuePair<string, object?>("scheme", spec?.HeaderName ?? "(none)");
+        _telemetry?.WebhookReceivedCounter.Add(1, flowTag, resultTag, schemeTag);
+        _telemetry?.WebhookRejectedCounter.Add(1, flowTag, reasonTag);
+        _telemetry?.WebhookProcessingMs.Record(processingMs, flowTag, resultTag);
+
+        if (_rejectionStore is not null)
+        {
+            try
+            {
+                await _rejectionStore.WriteAsync(BuildRecord(flowId, triggerKey, reason, statusCode, ip, body, headers, spec, processingMs, isAccepted: false), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (_logger is not null)
+            {
+                WebhookLog.RejectionStoreFailed(_logger, ex, flowId, triggerKey);
+            }
+        }
 
         return _options.EnforcementMode switch
         {
             WebhookEnforcementMode.Audit => new PipelineResult(Decision.AuditFail, statusCode, reason, false),
             WebhookEnforcementMode.Enforce => new PipelineResult(Decision.Reject, statusCode, reason, false),
             _ => new PipelineResult(Decision.Accept, StatusCodes.Status200OK, reason, false),
+        };
+    }
+
+    private void EmitAccept(
+        Guid flowId, string triggerKey, string result, IPAddress? ip, long bytes,
+        IReadOnlyDictionary<string, string> headers, double processingMs, string? scheme)
+    {
+        var flowTag = new KeyValuePair<string, object?>("flow", flowId.ToString());
+        var resultTag = new KeyValuePair<string, object?>("result", result);
+        var schemeTag = new KeyValuePair<string, object?>("scheme", scheme ?? "(none)");
+        _telemetry?.WebhookReceivedCounter.Add(1, flowTag, resultTag, schemeTag);
+        _telemetry?.WebhookProcessingMs.Record(processingMs, flowTag, resultTag);
+
+        if (_rejectionStore is not null)
+        {
+            try
+            {
+                var rec = BuildRecord(flowId, triggerKey, reason: string.Empty, StatusCodes.Status200OK, ip, body: ReadOnlyMemory<byte>.Empty, headers, spec: null, processingMs, isAccepted: true);
+                _ = _rejectionStore.WriteAsync(rec with { BodyBytes = (int)bytes, BodyTruncated = null, Scheme = scheme }, default);
+            }
+            catch (Exception ex) when (_logger is not null)
+            {
+                WebhookLog.RejectionStoreFailed(_logger, ex, flowId, triggerKey);
+            }
+        }
+    }
+
+    private WebhookRejectionRecord BuildRecord(
+        Guid flowId, string triggerKey, string reason, int statusCode, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec, double processingMs, bool isAccepted)
+    {
+        var truncated = body.IsEmpty
+            ? null
+            : System.Text.Encoding.UTF8.GetString(body.Span.Slice(0, Math.Min(body.Length, 4096)));
+        string? headersJson = null;
+        try
+        {
+            headersJson = JsonSerializer.Serialize(headers);
+        }
+        catch { /* headers shouldn't fail to serialize but stay defensive */ }
+        return new WebhookRejectionRecord
+        {
+            FlowId = flowId,
+            TriggerKey = triggerKey,
+            ReceivedAt = _clock.GetUtcNow(),
+            RemoteIp = ip?.ToString(),
+            Reason = reason,
+            StatusCode = statusCode,
+            BodyBytes = body.Length,
+            BodyTruncated = truncated,
+            HeadersJson = headersJson,
+            Scheme = spec?.HeaderName,
+            ProcessingMs = processingMs,
+            IsAccepted = isAccepted,
         };
     }
 
@@ -306,16 +435,12 @@ public sealed class WebhookSecurityPipeline
         };
     }
 
-    private PipelineResult RejectIp(Guid flowId, string triggerKey, IPAddress? ip, string reason)
+    /// <summary>Compact stopwatch-equivalent without allocation.</summary>
+    private readonly struct ValueStopwatch
     {
-        if (_logger is not null) WebhookLog.IpDenied(_logger, flowId, triggerKey, ip?.ToString() ?? "(unknown)");
-        return Reject(reason, StatusCodes.Status403Forbidden);
-    }
-
-    private PipelineResult RejectRateLimit(Guid flowId, string triggerKey, string key, TimeSpan retryAfter)
-    {
-        if (_logger is not null) WebhookLog.RateLimited(_logger, flowId, triggerKey, key);
-        Activity.Current?.SetTag("flow.webhook.rate_limit.retry_after_ms", retryAfter.TotalMilliseconds);
-        return Reject("rate_limited", StatusCodes.Status429TooManyRequests);
+        private readonly long _start;
+        private ValueStopwatch(long start) { _start = start; }
+        public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
+        public TimeSpan Elapsed => Stopwatch.GetElapsedTime(_start);
     }
 }

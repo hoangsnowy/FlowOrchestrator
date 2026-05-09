@@ -2467,7 +2467,80 @@ async function refresh(opts) {
       }
     }
     if (currentPage === 'scheduled') await loadScheduled({ silent });
+    if (currentPage === 'webhooks') await loadWebhooks({ silent });
   } catch(e) { if (!isAbortError(e)) console.error('refresh', e); }
+}
+
+// ── Webhooks page ──
+async function loadWebhooks(opts) {
+  const silent = !!(opts && opts.silent);
+  const tableEl = $('webhook-table');
+  const statsEl = $('webhook-stats');
+  const countEl = $('webhooks-count-label');
+  if (!tableEl) return;
+  if (!silent && !tableEl.innerHTML.trim()) tableEl.innerHTML = skeletonRows(6, 5);
+  const rejectedOnly = $('webhook-rejected-only') && $('webhook-rejected-only').checked;
+  const url = BASE+'/webhooks/recent?take=100' + (rejectedOnly ? '&rejectedOnly=true' : '');
+  try {
+    const [items, stats] = await Promise.all([
+      fetchJSON(url),
+      fetchJSON(BASE+'/webhooks/stats?hours=24').catch(() => ({ counts: {} }))
+    ]);
+    if (countEl) countEl.innerHTML = '<span class="num">' + items.length + '</span>recent';
+    statsEl.innerHTML = renderWebhookStats(stats);
+    tableEl.innerHTML = items.length === 0
+      ? '<div class="empty-msg">No webhook deliveries yet.</div>'
+      : renderWebhookTable(items);
+  } catch (e) {
+    if (isAbortError(e)) return;
+    tableEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load webhook log. <button class="btn-retry" onclick="loadWebhooks()">Retry</button></div>';
+  }
+}
+
+function renderWebhookStats(stats) {
+  const counts = (stats && stats.counts) || {};
+  const entries = Object.entries(counts).sort(function(a, b) { return b[1] - a[1]; });
+  if (entries.length === 0) return '<div class="empty-msg">No rejections in the last 24 h.</div>';
+  return '<div class="webhook-chips">' + entries.map(function(kv) {
+    return '<span class="chip chip--reject">' + escapeHtml(kv[0]) + ' <strong>' + kv[1] + '</strong></span>';
+  }).join('') + '</div>';
+}
+
+function renderWebhookTable(items) {
+  return '<table class="recent-table"><thead><tr>'
+    + '<th>Time</th><th>Flow</th><th>Trigger</th><th>Result</th>'
+    + '<th>Status</th><th>Reason</th><th>IP</th><th>Bytes</th><th>ms</th>'
+    + '</tr></thead><tbody>'
+    + items.map(function(r) {
+        const accepted = r.isAccepted || r.IsAccepted;
+        const reason = r.reason || r.Reason || '';
+        const ts = r.receivedAt || r.ReceivedAt;
+        const flowId = r.flowId || r.FlowId;
+        return '<tr>'
+          + '<td><time>' + escapeHtml(formatTimestamp(ts)) + '</time></td>'
+          + '<td>' + escapeHtml(flowId ? String(flowId).slice(0, 8) + '…' : '(unknown)') + '</td>'
+          + '<td>' + escapeHtml(r.triggerKey || r.TriggerKey || '') + '</td>'
+          + '<td>' + (accepted ? '<span class="chip chip--accept">accepted</span>' : '<span class="chip chip--reject">rejected</span>') + '</td>'
+          + '<td>' + (r.statusCode || r.StatusCode || '') + '</td>'
+          + '<td>' + escapeHtml(reason) + '</td>'
+          + '<td>' + escapeHtml(r.remoteIp || r.RemoteIp || '') + '</td>'
+          + '<td>' + (r.bodyBytes || r.BodyBytes || 0) + '</td>'
+          + '<td>' + (Math.round((r.processingMs || r.ProcessingMs || 0) * 10) / 10) + '</td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table>';
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleString(); } catch { return String(ts); }
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
+  });
 }
 
 document.addEventListener('visibilitychange', () => {

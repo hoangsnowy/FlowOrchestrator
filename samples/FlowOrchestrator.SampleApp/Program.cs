@@ -156,6 +156,10 @@ builder.Services.AddFlowOrchestrator(options =>
     options.AddFlow<ShipmentTrackingFlow>();
     options.AddFlow<PaymentEventFlow>();
 
+    // v1.25 enterprise webhook hardening sample — GitHub-style HMAC with
+    // replay protection, rate limit, and IP allowlist preset.
+    options.AddFlow<WebhookEnterpriseSampleFlow>();
+
     // M1.4 ForEach + M2.3 Idempotency demo — available on all storage backends.
     options.AddFlow<OrderBatchFlow>();
 

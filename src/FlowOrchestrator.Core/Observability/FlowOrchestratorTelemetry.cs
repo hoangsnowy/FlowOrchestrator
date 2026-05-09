@@ -66,6 +66,18 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
     /// <summary>Records the gap between a cron trigger's scheduled fire time and its actual dispatch time, in milliseconds.</summary>
     public Histogram<double> CronLagMs { get; }
 
+    /// <summary>Incremented for every webhook receive (accepted or rejected). Tags: <c>flow</c>, <c>result</c>, <c>scheme</c>.</summary>
+    public Counter<long> WebhookReceivedCounter { get; }
+
+    /// <summary>Incremented for every webhook rejected by the security pipeline. Tags: <c>flow</c>, <c>reason</c>.</summary>
+    public Counter<long> WebhookRejectedCounter { get; }
+
+    /// <summary>Records the size of each webhook body in bytes. Tags: <c>flow</c>.</summary>
+    public Histogram<long> WebhookBodyBytes { get; }
+
+    /// <summary>Records the wall-clock pipeline processing time per webhook in milliseconds. Tags: <c>flow</c>, <c>result</c>.</summary>
+    public Histogram<double> WebhookProcessingMs { get; }
+
     /// <summary>Initialises all counters and histograms against the shared <see cref="Meter"/>.</summary>
     public FlowOrchestratorTelemetry()
     {
@@ -79,6 +91,10 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
         StepPollAttemptsCounter = Meter.CreateCounter<long>("flow_step_poll_attempts");
         SignalWaitMs = Meter.CreateHistogram<double>("flow_signal_wait_ms");
         CronLagMs = Meter.CreateHistogram<double>("flow_cron_lag_ms");
+        WebhookReceivedCounter = Meter.CreateCounter<long>("webhook_received_total");
+        WebhookRejectedCounter = Meter.CreateCounter<long>("webhook_rejected_total");
+        WebhookBodyBytes = Meter.CreateHistogram<long>("webhook_body_bytes");
+        WebhookProcessingMs = Meter.CreateHistogram<double>("webhook_processing_ms");
     }
 
     /// <summary>Disposes the <see cref="ActivitySource"/> and <see cref="Meter"/>.</summary>

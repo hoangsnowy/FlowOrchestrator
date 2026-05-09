@@ -48,6 +48,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
       Scheduled
     </button>
+    <button type="button" class="nav-item" data-page="webhooks" onclick="navigate('webhooks')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8a6 6 0 1 0-11.16 3.06A4 4 0 0 1 8 14H4a4 4 0 0 0 0 8h14a4 4 0 0 0 4-4 4 4 0 0 0-4-4h-1.5"/><circle cx="18" cy="8" r="3"/></svg>
+      Webhooks
+    </button>
   </nav>
   <div class="sidebar-footer">
     <div class="refresh-row">
@@ -247,6 +251,29 @@
       <div class="schedule-section">
         <div id="scheduled-table"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- Webhooks Page -->
+  <section class="page" id="page-webhooks" aria-labelledby="page-webhooks-title">
+    <header class="page-header">
+      <div class="page-header-leading">
+        <button type="button" class="hamburger" id="hamburger-webhooks" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <h2 class="page-title" id="page-webhooks-title">Webhooks</h2>
+      </div>
+      <div class="page-count" id="webhooks-count-label"><span class="num">0</span>recent</div>
+    </header>
+    <div class="page-content">
+      <div class="webhook-stats" id="webhook-stats" aria-live="polite"></div>
+      <div class="webhook-filters">
+        <label class="refresh-toggle">
+          <input id="webhook-rejected-only" type="checkbox" onchange="loadWebhooks()"/>
+          Rejected only
+        </label>
+      </div>
+      <div id="webhook-table" class="schedule-section"></div>
     </div>
   </section>
 </main>

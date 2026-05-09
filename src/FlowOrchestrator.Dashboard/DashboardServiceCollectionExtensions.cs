@@ -75,14 +75,18 @@ public static class DashboardServiceCollectionExtensions
             sp.GetRequiredService<TimeProvider>(),
             sp.GetService<ILogger<Webhooks.Replay.WebhookReplayJanitor>>()));
         services.TryAddSingleton<Webhooks.RateLimit.IWebhookRateLimiter, Webhooks.RateLimit.TokenBucketWebhookRateLimiter>();
+        services.TryAddSingleton<Webhooks.Dlq.IWebhookRejectionStore, Webhooks.Dlq.InMemoryWebhookRejectionStore>();
         services.TryAddSingleton<WebhookSecurityPipeline>(sp =>
         {
             var opts = sp.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
             var verifier = sp.GetRequiredService<IWebhookSignatureVerifier>();
             var replay = sp.GetService<Webhooks.Replay.ReplayProtectionGate>();
             var rate = sp.GetService<Webhooks.RateLimit.IWebhookRateLimiter>();
+            var dlq = sp.GetService<Webhooks.Dlq.IWebhookRejectionStore>();
+            var telemetry = sp.GetService<FlowOrchestratorTelemetry>();
+            var clock = sp.GetService<TimeProvider>();
             var logger = sp.GetService<ILogger<WebhookSecurityPipeline>>();
-            return new WebhookSecurityPipeline(verifier, opts.WebhookSecurity, replay, rate, logger);
+            return new WebhookSecurityPipeline(verifier, opts.WebhookSecurity, replay, rate, dlq, telemetry, clock, logger);
         });
 
         return services;
@@ -419,6 +423,42 @@ public static class DashboardServiceCollectionExtensions
         {
             var list = handlers.Select(h => new { type = h.Type }).ToList();
             return WriteJsonAsync(http.Response,list);
+        });
+
+        // ── Webhook hardening surface ──
+        group.MapGet("/api/webhooks/recent", async (HttpContext http) =>
+        {
+            var store = http.RequestServices.GetService<Webhooks.Dlq.IWebhookRejectionStore>();
+            if (store is null)
+            {
+                await WriteJsonAsync(http.Response, Array.Empty<object>());
+                return;
+            }
+            var query = http.Request.Query;
+            Guid? flowId = query.TryGetValue("flowId", out var f) && Guid.TryParse(f, out var fid) ? fid : null;
+            string? reason = query.TryGetValue("reason", out var r) ? r.ToString() : null;
+            var includeAccepted = !query.TryGetValue("acceptedOnly", out _)
+                                  && (!query.TryGetValue("rejectedOnly", out var rejOnly)
+                                      || !bool.TryParse(rejOnly, out var rejFlag) || !rejFlag);
+            int skip = query.TryGetValue("skip", out var sv) && int.TryParse(sv, out var s) ? s : 0;
+            int take = query.TryGetValue("take", out var tv) && int.TryParse(tv, out var t) ? t : 50;
+            var items = await store.QueryRecentAsync(flowId, reason, includeAccepted, skip, take, http.RequestAborted);
+            await WriteJsonAsync(http.Response, items);
+        });
+
+        group.MapGet("/api/webhooks/stats", async (HttpContext http) =>
+        {
+            var store = http.RequestServices.GetService<Webhooks.Dlq.IWebhookRejectionStore>();
+            if (store is null)
+            {
+                await WriteJsonAsync(http.Response, new { window = "24h", counts = new Dictionary<string, long>() });
+                return;
+            }
+            var window = TimeSpan.FromHours(24);
+            if (http.Request.Query.TryGetValue("hours", out var h) && int.TryParse(h, out var hours) && hours > 0)
+                window = TimeSpan.FromHours(Math.Min(hours, 168));
+            var counts = await store.CountsByReasonAsync(window, http.RequestAborted);
+            await WriteJsonAsync(http.Response, new { windowHours = (int)window.TotalHours, counts });
         });
 
         // ── Run monitoring endpoints ──

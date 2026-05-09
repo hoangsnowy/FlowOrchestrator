@@ -85,6 +85,13 @@ public sealed class DashboardTestServer : IDisposable
 
     public HttpClient CreateClient() => _app.GetTestClient();
 
+    /// <summary>Lazily-created reusable HTTP client for tests that don't need a fresh per-call instance.</summary>
+    public HttpClient Client => _client ??= _app.GetTestClient();
+    private HttpClient? _client;
+
+    /// <summary>Resolved DI service provider for tests that need to reach into the registered services.</summary>
+    public IServiceProvider Services => _app.Services;
+
     /// <summary>
     /// Resolved SSE broadcaster — tests use this to publish events into the dashboard's
     /// realtime channel without going through the engine. Registered by <c>AddFlowDashboard()</c>.
