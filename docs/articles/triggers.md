@@ -131,8 +131,9 @@ Activate per flow via manifest inputs. The full set of v1.25 fields:
 | `webhookReplayToleranceSeconds` | Max clock skew between publisher timestamp and server time. `0` disables replay protection. |
 | `webhookNonceHeader` | Optional explicit nonce header (e.g. `X-GitHub-Delivery`). Default: SHA-256 of `timestamp \|\| body`. |
 | `webhookRateLimitPermitsPerSecond`, `webhookRateLimitBurstSize`, `webhookRateLimitPerIp` | Token-bucket overrides. Per-IP keying is opt-in. |
-| `webhookIpAllowList`, `webhookIpDenyList` | CIDR lists (IPv4 + IPv6). Allow takes precedence. |
-| `webhookIpAllowListPreset` | Curated publisher CIDR set (`github`, `stripe`). |
+| `webhookIpAllowList`, `webhookIpDenyList` | IP entries — CIDR (`10.0.0.0/8`, `2001:db8::/32`), inclusive range (`10.0.0.10-10.0.0.42`), wildcard (`10.0.*.*`), single address, or any combination. Accepts an array OR a comma-delimited string. Allow takes precedence. |
+| `webhookIpAllowListPreset` | Single curated publisher CIDR set. Presets: `github`, `stripe`, `shopify`, `twilio`, `square`, `atlassian`, `bitbucket`, `slack`, `mailgun`, `zoom`, `local` / `private`. |
+| `webhookIpAllowListPresets` | Multiple presets combined (array or comma-delimited string). Merges with `webhookIpAllowListPreset` and the explicit `webhookIpAllowList`. |
 
 Per-publisher cookbook example — GitHub:
 

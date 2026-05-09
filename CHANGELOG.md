@@ -6,6 +6,52 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added — IP allowlist range syntax + 9 new publisher presets (v1.25.2)
+
+- **`CidrMatcher` accepts more notations.** In addition to CIDR
+  (`10.0.0.0/8`, `2001:db8::/32`) and bare addresses, the matcher now
+  parses:
+  - **Inclusive ranges** — `10.0.0.10-10.0.0.42` (IPv4) and
+    `2001:db8::1-2001:db8::ff` (IPv6). Bytewise compare; reversed ranges
+    are rejected as malformed.
+  - **Octet wildcards** — `10.0.*.*` is equivalent to `10.0.0.0/16`,
+    `10.*.*.*` is `/8`, `*.*.*.*` matches everything. Each `*` after the
+    first must also be `*` (`10.*.0.0` is rejected).
+- **9 new bundled presets** in `KnownPublisherCidrs`: `shopify`,
+  `twilio`, `square`, `atlassian` / `bitbucket`, `slack`, `mailgun`,
+  `zoom`, plus `local` / `localhost` / `private` (RFC 1918 + loopback +
+  link-local for dev environments). `github` and `stripe` already
+  shipped in v1.25.0.
+- **`webhookIpAllowListPresets` (plural)** new manifest field — combine
+  multiple presets in one flow. Accepts an array or comma-delimited
+  string. Merges with the singular `webhookIpAllowListPreset` and the
+  explicit `webhookIpAllowList`.
+- **Comma-delimited string form** for `webhookIpAllowList` /
+  `webhookIpDenyList` — friendlier for `appsettings.json` configuration
+  than nested arrays. Existing array form still works.
+
+### Tests
+
+- 30 new unit tests in `CidrMatcherTests`: range syntax (IPv4 + IPv6 +
+  reversed-rejected), wildcard syntax (every prefix length + post-star
+  octet rejection), mixed CIDR/range/wildcard in same matcher, every
+  bundled preset resolves to a non-empty list, `local` preset matches
+  loopback + RFC 1918 + IPv6 link-local. Dashboard.UnitTests grew
+  75 → 105.
+
+### Docs
+
+- `docs/articles/webhook-hardening.md` rewritten "IP allow / deny list"
+  section: notation table, mixed-list example, comma-delimited config
+  example, full preset reference table, `webhookIpAllowListPresets`
+  plural usage, drift caveat for presets, reverse-proxy / XFF guide.
+- `docs/articles/triggers.md` manifest field reference updated with new
+  notations + every preset name.
+- `docs/articles/production-checklist.md` step 4 expanded with the new
+  presets and notation flexibility.
+
+
+
 ## [1.25.0] - 2026-05-09
 
 ### Added — enterprise webhook hardening

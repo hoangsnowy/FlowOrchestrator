@@ -395,19 +395,62 @@ public sealed class WebhookSecurityPipeline
         string listKey,
         string? presetKey)
     {
+        var entries = new List<string>();
+
+        // Explicit list — array, IEnumerable, or comma-delimited string.
         if (inputs.TryGetValue(listKey, out var raw) && raw is not null)
         {
-            return raw switch
+            switch (raw)
             {
-                IReadOnlyList<string> list => list,
-                IEnumerable<string> seq => seq.ToArray(),
-                string single => new[] { single },
-                _ => null,
-            };
+                case string single:
+                    foreach (var part in single.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                        entries.Add(part);
+                    break;
+                case IEnumerable<string> seq:
+                    entries.AddRange(seq);
+                    break;
+                case System.Collections.IEnumerable enumerable:
+                    foreach (var o in enumerable)
+                    {
+                        if (o is string s) entries.Add(s);
+                    }
+                    break;
+            }
         }
-        if (presetKey is not null && inputs.TryGetValue(presetKey, out var presetRaw) && presetRaw is string preset)
-            return KnownPublisherCidrs.TryGet(preset);
-        return null;
+
+        // Preset(s) — single preset name (`webhookIpAllowListPreset`) OR multiple
+        // (`webhookIpAllowListPresets` plural; comma-delimited or array). Merge with explicit list.
+        if (presetKey is not null)
+        {
+            // Singular form (back-compat).
+            if (inputs.TryGetValue(presetKey, out var presetRaw) && presetRaw is string preset)
+            {
+                var resolved = KnownPublisherCidrs.TryGet(preset);
+                if (resolved is not null) entries.AddRange(resolved);
+            }
+            // Plural form: same key + 's', supports list or CSV.
+            var pluralKey = presetKey + "s";
+            if (inputs.TryGetValue(pluralKey, out var pluralRaw) && pluralRaw is not null)
+            {
+                IEnumerable<string>? names = pluralRaw switch
+                {
+                    string s => s.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
+                    IEnumerable<string> seq => seq,
+                    System.Collections.IEnumerable enumerable => enumerable.OfType<string>(),
+                    _ => null,
+                };
+                if (names is not null)
+                {
+                    foreach (var n in names)
+                    {
+                        var resolved = KnownPublisherCidrs.TryGet(n);
+                        if (resolved is not null) entries.AddRange(resolved);
+                    }
+                }
+            }
+        }
+
+        return entries.Count == 0 ? null : entries;
     }
 
     private WebhookRateLimitOptions ResolveRateLimit(IReadOnlyDictionary<string, object?> inputs)

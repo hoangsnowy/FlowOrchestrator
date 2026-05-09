@@ -226,18 +226,109 @@ Inputs["webhookRateLimitPerIp"] = true;
 
 ## IP allow / deny list
 
-Compact CIDR matcher (IPv4 + IPv6) plus curated publisher presets:
+`CidrMatcher` accepts every common notation for an IP allow / deny list,
+mix-and-match in the same array:
+
+| Notation | Example | Notes |
+|----------|---------|-------|
+| CIDR | `10.0.0.0/8`, `2001:db8::/32` | IPv4 + IPv6 |
+| Single address | `203.0.113.42` | Auto-promoted to `/32` (IPv4) / `/128` (IPv6) |
+| Inclusive range | `10.0.0.10-10.0.0.42` | Bytewise compare; works for IPv6 too (`2001:db8::1-2001:db8::ff`) |
+| Octet wildcard | `10.0.*.*` | Equivalent to the matching CIDR (`10.0.0.0/16`); `*.*.*.*` matches everything |
 
 ```csharp
-Inputs["webhookIpAllowListPreset"] = "github";   // KnownPublisherCidrs.GitHub
-// or override with explicit ranges:
-Inputs["webhookIpAllowList"] = new[] { "10.0.0.0/8", "2001:db8::/32" };
-Inputs["webhookIpDenyList"] = new[] { "203.0.113.42" };
+// Mix-and-match in any combination.
+Inputs["webhookIpAllowList"] = new[]
+{
+    "10.0.0.0/8",                     // CIDR
+    "172.16.0.10-172.16.0.42",        // inclusive range
+    "192.168.5.*",                    // wildcard /24
+    "203.0.113.42",                   // single address
+    "2001:db8::/32",                  // IPv6 CIDR
+    "::1/128",                        // IPv6 loopback
+};
+
+Inputs["webhookIpDenyList"] = new[]
+{
+    "203.0.113.0/24",                 // ban a /24
+    "198.51.100.0-198.51.100.99",     // ban a range
+};
 ```
 
-Allow takes precedence when both are set. Set
-`WebhookSecurityOptions.ForwardedHeaderDepth` to your trusted reverse-proxy
-depth — the matcher reads `X-Forwarded-For` only when this is > 0.
+The list can also be a single comma-delimited string, which is more friendly
+for `appsettings.json` configuration:
+
+```json
+{
+  "webhookIpAllowList": "10.0.0.0/8, 172.16.0.0-172.16.255.255, 192.168.*.*"
+}
+```
+
+Allow takes precedence when both are set: a request must match the allow
+list AND not match the deny list to pass. If only the allow list is set the
+request must match it; if only the deny list is set every non-matching IP
+passes.
+
+### Curated publisher presets (`KnownPublisherCidrs`)
+
+For known publishers, name a preset instead of pasting CIDRs into every flow:
+
+```csharp
+Inputs["webhookIpAllowListPreset"] = "github";
+```
+
+Presets bundled with the library:
+
+| Preset | What it covers |
+|--------|----------------|
+| `github` | GitHub published webhook ranges (api.github.com/meta — 4 IPv4 + 2 IPv6) |
+| `stripe` | Stripe webhook source IPs |
+| `shopify` | Shopify partner-published ranges |
+| `twilio` | Twilio "Network Connectivity" ranges |
+| `square` | Square developer-docs ranges |
+| `atlassian` / `bitbucket` | Atlassian Cloud / Bitbucket Cloud (ip-ranges.atlassian.com) |
+| `slack` | Slack outbound IP ranges |
+| `mailgun` | Mailgun control-panel IPs |
+| `zoom` | Zoom marketplace publisher ranges |
+| `local` / `localhost` / `private` | RFC 1918 private + loopback (IPv4 + IPv6 + link-local) — for dev environments |
+
+Use multiple presets in one flow with `webhookIpAllowListPresets` (plural):
+
+```csharp
+// Array form
+Inputs["webhookIpAllowListPresets"] = new[] { "github", "local" };
+
+// Or comma-delimited string (appsettings.json friendly)
+Inputs["webhookIpAllowListPresets"] = "github,stripe,local";
+```
+
+The plural form merges with the singular `webhookIpAllowListPreset` and the
+explicit `webhookIpAllowList` — all three sources combine into a single
+matcher. Use a custom array for environment-specific deltas; use presets for
+the well-known partner ranges.
+
+> **Caveat.** Presets are point-in-time snapshots of each publisher's
+> documentation. They drift. For production lock-down treat them as a
+> defensive baseline, then verify against the publisher's current
+> authoritative IP-range page before relying on them solo. Combine with an
+> explicit list when you need newer / extra ranges.
+
+### Reverse-proxy / `X-Forwarded-For`
+
+`WebhookSecurityOptions.ForwardedHeaderDepth` controls how deep into the
+XFF chain the dashboard trusts:
+
+```csharp
+opts.UseWebhookSecurity(sec => sec.UseForwardedHeaders(depth: 1));
+```
+
+- `0` (default) — use `HttpContext.Connection.RemoteIpAddress` directly. Only
+  trusts the immediate socket peer.
+- `1` — trust 1 reverse-proxy hop; read the second-from-last entry in
+  `X-Forwarded-For` as the client.
+- `N` — trust N hops. Never set this higher than the actual number of
+  proxies you control: every extra hop is an attacker-controlled IP if the
+  client itself can spoof the header.
 
 ## Body size cap
 
