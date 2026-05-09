@@ -6,52 +6,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-### Added — IP allowlist range syntax + 9 new publisher presets (v1.25.2)
-
-- **`CidrMatcher` accepts more notations.** In addition to CIDR
-  (`10.0.0.0/8`, `2001:db8::/32`) and bare addresses, the matcher now
-  parses:
-  - **Inclusive ranges** — `10.0.0.10-10.0.0.42` (IPv4) and
-    `2001:db8::1-2001:db8::ff` (IPv6). Bytewise compare; reversed ranges
-    are rejected as malformed.
-  - **Octet wildcards** — `10.0.*.*` is equivalent to `10.0.0.0/16`,
-    `10.*.*.*` is `/8`, `*.*.*.*` matches everything. Each `*` after the
-    first must also be `*` (`10.*.0.0` is rejected).
-- **9 new bundled presets** in `KnownPublisherCidrs`: `shopify`,
-  `twilio`, `square`, `atlassian` / `bitbucket`, `slack`, `mailgun`,
-  `zoom`, plus `local` / `localhost` / `private` (RFC 1918 + loopback +
-  link-local for dev environments). `github` and `stripe` already
-  shipped in v1.25.0.
-- **`webhookIpAllowListPresets` (plural)** new manifest field — combine
-  multiple presets in one flow. Accepts an array or comma-delimited
-  string. Merges with the singular `webhookIpAllowListPreset` and the
-  explicit `webhookIpAllowList`.
-- **Comma-delimited string form** for `webhookIpAllowList` /
-  `webhookIpDenyList` — friendlier for `appsettings.json` configuration
-  than nested arrays. Existing array form still works.
-
-### Tests
-
-- 30 new unit tests in `CidrMatcherTests`: range syntax (IPv4 + IPv6 +
-  reversed-rejected), wildcard syntax (every prefix length + post-star
-  octet rejection), mixed CIDR/range/wildcard in same matcher, every
-  bundled preset resolves to a non-empty list, `local` preset matches
-  loopback + RFC 1918 + IPv6 link-local. Dashboard.UnitTests grew
-  75 → 105.
-
-### Docs
-
-- `docs/articles/webhook-hardening.md` rewritten "IP allow / deny list"
-  section: notation table, mixed-list example, comma-delimited config
-  example, full preset reference table, `webhookIpAllowListPresets`
-  plural usage, drift caveat for presets, reverse-proxy / XFF guide.
-- `docs/articles/triggers.md` manifest field reference updated with new
-  notations + every preset name.
-- `docs/articles/production-checklist.md` step 4 expanded with the new
-  presets and notation flexibility.
-
-
-
 ## [1.25.0] - 2026-05-09
 
 ### Added — enterprise webhook hardening
@@ -209,6 +163,107 @@ services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
   purge, DLQ write + query, counts-by-reason aggregation) follow
   the existing `SqlServerFixture` / `PostgreSqlFixture` Testcontainers
   pattern.
+
+### IP allowlist — range + wildcard syntax + 9 new publisher presets
+
+- **`CidrMatcher` accepts more notations.** In addition to CIDR
+  (`10.0.0.0/8`, `2001:db8::/32`) and bare addresses, the matcher now
+  parses inclusive ranges (`10.0.0.10-10.0.0.42`, IPv6 too) and octet
+  wildcards (`10.0.*.*` ≡ `/16`, `10.*.*.*` ≡ `/8`,
+  `*.*.*.*` matches everything). Reversed ranges and post-star octets
+  are rejected as malformed.
+- **9 new bundled presets** in `KnownPublisherCidrs`: `shopify`,
+  `twilio`, `square`, `atlassian` (and `bitbucket` alias), `slack`,
+  `mailgun`, `zoom`, plus `local` / `localhost` / `private` (RFC 1918
+  + loopback + IPv6 link-local for dev). `github` and `stripe` were
+  already shipped.
+- **`webhookIpAllowListPresets` (plural)** new manifest field — combine
+  multiple presets in one flow. Accepts an array OR comma-delimited
+  string. Merges with the singular `webhookIpAllowListPreset` and the
+  explicit `webhookIpAllowList`. The list field also accepts a single
+  comma-delimited string, friendlier for `appsettings.json` config than
+  a nested array.
+
+### Webhooks dashboard surface
+
+- New "Webhooks" sidebar tab + `GET /flows/api/webhooks/recent` (paged,
+  searchable) + `GET /flows/api/webhooks/stats` (24-hour reason
+  histogram) endpoints. Compression honoured per the dashboard
+  Accept-Encoding contract (Brotli + Gzip + `Vary` header).
+- Page layout mirrors the runs page (`.runs-list-panel` pattern, search
+  input + filter dropdown in the header, table scrolls, pager pins as
+  a `flex-shrink:0` sibling). Reuses `.btn-page` / `.page-num` /
+  `.runs-pagination` classes for consistency. Pager has Prev/Next SVG
+  buttons + numbered list + jump-to-page input at ≥ 8 pages.
+- New "HMAC" column shows the resolved signature header (e.g.
+  `X-Hub-Signature-256`) as an info chip — quick visual signal that a
+  row was processed through the signature gate. Empty rows show `—`.
+- Search box does case-insensitive contains-match across `Reason`,
+  `TriggerKey`, and `RemoteIp` fields with 250 ms debounce. 3-state
+  filter dropdown (All / Rejected only / Accepted only).
+- All chip + input + pager styling uses the `--fo-*` token system from
+  `dashboard.css :root` (no hard-coded HEX or RGBA literals).
+  `chip--accept` uses the `--fo-success-*` family, `chip--reject` uses
+  `--fo-danger-*`, `chip--scheme` uses `--fo-info-*` (the only cool tint
+  sanctioned by `DESIGN.md`).
+
+### CLAUDE.md "Dashboard UI Standards" section expanded
+
+- Token-mapping table covering brand accent / surfaces / text / borders
+  / ring shadows / chip families / focus ring / typography / radius
+  scale; each row spells out the right token plus the anti-pattern.
+- 6-item pre-flight checklist for any `dashboard.css` / `dashboard.js`
+  / `index.html` edit (read DESIGN.md, every value uses a token,
+  reuse existing classes, pager is sibling not child of scroll
+  container, run contract tests, declare new tokens in DESIGN.md §10).
+
+### Tests
+
+- 30 new unit tests in `CidrMatcherTests` (range syntax IPv4 + IPv6,
+  reversed rejected, wildcard syntax + post-star octet rejection,
+  mixed CIDR/range/wildcard in same matcher, every bundled preset).
+- 12 new dashboard integration tests for `/api/webhooks/recent`
+  paged envelope, `q=` search, Brotli + Gzip compression contract,
+  webhook page layout mirror, JS pagination helpers inlined.
+- `Dashboard.UnitTests` grew 64 → 105 across the v1.25 line; webhook
+  integration suite grew 16 → 36.
+
+### Sample app
+
+- `WebhookEnterpriseSampleFlow` registered with full enterprise
+  hardening (HMAC + replay + IP allowlist preset). The sample's
+  `Program.cs` activates `EnforcementMode = Audit` so dry-run
+  rejections populate the dashboard without breaking legitimate
+  publishers, and calls `AddSqlServerWebhookHardening` /
+  `AddPostgreSqlWebhookHardening` so the DLQ + replay nonces persist
+  across host restarts on the SQL Server / PostgreSQL backed sample
+  instances. The `WebhookEnterpriseSampleFlow` GUID is now in
+  `SampleFlowIds.All` on the AppHost so the Service Bus emulator
+  pre-creates the matching subscription (no more
+  subscription-not-found errors in the SB instance log).
+
+### Docs
+
+- New `docs/articles/webhook-hardening.md` — full per-publisher
+  cookbook (GitHub, Stripe, Slack, Shopify, Twilio, Square, Zoom,
+  Linear, Dropbox, Mailgun, Microsoft Teams, Atlassian, Calendly,
+  Bitbucket, Generic, Custom), enforcement mode rollout, key rotation,
+  replay protection, rate limit, IP allowlist with notation table +
+  preset reference + multi-preset usage + drift caveat + reverse-proxy
+  / XFF guide, body cap, DLQ surface, observability.
+- `docs/articles/triggers.md` — manifest field reference table updated
+  with every notation + every preset name + the new plural field.
+- `docs/articles/configuration.md` — `WebhookSecurityOptions` reference
+  table + builder snippet covering every property.
+- `docs/articles/observability.md` — 4 new metrics rows
+  (`webhook_received_total`, `webhook_rejected_total`,
+  `webhook_body_bytes`, `webhook_processing_ms`) + EventIds 4000–4010
+  in the `LogEvents` block.
+- `docs/articles/production-checklist.md` — 5-step rollout checklist
+  with rotation playbook + multi-replica backend swap guidance.
+- `docs/articles/storage.md` — `WebhookReplayNonces` +
+  `WebhookRejections` tables documented with `AddSqlServerWebhookHardening`
+  / `AddPostgreSqlWebhookHardening` registration snippet.
 
 ## [1.24.0] - 2026-05-03
 
