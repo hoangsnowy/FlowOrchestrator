@@ -2487,7 +2487,6 @@ async function loadWebhooks(opts) {
   const silent = !!(opts && opts.silent);
   const listEl = $('webhook-list');
   const statsEl = $('webhook-stats');
-  const countEl = $('webhooks-count-label');
   const pagerEl = $('webhook-pagination');
   if (!listEl) return;
   if (!silent && !listEl.innerHTML.trim()) listEl.innerHTML = skeletonRows(8, 5);
@@ -2507,7 +2506,6 @@ async function loadWebhooks(opts) {
     ]);
     const items = page && Array.isArray(page.items) ? page.items : (Array.isArray(page) ? page : []);
     const total = page && typeof page.total === 'number' ? page.total : items.length;
-    if (countEl) countEl.innerHTML = '<span class="num">' + total + '</span>recent';
     if (statsEl) statsEl.innerHTML = renderWebhookStats(stats);
     listEl.innerHTML = items.length === 0
       ? '<div class="empty-msg">' + (webhookSearch ? 'No deliveries match your search.' : 'No webhook deliveries yet.') + '</div>'
