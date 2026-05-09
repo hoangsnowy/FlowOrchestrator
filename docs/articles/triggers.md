@@ -103,6 +103,58 @@ X-Webhook-Key: my-secret-key
 - `webhookSecret` — When set, every incoming request must include `X-Webhook-Key: {secret}`. Requests without or with the wrong secret receive `401 Unauthorized`.
 - If `webhookSecret` is omitted, the endpoint is unauthenticated.
 
+### Enterprise hardening (v1.25)
+
+The dashboard webhook endpoint ships an opt-in security pipeline: HMAC signature verification → IP allow / deny → rate limit → replay protection. With the default `WebhookEnforcementMode.Off` the endpoint behaves exactly as in v1.24; flip to `Audit` for one release to dry-run, then `Enforce` to start rejecting.
+
+Activate the pipeline in DI:
+
+```csharp
+services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
+{
+    sec.UseEnforcementMode(WebhookEnforcementMode.Enforce)
+       .UseReplayProtection(toleranceSeconds: 300)
+       .UseRateLimit(permitsPerSecond: 50, perIp: true)
+       .UseForwardedHeaders(depth: 1)
+       .UseMaxBodyBytes(1_048_576);
+}));
+```
+
+Activate per flow via manifest inputs. The full set of v1.25 fields:
+
+| Field | Purpose |
+|-------|---------|
+| `webhookSignatureScheme` | Selects a built-in dialect: `GitHub`, `GitHubLegacy`, `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`, `Linear`, `Dropbox`, `Mailgun`, `MicrosoftTeams`, `Atlassian`, `Calendly`, `Generic`, or `Custom`. |
+| `webhookHmacKey` | Signing key used for HMAC verification. Falls back to `webhookSecret` when absent. |
+| `webhookHmacKeyPrevious` / `webhookSecretPrevious` | Optional rotated-out key. Successful matches against the previous key emit `EventId 4010` (`WebhookSecretRotationUsedPrevious`). |
+| `webhookSignatureHeader`, `webhookSignatureAlgorithm`, `webhookSignatureEncoding`, `webhookSignaturePrefix`, `webhookSignatureMultiValueDelimiter`, `webhookSignatureKeyValueSeparator`, `webhookSignatureValueKey`, `webhookTimestampValueKey`, `webhookTimestampHeader`, `webhookSignedPayloadStrategy`, `webhookSignedPayloadDelimiter`, `webhookSignedPayloadVersion`, `webhookHeaderValuePrefix`, `webhookCustomStrategyName` | Drive the `Custom` scheme directly from the manifest (every aspect of the wire format is controllable). |
+| `webhookReplayToleranceSeconds` | Max clock skew between publisher timestamp and server time. `0` disables replay protection. |
+| `webhookNonceHeader` | Optional explicit nonce header (e.g. `X-GitHub-Delivery`). Default: SHA-256 of `timestamp \|\| body`. |
+| `webhookRateLimitPermitsPerSecond`, `webhookRateLimitBurstSize`, `webhookRateLimitPerIp` | Token-bucket overrides. Per-IP keying is opt-in. |
+| `webhookIpAllowList`, `webhookIpDenyList` | IP entries — CIDR (`10.0.0.0/8`, `2001:db8::/32`), inclusive range (`10.0.0.10-10.0.0.42`), wildcard (`10.0.*.*`), single address, or any combination. Accepts an array OR a comma-delimited string. Allow takes precedence. |
+| `webhookIpAllowListPreset` | Single curated publisher CIDR set. Presets: `github`, `stripe`, `shopify`, `twilio`, `square`, `atlassian`, `bitbucket`, `slack`, `mailgun`, `zoom`, `local` / `private`. |
+| `webhookIpAllowListPresets` | Multiple presets combined (array or comma-delimited string). Merges with `webhookIpAllowListPreset` and the explicit `webhookIpAllowList`. |
+
+Per-publisher cookbook example — GitHub:
+
+```csharp
+["webhook"] = new TriggerMetadata
+{
+    Type = TriggerType.Webhook,
+    Inputs = new Dictionary<string, object?>
+    {
+        ["webhookSlug"] = "github-events",
+        ["webhookHmacKey"] = "<the secret you configured at github.com/.../settings/hooks>",
+        ["webhookSignatureScheme"] = "GitHub",
+        ["webhookReplayToleranceSeconds"] = 300,
+        ["webhookNonceHeader"] = "X-GitHub-Delivery",
+        ["webhookIpAllowListPreset"] = "github",
+    }
+}
+```
+
+The dashboard exposes a "Webhooks" tab that surfaces the recent-deliveries log and a 24-hour reason histogram (`GET /flows/api/webhooks/recent`, `GET /flows/api/webhooks/stats`). Rejected requests are persisted to the in-memory ring buffer (last 1 000 entries by default); a Sql / Postgres backend ships in a follow-up release for long retention.
+
 ---
 
 ## Multiple Triggers per Flow

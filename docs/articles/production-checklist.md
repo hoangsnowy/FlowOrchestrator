@@ -166,6 +166,13 @@ flow store throws or the probe budget elapses — point your load balancer at it
 
 - **Connection strings.** Never in source. Use environment variables, `appsettings.{Environment}.json` outside of `main`, or a managed secret store.
 - **Webhook secrets.** Each webhook trigger carries a `webhookSecret` input. Rotate it like any shared secret; supply a new value in the manifest and pause-resume the trigger so the routing table refreshes.
+- **Webhook hardening pipeline (v1.25).** Treat the dashboard webhook endpoint as a public attack surface. Recommended rollout:
+  1. Set `WebhookSecurityOptions.EnforcementMode = Audit` for one release. The pipeline fires every gate (HMAC signature, replay, rate-limit, IP allow/deny, body cap), logs `EventId 4001-4006` for failures, and writes the DLQ — but the endpoint still returns 202. Use the dashboard "Webhooks" tab to confirm legitimate traffic still validates.
+  2. Flip to `Enforce` once `webhook_rejected_total` is dominated by traffic you actually want to reject.
+  3. Set `webhookHmacKey` on every webhook trigger; `webhookHmacKeyPrevious` is your zero-downtime rotation slot. Successful matches against the previous key emit `EventId 4010` so you know when to revoke it.
+  4. Lock down source IPs. The matcher accepts CIDR (`10.0.0.0/8`), inclusive ranges (`10.0.0.10-10.0.0.42`), wildcards (`10.0.*.*`), single addresses, and curated presets — mix-and-match in `webhookIpAllowList` (array OR comma-delimited string). Bundled presets: `github`, `stripe`, `shopify`, `twilio`, `square`, `atlassian` / `bitbucket`, `slack`, `mailgun`, `zoom`, plus `local` for RFC 1918 + loopback. Combine multiple presets via `webhookIpAllowListPresets` (plural). Set `WebhookSecurityOptions.ForwardedHeaderDepth` to your actual reverse-proxy depth — never higher.
+  5. For multi-replica deployments, swap the in-memory replay/DLQ stores for SQL Server (`AddSqlServerWebhookHardening`) or PostgreSQL (`AddPostgreSqlWebhookHardening`). The in-memory stores are single-process and will let a replay through on the second replica.
+  See [Webhook hardening](webhook-hardening.md) for the full per-publisher cookbook.
 - **Dashboard Basic Auth.** The dashboard ships with optional Basic Auth — sufficient for an internal-only surface behind a VPN. **Insufficient for any production fronting the public internet** — put a real auth proxy (OIDC, Azure AD, Cloudflare Access) in front.
 - **PII in step inputs/outputs.** Step inputs and outputs are persisted in `FlowSteps` and `FlowOutputs` and are visible in the dashboard's run detail view. **Treat them as logs.** If you need to ingest PII, redact before the step boundary and pass an opaque token instead.
 

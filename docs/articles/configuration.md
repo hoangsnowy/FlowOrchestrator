@@ -194,6 +194,50 @@ Or via `appsettings.json`:
 | `BasicAuth.Enabled` | `bool` | `false` | Protect all dashboard routes with HTTP Basic Auth |
 | `BasicAuth.Username` | `string?` | — | Required when `BasicAuth.Enabled = true` |
 | `BasicAuth.Password` | `string?` | — | Required when `BasicAuth.Enabled = true` |
+| `WebhookSecurity` | `WebhookSecurityOptions` | (Off) | Enterprise webhook hardening pipeline. Configure via `UseWebhookSecurity(b => …)` — see below. |
+
+### WebhookSecurityOptions
+
+Opt-in HMAC signature, replay, rate-limit, IP allow/deny, body cap, and DLQ
+gates for the dashboard webhook receive endpoint. The default
+`EnforcementMode = Off` keeps the endpoint behaving exactly as in v1.24.
+
+```csharp
+builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
+{
+    sec.UseEnforcementMode(WebhookEnforcementMode.Audit) // dry-run first
+       .UseMaxBodyBytes(1_048_576)
+       .UseReplayProtection(toleranceSeconds: 300)
+       .UseRateLimit(permitsPerSecond: 50, burstSize: 100, perIp: true)
+       .UseForwardedHeaders(depth: 1)
+       .AllowLegacySha1();   // GitHub legacy X-Hub-Signature opt-in
+}));
+
+// Storage backends (multi-replica) — replaces in-memory defaults:
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(sqlConn);
+    options.AddSqlServerWebhookHardening(sqlConn);
+});
+```
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `EnforcementMode` | `WebhookEnforcementMode` | `Off` | `Off` skips every gate. `Audit` runs gates + writes DLQ + emits metrics but always returns 202. `Enforce` rejects failing requests. |
+| `AllowLegacySha1` | `bool` | `false` | Allow HMAC-SHA1 signatures (legacy GitHub `X-Hub-Signature`). Off by default. |
+| `MaxBodyBytes` | `long` | `1_048_576` | Hard cap; oversized requests return 413 before JSON parsing. |
+| `ReplayToleranceSeconds` | `int` | `0` | Maximum allowed clock skew. `0` disables replay protection. |
+| `DefaultTimestampHeader` | `string?` | — | Global timestamp header default (e.g. `"X-Webhook-Timestamp"`). |
+| `DefaultNonceHeader` | `string?` | — | Global nonce / delivery-id header default. |
+| `RateLimit.PermitsPerSecond` | `double` | `0` | Sustained throughput. `0` disables rate limiting. |
+| `RateLimit.BurstSize` | `int?` | — | Optional burst capacity; defaults to `PermitsPerSecond`. |
+| `RateLimit.PerIp` | `bool` | `false` | Key the limiter on `flowId\|clientIp` instead of `flowId`. |
+| `ForwardedHeaderDepth` | `int` | `0` | Trusted reverse-proxy depth for `X-Forwarded-For`. `0` uses `RemoteIpAddress` directly. |
+
+**Manifest-level overrides** are documented in [Triggers — Enterprise hardening (v1.25)](triggers.md#enterprise-hardening-v125).
+
+For the full per-publisher cookbook (GitHub, Stripe, Slack, Shopify, …)
+see the dedicated [Webhook hardening](webhook-hardening.md) article.
 
 ---
 

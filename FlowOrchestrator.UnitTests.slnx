@@ -15,5 +15,6 @@
     <Project Path="tests/unit/FlowOrchestrator.Hangfire.UnitTests/FlowOrchestrator.Hangfire.UnitTests.csproj" />
     <Project Path="tests/unit/FlowOrchestrator.ServiceBus.UnitTests/FlowOrchestrator.ServiceBus.UnitTests.csproj" />
     <Project Path="tests/unit/FlowOrchestrator.SqlServer.UnitTests/FlowOrchestrator.SqlServer.UnitTests.csproj" />
+    <Project Path="tests/unit/FlowOrchestrator.Dashboard.UnitTests/FlowOrchestrator.Dashboard.UnitTests.csproj" />
   </Folder>
 </Solution>

@@ -44,6 +44,8 @@ builder.Services.AddFlowOrchestrator(options =>
 | `FlowEvents` | Event stream records (when `EnableEventPersistence = true`) |
 | `FlowSignalWaiters` | Parked `WaitForSignal` step state (see [WaitForSignal](wait-for-signal.md)) |
 | `FlowScheduleStates` | Cron override storage (when `Scheduler.PersistOverrides = true`) |
+| `WebhookReplayNonces` | Replay-attack nonce ledger for the dashboard webhook hardening pipeline (v1.25; opt-in) |
+| `WebhookRejections` | DLQ + recent-deliveries log for the webhook pipeline (v1.25; opt-in) |
 
 **Connection string format:**
 
@@ -71,7 +73,28 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-`FlowOrchestratorPgMigrator` creates the same table set in PostgreSQL on startup. Uses `Npgsql` — no EF Core dependency.
+`FlowOrchestratorPgMigrator` creates the same table set in PostgreSQL on startup. Uses `Npgsql` — no EF Core dependency. PostgreSQL table names are snake_case (`flow_runs`, `webhook_replay_nonces`, `webhook_rejections`, …).
+
+### Webhook hardening backends (v1.25)
+
+The replay-nonce + DLQ stores default to in-memory (single-replica only). For multi-replica deployments register the backend-specific implementations:
+
+```csharp
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(sqlConn);
+    options.AddSqlServerWebhookHardening(sqlConn);     // SqlWebhookReplayStore + SqlWebhookRejectionStore
+});
+
+// or for PostgreSQL:
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UsePostgreSql(pgConn);
+    options.AddPostgreSqlWebhookHardening(pgConn);     // PostgreSqlWebhookReplayStore + PostgreSqlWebhookRejectionStore
+});
+```
+
+Both replay-store implementations use atomic upserts (`INSERT … WHERE NOT EXISTS` on Sql Server, `ON CONFLICT DO NOTHING` on Postgres) so concurrent replicas race correctly without a serialisable transaction. Tables are created by the existing migrators with idempotent `IF NOT EXISTS` guards.
 
 ```json
 {

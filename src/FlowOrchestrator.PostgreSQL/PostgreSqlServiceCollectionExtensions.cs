@@ -44,6 +44,23 @@ public static class PostgreSqlServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the PostgreSQL-backed webhook hardening stores
+    /// (<see cref="IWebhookReplayStore"/>, <see cref="IWebhookRejectionStore"/>),
+    /// replacing the in-memory defaults wired by <c>AddFlowDashboard</c>.
+    /// </summary>
+    /// <param name="builder">The FlowOrchestrator builder.</param>
+    /// <param name="connectionString">Npgsql connection string.</param>
+    public static FlowOrchestratorBuilder AddPostgreSqlWebhookHardening(
+        this FlowOrchestratorBuilder builder,
+        string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) throw new ArgumentException("Connection string required.", nameof(connectionString));
+        builder.Services.Replace(ServiceDescriptor.Singleton<IWebhookReplayStore>(_ => new PostgreSqlWebhookReplayStore(connectionString)));
+        builder.Services.Replace(ServiceDescriptor.Singleton<IWebhookRejectionStore>(_ => new PostgreSqlWebhookRejectionStore(connectionString)));
+        return builder;
+    }
+
+    /// <summary>
     /// Registers PostgreSQL implementations directly on <see cref="IServiceCollection"/>,
     /// for use outside the <c>AddFlowOrchestrator</c> builder pattern.
     /// </summary>

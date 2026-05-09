@@ -6,6 +6,265 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-05-09
+
+### Added — enterprise webhook hardening
+
+The webhook receive endpoint (`POST /flows/api/webhook/{idOrSlug}`) now ships
+with a four-stage hardening pipeline driven by manifest fields and the new
+`FlowDashboardOptions.UseWebhookSecurity(...)` builder. Every gate is opt-in;
+existing flows that don't set new manifest fields keep their pre-1.25 behaviour.
+
+- **HMAC body signature verification (P1).** Pluggable
+  `IWebhookSignatureVerifier` driven by a declarative
+  `WebhookSignatureSpec`. 17 built-in dialects shipped via
+  `WebhookSignatureScheme` and `PartnerSchemeRegistry`:
+  `Generic`, `GitHub`, `GitHubLegacy` (SHA-1, gated by `AllowLegacySha1`),
+  `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`,
+  `Linear`, `Dropbox`, `Mailgun` (body-resident signature), `MicrosoftTeams`,
+  `Atlassian`, `Calendly`, `Custom` (full manifest-driven shape).
+  Multi-signature headers (Stripe `t=,v0=,v1=` / Slack `v0=`) parsed without
+  short-circuit so the constant-time compare doesn't leak which candidate matched.
+  HMAC-SHA1 / SHA-256 / SHA-384 / SHA-512 supported across hex (lower/upper),
+  base64, and base64url (padding-tolerant). Zero-downtime key rotation via the
+  `webhookHmacKeyPrevious` (or `webhookSecretPrevious`) input — successful
+  matches against the previous key emit EventId 4010 so operators know to
+  rotate publishers off the older value.
+- **Replay protection (P2).** New `IWebhookReplayStore` (in-memory default)
+  + `ReplayProtectionGate` checks publisher-supplied timestamps against a
+  configurable skew window (`webhookReplayToleranceSeconds`, default off,
+  recommended 300 s) and registers a per-`(flowId, triggerKey)` nonce to
+  reject duplicate deliveries. Nonce defaults to SHA-256 of
+  `timestamp || body` so identical replays collapse but distinct deliveries
+  do not. Header-supplied nonces (`webhookNonceHeader` /
+  `X-GitHub-Delivery`-style) override the body hash. A
+  `WebhookReplayJanitor : BackgroundService` purges expired entries every
+  minute. Multi-replica coordination is not yet covered (in-process only,
+  same constraint as the v1.24 SSE backplane); a Sql/Postgres backend
+  drops in via the same interface in a follow-up release.
+- **Rate limiting (P3).** Token-bucket limiter built on
+  `System.Threading.RateLimiting`, keyed per flow or per
+  `flowId|clientIp` when `webhookRateLimitPerIp = true`. Manifest controls:
+  `webhookRateLimitPermitsPerSecond`, `webhookRateLimitBurstSize`,
+  `webhookRateLimitPerIp`. Global default exposed through
+  `WebhookSecurityOptionsBuilder.UseRateLimit(...)`. Rejected requests
+  return HTTP 429 with `Retry-After` and emit EventId 4003.
+- **IP allow / deny list (P6).** Compact `CidrMatcher` parses IPv4 and IPv6
+  CIDR ranges plus single addresses. Manifest fields:
+  `webhookIpAllowList`, `webhookIpDenyList` (allow takes precedence) and
+  `webhookIpAllowListPreset` (`"github"` / `"stripe"`) which pulls from a
+  curated `KnownPublisherCidrs` table. `X-Forwarded-For` is only consulted
+  when `WebhookSecurityOptions.ForwardedHeaderDepth > 0`; clients are
+  resolved at the configured trust depth.
+- **Body size cap.** Webhook body now buffered exactly once via the new
+  `WebhookRequestBuffer.ReadAsync`, capped at
+  `WebhookSecurityOptions.MaxBodyBytes` (default 1 MiB). Oversized requests
+  return HTTP 413 before the JSON parser sees a single byte.
+- **DLQ + recent-deliveries log (P4).** New `IWebhookRejectionStore` +
+  `InMemoryWebhookRejectionStore` (bounded ring buffer, default 1 000
+  entries) records every accepted and rejected delivery with reason chip,
+  IP, body excerpt (4 KiB cap), and processing time. Wired into the
+  pipeline so every gate failure persists a row.
+- **Receive metrics (P5).** New
+  `FlowOrchestratorTelemetry` counters / histograms:
+  `webhook_received_total{flow,result,scheme}`,
+  `webhook_rejected_total{flow,reason}`,
+  `webhook_body_bytes`, `webhook_processing_ms{flow,result}`.
+- **Dashboard "Webhooks" tab (P7).** New
+  `GET /flows/api/webhooks/recent?flowId=&reason=&rejectedOnly=&skip=&take=`
+  and `GET /flows/api/webhooks/stats?hours=24` endpoints; new SPA tab
+  with reason chips, accept/reject filter toggle, and a 24-hour reason
+  histogram. Follows DESIGN.md (warm palette, Terracotta accent on
+  rejection chips, ring shadows, no gradients).
+- **Sample flow.** `samples/.../WebhookEnterpriseSampleFlow.cs`
+  demonstrates GitHub-style HMAC verification with replay protection,
+  rate limit, and IP allowlist preset.
+- **Three enforcement modes.** `WebhookEnforcementMode`:
+  `Off` (default — endpoint is byte-for-byte identical to v1.24),
+  `Audit` (gates run + log + metrics fire but the endpoint always accepts —
+  one-release dry-run path), `Enforce` (rejecting gates return 4xx).
+- **EventIds 4000–4099 reserved** in a dashboard-local
+  `WebhookLog` source generator: 4000 `WebhookReceived`,
+  4001 `WebhookSignatureRejected`, 4002 `WebhookReplayRejected`,
+  4003 `WebhookRateLimited`, 4004 `WebhookPayloadTooLarge`,
+  4005 `WebhookIpDenied`, 4006 `WebhookSecretInvalid`,
+  4007 `WebhookDeliveryAccepted`, 4008 `WebhookRejectionStoreFailed`,
+  4009 `WebhookReplayStoreFailed`,
+  4010 `WebhookSecretRotationUsedPrevious`. 4011–4099 reserved for the
+  follow-up DLQ + dashboard-UI work.
+- **Activity tags.** The existing `flow.webhook.receive` span gains
+  `flow.webhook.scheme`, `flow.webhook.client_ip`,
+  `flow.webhook.replay_skew_ms`, `flow.webhook.rate_limit.retry_after_ms`,
+  `flow.webhook.result`, and `flow.webhook.reject_reason` for triage.
+
+### Tests
+
+- New project `tests/unit/FlowOrchestrator.Dashboard.UnitTests` (closes the
+  qa-agent gap flagged in 2026-05-08 audit). 59 unit tests covering
+  per-publisher signature vectors (GitHub modern + legacy, Stripe,
+  Slack, Shopify, Twilio, Square, Zoom, Linear, Dropbox, Mailgun,
+  MS Teams, Atlassian, Calendly, Bitbucket, Generic, Custom), encoding
+  edge cases (hex case insensitivity, base64url padding tolerance),
+  spec resolver precedence, replay-skew + nonce dedup behaviour,
+  token-bucket rate-limit math, and CIDR matcher (IPv4 + IPv6 + invalid
+  entries).
+- All 13 existing Dashboard webhook integration tests
+  (`WebhookEndpointTests`, `WebhookSecurityHardeningTests`,
+  `WebhookIdempotencyTests`, `WebhookRerunIdempotencyKeyHandlingTests`)
+  pass unchanged with the new pipeline.
+
+### DI surface
+
+```csharp
+services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
+{
+    sec.UseEnforcementMode(WebhookEnforcementMode.Audit) // dry-run first
+       .UseMaxBodyBytes(1_048_576)
+       .UseReplayProtection(toleranceSeconds: 300)
+       .UseRateLimit(permitsPerSecond: 50, perIp: true)
+       .UseForwardedHeaders(depth: 1);
+}));
+```
+
+### Manifest schema additions
+
+`webhookSignatureScheme`, `webhookSignatureHeader`,
+`webhookSignatureAlgorithm`, `webhookSignatureEncoding`,
+`webhookSignaturePrefix`, `webhookSignatureMultiValueDelimiter`,
+`webhookSignatureKeyValueSeparator`, `webhookSignatureValueKey`,
+`webhookTimestampValueKey`, `webhookTimestampHeader`,
+`webhookSignedPayloadStrategy`, `webhookSignedPayloadDelimiter`,
+`webhookSignedPayloadVersion`, `webhookHeaderValuePrefix`,
+`webhookCustomStrategyName`, `webhookHmacKey`, `webhookHmacKeyPrevious`,
+`webhookSecretPrevious`, `webhookReplayToleranceSeconds`,
+`webhookNonceHeader`, `webhookRateLimitPermitsPerSecond`,
+`webhookRateLimitBurstSize`, `webhookRateLimitPerIp`,
+`webhookIpAllowList`, `webhookIpDenyList`, `webhookIpAllowListPreset`.
+
+### Multi-replica storage backends
+
+- **`IWebhookReplayStore` and `IWebhookRejectionStore` moved to
+  `FlowOrchestrator.Core.Storage`** so any storage backend can plug in.
+- **SQL Server backend** — `SqlWebhookReplayStore`,
+  `SqlWebhookRejectionStore`, plus `WebhookReplayNonces` +
+  `WebhookRejections` tables added to `FlowOrchestratorSqlMigrator`.
+  Wire via `builder.AddSqlServerWebhookHardening(connectionString)`.
+- **PostgreSQL backend** — `PostgreSqlWebhookReplayStore`,
+  `PostgreSqlWebhookRejectionStore`, plus matching
+  `webhook_replay_nonces` + `webhook_rejections` tables. Wire via
+  `builder.AddPostgreSqlWebhookHardening(connectionString)`.
+- Both replay-store impls use atomic upserts (`INSERT … WHERE NOT EXISTS`
+  on Sql; `ON CONFLICT DO NOTHING` on Postgres) so concurrent inserters
+  race correctly — at most one wins per
+  `(flowId, triggerKey, nonce)` tuple. Suitable for multi-replica
+  deployments without the SSE-backplane caveat from the in-memory
+  default.
+- 4 integration tests per backend (replay register + duplicate, expiry
+  purge, DLQ write + query, counts-by-reason aggregation) follow
+  the existing `SqlServerFixture` / `PostgreSqlFixture` Testcontainers
+  pattern.
+
+### IP allowlist — range + wildcard syntax + 9 new publisher presets
+
+- **`CidrMatcher` accepts more notations.** In addition to CIDR
+  (`10.0.0.0/8`, `2001:db8::/32`) and bare addresses, the matcher now
+  parses inclusive ranges (`10.0.0.10-10.0.0.42`, IPv6 too) and octet
+  wildcards (`10.0.*.*` ≡ `/16`, `10.*.*.*` ≡ `/8`,
+  `*.*.*.*` matches everything). Reversed ranges and post-star octets
+  are rejected as malformed.
+- **9 new bundled presets** in `KnownPublisherCidrs`: `shopify`,
+  `twilio`, `square`, `atlassian` (and `bitbucket` alias), `slack`,
+  `mailgun`, `zoom`, plus `local` / `localhost` / `private` (RFC 1918
+  + loopback + IPv6 link-local for dev). `github` and `stripe` were
+  already shipped.
+- **`webhookIpAllowListPresets` (plural)** new manifest field — combine
+  multiple presets in one flow. Accepts an array OR comma-delimited
+  string. Merges with the singular `webhookIpAllowListPreset` and the
+  explicit `webhookIpAllowList`. The list field also accepts a single
+  comma-delimited string, friendlier for `appsettings.json` config than
+  a nested array.
+
+### Webhooks dashboard surface
+
+- New "Webhooks" sidebar tab + `GET /flows/api/webhooks/recent` (paged,
+  searchable) + `GET /flows/api/webhooks/stats` (24-hour reason
+  histogram) endpoints. Compression honoured per the dashboard
+  Accept-Encoding contract (Brotli + Gzip + `Vary` header).
+- Page layout mirrors the runs page (`.runs-list-panel` pattern, search
+  input + filter dropdown in the header, table scrolls, pager pins as
+  a `flex-shrink:0` sibling). Reuses `.btn-page` / `.page-num` /
+  `.runs-pagination` classes for consistency. Pager has Prev/Next SVG
+  buttons + numbered list + jump-to-page input at ≥ 8 pages.
+- New "HMAC" column shows the resolved signature header (e.g.
+  `X-Hub-Signature-256`) as an info chip — quick visual signal that a
+  row was processed through the signature gate. Empty rows show `—`.
+- Search box does case-insensitive contains-match across `Reason`,
+  `TriggerKey`, and `RemoteIp` fields with 250 ms debounce. 3-state
+  filter dropdown (All / Rejected only / Accepted only).
+- All chip + input + pager styling uses the `--fo-*` token system from
+  `dashboard.css :root` (no hard-coded HEX or RGBA literals).
+  `chip--accept` uses the `--fo-success-*` family, `chip--reject` uses
+  `--fo-danger-*`, `chip--scheme` uses `--fo-info-*` (the only cool tint
+  sanctioned by `DESIGN.md`).
+
+### CLAUDE.md "Dashboard UI Standards" section expanded
+
+- Token-mapping table covering brand accent / surfaces / text / borders
+  / ring shadows / chip families / focus ring / typography / radius
+  scale; each row spells out the right token plus the anti-pattern.
+- 6-item pre-flight checklist for any `dashboard.css` / `dashboard.js`
+  / `index.html` edit (read DESIGN.md, every value uses a token,
+  reuse existing classes, pager is sibling not child of scroll
+  container, run contract tests, declare new tokens in DESIGN.md §10).
+
+### Tests
+
+- 30 new unit tests in `CidrMatcherTests` (range syntax IPv4 + IPv6,
+  reversed rejected, wildcard syntax + post-star octet rejection,
+  mixed CIDR/range/wildcard in same matcher, every bundled preset).
+- 12 new dashboard integration tests for `/api/webhooks/recent`
+  paged envelope, `q=` search, Brotli + Gzip compression contract,
+  webhook page layout mirror, JS pagination helpers inlined.
+- `Dashboard.UnitTests` grew 64 → 105 across the v1.25 line; webhook
+  integration suite grew 16 → 36.
+
+### Sample app
+
+- `WebhookEnterpriseSampleFlow` registered with full enterprise
+  hardening (HMAC + replay + IP allowlist preset). The sample's
+  `Program.cs` activates `EnforcementMode = Audit` so dry-run
+  rejections populate the dashboard without breaking legitimate
+  publishers, and calls `AddSqlServerWebhookHardening` /
+  `AddPostgreSqlWebhookHardening` so the DLQ + replay nonces persist
+  across host restarts on the SQL Server / PostgreSQL backed sample
+  instances. The `WebhookEnterpriseSampleFlow` GUID is now in
+  `SampleFlowIds.All` on the AppHost so the Service Bus emulator
+  pre-creates the matching subscription (no more
+  subscription-not-found errors in the SB instance log).
+
+### Docs
+
+- New `docs/articles/webhook-hardening.md` — full per-publisher
+  cookbook (GitHub, Stripe, Slack, Shopify, Twilio, Square, Zoom,
+  Linear, Dropbox, Mailgun, Microsoft Teams, Atlassian, Calendly,
+  Bitbucket, Generic, Custom), enforcement mode rollout, key rotation,
+  replay protection, rate limit, IP allowlist with notation table +
+  preset reference + multi-preset usage + drift caveat + reverse-proxy
+  / XFF guide, body cap, DLQ surface, observability.
+- `docs/articles/triggers.md` — manifest field reference table updated
+  with every notation + every preset name + the new plural field.
+- `docs/articles/configuration.md` — `WebhookSecurityOptions` reference
+  table + builder snippet covering every property.
+- `docs/articles/observability.md` — 4 new metrics rows
+  (`webhook_received_total`, `webhook_rejected_total`,
+  `webhook_body_bytes`, `webhook_processing_ms`) + EventIds 4000–4010
+  in the `LogEvents` block.
+- `docs/articles/production-checklist.md` — 5-step rollout checklist
+  with rotation playbook + multi-replica backend swap guidance.
+- `docs/articles/storage.md` — `WebhookReplayNonces` +
+  `WebhookRejections` tables documented with `AddSqlServerWebhookHardening`
+  / `AddPostgreSqlWebhookHardening` registration snippet.
+
 ## [1.24.0] - 2026-05-03
 
 ### Added

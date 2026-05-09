@@ -44,6 +44,24 @@ public static class SqlServerServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the SQL Server-backed webhook hardening stores
+    /// (<see cref="IWebhookReplayStore"/>, <see cref="IWebhookRejectionStore"/>).
+    /// Call AFTER <see cref="UseSqlServer"/> so the migrator + connection string
+    /// are already bound. Defaults from <c>AddFlowDashboard</c> are replaced.
+    /// </summary>
+    /// <param name="builder">The FlowOrchestrator builder.</param>
+    /// <param name="connectionString">SQL Server connection string.</param>
+    public static FlowOrchestratorBuilder AddSqlServerWebhookHardening(
+        this FlowOrchestratorBuilder builder,
+        string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) throw new ArgumentException("Connection string required.", nameof(connectionString));
+        builder.Services.Replace(ServiceDescriptor.Singleton<IWebhookReplayStore>(_ => new SqlWebhookReplayStore(connectionString)));
+        builder.Services.Replace(ServiceDescriptor.Singleton<IWebhookRejectionStore>(_ => new SqlWebhookRejectionStore(connectionString)));
+        return builder;
+    }
+
+    /// <summary>
     /// Registers SQL Server implementations directly on <see cref="IServiceCollection"/>,
     /// for use outside the <c>AddFlowOrchestrator</c> builder pattern.
     /// </summary>

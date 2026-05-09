@@ -274,6 +274,45 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
             ALTER TABLE [FlowRuns] ADD [SourceRunId] UNIQUEIDENTIFIER NULL;
         END
 
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'WebhookReplayNonces')
+        BEGIN
+            CREATE TABLE [WebhookReplayNonces] (
+                [FlowId]      UNIQUEIDENTIFIER NOT NULL,
+                [TriggerKey]  NVARCHAR(256)    NOT NULL,
+                [Nonce]       NVARCHAR(256)    NOT NULL,
+                [ExpiresAt]   DATETIMEOFFSET   NOT NULL,
+                CONSTRAINT PK_WebhookReplayNonces PRIMARY KEY ([FlowId], [TriggerKey], [Nonce])
+            );
+
+            CREATE INDEX IX_WebhookReplayNonces_ExpiresAt ON [WebhookReplayNonces]([ExpiresAt]);
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'WebhookRejections')
+        BEGIN
+            CREATE TABLE [WebhookRejections] (
+                [Id]            BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                [FlowId]        UNIQUEIDENTIFIER NULL,
+                [TriggerKey]    NVARCHAR(256)    NULL,
+                [ReceivedAt]    DATETIMEOFFSET   NOT NULL,
+                [RemoteIp]      NVARCHAR(64)     NULL,
+                [Reason]        NVARCHAR(64)     NOT NULL,
+                [StatusCode]    INT              NOT NULL,
+                [BodyBytes]     INT              NOT NULL,
+                [BodyTruncated] NVARCHAR(MAX)    NULL,
+                [HeadersJson]   NVARCHAR(MAX)    NULL,
+                [Scheme]        NVARCHAR(128)    NULL,
+                [ProcessingMs]  FLOAT            NULL,
+                [IsAccepted]    BIT              NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IX_WebhookRejections_FlowId_ReceivedAt
+                ON [WebhookRejections]([FlowId], [ReceivedAt]);
+            CREATE INDEX IX_WebhookRejections_Reason
+                ON [WebhookRejections]([Reason]);
+            CREATE INDEX IX_WebhookRejections_ReceivedAt
+                ON [WebhookRejections]([ReceivedAt]);
+        END
+
         IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowRuns_SourceRunId' AND object_id = OBJECT_ID(N'[FlowRuns]'))
         BEGIN
             EXEC('CREATE INDEX IX_FlowRuns_SourceRunId ON [FlowRuns]([SourceRunId]) WHERE [SourceRunId] IS NOT NULL');
