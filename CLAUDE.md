@@ -219,16 +219,49 @@ To swap storage, implement `IFlowStore`, `IFlowRunStore`, and `IOutputsRepositor
 
 ## Dashboard UI Standards
 
-All changes to `src/FlowOrchestrator.Dashboard/DashboardHtml.cs` (CSS, HTML, JS) **must follow `DESIGN.md`**.
+**Read `DESIGN.md` BEFORE touching `src/FlowOrchestrator.Dashboard/Assets/` (CSS, HTML, JS).** Every change to a dashboard surface — new tab, new component, new button, new chip, new icon — MUST land using the existing `--fo-*` tokens defined in `dashboard.css :root`. No hard-coded HEX values. No `rgba(...)` literals. No new font families. No inline `style="color:..."` outside the tokens.
 
-### Key rules (read `DESIGN.md` for full spec)
+### Tokens you MUST use (defined in `dashboard.css :root`, lines 12–116)
 
-- **Color** — use only the warm-toned palette from DESIGN.md. No cool blue-grays. Primary accent is Terracotta `#c96442`. Surface hierarchy: Parchment `#f5f4ed` → Ivory `#faf9f5` → Warm Sand `#e8e6dc`.
-- **Typography** — `Inter` in this codebase maps to `Anthropic Sans` roles (UI text, labels, nav). Monospace (`JetBrains Mono`) maps to `Anthropic Mono`. No other typefaces.
-- **Buttons** — follow the button styles in DESIGN.md §4 (ring-based shadows, rounded corners, warm backgrounds). Never use pure black/white flat buttons.
-- **Layout** — the main-area must remain `height:100vh;overflow:hidden` so internal panels scroll, not the page. Pagination and footers must be `flex-shrink:0` siblings of scroll containers, not inside them.
-- **No gradients** — depth comes from warm surface layering and ring shadows, not gradients.
-- **Icons** — inline SVG only, `stroke-width:2`, consistent 16–20px sizing.
+| Need | Token (do this) | Anti-pattern (don't do this) |
+|------|-----------------|------------------------------|
+| Brand accent / CTA | `var(--fo-terracotta)` | `#c96442` literal, `var(--accent)` is a back-compat alias — fine but prefer `--fo-*` for new rules |
+| Page background | `var(--fo-parchment)` | `#f5f4ed`, `#fff`, `white` |
+| Card surface | `var(--fo-ivory)` | `#faf9f5`, `#ffffff` |
+| Secondary surface (button) | `var(--fo-warm-sand)` | `#e8e6dc` |
+| Primary text | `var(--fo-near-black)` | `#000`, `#141413`, `var(--fo-text)` (token does not exist — common mistake) |
+| Muted text | `var(--fo-stone)` | `#87867f`, `var(--fo-text-muted)` (token does not exist) |
+| Borders (light surface) | `var(--fo-border-cream)` | `var(--fo-divider)` (token does not exist), `#f0eee6` literal |
+| Borders (dark surface) | `var(--fo-border-dark)` | `#30302e` literal |
+| Ring shadow | `var(--fo-ring-warm)` or `var(--shadow-ring)` | manual `rgba(0,0,0,...)` |
+| Success chip | `var(--fo-success-bg)` + `--fo-success-text` + `--fo-success-border` | hand-coded green `rgba(76,138,86,...)` |
+| Danger / reject chip | `var(--fo-danger-bg)` + `--fo-danger-text` + `--fo-danger-border` | hand-coded red, or terracotta (terracotta is brand-CTA only) |
+| Warning chip | `var(--fo-warn-bg)` + `--fo-warn-text` + `--fo-warn-border` | yellow literal |
+| Skip / neutral chip | `var(--fo-skip-bg)` + `--fo-skip-text` + `--fo-skip-border` | gray literal |
+| Info / cool tint chip | `var(--fo-info-bg)` + `--fo-info-text` + `--fo-info-border` | the only sanctioned cool color (focus-blue family) |
+| Focus ring (the only cool color allowed) | `var(--fo-focus)` | hand-coded `#3898ec` literal |
+| Sans / serif / mono | `var(--fo-sans)` / `var(--fo-serif)` / `var(--fo-mono)` | `'Inter, …'` / `'JetBrains Mono, …'` literal stacks |
+| Border radius | `var(--r-sharp)` 4px, `--r-subtle` 6px, `--r-comfy` 8px, `--r-generous` 12px, `--r-very` 16px, hand-write 24px for "highly rounded" tag-pills | arbitrary `13px`, `14px`, `7px` |
+
+If a NEW token is genuinely needed (a new semantic state, a new surface tier), add it to the `:root` block in `dashboard.css` AND list it in `DESIGN.md §10 "Token Reference"`. Never inline a literal at the call-site.
+
+### Hard rules (verbatim from `DESIGN.md`)
+
+- **Color** — warm-toned palette only. No cool blue-grays. Primary accent is Terracotta `#c96442`. Surface hierarchy: Parchment → Ivory → Warm Sand.
+- **Typography** — `Inter` maps to `Anthropic Sans` roles (UI text, labels, nav). Monospace `JetBrains Mono` maps to `Anthropic Mono`. No other typefaces.
+- **Buttons** — follow `DESIGN.md §4` (ring-based shadows via `box-shadow:0 0 0 1px ...`, rounded corners 8–12px, warm backgrounds). Never pure black/white flat. Reuse existing `.btn-page`, `.btn-primary`, `.btn-ghost`, `.btn-success`, `.btn-warning`, `.btn-danger` classes — do not redefine them per page.
+- **Layout** — main-area stays `height:100vh;overflow:hidden` so internal panels scroll, not the page. Pagination + footers are `flex-shrink:0` siblings of the scroll container, NOT inside it. New pager containers follow the `.page-bar-wrap` / `.page-bar` pattern (see Webhooks tab).
+- **No gradients.** Depth comes from warm surface layering + `0 0 0 1px` ring shadows.
+- **Icons** — inline SVG only, `stroke-width:2`, consistent 16–20px sizing. No icon fonts.
+
+### Pre-flight checklist when editing `dashboard.css` / `dashboard.js` / `index.html`
+
+1. Did you read `DESIGN.md` for the affected component category (button / chip / input / card / pager)?
+2. Are EVERY color / radius / font-family value a `var(--fo-*)` or `var(--r-*)` token? Search the diff for stray `#` and `rgba(` — there should be zero new ones.
+3. Did you reuse an existing class (`.btn-page`, `.chip`, `.recent-table`, `.page-bar`, `.skeleton-row`, …) instead of inventing a parallel one? Cross-check the existing CSS — duplicates create drift.
+4. Does the new HTML structure put pagination / footer as a `flex-shrink:0` sibling of the scroll container (not inside it)?
+5. Run the `Dashboard*ContractTests` integration tests. They lock down inlined IDs / class names / function names and will catch unintended deletions.
+6. If you added a new `--fo-*` token: did you also update `DESIGN.md §10`?
 
 ## Documentation Standards
 

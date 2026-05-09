@@ -743,26 +743,41 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
   .sidebar,.events-drawer{transition:none}
 }
 
-/* Webhooks page */
+/* ────────────────────────────────────────────────────────────────────────
+   Webhooks page (v1.25)
+   All colors / borders / radii / typography are DESIGN.md tokens. No
+   hard-coded HEX or RGBA values. Reject chip uses --fo-danger-* family;
+   accept chip uses --fo-success-*; reusable elsewhere on the dashboard
+   if other pages need similar status pills.
+   ──────────────────────────────────────────────────────────────────────── */
 .webhook-stats{margin-bottom:16px}
 .webhook-filters{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
-.webhook-search{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;background:var(--fo-ivory);box-shadow:inset 0 0 0 1px var(--fo-divider);min-width:280px;flex:1}
-.webhook-search svg{width:16px;height:16px;color:var(--fo-text-muted);flex-shrink:0}
-.webhook-search input{border:0;outline:0;background:transparent;color:var(--fo-text);font-size:13px;flex:1;font-family:inherit}
-.webhook-search input::placeholder{color:var(--fo-text-muted)}
-.webhook-search:focus-within{box-shadow:inset 0 0 0 2px var(--fo-coral)}
+
+/* Search input — matches DESIGN.md "Inputs & Forms": warm ivory surface,
+   ring-shadow border, generous radius, focus shifts to the only-cool
+   color the palette permits (--fo-focus). */
+.webhook-search{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:var(--r-generous);background:var(--fo-ivory);box-shadow:0 0 0 1px var(--fo-border-cream);min-width:280px;flex:1}
+.webhook-search svg{width:16px;height:16px;color:var(--fo-stone);flex-shrink:0}
+.webhook-search input{border:0;outline:0;background:transparent;color:var(--fo-near-black);font-size:13px;flex:1;font-family:var(--fo-sans)}
+.webhook-search input::placeholder{color:var(--fo-stone)}
+.webhook-search:focus-within{box-shadow:0 0 0 2px var(--fo-focus)}
+
+/* Chips — highly rounded (DESIGN.md §5 "Border Radius Scale" → 24px tag-like).
+   Mono font keeps the data-feel without breaking the editorial hierarchy. */
 .webhook-chips{display:flex;flex-wrap:wrap;gap:8px}
-.chip{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:500;font-family:'JetBrains Mono','SF Mono',Consolas,monospace;background:var(--fo-warm-sand);color:var(--fo-text);box-shadow:inset 0 0 0 1px var(--fo-divider)}
-.chip strong{font-weight:700;color:var(--fo-coral)}
-.chip--accept{background:rgba(76,138,86,0.16);color:#3a6e44;box-shadow:inset 0 0 0 1px rgba(76,138,86,0.3)}
-.chip--reject{background:rgba(201,100,66,0.16);color:var(--fo-coral);box-shadow:inset 0 0 0 1px rgba(201,100,66,0.3)}
-/* Pager bar (Webhooks tab — same shape as runs pagination) */
+.chip{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:24px;font-size:12px;font-weight:500;font-family:var(--fo-mono);background:var(--fo-warm-sand);color:var(--fo-near-black);box-shadow:inset 0 0 0 1px var(--fo-border-cream)}
+.chip strong{font-weight:700;color:var(--fo-terracotta)}
+.chip--accept{background:var(--fo-success-bg);color:var(--fo-success-text);box-shadow:inset 0 0 0 1px var(--fo-success-border)}
+.chip--reject{background:var(--fo-danger-bg);color:var(--fo-danger-text);box-shadow:inset 0 0 0 1px var(--fo-danger-border)}
+
+/* Pager bar — sibling of the scroll container so the table itself scrolls
+   but the pager stays pinned, matching the runs page pattern. The visible
+   button surface is .btn-page which is already defined above with the
+   shared dashboard button styling — do NOT redefine it here. */
 .page-bar-wrap{flex-shrink:0;margin-top:12px}
 .page-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 4px;flex-wrap:wrap}
-.page-bar-info{font-size:12px;color:var(--fo-text-muted);font-family:'JetBrains Mono','SF Mono',Consolas,monospace}
+.page-bar-info{font-size:12px;color:var(--fo-stone);font-family:var(--fo-mono)}
 .page-bar-controls{display:inline-flex;align-items:center;gap:8px}
-.page-bar-pos{font-size:12px;color:var(--fo-text);font-family:'JetBrains Mono','SF Mono',Consolas,monospace}
-.btn-page{padding:5px 12px;border-radius:6px;border:0;background:var(--fo-warm-sand);color:var(--fo-text);font-size:12px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--fo-divider);transition:background .15s}
-.btn-page:hover:not([disabled]){background:var(--fo-parchment)}
-.btn-page[disabled]{opacity:.4;cursor:not-allowed}
-.page-size{padding:5px 8px;border-radius:6px;border:0;background:var(--fo-ivory);color:var(--fo-text);font-size:12px;box-shadow:inset 0 0 0 1px var(--fo-divider);cursor:pointer}
+.page-bar-pos{font-size:12px;color:var(--fo-near-black);font-family:var(--fo-mono)}
+.page-size{padding:5px 8px;border-radius:var(--r-subtle);border:1px solid var(--fo-border-cream);background:var(--fo-ivory);color:var(--fo-near-black);font-size:12px;font-family:var(--fo-sans);cursor:pointer}
+.page-size:focus-visible{outline:2px solid var(--fo-focus);outline-offset:2px}
