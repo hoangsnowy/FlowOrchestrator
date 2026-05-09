@@ -58,6 +58,26 @@ public sealed class DashboardWebhooksUiContractTests : IDisposable
     }
 
     [Fact]
+    public async Task Search_input_and_pager_container_are_inlined()
+    {
+        var html = await _body.Value;
+        Assert.Contains("id=\"webhook-search-input\"", html, StringComparison.Ordinal);
+        Assert.Contains("oninput=\"onWebhookSearchInput(", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"webhook-pager\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Pagination_helpers_and_state_are_inlined_in_js()
+    {
+        var html = await _body.Value;
+        Assert.Contains("function setWebhookPage(", html, StringComparison.Ordinal);
+        Assert.Contains("function setWebhookPageSize(", html, StringComparison.Ordinal);
+        Assert.Contains("function onWebhookSearchInput(", html, StringComparison.Ordinal);
+        Assert.Contains("function renderWebhookPager(", html, StringComparison.Ordinal);
+        Assert.Contains("includeTotal", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Chip_css_classes_are_inlined()
     {
         var html = await _body.Value;

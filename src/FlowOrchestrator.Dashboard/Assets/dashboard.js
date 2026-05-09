@@ -2472,29 +2472,69 @@ async function refresh(opts) {
 }
 
 // ── Webhooks page ──
+let webhookPage = 1;
+let webhookPageSize = 25;
+const webhookPageSizeAllowed = [10, 25, 50, 100];
+let webhookSearch = '';
+let webhookSearchDebounce = null;
+
 async function loadWebhooks(opts) {
   const silent = !!(opts && opts.silent);
   const tableEl = $('webhook-table');
   const statsEl = $('webhook-stats');
   const countEl = $('webhooks-count-label');
+  const pagerEl = $('webhook-pager');
   if (!tableEl) return;
   if (!silent && !tableEl.innerHTML.trim()) tableEl.innerHTML = skeletonRows(6, 5);
   const rejectedOnly = $('webhook-rejected-only') && $('webhook-rejected-only').checked;
-  const url = BASE+'/webhooks/recent?take=100' + (rejectedOnly ? '&rejectedOnly=true' : '');
+  const skip = Math.max(0, (webhookPage - 1) * webhookPageSize);
+  const params = new URLSearchParams();
+  params.set('take', String(webhookPageSize));
+  params.set('skip', String(skip));
+  params.set('includeTotal', 'true');
+  if (rejectedOnly) params.set('rejectedOnly', 'true');
+  if (webhookSearch) params.set('q', webhookSearch);
+  const url = BASE+'/webhooks/recent?' + params.toString();
   try {
-    const [items, stats] = await Promise.all([
+    const [page, stats] = await Promise.all([
       fetchJSON(url),
       fetchJSON(BASE+'/webhooks/stats?hours=24').catch(() => ({ counts: {} }))
     ]);
-    if (countEl) countEl.innerHTML = '<span class="num">' + items.length + '</span>recent';
+    const items = page && Array.isArray(page.items) ? page.items : (Array.isArray(page) ? page : []);
+    const total = page && typeof page.total === 'number' ? page.total : items.length;
+    if (countEl) countEl.innerHTML = '<span class="num">' + total + '</span>recent';
     statsEl.innerHTML = renderWebhookStats(stats);
     tableEl.innerHTML = items.length === 0
-      ? '<div class="empty-msg">No webhook deliveries yet.</div>'
+      ? '<div class="empty-msg">' + (webhookSearch ? 'No deliveries match your search.' : 'No webhook deliveries yet.') + '</div>'
       : renderWebhookTable(items);
+    if (pagerEl) pagerEl.innerHTML = renderWebhookPager(total);
   } catch (e) {
     if (isAbortError(e)) return;
     tableEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load webhook log. <button class="btn-retry" onclick="loadWebhooks()">Retry</button></div>';
   }
+}
+
+function onWebhookSearchInput(value) {
+  if (webhookSearchDebounce) clearTimeout(webhookSearchDebounce);
+  webhookSearchDebounce = setTimeout(function() {
+    webhookSearch = (value || '').trim();
+    webhookPage = 1; // reset to first page on new search
+    loadWebhooks();
+  }, 250);
+}
+
+function setWebhookPage(page) {
+  if (!Number.isFinite(page) || page < 1) return;
+  webhookPage = page;
+  loadWebhooks();
+}
+
+function setWebhookPageSize(size) {
+  size = parseInt(size, 10);
+  if (!webhookPageSizeAllowed.includes(size)) return;
+  webhookPageSize = size;
+  webhookPage = 1;
+  loadWebhooks();
 }
 
 function renderWebhookStats(stats) {
@@ -2529,6 +2569,26 @@ function renderWebhookTable(items) {
           + '</tr>';
       }).join('')
     + '</tbody></table>';
+}
+
+function renderWebhookPager(total) {
+  const totalPages = Math.max(1, Math.ceil(total / webhookPageSize));
+  const cur = Math.min(webhookPage, totalPages);
+  const start = total === 0 ? 0 : ((cur - 1) * webhookPageSize) + 1;
+  const end = Math.min(total, cur * webhookPageSize);
+  const sizeOptions = webhookPageSizeAllowed.map(function(s) {
+    return '<option value="' + s + '"' + (s === webhookPageSize ? ' selected' : '') + '>' + s + ' / page</option>';
+  }).join('');
+  return ''
+    + '<div class="page-bar">'
+    + '<div class="page-bar-info">' + start + '–' + end + ' of ' + total + '</div>'
+    + '<div class="page-bar-controls">'
+    +   '<button class="btn-page" onclick="setWebhookPage(' + (cur - 1) + ')"' + (cur <= 1 ? ' disabled' : '') + '>‹ Prev</button>'
+    +   '<span class="page-bar-pos">Page ' + cur + ' / ' + totalPages + '</span>'
+    +   '<button class="btn-page" onclick="setWebhookPage(' + (cur + 1) + ')"' + (cur >= totalPages ? ' disabled' : '') + '>Next ›</button>'
+    +   '<select class="page-size" aria-label="Rows per page" onchange="setWebhookPageSize(this.value)">' + sizeOptions + '</select>'
+    + '</div>'
+    + '</div>';
 }
 
 function formatTimestamp(ts) {

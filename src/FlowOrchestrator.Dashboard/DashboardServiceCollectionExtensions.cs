@@ -426,24 +426,48 @@ public static class DashboardServiceCollectionExtensions
         });
 
         // ── Webhook hardening surface ──
+        // Recent webhook deliveries (rejected + accepted), paged + searchable.
+        // WriteJsonAsync honours Accept-Encoding (Brotli / Gzip) per the
+        // dashboard compression contract — this endpoint is hit on every
+        // page navigation + tab refresh, so the response payload is
+        // negotiated transparently for free.
         group.MapGet("/api/webhooks/recent", async (HttpContext http) =>
         {
             var store = http.RequestServices.GetService<FlowOrchestrator.Core.Storage.IWebhookRejectionStore>();
             if (store is null)
             {
-                await WriteJsonAsync(http.Response, Array.Empty<object>());
+                await WriteJsonAsync(http.Response, new { items = Array.Empty<object>(), total = 0, skip = 0, take = 0 });
                 return;
             }
             var query = http.Request.Query;
             Guid? flowId = query.TryGetValue("flowId", out var f) && Guid.TryParse(f, out var fid) ? fid : null;
             string? reason = query.TryGetValue("reason", out var r) ? r.ToString() : null;
+            string? search = query.TryGetValue("q", out var qv) ? qv.ToString()
+                              : query.TryGetValue("search", out var sv2) ? sv2.ToString() : null;
             var includeAccepted = !query.TryGetValue("acceptedOnly", out _)
                                   && (!query.TryGetValue("rejectedOnly", out var rejOnly)
                                       || !bool.TryParse(rejOnly, out var rejFlag) || !rejFlag);
             int skip = query.TryGetValue("skip", out var sv) && int.TryParse(sv, out var s) ? s : 0;
             int take = query.TryGetValue("take", out var tv) && int.TryParse(tv, out var t) ? t : 50;
-            var items = await store.QueryRecentAsync(flowId, reason, includeAccepted, skip, take, http.RequestAborted);
-            await WriteJsonAsync(http.Response, items);
+            var includeTotal = query.TryGetValue("includeTotal", out var itv)
+                               && bool.TryParse(itv, out var it) && it;
+
+            var page = await store.QueryAsync(new FlowOrchestrator.Core.Storage.WebhookRejectionQuery(
+                FlowId: flowId,
+                Reason: reason,
+                Search: string.IsNullOrWhiteSpace(search) ? null : search,
+                IncludeAccepted: includeAccepted,
+                Skip: skip,
+                Take: take), http.RequestAborted);
+
+            // Backwards-compat: when no pagination signal is sent (no skip,
+            // no q, no includeTotal), return a bare array so v1.25.0 callers
+            // keep working. New callers ask for `includeTotal=true` and get
+            // the paged shape that the new dashboard SPA needs.
+            if (includeTotal || !string.IsNullOrWhiteSpace(search) || skip > 0)
+                await WriteJsonAsync(http.Response, new { items = page.Items, total = page.Total, skip, take });
+            else
+                await WriteJsonAsync(http.Response, page.Items);
         });
 
         group.MapGet("/api/webhooks/stats", async (HttpContext http) =>

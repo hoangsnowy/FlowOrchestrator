@@ -98,6 +98,65 @@ public sealed class InMemoryWebhookRejectionStoreTests
     }
 
     [Fact]
+    public async Task QueryAsync_returns_total_count_alongside_paged_items()
+    {
+        // Arrange
+        var clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch.AddSeconds(1700000000));
+        var store = new InMemoryWebhookRejectionStore(maxEntries: 50, clock);
+        for (var i = 0; i < 12; i++)
+        {
+            await store.WriteAsync(new WebhookRejectionRecord
+            {
+                FlowId = _flow,
+                Reason = "r" + i,
+                ReceivedAt = clock.GetUtcNow(),
+            });
+        }
+
+        // Act
+        var page = await store.QueryAsync(new WebhookRejectionQuery(FlowId: _flow, Skip: 5, Take: 4));
+
+        // Assert
+        Assert.Equal(12, page.Total);
+        Assert.Equal(4, page.Items.Count);
+    }
+
+    [Fact]
+    public async Task QueryAsync_search_filter_matches_reason_trigger_or_ip()
+    {
+        // Arrange
+        var clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch.AddSeconds(1700000000));
+        var store = new InMemoryWebhookRejectionStore(maxEntries: 50, clock);
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = _flow, TriggerKey = "github-events", Reason = "rate_limited",
+            RemoteIp = "10.0.0.1", ReceivedAt = clock.GetUtcNow(),
+        });
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = _flow, TriggerKey = "stripe-events", Reason = "signature_invalid",
+            RemoteIp = "192.168.1.1", ReceivedAt = clock.GetUtcNow(),
+        });
+
+        // Act + Assert — match by trigger
+        var byTrigger = await store.QueryAsync(new WebhookRejectionQuery(Search: "github"));
+        Assert.Equal(1, byTrigger.Total);
+        Assert.Equal("github-events", byTrigger.Items[0].TriggerKey);
+
+        // by reason
+        var byReason = await store.QueryAsync(new WebhookRejectionQuery(Search: "RATE"));
+        Assert.Equal(1, byReason.Total);
+
+        // by remote IP
+        var byIp = await store.QueryAsync(new WebhookRejectionQuery(Search: "192.168"));
+        Assert.Equal(1, byIp.Total);
+
+        // empty search returns everything
+        var noFilter = await store.QueryAsync(new WebhookRejectionQuery(Search: null));
+        Assert.Equal(2, noFilter.Total);
+    }
+
+    [Fact]
     public async Task Include_accepted_false_excludes_accepted_rows()
     {
         // Arrange

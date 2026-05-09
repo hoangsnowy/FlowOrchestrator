@@ -272,8 +272,13 @@
           <input id="webhook-rejected-only" type="checkbox" onchange="loadWebhooks()"/>
           Rejected only
         </label>
+        <div class="webhook-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="webhook-search-input" type="search" placeholder="Search reason / trigger / IP" autocomplete="off" oninput="onWebhookSearchInput(this.value)"/>
+        </div>
       </div>
       <div id="webhook-table" class="schedule-section"></div>
+      <div id="webhook-pager" class="page-bar-wrap"></div>
     </div>
   </section>
 </main>

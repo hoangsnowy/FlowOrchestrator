@@ -31,6 +31,18 @@ public interface IWebhookRejectionStore
         CancellationToken ct = default);
 
     /// <summary>
+    /// Filtered + paged query that also returns the matching total count.
+    /// Supersedes <see cref="QueryRecentAsync"/> for new callers — that method
+    /// is kept for backwards compatibility with the v1.25.0 dashboard
+    /// endpoint that lacked search + pagination.
+    /// </summary>
+    /// <param name="query">Filter + paging parameters.</param>
+    /// <param name="ct">Cancellation token.</param>
+    ValueTask<WebhookRejectionPage> QueryAsync(
+        WebhookRejectionQuery query,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Returns counts by reason for the last <paramref name="window"/>.
     /// Keys are reason strings, values are occurrence counts.
     /// </summary>

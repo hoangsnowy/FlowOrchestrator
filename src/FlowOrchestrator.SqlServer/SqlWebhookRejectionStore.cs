@@ -83,6 +83,42 @@ public sealed class SqlWebhookRejectionStore : IWebhookRejectionStore
     }
 
     /// <inheritdoc/>
+    public async ValueTask<WebhookRejectionPage> QueryAsync(WebhookRejectionQuery query, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var skip = query.Skip < 0 ? 0 : query.Skip;
+        var take = query.Take <= 0 ? 50 : (query.Take > 500 ? 500 : query.Take);
+        var hasSearch = !string.IsNullOrEmpty(query.Search);
+        var searchLike = hasSearch ? "%" + query.Search!.Replace("%", "[%]").Replace("_", "[_]") + "%" : null;
+
+        var where = new StringBuilder("WHERE 1=1");
+        if (query.FlowId is not null) where.Append(" AND [FlowId] = @FlowId");
+        if (!string.IsNullOrEmpty(query.Reason)) where.Append(" AND [Reason] = @Reason");
+        if (!query.IncludeAccepted) where.Append(" AND [IsAccepted] = 0");
+        if (hasSearch) where.Append(" AND ([Reason] LIKE @Search OR [TriggerKey] LIKE @Search OR [RemoteIp] LIKE @Search)");
+
+        var pagedSql = new StringBuilder()
+            .Append("SELECT [Id], [FlowId], [TriggerKey], [ReceivedAt], [RemoteIp], [Reason], [StatusCode], ")
+            .Append("[BodyBytes], [BodyTruncated], [HeadersJson], [Scheme], [ProcessingMs], [IsAccepted] ")
+            .Append("FROM [WebhookRejections] ").Append(where)
+            .Append(" ORDER BY [Id] DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY;").ToString();
+        var totalSql = "SELECT COUNT_BIG(*) FROM [WebhookRejections] " + where + ";";
+
+        await using var conn = new SqlConnection(_connectionString);
+        var args = new
+        {
+            FlowId = query.FlowId,
+            Reason = query.Reason,
+            Search = searchLike,
+            Skip = skip,
+            Take = take,
+        };
+        var rows = await conn.QueryAsync<WebhookRejectionRecord>(new CommandDefinition(pagedSql, args, cancellationToken: ct));
+        var total = await conn.ExecuteScalarAsync<long>(new CommandDefinition(totalSql, args, cancellationToken: ct));
+        return new WebhookRejectionPage(rows.ToArray(), (int)Math.Min(int.MaxValue, total));
+    }
+
+    /// <inheritdoc/>
     public async ValueTask<IReadOnlyDictionary<string, long>> CountsByReasonAsync(TimeSpan window, CancellationToken ct = default)
     {
         var cutoff = DateTimeOffset.UtcNow - window;

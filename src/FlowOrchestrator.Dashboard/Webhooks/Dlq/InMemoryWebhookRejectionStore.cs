@@ -83,6 +83,31 @@ public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
     }
 
     /// <inheritdoc/>
+    public ValueTask<WebhookRejectionPage> QueryAsync(WebhookRejectionQuery query, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var skip = query.Skip < 0 ? 0 : query.Skip;
+        var take = query.Take <= 0 ? 50 : (query.Take > 500 ? 500 : query.Take);
+        WebhookRejectionRecord[] snapshot;
+        lock (_lock)
+        {
+            snapshot = _entries.ToArray();
+        }
+        var search = query.Search;
+        var filtered = snapshot
+            .Where(r => (query.IncludeAccepted || !r.IsAccepted)
+                        && (query.FlowId is null || r.FlowId == query.FlowId)
+                        && (string.IsNullOrEmpty(query.Reason) || string.Equals(r.Reason, query.Reason, StringComparison.OrdinalIgnoreCase))
+                        && (string.IsNullOrEmpty(search)
+                            || (r.Reason?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+                            || (r.TriggerKey?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+                            || (r.RemoteIp?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)))
+            .ToArray();
+        var page = filtered.Skip(skip).Take(take).ToArray();
+        return ValueTask.FromResult(new WebhookRejectionPage(page, filtered.Length));
+    }
+
+    /// <inheritdoc/>
     public ValueTask<IReadOnlyDictionary<string, long>> CountsByReasonAsync(TimeSpan window, CancellationToken ct = default)
     {
         var cutoff = _clock.GetUtcNow() - window;
