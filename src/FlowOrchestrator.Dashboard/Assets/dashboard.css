@@ -764,3 +764,5 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .chip strong{font-weight:700;color:var(--fo-terracotta)}
 .chip--accept{background:var(--fo-success-bg);color:var(--fo-success-text);box-shadow:inset 0 0 0 1px var(--fo-success-border)}
 .chip--reject{background:var(--fo-danger-bg);color:var(--fo-danger-text);box-shadow:inset 0 0 0 1px var(--fo-danger-border)}
+.chip--scheme{background:var(--fo-info-bg);color:var(--fo-info-text);box-shadow:inset 0 0 0 1px var(--fo-info-border);font-size:11px;padding:3px 8px}
+.dim{color:var(--fo-stone)}

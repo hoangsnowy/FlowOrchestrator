@@ -2575,13 +2575,17 @@ function renderWebhookStats(stats) {
 function renderWebhookTable(items) {
   return '<table class="recent-table"><thead><tr>'
     + '<th>Time</th><th>Flow</th><th>Trigger</th><th>Result</th>'
-    + '<th>Status</th><th>Reason</th><th>IP</th><th>Bytes</th><th>ms</th>'
+    + '<th>Status</th><th>Reason</th><th>HMAC</th><th>IP</th><th>Bytes</th><th>ms</th>'
     + '</tr></thead><tbody>'
     + items.map(function(r) {
         const accepted = r.isAccepted || r.IsAccepted;
         const reason = r.reason || r.Reason || '';
         const ts = r.receivedAt || r.ReceivedAt;
         const flowId = r.flowId || r.FlowId;
+        const scheme = r.scheme || r.Scheme || '';
+        const schemeCell = scheme
+          ? '<span class="chip chip--scheme" title="HMAC signature header verified">' + escapeHtml(scheme) + '</span>'
+          : '<span class="dim">—</span>';
         return '<tr>'
           + '<td><time>' + escapeHtml(formatTimestamp(ts)) + '</time></td>'
           + '<td>' + escapeHtml(flowId ? String(flowId).slice(0, 8) + '…' : '(unknown)') + '</td>'
@@ -2589,6 +2593,7 @@ function renderWebhookTable(items) {
           + '<td>' + (accepted ? '<span class="chip chip--accept">accepted</span>' : '<span class="chip chip--reject">rejected</span>') + '</td>'
           + '<td>' + (r.statusCode || r.StatusCode || '') + '</td>'
           + '<td>' + escapeHtml(reason) + '</td>'
+          + '<td>' + schemeCell + '</td>'
           + '<td>' + escapeHtml(r.remoteIp || r.RemoteIp || '') + '</td>'
           + '<td>' + (r.bodyBytes || r.BodyBytes || 0) + '</td>'
           + '<td>' + (Math.round((r.processingMs || r.ProcessingMs || 0) * 10) / 10) + '</td>'
