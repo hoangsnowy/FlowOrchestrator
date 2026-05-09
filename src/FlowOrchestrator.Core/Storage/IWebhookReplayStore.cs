@@ -1,4 +1,4 @@
-namespace FlowOrchestrator.Dashboard.Webhooks.Replay;
+namespace FlowOrchestrator.Core.Storage;
 
 /// <summary>
 /// Persistence contract for webhook replay-attack protection. Maintains a set
@@ -7,10 +7,10 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Replay;
 /// replay attack is in progress.
 /// </summary>
 /// <remarks>
-/// The default <see cref="InMemoryWebhookReplayStore"/> is sufficient for
-/// single-replica deployments. Multi-replica coordination ships alongside the
-/// SSE backplane in a later release; the interface stays unchanged so a
-/// SQL- or Redis-backed store drops in without engine changes.
+/// Storage-neutral by design — in-memory, Sql Server, and PostgreSQL impls
+/// ship in their respective projects. Pick the backend that matches your
+/// deployment topology: in-memory for single-replica, Sql/Postgres for
+/// multi-replica coordination.
 /// </remarks>
 public interface IWebhookReplayStore
 {

@@ -141,12 +141,28 @@ services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 `webhookRateLimitBurstSize`, `webhookRateLimitPerIp`,
 `webhookIpAllowList`, `webhookIpDenyList`, `webhookIpAllowListPreset`.
 
-### Deferred to follow-up
+### Multi-replica storage backends
 
-- Sql Server + PostgreSQL implementations of
-  `IWebhookReplayStore` and `IWebhookRejectionStore` (in-memory
-  defaults ship now; multi-replica + long-retention storage drops in
-  via the same interfaces in v1.25.1).
+- **`IWebhookReplayStore` and `IWebhookRejectionStore` moved to
+  `FlowOrchestrator.Core.Storage`** so any storage backend can plug in.
+- **SQL Server backend** — `SqlWebhookReplayStore`,
+  `SqlWebhookRejectionStore`, plus `WebhookReplayNonces` +
+  `WebhookRejections` tables added to `FlowOrchestratorSqlMigrator`.
+  Wire via `builder.AddSqlServerWebhookHardening(connectionString)`.
+- **PostgreSQL backend** — `PostgreSqlWebhookReplayStore`,
+  `PostgreSqlWebhookRejectionStore`, plus matching
+  `webhook_replay_nonces` + `webhook_rejections` tables. Wire via
+  `builder.AddPostgreSqlWebhookHardening(connectionString)`.
+- Both replay-store impls use atomic upserts (`INSERT … WHERE NOT EXISTS`
+  on Sql; `ON CONFLICT DO NOTHING` on Postgres) so concurrent inserters
+  race correctly — at most one wins per
+  `(flowId, triggerKey, nonce)` tuple. Suitable for multi-replica
+  deployments without the SSE-backplane caveat from the in-memory
+  default.
+- 4 integration tests per backend (replay register + duplicate, expiry
+  purge, DLQ write + query, counts-by-reason aggregation) follow
+  the existing `SqlServerFixture` / `PostgreSqlFixture` Testcontainers
+  pattern.
 
 ## [1.24.0] - 2026-05-03
 

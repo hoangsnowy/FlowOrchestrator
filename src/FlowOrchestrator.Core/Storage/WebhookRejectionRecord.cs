@@ -1,9 +1,9 @@
-namespace FlowOrchestrator.Dashboard.Webhooks.Dlq;
+namespace FlowOrchestrator.Core.Storage;
 
 /// <summary>
-/// One row in the webhook DLQ. Persisted by <see cref="IWebhookRejectionStore"/>
-/// when the security pipeline rejects a request, plus a slim "accepted" log for
-/// the dashboard recent-receives view.
+/// One row in the webhook delivery log. Persisted by
+/// <see cref="IWebhookRejectionStore"/> for both rejected and accepted
+/// deliveries; the <see cref="IsAccepted"/> flag distinguishes the two.
 /// </summary>
 public sealed record WebhookRejectionRecord
 {

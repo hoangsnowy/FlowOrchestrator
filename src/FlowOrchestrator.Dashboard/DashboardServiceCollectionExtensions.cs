@@ -64,25 +64,25 @@ public static class DashboardServiceCollectionExtensions
                 ? null
                 : new Dictionary<string, Func<WebhookSignatureContext, byte[]>>(custom));
         });
-        services.TryAddSingleton<Webhooks.Replay.IWebhookReplayStore, Webhooks.Replay.InMemoryWebhookReplayStore>();
+        services.TryAddSingleton<FlowOrchestrator.Core.Storage.IWebhookReplayStore, Webhooks.Replay.InMemoryWebhookReplayStore>();
         services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
         services.TryAddSingleton<Webhooks.Replay.ReplayProtectionGate>(sp =>
             new Webhooks.Replay.ReplayProtectionGate(
-                sp.GetRequiredService<Webhooks.Replay.IWebhookReplayStore>(),
+                sp.GetRequiredService<FlowOrchestrator.Core.Storage.IWebhookReplayStore>(),
                 sp.GetRequiredService<TimeProvider>()));
         services.AddHostedService(sp => new Webhooks.Replay.WebhookReplayJanitor(
-            sp.GetRequiredService<Webhooks.Replay.IWebhookReplayStore>(),
+            sp.GetRequiredService<FlowOrchestrator.Core.Storage.IWebhookReplayStore>(),
             sp.GetRequiredService<TimeProvider>(),
             sp.GetService<ILogger<Webhooks.Replay.WebhookReplayJanitor>>()));
         services.TryAddSingleton<Webhooks.RateLimit.IWebhookRateLimiter, Webhooks.RateLimit.TokenBucketWebhookRateLimiter>();
-        services.TryAddSingleton<Webhooks.Dlq.IWebhookRejectionStore, Webhooks.Dlq.InMemoryWebhookRejectionStore>();
+        services.TryAddSingleton<FlowOrchestrator.Core.Storage.IWebhookRejectionStore, Webhooks.Dlq.InMemoryWebhookRejectionStore>();
         services.TryAddSingleton<WebhookSecurityPipeline>(sp =>
         {
             var opts = sp.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
             var verifier = sp.GetRequiredService<IWebhookSignatureVerifier>();
             var replay = sp.GetService<Webhooks.Replay.ReplayProtectionGate>();
             var rate = sp.GetService<Webhooks.RateLimit.IWebhookRateLimiter>();
-            var dlq = sp.GetService<Webhooks.Dlq.IWebhookRejectionStore>();
+            var dlq = sp.GetService<FlowOrchestrator.Core.Storage.IWebhookRejectionStore>();
             var telemetry = sp.GetService<FlowOrchestratorTelemetry>();
             var clock = sp.GetService<TimeProvider>();
             var logger = sp.GetService<ILogger<WebhookSecurityPipeline>>();
@@ -428,7 +428,7 @@ public static class DashboardServiceCollectionExtensions
         // ── Webhook hardening surface ──
         group.MapGet("/api/webhooks/recent", async (HttpContext http) =>
         {
-            var store = http.RequestServices.GetService<Webhooks.Dlq.IWebhookRejectionStore>();
+            var store = http.RequestServices.GetService<FlowOrchestrator.Core.Storage.IWebhookRejectionStore>();
             if (store is null)
             {
                 await WriteJsonAsync(http.Response, Array.Empty<object>());
@@ -448,7 +448,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapGet("/api/webhooks/stats", async (HttpContext http) =>
         {
-            var store = http.RequestServices.GetService<Webhooks.Dlq.IWebhookRejectionStore>();
+            var store = http.RequestServices.GetService<FlowOrchestrator.Core.Storage.IWebhookRejectionStore>();
             if (store is null)
             {
                 await WriteJsonAsync(http.Response, new { window = "24h", counts = new Dictionary<string, long>() });

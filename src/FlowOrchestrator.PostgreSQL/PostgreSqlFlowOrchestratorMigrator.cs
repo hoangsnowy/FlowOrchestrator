@@ -189,5 +189,34 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
         -- Re-run lineage column (idempotent — Postgres ADD COLUMN IF NOT EXISTS).
         ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
         CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
+
+        -- Webhook hardening tables (v1.25).
+        CREATE TABLE IF NOT EXISTS webhook_replay_nonces (
+            flow_id     UUID         NOT NULL,
+            trigger_key VARCHAR(256) NOT NULL,
+            nonce       VARCHAR(256) NOT NULL,
+            expires_at  TIMESTAMPTZ  NOT NULL,
+            PRIMARY KEY (flow_id, trigger_key, nonce)
+        );
+        CREATE INDEX IF NOT EXISTS ix_webhook_replay_nonces_expires_at ON webhook_replay_nonces (expires_at);
+
+        CREATE TABLE IF NOT EXISTS webhook_rejections (
+            id              BIGSERIAL    PRIMARY KEY,
+            flow_id         UUID         NULL,
+            trigger_key     VARCHAR(256) NULL,
+            received_at     TIMESTAMPTZ  NOT NULL,
+            remote_ip       VARCHAR(64)  NULL,
+            reason          VARCHAR(64)  NOT NULL,
+            status_code     INT          NOT NULL,
+            body_bytes      INT          NOT NULL,
+            body_truncated  TEXT         NULL,
+            headers_json    TEXT         NULL,
+            scheme          VARCHAR(128) NULL,
+            processing_ms   DOUBLE PRECISION NULL,
+            is_accepted     BOOLEAN      NOT NULL DEFAULT FALSE
+        );
+        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_flow_received ON webhook_rejections (flow_id, received_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_reason ON webhook_rejections (reason);
+        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_received_at ON webhook_rejections (received_at DESC);
         """;
 }

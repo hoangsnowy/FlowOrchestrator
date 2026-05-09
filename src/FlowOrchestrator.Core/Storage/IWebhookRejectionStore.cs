@@ -1,4 +1,4 @@
-namespace FlowOrchestrator.Dashboard.Webhooks.Dlq;
+namespace FlowOrchestrator.Core.Storage;
 
 /// <summary>
 /// Persistence contract for the webhook receive log + DLQ. Stores both
