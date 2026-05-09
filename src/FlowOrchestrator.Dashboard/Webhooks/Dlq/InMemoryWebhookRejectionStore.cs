@@ -96,6 +96,7 @@ public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
         var search = query.Search;
         var filtered = snapshot
             .Where(r => (query.IncludeAccepted || !r.IsAccepted)
+                        && (query.IncludeRejected || r.IsAccepted)
                         && (query.FlowId is null || r.FlowId == query.FlowId)
                         && (string.IsNullOrEmpty(query.Reason) || string.Equals(r.Reason, query.Reason, StringComparison.OrdinalIgnoreCase))
                         && (string.IsNullOrEmpty(search)

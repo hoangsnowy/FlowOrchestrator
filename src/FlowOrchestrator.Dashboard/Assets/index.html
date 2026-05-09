@@ -254,31 +254,33 @@
     </div>
   </section>
 
-  <!-- Webhooks Page -->
+  <!-- Webhooks Page — mirrors the runs page layout: page-header with
+       inline filters, a flex-column body where the table scrolls and the
+       pagination row stays pinned as a flex-shrink:0 sibling. -->
   <section class="page" id="page-webhooks" aria-labelledby="page-webhooks-title">
-    <header class="page-header">
-      <div class="page-header-leading">
-        <button type="button" class="hamburger" id="hamburger-webhooks" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
-        <h2 class="page-title" id="page-webhooks-title">Webhooks</h2>
-      </div>
-      <div class="page-count" id="webhooks-count-label"><span class="num">0</span>recent</div>
-    </header>
-    <div class="page-content">
-      <div class="webhook-stats" id="webhook-stats" aria-live="polite"></div>
-      <div class="webhook-filters">
-        <label class="refresh-toggle">
-          <input id="webhook-rejected-only" type="checkbox" onchange="loadWebhooks()"/>
-          Rejected only
-        </label>
-        <div class="webhook-search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="webhook-search-input" type="search" placeholder="Search reason / trigger / IP" autocomplete="off" oninput="onWebhookSearchInput(this.value)"/>
+    <div id="webhooks-list-panel" class="webhooks-list-panel">
+      <header class="page-header">
+        <div class="page-header-leading">
+          <button type="button" class="hamburger" id="hamburger-webhooks" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <h2 class="page-title" id="page-webhooks-title">Webhooks</h2>
         </div>
-      </div>
-      <div id="webhook-table" class="schedule-section"></div>
-      <div id="webhook-pager" class="page-bar-wrap"></div>
+        <div class="runs-filters" role="search" aria-label="Filter webhook deliveries">
+          <label class="visually-hidden" for="webhook-search-input">Search webhook deliveries</label>
+          <input class="filter-input runs-search" id="webhook-search-input" type="search" placeholder="Search reason / trigger / IP" autocomplete="off" oninput="onWebhookSearchInput(this.value)" aria-label="Search webhook deliveries"/>
+          <label class="visually-hidden" for="webhook-rejected-only-select">Filter</label>
+          <select class="filter-select" id="webhook-rejected-only-select" onchange="onWebhookFilterChange(this.value)" aria-label="Filter accepted vs rejected">
+            <option value="all">All</option>
+            <option value="rejected">Rejected only</option>
+            <option value="accepted">Accepted only</option>
+          </select>
+        </div>
+        <div class="page-count" id="webhooks-count-label"><span class="num">0</span>recent</div>
+      </header>
+      <div class="webhook-stats" id="webhook-stats" aria-live="polite"></div>
+      <div class="runs-list" id="webhook-list" role="region" aria-label="Webhook deliveries" aria-live="polite" aria-busy="false"></div>
+      <div class="runs-pagination" id="webhook-pagination"></div>
     </div>
   </section>
 </main>

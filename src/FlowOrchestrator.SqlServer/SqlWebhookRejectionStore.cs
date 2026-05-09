@@ -95,6 +95,7 @@ public sealed class SqlWebhookRejectionStore : IWebhookRejectionStore
         if (query.FlowId is not null) where.Append(" AND [FlowId] = @FlowId");
         if (!string.IsNullOrEmpty(query.Reason)) where.Append(" AND [Reason] = @Reason");
         if (!query.IncludeAccepted) where.Append(" AND [IsAccepted] = 0");
+        if (!query.IncludeRejected) where.Append(" AND [IsAccepted] = 1");
         if (hasSearch) where.Append(" AND ([Reason] LIKE @Search OR [TriggerKey] LIKE @Search OR [RemoteIp] LIKE @Search)");
 
         var pagedSql = new StringBuilder()

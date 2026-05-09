@@ -2472,27 +2472,32 @@ async function refresh(opts) {
 }
 
 // ── Webhooks page ──
+// Mirrors the runs-page pager: Prev SVG button, numbered page list,
+// Next SVG button, jump-to-page input. Reuses .btn-page / .page-num /
+// .runs-pagination / .runs-page-* classes so visual styling stays in
+// lock-step with the runs page.
 let webhookPage = 1;
 let webhookPageSize = 25;
 const webhookPageSizeAllowed = [10, 25, 50, 100];
 let webhookSearch = '';
+let webhookFilter = 'all'; // all | rejected | accepted
 let webhookSearchDebounce = null;
 
 async function loadWebhooks(opts) {
   const silent = !!(opts && opts.silent);
-  const tableEl = $('webhook-table');
+  const listEl = $('webhook-list');
   const statsEl = $('webhook-stats');
   const countEl = $('webhooks-count-label');
-  const pagerEl = $('webhook-pager');
-  if (!tableEl) return;
-  if (!silent && !tableEl.innerHTML.trim()) tableEl.innerHTML = skeletonRows(6, 5);
-  const rejectedOnly = $('webhook-rejected-only') && $('webhook-rejected-only').checked;
+  const pagerEl = $('webhook-pagination');
+  if (!listEl) return;
+  if (!silent && !listEl.innerHTML.trim()) listEl.innerHTML = skeletonRows(8, 5);
   const skip = Math.max(0, (webhookPage - 1) * webhookPageSize);
   const params = new URLSearchParams();
   params.set('take', String(webhookPageSize));
   params.set('skip', String(skip));
   params.set('includeTotal', 'true');
-  if (rejectedOnly) params.set('rejectedOnly', 'true');
+  if (webhookFilter === 'rejected') params.set('rejectedOnly', 'true');
+  else if (webhookFilter === 'accepted') params.set('acceptedOnly', 'true');
   if (webhookSearch) params.set('q', webhookSearch);
   const url = BASE+'/webhooks/recent?' + params.toString();
   try {
@@ -2503,14 +2508,14 @@ async function loadWebhooks(opts) {
     const items = page && Array.isArray(page.items) ? page.items : (Array.isArray(page) ? page : []);
     const total = page && typeof page.total === 'number' ? page.total : items.length;
     if (countEl) countEl.innerHTML = '<span class="num">' + total + '</span>recent';
-    statsEl.innerHTML = renderWebhookStats(stats);
-    tableEl.innerHTML = items.length === 0
+    if (statsEl) statsEl.innerHTML = renderWebhookStats(stats);
+    listEl.innerHTML = items.length === 0
       ? '<div class="empty-msg">' + (webhookSearch ? 'No deliveries match your search.' : 'No webhook deliveries yet.') + '</div>'
       : renderWebhookTable(items);
     if (pagerEl) pagerEl.innerHTML = renderWebhookPager(total);
   } catch (e) {
     if (isAbortError(e)) return;
-    tableEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load webhook log. <button class="btn-retry" onclick="loadWebhooks()">Retry</button></div>';
+    listEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load webhook log. <button class="btn-retry" onclick="loadWebhooks()">Retry</button></div>';
   }
 }
 
@@ -2518,15 +2523,29 @@ function onWebhookSearchInput(value) {
   if (webhookSearchDebounce) clearTimeout(webhookSearchDebounce);
   webhookSearchDebounce = setTimeout(function() {
     webhookSearch = (value || '').trim();
-    webhookPage = 1; // reset to first page on new search
+    webhookPage = 1;
     loadWebhooks();
   }, 250);
+}
+
+function onWebhookFilterChange(value) {
+  webhookFilter = value;
+  webhookPage = 1;
+  loadWebhooks();
 }
 
 function setWebhookPage(page) {
   if (!Number.isFinite(page) || page < 1) return;
   webhookPage = page;
   loadWebhooks();
+}
+
+function changeWebhookPage(delta) {
+  setWebhookPage(webhookPage + delta);
+}
+
+function gotoWebhookPage(page) {
+  setWebhookPage(parseInt(page, 10));
 }
 
 function setWebhookPageSize(size) {
@@ -2537,10 +2556,17 @@ function setWebhookPageSize(size) {
   loadWebhooks();
 }
 
+function onWebhookJumpKeydown(event) {
+  if (event.key === 'Enter') {
+    const v = parseInt(event.target.value, 10);
+    if (Number.isFinite(v) && v >= 1) gotoWebhookPage(v);
+  }
+}
+
 function renderWebhookStats(stats) {
   const counts = (stats && stats.counts) || {};
   const entries = Object.entries(counts).sort(function(a, b) { return b[1] - a[1]; });
-  if (entries.length === 0) return '<div class="empty-msg">No rejections in the last 24 h.</div>';
+  if (entries.length === 0) return '';
   return '<div class="webhook-chips">' + entries.map(function(kv) {
     return '<span class="chip chip--reject">' + escapeHtml(kv[0]) + ' <strong>' + kv[1] + '</strong></span>';
   }).join('') + '</div>';
@@ -2572,23 +2598,53 @@ function renderWebhookTable(items) {
 }
 
 function renderWebhookPager(total) {
-  const totalPages = Math.max(1, Math.ceil(total / webhookPageSize));
-  const cur = Math.min(webhookPage, totalPages);
-  const start = total === 0 ? 0 : ((cur - 1) * webhookPageSize) + 1;
+  const maxPage = Math.max(1, Math.ceil(total / webhookPageSize));
+  const cur = Math.min(webhookPage, maxPage);
+  const has = total > 0;
+  const start = has ? ((cur - 1) * webhookPageSize) + 1 : 0;
   const end = Math.min(total, cur * webhookPageSize);
-  const sizeOptions = webhookPageSizeAllowed.map(function(s) {
-    return '<option value="' + s + '"' + (s === webhookPageSize ? ' selected' : '') + '>' + s + ' / page</option>';
+
+  // Numbered pages — first, last, current ± 1, with ellipsis spacers.
+  const wantedSet = new Set([1, maxPage, cur, cur - 1, cur + 1]);
+  const wanted = Array.from(wantedSet).filter(function(p) { return p >= 1 && p <= maxPage; }).sort(function(a, b) { return a - b; });
+  let numberedHtml = '';
+  let last = 0;
+  wanted.forEach(function(p) {
+    if (last && p > last + 1) numberedHtml += '<span class="page-num-ellipsis" aria-hidden="true">…</span>';
+    const active = p === cur ? ' page-num-active' : '';
+    const aria = p === cur ? ' aria-current="page"' : '';
+    numberedHtml += '<button class="page-num' + active + '" onclick="gotoWebhookPage(' + p + ')"' + aria + '>' + p + '</button>';
+    last = p;
+  });
+
+  const sizeOpts = webhookPageSizeAllowed.map(function(s) {
+    return '<option value="' + s + '"' + (s === webhookPageSize ? ' selected' : '') + '>' + s + '</option>';
   }).join('');
+  const showJump = maxPage >= 8;
+  const jumpHtml = showJump
+    ? '<span class="runs-page-jump"><label class="runs-page-jump-label" for="webhook-page-jump-input">Go to</label>'
+      + '<input id="webhook-page-jump-input" class="runs-page-jump-input" type="number" inputmode="numeric" min="1" max="' + maxPage + '" placeholder="' + cur + '" onkeydown="onWebhookJumpKeydown(event)" aria-label="Jump to page (1 to ' + maxPage + ')"></span>'
+    : '';
+
   return ''
-    + '<div class="page-bar">'
-    + '<div class="page-bar-info">' + start + '–' + end + ' of ' + total + '</div>'
-    + '<div class="page-bar-controls">'
-    +   '<button class="btn-page" onclick="setWebhookPage(' + (cur - 1) + ')"' + (cur <= 1 ? ' disabled' : '') + '>‹ Prev</button>'
-    +   '<span class="page-bar-pos">Page ' + cur + ' / ' + totalPages + '</span>'
-    +   '<button class="btn-page" onclick="setWebhookPage(' + (cur + 1) + ')"' + (cur >= totalPages ? ' disabled' : '') + '>Next ›</button>'
-    +   '<select class="page-size" aria-label="Rows per page" onchange="setWebhookPageSize(this.value)">' + sizeOptions + '</select>'
+    + '<div class="runs-page-left">'
+    +   '<div class="runs-page-info">' + (has ? ('Showing <b>' + start + '</b>–<b>' + end + '</b> of <b>' + total + '</b>') : 'No deliveries') + '</div>'
+    +   '<label class="runs-page-size"><span>Rows</span>'
+    +     '<select class="filter-select runs-page-size-select" onchange="setWebhookPageSize(this.value)" aria-label="Rows per page">' + sizeOpts + '</select>'
+    +   '</label>'
     + '</div>'
-    + '</div>';
+    + '<nav class="runs-page-controls" aria-label="Pagination" role="navigation">'
+    +   '<button class="btn-page" onclick="changeWebhookPage(-1)" aria-label="Previous page"' + (cur <= 1 ? ' disabled' : '') + '>'
+    +     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>'
+    +     '<span>Prev</span>'
+    +   '</button>'
+    +   '<div class="page-num-list" role="group" aria-label="Page numbers">' + numberedHtml + '</div>'
+    +   '<button class="btn-page" onclick="changeWebhookPage(1)" aria-label="Next page"' + (cur >= maxPage || !has ? ' disabled' : '') + '>'
+    +     '<span>Next</span>'
+    +     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>'
+    +   '</button>'
+    +   jumpHtml
+    + '</nav>';
 }
 
 function formatTimestamp(ts) {

@@ -444,9 +444,14 @@ public static class DashboardServiceCollectionExtensions
             string? reason = query.TryGetValue("reason", out var r) ? r.ToString() : null;
             string? search = query.TryGetValue("q", out var qv) ? qv.ToString()
                               : query.TryGetValue("search", out var sv2) ? sv2.ToString() : null;
-            var includeAccepted = !query.TryGetValue("acceptedOnly", out _)
-                                  && (!query.TryGetValue("rejectedOnly", out var rejOnly)
-                                      || !bool.TryParse(rejOnly, out var rejFlag) || !rejFlag);
+            var rejectedOnly = query.TryGetValue("rejectedOnly", out var rejOnly)
+                               && bool.TryParse(rejOnly, out var rf) && rf;
+            var acceptedOnly = query.TryGetValue("acceptedOnly", out var accOnly)
+                               && bool.TryParse(accOnly, out var af) && af;
+            // rejectedOnly → exclude accepted; acceptedOnly → exclude rejected. Both = error;
+            // prefer rejectedOnly if both set (back-compat with v1.25.0 dashboard).
+            var includeAccepted = !rejectedOnly;
+            var includeRejected = !acceptedOnly || rejectedOnly;
             int skip = query.TryGetValue("skip", out var sv) && int.TryParse(sv, out var s) ? s : 0;
             int take = query.TryGetValue("take", out var tv) && int.TryParse(tv, out var t) ? t : 50;
             var includeTotal = query.TryGetValue("includeTotal", out var itv)
@@ -457,6 +462,7 @@ public static class DashboardServiceCollectionExtensions
                 Reason: reason,
                 Search: string.IsNullOrWhiteSpace(search) ? null : search,
                 IncludeAccepted: includeAccepted,
+                IncludeRejected: includeRejected,
                 Skip: skip,
                 Take: take), http.RequestAborted);
 

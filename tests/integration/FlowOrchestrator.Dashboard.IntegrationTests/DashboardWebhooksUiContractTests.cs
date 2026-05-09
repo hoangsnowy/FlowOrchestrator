@@ -36,9 +36,21 @@ public sealed class DashboardWebhooksUiContractTests : IDisposable
     {
         var html = await _body.Value;
         Assert.Contains("id=\"page-webhooks\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"webhook-table\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"webhook-list\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"webhook-stats\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"webhook-rejected-only\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"webhook-pagination\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"webhook-rejected-only-select\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Page_layout_mirrors_runs_list_panel_pattern()
+    {
+        var html = await _body.Value;
+        // Webhook page must use the same panel/list/pagination shape as runs.
+        Assert.Contains("class=\"webhooks-list-panel", html, StringComparison.Ordinal);
+        // Reuses runs-list and runs-pagination classes for visual consistency.
+        Assert.Contains("class=\"runs-list\" id=\"webhook-list\"", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"runs-pagination\" id=\"webhook-pagination\"", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -63,7 +75,7 @@ public sealed class DashboardWebhooksUiContractTests : IDisposable
         var html = await _body.Value;
         Assert.Contains("id=\"webhook-search-input\"", html, StringComparison.Ordinal);
         Assert.Contains("oninput=\"onWebhookSearchInput(", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"webhook-pager\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"webhook-pagination\"", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -71,8 +83,11 @@ public sealed class DashboardWebhooksUiContractTests : IDisposable
     {
         var html = await _body.Value;
         Assert.Contains("function setWebhookPage(", html, StringComparison.Ordinal);
+        Assert.Contains("function changeWebhookPage(", html, StringComparison.Ordinal);
+        Assert.Contains("function gotoWebhookPage(", html, StringComparison.Ordinal);
         Assert.Contains("function setWebhookPageSize(", html, StringComparison.Ordinal);
         Assert.Contains("function onWebhookSearchInput(", html, StringComparison.Ordinal);
+        Assert.Contains("function onWebhookFilterChange(", html, StringComparison.Ordinal);
         Assert.Contains("function renderWebhookPager(", html, StringComparison.Ordinal);
         Assert.Contains("includeTotal", html, StringComparison.Ordinal);
     }

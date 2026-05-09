@@ -99,6 +99,7 @@ public sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
         if (query.FlowId is not null) where.Append(" AND flow_id = @FlowId");
         if (!string.IsNullOrEmpty(query.Reason)) where.Append(" AND reason = @Reason");
         if (!query.IncludeAccepted) where.Append(" AND is_accepted = FALSE");
+        if (!query.IncludeRejected) where.Append(" AND is_accepted = TRUE");
         if (hasSearch) where.Append(" AND (reason ILIKE @Search OR trigger_key ILIKE @Search OR remote_ip ILIKE @Search)");
 
         var pagedSql = new StringBuilder()

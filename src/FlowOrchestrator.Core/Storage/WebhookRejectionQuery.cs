@@ -12,7 +12,8 @@ namespace FlowOrchestrator.Core.Storage;
 /// <c>RemoteIp</c>. Case-insensitive. Pass <see langword="null"/> or empty
 /// to skip the filter.
 /// </param>
-/// <param name="IncludeAccepted"><see langword="false"/> to return rejections only.</param>
+/// <param name="IncludeAccepted"><see langword="false"/> to exclude accepted rows (rejected only).</param>
+/// <param name="IncludeRejected"><see langword="false"/> to exclude rejected rows (accepted only). Both <see langword="true"/> = no filter.</param>
 /// <param name="Skip">Pagination skip (rows).</param>
 /// <param name="Take">Page size; capped at 500 by stores.</param>
 public sealed record WebhookRejectionQuery(
@@ -20,6 +21,7 @@ public sealed record WebhookRejectionQuery(
     string? Reason = null,
     string? Search = null,
     bool IncludeAccepted = true,
+    bool IncludeRejected = true,
     int Skip = 0,
     int Take = 50);
 
