@@ -34,6 +34,42 @@ builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 }));
 ```
 
+## Just pick a preset
+
+For the 17 publishers that ship in `PartnerSchemeRegistry`, you only need
+three manifest fields. Pick a scheme and the verifier fills in the wire
+format (header name, algorithm, encoding, prefix) automatically:
+
+```csharp
+Inputs = new Dictionary<string, object?>
+{
+    ["webhookSlug"] = "github-events",
+    ["webhookHmacKey"] = "<secret from publisher dashboard>",
+    ["webhookSignatureScheme"] = "GitHub",
+}
+```
+
+Browse the [Per-publisher cookbook](#per-publisher-cookbook) for the
+other 16 schemes. If your publisher isn't on the list, see
+[Custom scheme reference](#custom-scheme-reference) for full manifest
+control or [Bring your own scheme](#bring-your-own-scheme) to plug a
+custom verifier through DI.
+
+## Migrating from v1.24
+
+v1.24 used `webhookSecret` / `webhookSecretPrevious` as the HMAC key
+fields. v1.25 renames them to make the role explicit; the v1.24 names
+keep working as aliases.
+
+| v1.24 manifest field    | v1.25 equivalent          | Notes                                                                                                                                          |
+| ----------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `webhookSecret`         | `webhookHmacKey`          | Legacy alias; honoured as fallback. `webhookHmacKey` wins when both are set; the pipeline emits EventId 4011 once per flow on the first conflict. |
+| `webhookSecretPrevious` | `webhookHmacKeyPrevious`  | Same precedence rule as above.                                                                                                                 |
+
+Existing v1.24 manifests using only `webhookSecret` continue to work
+unchanged. Removal of the legacy names is planned for v2.0; no
+`[Obsolete]` attribute is applied yet.
+
 ## Per-publisher cookbook
 
 Each example shows the manifest inputs needed for the named publisher. The
@@ -44,18 +80,13 @@ publisher not on the built-in list.
 ### GitHub (`X-Hub-Signature-256`)
 
 ```csharp
-["webhook"] = new TriggerMetadata
+Inputs = new Dictionary<string, object?>
 {
-    Type = TriggerType.Webhook,
-    Inputs = new Dictionary<string, object?>
-    {
-        ["webhookSlug"] = "github-events",
-        ["webhookHmacKey"] = "<secret configured in github.com/.../settings/hooks>",
-        ["webhookSignatureScheme"] = "GitHub",
-        ["webhookReplayToleranceSeconds"] = 300,
-        ["webhookNonceHeader"] = "X-GitHub-Delivery",
-        ["webhookIpAllowListPreset"] = "github",
-    }
+    ["webhookSlug"] = "github-events",
+    ["webhookHmacKey"] = "<secret from github.com/.../settings/hooks>",
+    ["webhookSignatureScheme"] = "GitHub",
+    ["webhookNonceHeader"] = "X-GitHub-Delivery",
+    ["webhookIpAllowListPreset"] = "github",
 }
 ```
 
@@ -142,8 +173,9 @@ Inputs = new Dictionary<string, object?>
 
 ### Custom (full manifest control)
 
-When the publisher is not on the built-in list, drive the verifier directly
-from the manifest. Every aspect of the wire format is configurable:
+Use this only if your publisher isn't in the built-in list. ~10% of
+users will need it. The full field set lives in
+[Custom scheme reference](#custom-scheme-reference); a minimal example:
 
 ```csharp
 Inputs = new Dictionary<string, object?>
@@ -153,27 +185,14 @@ Inputs = new Dictionary<string, object?>
     ["webhookSignatureScheme"] = "Custom",
     ["webhookSignatureHeader"] = "X-MyApp-Signature",
     ["webhookSignatureAlgorithm"] = "sha512",
-    ["webhookSignatureEncoding"] = "base64",
-    ["webhookSignaturePrefix"] = "v1=",
-    ["webhookSignedPayloadStrategy"] = "TimestampDotBody",
-    ["webhookSignedPayloadDelimiter"] = ".",
-    ["webhookRequireTimestamp"] = true,
-    ["webhookTimestampHeader"] = "X-MyApp-Timestamp",
-    ["webhookReplayToleranceSeconds"] = 600,
 }
 ```
 
-For an even more exotic byte composition (e.g. AWS SigV4-style
-canonical request), register a custom strategy in DI and reference it
-by name:
-
-```csharp
-opts.UseWebhookSecurity(sec =>
-    sec.AddCustomSignatureStrategy("myapp-canonical", ctx => /* byte[] */));
-```
-
-Then set `webhookSignedPayloadStrategy = "Custom"` and
-`webhookCustomStrategyName = "myapp-canonical"` on the manifest.
+For exotic byte compositions (e.g. AWS SigV4-style canonical requests),
+register a custom byte-builder strategy in DI and reference it by name —
+see [Custom scheme reference](#custom-scheme-reference). For a fully
+pluggable verifier (asymmetric, KMS, query-string carriers), see
+[Bring your own scheme](#bring-your-own-scheme).
 
 ## Zero-downtime key rotation
 
@@ -188,8 +207,9 @@ Inputs["webhookHmacKey"] = "new-secret-2026-Q2";
 Inputs["webhookHmacKeyPrevious"] = "old-secret-2026-Q1";
 ```
 
-The legacy `webhookSecret` (bearer-token shared secret) is also honoured
-for the rotation pair via `webhookSecretPrevious`.
+The v1.24 names `webhookSecret` / `webhookSecretPrevious` are legacy
+aliases for the same rotation pair — see
+[Migrating from v1.24](#migrating-from-v124).
 
 ## Replay protection
 
@@ -365,6 +385,108 @@ The existing `flow.webhook.receive` activity gains tags
 `flow.webhook.scheme`, `flow.webhook.client_ip`,
 `flow.webhook.replay_skew_ms`, `flow.webhook.rate_limit.retry_after_ms`,
 `flow.webhook.result`, and `flow.webhook.reject_reason`.
+
+## Custom scheme reference
+
+When `webhookSignatureScheme = "Custom"` the verifier composes its
+behaviour from the manifest fields below instead of looking up a
+built-in spec in `PartnerSchemeRegistry`. Most users will never need
+these — pick a built-in scheme first.
+
+### Signature fields
+
+| Field                                  | Meaning                                                                                                |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `webhookSignatureHeader`               | Header carrying the digest (e.g. `X-MyApp-Signature`).                                                 |
+| `webhookSignatureAlgorithm`            | `sha1`, `sha256` (default), `sha384`, `sha512`. SHA-1 also requires `AllowLegacySha1`.                 |
+| `webhookSignatureEncoding`             | `hexLower` (default), `hexUpper`, `base64`, `base64Url`.                                               |
+| `webhookSignaturePrefix`               | Prefix stripped from the header value before decoding (e.g. `sha256=`).                                |
+| `webhookSignatureMultiValueDelimiter`  | Multi-value separator (Stripe `,`, etc.); enables key=value parsing.                                   |
+| `webhookSignatureKeyValueSeparator`    | Key/value separator inside each segment; defaults to `=`.                                              |
+| `webhookSignatureValueKey`             | Segment key whose value is the signature (Stripe `v1`).                                                |
+| `webhookHeaderValuePrefix`             | Prefix on the whole header line, stripped before parsing (Microsoft Teams `HMAC `).                    |
+| `webhookAcceptMultipleSignatures`      | When `true`, every matching segment is treated as a candidate.                                         |
+| `webhookAcceptedVersions`              | Allowlist of segment keys (`["v0", "v1"]`); other segments ignored.                                    |
+| `webhookSignedPayloadStrategy`         | `RawBody` (default), `TimestampDotBody`, `ColonDelimited`, `UrlPlusSortedForm`, `UrlPlusBody`, `TimestampPlusToken`, `Custom`. |
+| `webhookSignedPayloadDelimiter`        | Delimiter between timestamp and body for delimited strategies.                                         |
+| `webhookSignedPayloadVersion`          | Version literal injected for `ColonDelimited` (e.g. Slack `v0`).                                       |
+| `webhookCustomStrategyName`            | Name of a strategy registered through `AddCustomSignatureStrategy(...)`; required when strategy = `Custom`. |
+
+### Timestamp fields
+
+| Field                       | Meaning                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `webhookTimestampHeader`    | Header that carries the publisher timestamp when it is not embedded in the signature header.                  |
+| `webhookTimestampValueKey`  | Multi-value key whose value is the timestamp (Stripe `t`).                                                    |
+| `webhookRequireTimestamp`   | When `true`, missing timestamps fail closed.                                                                  |
+
+### Replay fields
+
+| Field                              | Meaning                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `webhookReplayToleranceSeconds`    | Maximum allowed clock skew. `0` (default) disables replay protection.                                         |
+| `webhookNonceHeader`               | Header used for the nonce ledger (e.g. `X-GitHub-Delivery`); falls back to SHA-256 of `timestamp \|\| body`. |
+
+### Rate-limit fields
+
+| Field                                  | Meaning                                                                |
+| -------------------------------------- | ---------------------------------------------------------------------- |
+| `webhookRateLimitPermitsPerSecond`     | Steady-state token-bucket rate.                                        |
+| `webhookRateLimitBurstSize`            | Maximum token burst.                                                   |
+| `webhookRateLimitPerIp`                | When `true`, the bucket key is `flowId\|clientIp` instead of `flowId`. |
+
+### IP allow / deny fields
+
+| Field                              | Meaning                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `webhookIpAllowList`               | Explicit list of CIDRs / ranges / wildcards / single addresses.                                               |
+| `webhookIpDenyList`                | Same shape as the allow list; allow takes precedence when both are set.                                       |
+| `webhookIpAllowListPreset`         | Single curated preset (`github`, `stripe`, …) drawn from `KnownPublisherCidrs`.                               |
+| `webhookIpAllowListPresets`        | Plural form; comma-string or array. Merges with the singular form and the explicit list.                      |
+
+For exotic byte compositions, register a custom strategy in DI and
+reference it from `webhookCustomStrategyName`:
+
+```csharp
+opts.UseWebhookSecurity(sec =>
+    sec.AddCustomSignatureStrategy("myapp-canonical", ctx => /* byte[] */));
+```
+
+```csharp
+Inputs["webhookSignedPayloadStrategy"] = "Custom";
+Inputs["webhookCustomStrategyName"] = "myapp-canonical";
+```
+
+## Bring your own scheme
+
+When the wire format doesn't fit any built-in scheme nor the `Custom`
+manifest shape — asymmetric verification, KMS-backed digests, query-string
+signature carriers — register a full `IWebhookSignatureVerifier` in DI and
+reference it by name from the manifest.
+
+```csharp
+public sealed class AcmeCorpVerifier : IWebhookSignatureVerifier
+{
+    public WebhookSignatureResult Verify(WebhookSignatureContext context)
+    {
+        // Read context.Headers / context.Body and verify against your KMS,
+        // public key, etc. Return Success / SuccessWithRotation / Failure(reason).
+        return WebhookSignatureResult.Success;
+    }
+}
+
+builder.Services.AddWebhookSignatureVerifier<AcmeCorpVerifier>("AcmeCorp");
+```
+
+```csharp
+Inputs["webhookSignatureScheme"] = "AcmeCorp";
+```
+
+The pipeline resolves verifiers in this order: built-in `WebhookSignatureScheme`
+enum match → DI-registered verifier with matching scheme name →
+`Custom` manifest shape. Scheme names are case-insensitive; collisions
+with built-in scheme names (or the literal `"Custom"`) throw
+`ArgumentException` at registration time.
 
 ## Recommended rollout
 

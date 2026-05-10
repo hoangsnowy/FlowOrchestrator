@@ -41,4 +41,7 @@ internal static partial class WebhookLog
 
     [LoggerMessage(EventId = 4010, Level = LogLevel.Information, Message = "Webhook accepted using rotated secondary key for flow {FlowId} ('{TriggerKey}'); rotate publishers off the previous key soon.")]
     public static partial void RotationUsedPreviousKey(ILogger logger, Guid flowId, string triggerKey);
+
+    [LoggerMessage(EventId = 4011, Level = LogLevel.Warning, Message = "Webhook flow {FlowId} ('{TriggerKey}') has both webhookHmacKey and webhookSecret configured; webhookHmacKey wins. Drop webhookSecret to silence this warning.")]
+    public static partial void ConflictingKeyFields(ILogger logger, Guid flowId, string triggerKey);
 }

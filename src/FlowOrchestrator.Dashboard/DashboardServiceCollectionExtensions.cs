@@ -86,10 +86,77 @@ public static class DashboardServiceCollectionExtensions
             var telemetry = sp.GetService<FlowOrchestratorTelemetry>();
             var clock = sp.GetService<TimeProvider>();
             var logger = sp.GetService<ILogger<WebhookSecurityPipeline>>();
-            return new WebhookSecurityPipeline(verifier, opts.WebhookSecurity, replay, rate, dlq, telemetry, clock, logger);
+            var customRegistry = sp.GetService<WebhookCustomVerifierRegistry>();
+            var scopeFactory = sp.GetService<IServiceScopeFactory>();
+            return new WebhookSecurityPipeline(verifier, opts.WebhookSecurity, replay, rate, dlq, telemetry, clock, logger, customRegistry, scopeFactory);
         });
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers a custom <see cref="IWebhookSignatureVerifier"/> implementation that
+    /// the dashboard's webhook pipeline will dispatch to whenever a flow's manifest
+    /// sets <c>webhookSignatureScheme</c> to <paramref name="schemeName"/>.
+    /// </summary>
+    /// <typeparam name="TVerifier">Concrete verifier implementation; resolved per request.</typeparam>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="schemeName">
+    /// Publisher-specific scheme name used as the keyed-service key (case-insensitive).
+    /// Must not collide with any built-in <see cref="WebhookSignatureScheme"/> value.
+    /// </param>
+    /// <returns>The same service collection for chaining.</returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="schemeName"/> is null/whitespace or collides with
+    /// a built-in <see cref="WebhookSignatureScheme"/> name (including the
+    /// <c>Custom</c> sentinel).
+    /// </exception>
+    /// <remarks>
+    /// The verifier is registered as scoped via .NET 8 keyed-DI, so per-request
+    /// dependencies are honored. The pipeline creates a fresh scope around each
+    /// custom-verifier call and disposes it after <c>Verify</c> returns.
+    /// </remarks>
+    public static IServiceCollection AddWebhookSignatureVerifier<TVerifier>(
+        this IServiceCollection services, string schemeName)
+        where TVerifier : class, IWebhookSignatureVerifier
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(schemeName);
+
+        // Validate name fast (before any DI mutation) so misuse fails at registration,
+        // not lazily on first request.
+        foreach (var builtIn in Enum.GetNames<WebhookSignatureScheme>())
+        {
+            if (string.Equals(schemeName, builtIn, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"'{schemeName}' collides with the built-in WebhookSignatureScheme.{builtIn} value; use a publisher-specific name.",
+                    nameof(schemeName));
+            }
+        }
+
+        services.AddKeyedScoped<IWebhookSignatureVerifier, TVerifier>(schemeName);
+
+        var registry = GetOrCreateCustomVerifierRegistry(services);
+        registry.Register(schemeName);
+        return services;
+    }
+
+    /// <summary>
+    /// Gets the singleton <see cref="WebhookCustomVerifierRegistry"/> already
+    /// registered on <paramref name="services"/>, or creates and registers one.
+    /// Returning the live instance lets the extension method populate scheme
+    /// names eagerly so the pipeline observes them at first request.
+    /// </summary>
+    private static WebhookCustomVerifierRegistry GetOrCreateCustomVerifierRegistry(IServiceCollection services)
+    {
+        var existing = services.FirstOrDefault(d =>
+            d.ServiceType == typeof(WebhookCustomVerifierRegistry) &&
+            d.ImplementationInstance is WebhookCustomVerifierRegistry);
+        if (existing?.ImplementationInstance is WebhookCustomVerifierRegistry registry)
+            return registry;
+        registry = new WebhookCustomVerifierRegistry();
+        services.AddSingleton(registry);
+        return registry;
     }
 
     /// <summary>
