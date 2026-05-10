@@ -6,6 +6,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.25.1] - 2026-05-10
+
+### Changed — webhook hardening polish
+
+- **Docs.** `docs/articles/webhook-hardening.md` now leads with a "Just pick a
+  preset" hello-world (the 4-line GitHub manifest) and a v1.24 → v1.25
+  migration table. The exhaustive `Custom`-scheme manifest field list moved
+  into a dedicated "Custom scheme reference" section near the bottom, grouped
+  by phase (signature → timestamp → replay → rate-limit → IP). Per-publisher
+  cookbook examples trimmed to the minimum 3-field form so the resolver fills
+  the rest from `PartnerSchemeRegistry`.
+- **`webhookSecret` ↔ `webhookHmacKey` precedence is now explicit.** When a
+  flow manifest sets both the v1.24 (`webhookSecret` / `webhookSecretPrevious`)
+  and v1.25 (`webhookHmacKey` / `webhookHmacKeyPrevious`) names, the modern
+  pair wins (unchanged behaviour) and the pipeline emits a new structured
+  warning **EventId 4011 `WebhookConflictingKeyFields`** once per flow. v1.24
+  manifests using only `webhookSecret` keep working unchanged. Removal of the
+  legacy fields is planned for v2.0; no `[Obsolete]` attribute is applied yet.
+- **Custom signature verifiers.** New
+  `IServiceCollection.AddWebhookSignatureVerifier<TVerifier>(string schemeName)`
+  extension lets consumers plug a fully custom `IWebhookSignatureVerifier`
+  for publishers that don't fit the built-in HMAC path (asymmetric
+  verification, KMS-backed digests, query-string carriers). Registered as
+  scoped via .NET 8 keyed-DI; pipeline resolution order is built-in
+  `WebhookSignatureScheme` enum match → DI-registered verifier with matching
+  scheme name → `Custom` manifest shape. Registration throws
+  `ArgumentException` when the scheme name collides (case-insensitive) with
+  any built-in `WebhookSignatureScheme` value (including the `Custom`
+  sentinel) or is null/whitespace. `WebhookSignatureContext.Spec` is now
+  nullable so DI verifiers receive a clean context without a synthetic spec.
+
 ## [1.25.0] - 2026-05-09
 
 ### Added — enterprise webhook hardening
