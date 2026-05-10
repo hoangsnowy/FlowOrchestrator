@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration.Internal;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Serialization;
 using Microsoft.Extensions.DependencyInjection;
@@ -122,115 +123,5 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
         var result = await typedHandler.ExecuteAsync(ctx, flow, typedStep).ConfigureAwait(false);
         typedStep.SyncInputsToInner(_jsonOptions);
         return result;
-    }
-}
-
-/// <summary>
-/// Wraps an untyped <see cref="IStepInstance"/> and exposes a strongly-typed
-/// <typeparamref name="TInput"/> <see cref="Inputs"/> property for use by
-/// <see cref="IStepHandler{TInput}"/> implementations. Syncs mutations back to the
-/// inner instance after execution so the output store receives the final input state.
-/// </summary>
-/// <typeparam name="TInput">The deserialized input model type.</typeparam>
-internal sealed class TypedStepInstanceAdapter<TInput> : IStepInstance<TInput>
-{
-    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
-    private readonly IStepInstance _inner;
-
-    /// <summary>Initialises the adapter wrapping <paramref name="inner"/> with pre-deserialized <paramref name="inputs"/>.</summary>
-    /// <param name="inner">The underlying untyped step instance.</param>
-    /// <param name="inputs">The deserialized input model.</param>
-    public TypedStepInstanceAdapter(IStepInstance inner, TInput inputs)
-    {
-        _inner = inner;
-        Inputs = inputs;
-    }
-
-    public Guid RunId
-    {
-        get => _inner.RunId;
-        set => _inner.RunId = value;
-    }
-
-    public string? PrincipalId
-    {
-        get => _inner.PrincipalId;
-        set => _inner.PrincipalId = value;
-    }
-
-    public object? TriggerData
-    {
-        get => _inner.TriggerData;
-        set => _inner.TriggerData = value;
-    }
-
-    public IReadOnlyDictionary<string, string>? TriggerHeaders
-    {
-        get => _inner.TriggerHeaders;
-        set => _inner.TriggerHeaders = value;
-    }
-
-    public string? JobId
-    {
-        get => _inner.JobId;
-        set => _inner.JobId = value;
-    }
-
-    public DateTimeOffset ScheduledTime
-    {
-        get => _inner.ScheduledTime;
-        set => _inner.ScheduledTime = value;
-    }
-
-    public string Type
-    {
-        get => _inner.Type;
-        set => _inner.Type = value;
-    }
-
-    public string Key => _inner.Key;
-
-    public TInput Inputs { get; set; }
-
-    public int Index
-    {
-        get => _inner.Index;
-        set => _inner.Index = value;
-    }
-
-    public bool ScopeMoveNext
-    {
-        get => _inner.ScopeMoveNext;
-        set => _inner.ScopeMoveNext = value;
-    }
-
-    internal void SyncInputsToInner(JsonSerializerOptions? options = null)
-    {
-        if (Inputs is IDictionary<string, object?> dict)
-        {
-            _inner.Inputs = new Dictionary<string, object?>(dict);
-            return;
-        }
-
-        if (Inputs is null)
-        {
-            _inner.Inputs = new Dictionary<string, object?>();
-            return;
-        }
-
-        var serializerOptions = options ?? _jsonOptions;
-        var serialized = JsonSerializer.SerializeToElement(Inputs, Inputs.GetType(), serializerOptions);
-        if (serialized.ValueKind != JsonValueKind.Object)
-        {
-            return;
-        }
-
-        var converted = JsonSerializer.Deserialize<Dictionary<string, object?>>(serialized.GetRawText(), serializerOptions)
-            ?? new Dictionary<string, object?>();
-        _inner.Inputs = converted;
     }
 }

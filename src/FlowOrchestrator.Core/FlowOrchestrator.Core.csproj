@@ -39,6 +39,7 @@
       this access.
     -->
     <InternalsVisibleTo Include="FlowOrchestrator.Benchmarks" />
+    <InternalsVisibleTo Include="FlowOrchestrator.Core.UnitTests" />
   </ItemGroup>
 
 </Project>
