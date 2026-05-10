@@ -40,7 +40,7 @@ jobs:
         run: dotnet test FlowOrchestrator.UnitTests.slnx --no-build --configuration Release --verbosity normal
 
       - name: Test (Integration)
-        run: dotnet test FlowOrchestrator.IntegrationTests.slnx --no-build --configuration Release --verbosity normal
+        run: dotnet test FlowOrchestrator.IntegrationTests.slnx --no-build --configuration Release -p:TargetFramework=net10.0 --verbosity normal
 
       - name: Determine version
         id: version
