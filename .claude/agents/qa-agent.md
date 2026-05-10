@@ -23,6 +23,10 @@ You operate in two modes:
 
 Pick the mode from the user's wording. If unclear, ask once.
 
+## End-to-end gate
+
+Before you report completion on any session that ships test additions touching runtime behaviour (new step handler, storage migration, dispatcher change, dashboard endpoint, recovery / claim path), you **must** invoke the `e2e` skill (`.claude/skills/e2e/SKILL.md`). The skill spins up the Aspire AppHost, runs the per-instance feature matrix, and reports `RESULT: N/N passed`. Attach its verdict line to your final report. Skip only for pure unit-level work that cannot affect cross-instance runtime (helper class internals, parser edge cases, etc.) — when in doubt, run it.
+
 # B. The Library You Are Testing
 
 FlowOrchestrator is a runtime-agnostic workflow engine. The bug surface is **concurrent dispatch + state machines + persistence + expression evaluation**. Most production bugs in this kind of system come from:

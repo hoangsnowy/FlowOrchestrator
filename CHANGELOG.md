@@ -6,6 +6,91 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-05-10
+
+### Changed — internal Core refactor (zero public-API change)
+
+Seven hot files in `FlowOrchestrator.Core` were decomposed using design patterns
+to keep per-file responsibility focused. Public API surface, DI registrations,
+and storage schemas are byte-identical to v1.25.1; consumer recompiles are not
+required and no migration is needed.
+
+- **`FlowOrchestratorEngine.cs` (1202 → ~140 lines + 4 partials)** — split by
+  responsibility phase via `partial class`:
+  - `FlowOrchestratorEngine.Trigger.cs` — `TriggerAsync`, `TriggerByScheduleAsync`,
+    idempotency-key handling, run-timeout resolution.
+  - `FlowOrchestratorEngine.Step.cs` — `RunStepAsync`, `RetryStepAsync`,
+    claim-guard, dispatch-hint fan-out.
+  - `FlowOrchestratorEngine.Continuation.cs` — graph + legacy continuation,
+    When-skip propagation, terminal-status decision.
+  - `FlowOrchestratorEngine.Control.cs` — dispatch ledger, run completion,
+    run-control termination, lifecycle event publish.
+- **`BooleanExpressionEvaluator.cs` (673 → ~80 lines + 4 internals)** — compiler
+  pipeline (Lex → Parse → AST → Eval) under `Expressions/Internal/`.
+- **`FlowGraphPlanner.cs` (434 → ~150 lines + 2 partials)** — split into public
+  surface, validation, and key-resolution partials.
+- **`FlowRunRecoveryHostedService.cs` (332 → ~125 lines + RunRecoverer)** —
+  per-run recovery extracted to `Hosting/Internal/RunRecoverer.cs`. Now consumes
+  the new `RunTerminationClassifier` (single source of truth shared with the
+  engine).
+- **`DefaultStepExecutor.cs` (289 → ~80 lines + 2 pipelines)** — input
+  resolution split into sync `InputResolutionPipeline` (trigger expressions)
+  and async `StepExpressionResolutionPipeline` (step-output expressions).
+- **`ForEachStepHandler.cs` (292 → ~90 lines + ForEachSourceResolver)** —
+  iteration source + item materialisation extracted to internal helper.
+- **`StepHandlerMetadata.cs` (236 → ~125 lines + TypedStepInstanceAdapter)** —
+  pure file split; both types remain `internal`.
+
+New internal type: `RunTerminationClassifier` — replaces inline duplication
+between the engine and the recovery service. Behaviour is preserved bit-for-bit
+(allocation-free single-pass tally over step statuses).
+
+### Added — test infrastructure
+
+- **23 new internal-coverage unit tests** across `RunTerminationClassifier`
+  (8 cases — no-success / unhandled-failure / handled-failure recovery /
+  all-leaves-skipped / mixed leaves), `ForEachSourceResolver` (8 cases —
+  literal collection, trigger-body expression, header-bracket length guard,
+  JSON array clone, string-source exclusion), and `InputResolutionPipeline`
+  (7 cases — primitive-only steady-state ref equality, leading-whitespace
+  fast-path, nested-collection allocation).
+- **`InternalsVisibleTo` for `FlowOrchestrator.Core.UnitTests`** so the new
+  tests can reach `Internal/` types without forcing them onto the public
+  surface.
+- **`/e2e` skill** at `.claude/skills/e2e/SKILL.md` — end-to-end smoke that
+  starts the Aspire AppHost, polls all four sample-app instances ready
+  (`flow-sqlserver` / `flow-postgresql` / `flow-inmemory` / `flow-servicebus`),
+  exercises the full feature matrix per instance via HTTP (dashboard, cron,
+  manual trigger, ForEach, When clause, webhook + HMAC, WaitForSignal,
+  Hangfire dashboard, SQL-only OrderFulfillmentFlow), and tears down. Treats
+  `RESULT: N/N passed` as the merge gate.
+- **Pre-release gate** in `CLAUDE.md` — any version bump requires unit +
+  integration + regression suites green plus a clean `/e2e` run on the
+  release-candidate commit. Partial passes block the release until the
+  failure is reproduced, root-caused, and either fixed or explicitly waived
+  in the release notes.
+- **`qa-agent` follow-up rule** — when `qa-agent` ships test additions that
+  touch runtime behaviour, it must invoke `/e2e` before reporting completion.
+
+### Pre-release verification
+
+- `dotnet build FlowOrchestrator.slnx --configuration Debug` — 0 warning, 0 error
+  on `net8.0` / `net9.0` / `net10.0`.
+- Unit suite — **498/498 passed** (Core 260, Dashboard 120, Hangfire 42,
+  InMemory 45, ServiceBus 27, SqlServer 4).
+- `/e2e` against all four Aspire instances — 25/30 checks passed; 5 timeouts
+  on multi-step continuation flows (ForEach children, fan-in completion on
+  PostgreSQL+Hangfire, post-signal continuation on InMemory).
+- **Waiver**: the 5 timeouts reproduce on the `1.25.1` HEAD baseline with the
+  refactor stashed (verified by re-running `/e2e` against pre-refactor source
+  in the same Aspire environment). Pattern is identical:
+  `prepare_batch.completed` + `process_orders.completed` events recorded,
+  child iterations + downstream steps never dispatch in the live AppHost.
+  This is a pre-existing environmental issue in the sample app (likely
+  `OrderBatchFlow` ForEach dispatch interaction with Aspire-managed
+  dispatchers under CPU contention), **not a v1.26.0 regression**. Tracked
+  as a separate sample-app bug.
+
 ## [1.25.1] - 2026-05-10
 
 ### Changed — webhook hardening polish
