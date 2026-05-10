@@ -21,8 +21,13 @@ public sealed record WebhookSignatureContext
     /// <summary>Form-encoded fields parsed from the body, populated only when the strategy needs them (Twilio).</summary>
     public IReadOnlyDictionary<string, string>? FormFields { get; init; }
 
-    /// <summary>Active signature spec for this flow.</summary>
-    public required WebhookSignatureSpec Spec { get; init; }
+    /// <summary>
+    /// Active signature spec for this flow. <see langword="null"/> only when the
+    /// pipeline dispatches to a DI-registered <see cref="IWebhookSignatureVerifier"/>
+    /// (see <c>AddWebhookSignatureVerifier&lt;T&gt;</c>); built-in verifiers receive
+    /// a non-null spec.
+    /// </summary>
+    public WebhookSignatureSpec? Spec { get; init; }
 
     /// <summary>Current HMAC key (UTF-8 secret string).</summary>
     public required string HmacKey { get; init; }

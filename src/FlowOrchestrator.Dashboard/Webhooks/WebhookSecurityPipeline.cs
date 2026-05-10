@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using FlowOrchestrator.Dashboard.Webhooks.RateLimit;
 using FlowOrchestrator.Dashboard.Webhooks.Replay;
 using FlowOrchestrator.Dashboard.Webhooks.Signature;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace FlowOrchestrator.Dashboard.Webhooks;
@@ -30,6 +32,17 @@ public sealed class WebhookSecurityPipeline
     private readonly WebhookSecurityOptions _options;
     private readonly ILogger<WebhookSecurityPipeline>? _logger;
 
+    /// <summary>
+    /// Per-flow latch tracking flows that have already emitted EventId 4011
+    /// (both <c>webhookHmacKey</c> and <c>webhookSecret</c> set on the same trigger).
+    /// One warning per flow keeps logs quiet under high traffic while still
+    /// alerting operators about the misconfiguration.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, byte> _warnedConflictFlows = new();
+
+    private readonly Signature.WebhookCustomVerifierRegistry? _customRegistry;
+    private readonly IServiceScopeFactory? _scopeFactory;
+
     /// <summary>Constructs the pipeline with required dependencies.</summary>
     /// <param name="verifier">Signature verifier (typically <see cref="HmacSignatureVerifier"/>).</param>
     /// <param name="options">Operator-supplied webhook security options.</param>
@@ -39,6 +52,14 @@ public sealed class WebhookSecurityPipeline
     /// <param name="telemetry">Optional metrics emitter; counters/histograms are no-ops when null.</param>
     /// <param name="clock">Time provider used for receive timestamps.</param>
     /// <param name="logger">Optional logger for structured event emission.</param>
+    /// <param name="customRegistry">
+    /// Optional sidecar registry of DI-registered custom-verifier scheme names.
+    /// When set together with <paramref name="scopeFactory"/>, the pipeline dispatches
+    /// matching scheme names to the keyed <see cref="IWebhookSignatureVerifier"/> service.
+    /// </param>
+    /// <param name="scopeFactory">
+    /// Optional <see cref="IServiceScopeFactory"/> used to resolve scoped custom verifiers.
+    /// </param>
     public WebhookSecurityPipeline(
         IWebhookSignatureVerifier verifier,
         WebhookSecurityOptions options,
@@ -47,7 +68,9 @@ public sealed class WebhookSecurityPipeline
         IWebhookRejectionStore? rejectionStore = null,
         FlowOrchestratorTelemetry? telemetry = null,
         TimeProvider? clock = null,
-        ILogger<WebhookSecurityPipeline>? logger = null)
+        ILogger<WebhookSecurityPipeline>? logger = null,
+        Signature.WebhookCustomVerifierRegistry? customRegistry = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -57,6 +80,8 @@ public sealed class WebhookSecurityPipeline
         _telemetry = telemetry;
         _clock = clock ?? TimeProvider.System;
         _logger = logger;
+        _customRegistry = customRegistry;
+        _scopeFactory = scopeFactory;
     }
 
     /// <summary>Outcome chip emitted by the pipeline.</summary>
@@ -130,20 +155,35 @@ public sealed class WebhookSecurityPipeline
             }
         }
 
-        var customSchemesRo = _options.CustomSchemes.Count == 0
-            ? null
-            : (IReadOnlyDictionary<string, WebhookSignatureSpec>)new Dictionary<string, WebhookSignatureSpec>(_options.CustomSchemes, StringComparer.OrdinalIgnoreCase);
-        var spec = WebhookSignatureSpecResolver.Resolve(triggerInputs, customSchemesRo);
+        // Resolve the requested scheme. Built-in enum match → DI-registered custom
+        // verifier (T3) → manifest "Custom" shape are checked in that order; the
+        // custom-verifier registry pre-validates that user-chosen names do not
+        // collide with any built-in WebhookSignatureScheme value.
+        var schemeName = TryGetString(triggerInputs, "webhookSignatureScheme");
+        var customDispatch = schemeName is not null
+            && _customRegistry?.Contains(schemeName) == true
+            && _scopeFactory is not null;
+
+        WebhookSignatureSpec? spec = null;
+        if (!customDispatch)
+        {
+            var customSchemesRo = _options.CustomSchemes.Count == 0
+                ? null
+                : (IReadOnlyDictionary<string, WebhookSignatureSpec>)new Dictionary<string, WebhookSignatureSpec>(_options.CustomSchemes, StringComparer.OrdinalIgnoreCase);
+            spec = WebhookSignatureSpecResolver.Resolve(triggerInputs, customSchemesRo);
+        }
 
         // ── Signature gate ──
         var usedRotation = false;
-        if (spec is not null)
+        if (spec is not null || customDispatch)
         {
-            var key = TryGetString(triggerInputs, "webhookHmacKey")
-                      ?? TryGetString(triggerInputs, "webhookSecret");
-            var previous = TryGetString(triggerInputs, "webhookHmacKeyPrevious")
-                           ?? TryGetString(triggerInputs, "webhookSecretPrevious");
-            if (string.IsNullOrEmpty(key))
+            var (key, previous, conflicted) = ResolveHmacKeys(triggerInputs);
+            if (conflicted && _logger is not null && _warnedConflictFlows.TryAdd(flowId, 0))
+                WebhookLog.ConflictingKeyFields(_logger, flowId, triggerKey);
+
+            // Built-in path requires a key; custom verifiers may be keyless
+            // (KMS, asymmetric, etc.) so they handle credential checks themselves.
+            if (!customDispatch && string.IsNullOrEmpty(key))
             {
                 _logger?.LogWarning("Webhook signature scheme set on flow {FlowId} but no key configured.", flowId);
                 return await PersistRejectSignatureAsync(flowId, triggerKey, "key_not_configured", clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
@@ -156,13 +196,24 @@ public sealed class WebhookSecurityPipeline
                 AbsoluteUrl = BuildAbsoluteUrl(http),
                 FormFields = null,
                 Spec = spec,
-                HmacKey = key,
+                HmacKey = key ?? string.Empty,
                 HmacKeyPrevious = previous,
                 AllowLegacySha1 = _options.AllowLegacySha1,
             };
 
-            var sigResult = _verifier.Verify(sigCtx);
-            Activity.Current?.SetTag("flow.webhook.scheme", spec.HeaderName);
+            WebhookSignatureResult sigResult;
+            if (customDispatch)
+            {
+                using var scope = _scopeFactory!.CreateScope();
+                var customVerifier = scope.ServiceProvider.GetRequiredKeyedService<IWebhookSignatureVerifier>(schemeName!);
+                sigResult = customVerifier.Verify(sigCtx);
+            }
+            else
+            {
+                sigResult = _verifier.Verify(sigCtx);
+            }
+
+            Activity.Current?.SetTag("flow.webhook.scheme", spec?.HeaderName ?? schemeName);
             if (!sigResult.IsValid)
                 return await PersistRejectSignatureAsync(flowId, triggerKey, sigResult.Reason.ToString(), clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
             if (sigResult.UsedRotationKey && _logger is not null)
@@ -334,6 +385,25 @@ public sealed class WebhookSecurityPipeline
 
     private static string? TryGetString(IReadOnlyDictionary<string, object?> map, string key) =>
         map.TryGetValue(key, out var v) && v is not null ? v as string ?? v.ToString() : null;
+
+    /// <summary>
+    /// Resolves the HMAC key pair from manifest inputs. Prefers the v1.25 names
+    /// (<c>webhookHmacKey</c> / <c>webhookHmacKeyPrevious</c>) and falls back to
+    /// the legacy v1.24 names (<c>webhookSecret</c> / <c>webhookSecretPrevious</c>).
+    /// The returned <c>Conflicted</c> flag is <see langword="true"/> when both
+    /// the modern and legacy current-key fields are populated, signalling that
+    /// the operator should drop the legacy field.
+    /// </summary>
+    internal static (string? Key, string? Previous, bool Conflicted) ResolveHmacKeys(
+        IReadOnlyDictionary<string, object?> inputs)
+    {
+        var modern = TryGetString(inputs, "webhookHmacKey");
+        var legacy = TryGetString(inputs, "webhookSecret");
+        var modernPrev = TryGetString(inputs, "webhookHmacKeyPrevious");
+        var legacyPrev = TryGetString(inputs, "webhookSecretPrevious");
+        var conflicted = !string.IsNullOrEmpty(modern) && !string.IsNullOrEmpty(legacy);
+        return (modern ?? legacy, modernPrev ?? legacyPrev, conflicted);
+    }
 
     private static int? TryGetInt(IReadOnlyDictionary<string, object?> map, string key)
     {

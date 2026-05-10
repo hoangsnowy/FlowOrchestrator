@@ -40,7 +40,10 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
     /// <inheritdoc/>
     public WebhookSignatureResult Verify(WebhookSignatureContext context)
     {
-        var spec = context.Spec;
+        var spec = context.Spec
+            ?? throw new ArgumentException(
+                "HmacSignatureVerifier requires WebhookSignatureContext.Spec; null spec is reserved for DI-registered custom verifiers.",
+                nameof(context));
         if (spec.Algorithm == HmacAlgorithm.Sha1 && !context.AllowLegacySha1)
             return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.AlgorithmNotAllowed);
 
@@ -49,7 +52,7 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
 
         // Special case: Mailgun-style schemes carry the signature in the JSON body, not headers.
         if (spec.SignedPayloadStrategy == SignedPayloadStrategy.TimestampPlusToken)
-            return VerifyBodyResident(context);
+            return VerifyBodyResident(context, spec);
 
         // Pull header value (or built-in body-resident exception above).
         if (!TryReadHeader(context, spec, out var headerValue, out var headerFailure))
@@ -115,7 +118,7 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
         return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.DigestMismatch);
     }
 
-    private WebhookSignatureResult VerifyBodyResident(WebhookSignatureContext context)
+    private WebhookSignatureResult VerifyBodyResident(WebhookSignatureContext context, WebhookSignatureSpec spec)
     {
         // Mailgun shape: { "signature": { "timestamp": "...", "token": "...", "signature": "<hex>" } }
         // Body is JSON; we read these three values without re-parsing the whole tree.
@@ -136,12 +139,12 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
             var candidate = sigEl.GetString()!;
 
             var signedPayload = SignedPayloadBuilder.TimestampPlusToken(timestamp, token);
-            var currentDigest = ComputeHmac(context.Spec.Algorithm, context.HmacKey!, signedPayload);
+            var currentDigest = ComputeHmac(spec.Algorithm, context.HmacKey!, signedPayload);
             var previousDigest = !string.IsNullOrEmpty(context.HmacKeyPrevious)
-                ? ComputeHmac(context.Spec.Algorithm, context.HmacKeyPrevious!, signedPayload)
+                ? ComputeHmac(spec.Algorithm, context.HmacKeyPrevious!, signedPayload)
                 : null;
 
-            if (!TryDecode(candidate, context.Spec.Encoding, out var candidateBytes))
+            if (!TryDecode(candidate, spec.Encoding, out var candidateBytes))
                 return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.InvalidEncoding);
 
             var matchedCurrent = CryptographicOperations.FixedTimeEquals(candidateBytes, currentDigest);
