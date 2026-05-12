@@ -17,7 +17,7 @@
   <!-- Aspire (orchestrator AppHost only) -->
   <ItemGroup>
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.2.4" />
-    <PackageVersion Include="Aspire.Hosting.SqlServer" Version="13.2.4" />
+    <PackageVersion Include="Aspire.Hosting.SqlServer" Version="13.3.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.ServiceBus" Version="13.2.4" />
   </ItemGroup>
 
