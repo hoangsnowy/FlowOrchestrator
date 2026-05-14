@@ -6,6 +6,53 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.26.1] - 2026-05-14
+
+### Fixed
+
+- **Manual retry now advances DAG dependents** — when a step failed,
+  `RunGraphContinuationAsync` eagerly marked direct blocked dependents as
+  `Skipped` with reason `"Prerequisite status did not satisfy runAfter conditions."`.
+  A subsequent successful manual retry of the failed step previously only reset
+  the step itself; the cascade-skipped dependents stayed final-`Skipped`, the
+  planner ignored them, and downstream work never advanced.
+  `engine.RetryStepAsync` now computes the transitive descendant set in the
+  manifest and calls a new
+  `IFlowRunStore.ResetCascadeSkippedDependentsAsync(runId, stepKeys)` to clear
+  the matching `Skipped` rows plus their claim and dispatch-ledger entries; the
+  existing post-retry continuation then re-evaluates the DAG and dispatches the
+  dependents naturally. Cascade-through-multiple-levels (A → B → C → D, B fails,
+  retry B) works via each step's own continuation. `FlowStepAttempts` rows are
+  preserved as audit trail; `When`-clause skips carry a different reason and
+  are deliberately left untouched. The new interface method has a default
+  no-op so external `IFlowRunStore` implementations continue to compile.
+  Three new unit tests cover the direct, recursive, and reason-preserving
+  cases.
+
+### Changed — dependency bumps
+
+- `Aspire.Hosting.PostgreSQL` 13.2.4 → 13.3.2
+- `Aspire.Hosting.SqlServer` 13.2.4 → 13.3.2
+- `Aspire.Hosting.Azure.ServiceBus` 13.2.4 → 13.3.2
+- `Microsoft.Extensions.{DependencyInjection,DependencyInjection.Abstractions,Diagnostics.HealthChecks,Diagnostics.HealthChecks.Abstractions,Hosting,Hosting.Abstractions,Logging,Logging.Abstractions}` 10.0.7 → 10.0.8
+- `Microsoft.Extensions.TimeProvider.Testing` 9.10.0 → 10.6.0
+- `System.Text.Json` 10.0.7 → 10.0.8
+
+### Known issues — e2e gate waiver
+
+The `e2e` skill `5.4 ForEach iteration` check fails on all four sample-app
+instances with a *pre-existing* bug (present in 1.26.0): `OrderBatchFlow`
+hangs when triggered with a non-empty `orderIds` array because
+`FlowOrchestratorEngine.Step.cs` line 210 wrongly rejects runtime child
+keys like `process_orders.0.validate_order` — `StepCollection.FindStep`
+resolves dot-notation through nested loop scopes and returns the child
+metadata, which trips the "no static DAG step" guard. The fix lives
+behind a separate spawned task. The failure is unrelated to this
+release's manual-retry change; remaining e2e checks (5.1 dashboard,
+5.2 cron, 5.3 manual trigger, 5.5 When-skip, 5.7 WaitForSignal,
+5.8 Hangfire dashboard, 5.9 SQL-only) pass on every applicable instance.
+Waiver documented per CLAUDE.md pre-release gate.
+
 ## [1.26.0] - 2026-05-10
 
 ### Changed — internal Core refactor (zero public-API change)

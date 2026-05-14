@@ -288,6 +288,17 @@ public sealed partial class FlowOrchestratorEngine
 
         await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
 
+        // When the original failure of this step caused the DAG continuation to eagerly
+        // mark downstream blocked steps as Skipped (with reason
+        // StepSkipReasons.PrerequisitesUnmet), those records would prevent the planner
+        // from re-evaluating them after the retry succeeds. Clear them transitively so
+        // the post-retry continuation can re-dispatch them naturally.
+        var cascadeDescendants = ComputeTransitiveDescendants(flow, stepKey);
+        if (cascadeDescendants.Count > 0)
+        {
+            await _runStore.ResetCascadeSkippedDependentsAsync(runId, cascadeDescendants).ConfigureAwait(false);
+        }
+
         await PublishEventSafelyAsync(new StepRetriedEvent
         {
             RunId = runId,
@@ -306,6 +317,47 @@ public sealed partial class FlowOrchestratorEngine
         ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(runId).ConfigureAwait(false);
 
         return await RunStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the transitive set of top-level step keys whose <c>RunAfter</c> chain
+    /// (re)leads back to <paramref name="rootStepKey"/>. Used by <see cref="RetryStepAsync"/>
+    /// to identify the dependents whose cascade-skip records must be cleared so the post-retry
+    /// continuation can re-evaluate them. Scoped/loop child steps are intentionally
+    /// ignored — only the top-level manifest is walked.
+    /// </summary>
+    private static IReadOnlyCollection<string> ComputeTransitiveDescendants(IFlowDefinition flow, string rootStepKey)
+    {
+        var descendants = new HashSet<string>(StringComparer.Ordinal);
+        var frontier = new Queue<string>();
+        frontier.Enqueue(rootStepKey);
+
+        while (frontier.Count > 0)
+        {
+            var current = frontier.Dequeue();
+            foreach (var kvp in flow.Manifest.Steps)
+            {
+                var key = kvp.Key;
+                if (string.Equals(key, rootStepKey, StringComparison.Ordinal) || descendants.Contains(key))
+                {
+                    continue;
+                }
+
+                var meta = kvp.Value;
+                if (meta is null || meta.RunAfter is null || meta.RunAfter.Count == 0)
+                {
+                    continue;
+                }
+
+                if (meta.RunAfter.ContainsKey(current))
+                {
+                    descendants.Add(key);
+                    frontier.Enqueue(key);
+                }
+            }
+        }
+
+        return descendants;
     }
 
     private async Task RecordSkippedCurrentStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, string terminalStatus)

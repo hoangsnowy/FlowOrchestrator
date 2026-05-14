@@ -4,6 +4,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Expressions;
 using FlowOrchestrator.Core.Observability;
+using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Core.Execution;
 
@@ -49,7 +50,7 @@ public sealed partial class FlowOrchestratorEngine
                 ctx.RunId,
                 blockedStepKey,
                 metadata?.Type ?? "Unknown",
-                "Prerequisite status did not satisfy runAfter conditions.").ConfigureAwait(false);
+                StepSkipReasons.PrerequisitesUnmet).ConfigureAwait(false);
 
             if (_observabilityOptions.EnableOpenTelemetry)
             {

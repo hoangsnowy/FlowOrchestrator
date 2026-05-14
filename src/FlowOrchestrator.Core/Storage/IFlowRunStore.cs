@@ -92,6 +92,25 @@ public interface IFlowRunStore
     Task RetryStepAsync(Guid runId, string stepKey);
 
     /// <summary>
+    /// Clears cascade-skip records (<see cref="StepSkipReasons.PrerequisitesUnmet"/>) for the
+    /// given step keys so the DAG planner re-evaluates them after a manual retry of an
+    /// upstream step. Removes the step row, claim row, and dispatch-ledger row for any
+    /// matching descendant — the attempt history (<c>FlowStepAttempts</c>) is preserved so
+    /// the dashboard still surfaces the prior "Skipped" attempt as audit trail.
+    /// </summary>
+    /// <remarks>
+    /// Only rows whose status is <c>Skipped</c> AND whose error message exactly matches
+    /// <see cref="StepSkipReasons.PrerequisitesUnmet"/> are cleared. Steps skipped via
+    /// <c>When</c>-clause evaluation carry a different reason and are intentionally left
+    /// untouched. Idempotent — calling with keys that have no matching row is a no-op.
+    /// Default implementation is a no-op so external <see cref="IFlowRunStore"/>
+    /// implementations continue to compile; in that case the post-retry DAG advance
+    /// behaves as pre-fix (downstream steps stay <c>Skipped</c>).
+    /// </remarks>
+    Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+        => Task.CompletedTask;
+
+    /// <summary>
     /// Atomically records that a step has been dispatched for execution.
     /// Returns <see langword="true"/> if this is the first dispatch for this step in this run;
     /// <see langword="false"/> if the step was already dispatched (idempotent guard — caller should skip).
