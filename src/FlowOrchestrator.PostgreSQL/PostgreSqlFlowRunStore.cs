@@ -319,6 +319,36 @@ public sealed class PostgreSqlFlowRunStore :
             new { RunId = runId, StepKey = stepKey });
     }
 
+    public async Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        if (stepKeys is null || stepKeys.Count == 0)
+        {
+            return;
+        }
+
+        var keyArray = stepKeys.ToArray();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        // flow_step_attempts rows are intentionally NOT deleted — the prior cascade-skip
+        // attempt stays as audit history for the dashboard. Only the latest-status row
+        // (flow_steps) and the gate rows are cleared so the engine re-evaluates on the
+        // next continuation pass.
+        await conn.ExecuteAsync(
+            """
+            DELETE FROM flow_steps
+            WHERE run_id = @RunId
+              AND step_key = ANY(@StepKeys)
+              AND status = 'Skipped'
+              AND error_message = @Reason;
+
+            DELETE FROM flow_step_claims
+            WHERE run_id = @RunId AND step_key = ANY(@StepKeys);
+
+            DELETE FROM flow_step_dispatches
+            WHERE run_id = @RunId AND step_key = ANY(@StepKeys);
+            """,
+            new { RunId = runId, StepKeys = keyArray, Reason = StepSkipReasons.PrerequisitesUnmet }).ConfigureAwait(false);
+    }
+
     public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

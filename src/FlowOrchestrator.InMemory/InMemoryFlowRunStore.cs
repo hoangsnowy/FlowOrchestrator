@@ -358,6 +358,56 @@ public sealed class InMemoryFlowRunStore :
         return Task.CompletedTask;
     }
 
+    public Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        if (stepKeys is null || stepKeys.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var stepKey in stepKeys)
+        {
+            // Only clear rows that were skipped specifically because an upstream final
+            // status didn't match — When-clause skips and manual cancellations carry a
+            // different reason and stay intact.
+            if (!_steps.TryGetValue((runId, stepKey), out var step))
+            {
+                continue;
+            }
+            if (!string.Equals(step.Status, StepStatus.Skipped.ToString(), StringComparison.Ordinal))
+            {
+                continue;
+            }
+            if (!string.Equals(step.ErrorMessage, StepSkipReasons.PrerequisitesUnmet, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            _steps.TryRemove((runId, stepKey), out _);
+            if (_stepKeysByRun.TryGetValue(runId, out var keySet))
+            {
+                keySet.TryRemove(stepKey, out _);
+            }
+
+            _stepClaims.TryRemove((runId, stepKey), out _);
+            if (_claimsByRun.TryGetValue(runId, out var claimSet))
+            {
+                claimSet.TryRemove(stepKey, out _);
+            }
+
+            _stepDispatches.TryRemove((runId, stepKey), out _);
+            if (_dispatchesByRun.TryGetValue(runId, out var dispatchSet))
+            {
+                dispatchSet.TryRemove(stepKey, out _);
+            }
+            // FlowStepAttempts entries are preserved so the dashboard still surfaces the
+            // prior cascade-skipped attempt as an audit trail; only the latest-status row
+            // is cleared so the planner re-evaluates.
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         var added = _stepDispatches.TryAdd((runId, stepKey), null);

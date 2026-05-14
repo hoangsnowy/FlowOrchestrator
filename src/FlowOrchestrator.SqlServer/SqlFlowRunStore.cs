@@ -270,6 +270,35 @@ public sealed class SqlFlowRunStore :
             new { RunId = runId, StepKey = stepKey });
     }
 
+    public async Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        if (stepKeys is null || stepKeys.Count == 0)
+        {
+            return;
+        }
+
+        await using var conn = new SqlConnection(_connectionString);
+        // FlowStepAttempts rows are intentionally NOT deleted — the prior cascade-skip
+        // attempt stays as audit history for the dashboard. Only the latest-status row
+        // (FlowSteps) and the gate rows (Claims / Dispatches) are cleared so the engine
+        // re-evaluates the step on the next continuation pass.
+        await conn.ExecuteAsync(
+            """
+            DELETE FROM FlowSteps
+            WHERE RunId = @RunId
+              AND StepKey IN @StepKeys
+              AND Status = 'Skipped'
+              AND ErrorMessage = @Reason;
+
+            DELETE FROM FlowStepClaims
+            WHERE RunId = @RunId AND StepKey IN @StepKeys;
+
+            DELETE FROM FlowStepDispatches
+            WHERE RunId = @RunId AND StepKey IN @StepKeys;
+            """,
+            new { RunId = runId, StepKeys = stepKeys, Reason = StepSkipReasons.PrerequisitesUnmet }).ConfigureAwait(false);
+    }
+
     public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connectionString);
