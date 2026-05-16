@@ -51,21 +51,30 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
 
         // Fire-and-forget: wait for the delay then write to channel.
         // The outer ValueTask completes immediately; the step becomes visible to the runner
-        // only after 'delay' elapses or the cancellation token fires.
+        // only after 'delay' elapses.
+        //
+        // We deliberately DROP the caller's `ct` for the deferred write. The dispatcher is often
+        // invoked from a per-request scope (signal endpoint, webhook handler, dashboard rerun),
+        // and that ct is cancelled the moment the HTTP response flushes — passing it to the
+        // background Task.Delay would silently kill the schedule (observed in v1.26.1 as
+        // WaitForSignal never resuming on the InMemory runtime). Host shutdown still tears
+        // down the channel, which makes WriteAsync throw — that path is caught below and
+        // FlowRunRecoveryHostedService re-enqueues on next startup.
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.Delay(delay, ct).ConfigureAwait(false);
-                await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext }, ct)
+                await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
+                await _writer.WriteAsync(
+                                  new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext },
+                                  CancellationToken.None)
                              .ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (ChannelClosedException)
             {
-                // Host is stopping — let the envelope drop silently.
-                // FlowRunRecoveryHostedService will re-enqueue on next startup.
+                // Host is stopping; recovery hosted service will re-enqueue on next startup.
             }
-        }, ct);
+        });
 
         return new ValueTask<string?>(id);
     }

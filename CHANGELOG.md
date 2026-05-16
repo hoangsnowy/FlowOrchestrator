@@ -6,6 +6,84 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.26.2] - 2026-05-16
+
+### Security — CodeQL code-scanning sweep
+
+Closes all 10 alerts surfaced by the newly-added CodeQL workflow.
+
+- **Dashboard `fetchJSON` (CSRF)** — every dashboard request is now routed
+  through `assertSameOriginUrl`, which parses the URL against
+  `window.location.origin` and throws on a cross-origin destination. The
+  three runId-flowing call sites (`selectRun`, `loadLineage`,
+  `openEventsDrawer`) additionally wrap the user-controlled path segment
+  with `encodeURIComponent` so path-traversal sequences are URI-escaped at
+  the boundary. CodeQL: `js/client-side-request-forgery` (error).
+- **Dashboard run error fallback (XSS)** — the "Retry" button in the
+  `selectRun` catch handler is now built with DOM APIs and an
+  `addEventListener` closure instead of string-interpolating `id` into both
+  an HTML attribute and a JS-string context inside `onclick=""`. CodeQL:
+  `js/xss` (error).
+- **DAG / Gantt `safeKey` (incomplete sanitization)** — the inline
+  `key.replace(/'/g, "\\'")` calls now route through a shared
+  `escJsString` helper that escapes backslashes first and quotes second,
+  closing the original `\` → `\'` → unescape attack window. CodeQL:
+  `js/incomplete-sanitization` (warning, ×2).
+- **Inline-JS placeholder (useless expression)** — the embedded HTML shell
+  previously used `<script>{{INLINE_JS}}</script>` as the substitution
+  token; CodeQL's JavaScript extractor parsed `{{...}}` as two unused
+  object literals. The placeholder is now `/*FLOW_DASHBOARD_INLINE_JS*/`,
+  a syntactically valid JS comment. `DashboardHtml.Replace` and the
+  leak-guard integration test updated together. CodeQL:
+  `js/useless-expression` (warning).
+- **Dead locals (note)** — drop unused `hourly` (leftover from before the
+  per-card timeseries fetch landed) and unused `placed` Set in
+  `renderDAG`. CodeQL: `js/unused-local-variable` (×2).
+- **CI workflow GITHUB_TOKEN scope** — `.github/workflows/ci.yml` now
+  carries a workflow-level `permissions: contents: read`; no job in this
+  workflow needs more. CodeQL: `actions/missing-workflow-permissions`
+  (warning, ×3).
+
+### Fixed
+
+- **InMemory runtime: deferred `ScheduleStepAsync` silently dropped on
+  HTTP-scoped cancellation tokens** — `InMemoryStepDispatcher` was passing
+  the caller's `CancellationToken` into the background `Task.Delay` +
+  `ChannelWriter.WriteAsync` chain that powers delayed dispatch. Callers
+  invoked from a per-request scope (signal endpoint, webhook handler,
+  dashboard rerun) supply the request's `RequestAborted` token, which
+  fires the moment the response flushes — so the deferred enqueue was
+  cancelled before it ever wrote to the channel. The visible symptom was
+  `WaitForSignal` never resuming on the InMemory runtime: the signal store
+  recorded delivery, the dispatcher schedule call returned a job id, but
+  the parked step stayed `Pending` forever. The deferred work now runs on
+  `CancellationToken.None`; host shutdown still tears down the channel,
+  which manifests as a swallowed `ChannelClosedException` and is
+  re-enqueued by `FlowRunRecoveryHostedService` on next startup. Four new
+  unit tests in `InMemoryStepDispatcherTests` cover the cancelled-token,
+  immediate-enqueue, delayed-enqueue, and host-shutdown paths.
+
+### CI / tooling
+
+- **CodeQL workflow build** — switched `build-mode` for C# from
+  `autobuild` (which failed with `MSB1011: Specify which project or
+  solution file to use because this folder contains more than one project
+  or solution file.` — repo root ships 5 `.slnx` filters) to `manual` with
+  `dotnet build FlowOrchestrator.slnx`. Added net10 SDK to the matrix so
+  the build matches the TFMs in `Directory.Build.props`.
+- **Node.js 20 deprecation** — bumped the three GitHub Actions in
+  `codeql.yml` that surfaced the deprecation annotation:
+  `actions/checkout` v4 → v6, `actions/setup-dotnet` v4 → v5,
+  `actions/setup-node` v4 → v5.
+
+### Changed — dependency bumps
+
+- `Aspire.AppHost.Sdk` 13.2.4 → 13.3.2 — the DCP runtime requires the
+  AppHost SDK to match the bumped `Aspire.Hosting.*` resource packages
+  (already on 13.3.2 from v1.26.1), otherwise the AppHost refuses to
+  start with `DcpDependencyCheck: Newer version of the
+  Aspire.Hosting.AppHost package is required (>=13.3.2).`
+
 ## [1.26.1] - 2026-05-14
 
 ### Fixed
