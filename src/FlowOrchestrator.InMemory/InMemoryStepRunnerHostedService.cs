@@ -23,6 +23,7 @@ internal sealed class InMemoryStepRunnerHostedService : BackgroundService
     private readonly ChannelReader<InMemoryStepEnvelope> _reader;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<InMemoryStepRunnerHostedService> _logger;
+    private SemaphoreSlim? _semaphore;
 
     /// <summary>Maximum number of steps processed concurrently. Default is 1 (sequential).</summary>
     public int MaxConcurrency { get; init; } = 1;
@@ -39,9 +40,17 @@ internal sealed class InMemoryStepRunnerHostedService : BackgroundService
     }
 
     /// <inheritdoc/>
+    public override void Dispose()
+    {
+        _semaphore?.Dispose();
+        base.Dispose();
+    }
+
+    /// <inheritdoc/>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var semaphore = new SemaphoreSlim(MaxConcurrency, MaxConcurrency);
+        _semaphore = new SemaphoreSlim(MaxConcurrency, MaxConcurrency);
+        var semaphore = _semaphore;
 
         await foreach (var envelope in _reader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
         {

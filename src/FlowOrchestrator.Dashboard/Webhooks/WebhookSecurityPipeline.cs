@@ -511,11 +511,9 @@ public sealed class WebhookSecurityPipeline
                 };
                 if (names is not null)
                 {
-                    // codeql[cs/linq/missed-select] loop has side effects beyond projection: AddRange merges each resolved preset's entries into the outer `entries` accumulator.
-                    foreach (var n in names)
+                    foreach (var resolved in names.Select(KnownPublisherCidrs.TryGet).Where(r => r is not null))
                     {
-                        var resolved = KnownPublisherCidrs.TryGet(n);
-                        if (resolved is not null) entries.AddRange(resolved);
+                        entries.AddRange(resolved!);
                     }
                 }
             }

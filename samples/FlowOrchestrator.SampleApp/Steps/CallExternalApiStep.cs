@@ -59,7 +59,7 @@ public sealed class CallExternalApiStep : PollableStepHandler<CallExternalApiSte
             ctx.RunId, input.PollAttempt ?? 1, method, path);
 
         var client  = _httpClientFactory.CreateClient("ExternalApi");
-        var request = new HttpRequestMessage(new HttpMethod(method), path);
+        using var request = new HttpRequestMessage(new HttpMethod(method), path);
 
         if (input.Body is not null)
         {
@@ -67,7 +67,7 @@ public sealed class CallExternalApiStep : PollableStepHandler<CallExternalApiSte
             request.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         }
 
-        var response = await client.SendAsync(request).ConfigureAwait(false);
+        using var response = await client.SendAsync(request).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
