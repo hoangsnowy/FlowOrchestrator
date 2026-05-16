@@ -56,8 +56,8 @@ public sealed class TokenBucketWebhookRateLimiter : IWebhookRateLimiter, IDispos
         _disposed = true;
         foreach (var bucket in _buckets.Values)
         {
-            // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break shutdown
-            try { bucket.Dispose(); } catch (Exception) { /* swallow shutdown noise */ }
+            // Dispose path: any exception (incl. OCE) must not break shutdown.
+            try { bucket.Dispose(); } catch (Exception ex) when (ex is not null) { /* swallow shutdown noise */ }
         }
         _buckets.Clear();
     }

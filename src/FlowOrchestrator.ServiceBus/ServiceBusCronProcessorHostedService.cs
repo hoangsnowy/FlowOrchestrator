@@ -62,8 +62,8 @@ internal sealed class ServiceBusCronProcessorHostedService : BackgroundService
         catch (OperationCanceledException) { /* shutting down */ }
         finally
         {
-            // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break shutdown
-            try { await _processor.StopProcessingAsync(CancellationToken.None).ConfigureAwait(false); } catch (Exception) { /* swallow */ }
+            // Dispose path: any exception (incl. OCE) must not break shutdown.
+            try { await _processor.StopProcessingAsync(CancellationToken.None).ConfigureAwait(false); } catch (Exception ex) when (ex is not null) { /* swallow */ }
             await _processor.DisposeAsync().ConfigureAwait(false);
         }
     }

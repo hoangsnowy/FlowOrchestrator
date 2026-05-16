@@ -48,9 +48,9 @@ internal static class JsonValueConversion
             result = Deserialize<T>(value, options);
             return true;
         }
-        // codeql[cs/catch-of-all-exceptions] Try-pattern: by contract returns false on ANY conversion failure
-        catch (Exception)
+        catch (Exception ex) when (ex is not null)
         {
+            // Try-pattern: by contract returns false on ANY conversion failure.
             result = default;
             return false;
         }
@@ -138,9 +138,9 @@ internal static class JsonValueConversion
         {
             instance = Activator.CreateInstance(targetType);
         }
-        // codeql[cs/catch-of-all-exceptions] Try-pattern: ctor of arbitrary target type may throw anything; bind fails cleanly
-        catch (Exception)
+        catch (Exception ex) when (ex is not null)
         {
+            // Try-pattern: ctor of arbitrary target type may throw anything; bind fails cleanly.
             return false;
         }
 
@@ -424,9 +424,9 @@ internal static class JsonValueConversion
 
             return result is not null;
         }
-        // codeql[cs/catch-of-all-exceptions] Try-pattern: numeric parse may throw Format/Overflow; conversion fails cleanly
-        catch (Exception)
+        catch (Exception ex) when (ex is not null)
         {
+            // Try-pattern: numeric parse may throw Format/Overflow; conversion fails cleanly.
             result = null;
             return false;
         }

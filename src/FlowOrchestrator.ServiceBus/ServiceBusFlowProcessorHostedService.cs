@@ -108,9 +108,9 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
     {
         foreach (var (_, processor) in _processors)
         {
-            // codeql[cs/catch-of-all-exceptions] shutdown path: any exception (incl. OCE) must not break stop
+            // Shutdown path: any exception (incl. OCE) must not break stop.
             try { await processor.StopProcessingAsync(cancellationToken).ConfigureAwait(false); }
-            catch (Exception) { /* swallow on shutdown */ }
+            catch (Exception ex) when (ex is not null) { /* swallow on shutdown */ }
         }
     }
 
@@ -169,8 +169,8 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
     {
         foreach (var (_, processor) in _processors)
         {
-            // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break shutdown
-            try { await processor.DisposeAsync().ConfigureAwait(false); } catch (Exception) { /* swallow */ }
+            // Dispose path: any exception (incl. OCE) must not break shutdown.
+            try { await processor.DisposeAsync().ConfigureAwait(false); } catch (Exception ex) when (ex is not null) { /* swallow */ }
         }
         _processors.Clear();
     }

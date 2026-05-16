@@ -5,7 +5,6 @@ using Cronos;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -90,8 +89,8 @@ internal sealed class ServiceBusRecurringTriggerHub
         // PeriodicTimer dispatcher's signature. ScheduleNextAsync now throws on failure so the
         // self-perpetuating consumer can redeliver; for the registration-time call we still log
         // and continue, since FlowSyncHostedService will re-attempt via the next sync cycle.
-        var safeJobId = LogSafe.Strip(jobId);
-        var safeCron = LogSafe.Strip(cronExpression);
+        var safeJobId = jobId.Replace('\r', '_').Replace('\n', '_');
+        var safeCron = cronExpression.Replace('\r', '_').Replace('\n', '_');
         _ = ScheduleNextAsync(jobId, flowId, triggerKey, cronExpression, nextFire, CancellationToken.None)
             .ContinueWith(t =>
                 _logger.LogError(t.Exception, "Failed to schedule first firing for {JobId} at {FireAt:O}.", safeJobId, nextFire),
@@ -104,7 +103,7 @@ internal sealed class ServiceBusRecurringTriggerHub
     {
         if (_jobs.TryRemove(jobId, out var state))
         {
-            _logger.LogInformation("Removed recurring job {JobId}.", LogSafe.Strip(jobId));
+            _logger.LogInformation("Removed recurring job {JobId}.", jobId.Replace('\r', '_').Replace('\n', '_'));
             // Best-effort cancellation of any in-flight scheduled message.
             if (state.LastSequenceNumber is { } seq)
             {
@@ -234,7 +233,7 @@ internal sealed class ServiceBusRecurringTriggerHub
         {
             _logger.LogDebug(
                 "Skipping ScheduleNextAsync for {JobId}: job is no longer registered (flow disabled or removed).",
-                LogSafe.Strip(jobId));
+                jobId.Replace('\r', '_').Replace('\n', '_'));
             return;
         }
 

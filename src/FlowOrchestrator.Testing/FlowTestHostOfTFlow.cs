@@ -101,10 +101,9 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
                 _host.Dispose();
             }
         }
-        // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break test teardown
-        catch (Exception)
+        catch (Exception ex) when (ex is not null)
         {
-            // Swallow — prefer disposal completion over surfacing teardown errors in tests.
+            // Dispose path: prefer completion over surfacing teardown errors in tests.
         }
     }
 

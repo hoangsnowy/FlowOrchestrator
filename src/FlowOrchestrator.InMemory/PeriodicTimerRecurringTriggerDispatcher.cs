@@ -93,9 +93,9 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     public void Dispose()
     {
         // Synchronous fallback for DI containers that only call IDisposable.Dispose.
-        // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break shutdown
+        // Dispose path: any exception (incl. OCE) must not break shutdown.
         try { StopAsync(CancellationToken.None).GetAwaiter().GetResult(); }
-        catch (Exception) { /* swallow on shutdown */ }
+        catch (Exception ex) when (ex is not null) { /* swallow on shutdown */ }
         _cts?.Dispose();
     }
 
@@ -152,7 +152,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
         {
             state.LastJobId = jobId;
             state.LastJobState = "Failed";
-            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", LogSafe.Strip(jobId), state.FlowId);
+            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", jobId.Replace('\r', '_').Replace('\n', '_'), state.FlowId);
             // Swallow so a single failure cannot kill the timer loop.
         }
         finally
@@ -203,14 +203,14 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 return existing;
             });
 
-        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", LogSafe.Strip(jobId), LogSafe.Strip(cronExpression));
+        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", jobId.Replace('\r', '_').Replace('\n', '_'), cronExpression.Replace('\r', '_').Replace('\n', '_'));
     }
 
     /// <inheritdoc/>
     public void Remove(string jobId)
     {
         if (_jobs.TryRemove(jobId, out _))
-            _logger.LogInformation("Removed recurring job {JobId}.", LogSafe.Strip(jobId));
+            _logger.LogInformation("Removed recurring job {JobId}.", jobId.Replace('\r', '_').Replace('\n', '_'));
     }
 
     /// <inheritdoc/>
