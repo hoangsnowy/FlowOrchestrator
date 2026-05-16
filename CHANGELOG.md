@@ -35,6 +35,54 @@ inline-comment suppression, no query-pack drops.
 - **`cs/constant-condition` ×2** — `ProcessOrderItemStep` tautological
   switch arm + `CallExternalApiStep` `(x || !x)` guard removed.
 
+#### Post-merge follow-up — 12 alerts still surfaced after `#71` merged
+
+The first sweep (#71) used inline `// codeql[cs/...]` comments next to side-
+effecting loops and the anonymous-type unification casts in
+`/api/schedules`. GitHub CodeQL does **not** honour those comments — it
+re-flagged 12 of them on the post-merge re-scan of `main`. Replaced with
+real refactors:
+
+- **`cs/useless-upcast` ×3** — `(Guid?)null` →  `default(Guid?)` in
+  `FlowOrchestratorEngine.Trigger.cs`; `(DateTime?)null` → `default(DateTime?)`
+  in `DashboardServiceCollectionExtensions` `/api/schedules`.
+- **`cs/linq/missed-select` ×5** — `SseFlowEventBroadcaster` iterates
+  `_connections.Values`; `FlowMermaidExporter` projects trigger IDs via
+  `.Select(t => "T_" + SafeId(t))`; `WebhookSecurityPipeline` resolves preset
+  CIDR lists via `.Select(KnownPublisherCidrs.TryGet).Where(...)`;
+  `DashboardServiceCollectionExtensions.HasEncoding` splits + trims via
+  `.Split(',').Select(p => p.Trim())` in both the outer and inner loops.
+- **`cs/linq/missed-where` ×1** — `InMemoryFlowRunStore.GetTimeseriesAsync`
+  filters `_runs.Values` via chained `.Where()` before the bucket-index
+  calculation.
+- **`cs/local-not-disposed` ×2** — `InMemoryStepRunnerHostedService` now
+  owns the per-runner `SemaphoreSlim` as a field with an override of
+  `Dispose`; `CallExternalApiStep` wraps `HttpRequestMessage` and
+  `HttpResponseMessage` in `using var`.
+- **`cs/catch-of-all-exceptions` ×1** — replaced the fake `// codeql[...]`
+  marker above `FlowOrchestratorEngine.Step.cs` handler-boundary catch with
+  a real WHY comment explaining the by-design swallow.
+
+The remaining 9 alerts are genuine false positives or won't-fix
+documented behaviour and were dismissed via the code-scanning API:
+
+- **`cs/useless-cast-to-self` ×3** in `/api/schedules` — `(string?)""`
+  casts are load-bearing for NRT (anonymous-type member must be `string?`
+  to unify with `activeJobs`' shape under `Concat`); CodeQL ignores NRT
+  annotations and reports as self-cast.
+- **`cs/linq/missed-where` ×3** — `HmacSignatureVerifier` constant-time
+  loop (must not short-circuit, security); `RunAfterConditionJsonConverter`
+  + `JsonValueConversion` both assign `out` parameters (cannot be
+  expressed as LINQ predicates).
+- **`cs/static-field-written-by-instance` ×3** — `TestFlow.cs` +
+  `ServiceBusCronRoundTripTests.cs` deliberately share an
+  `Interlocked.Increment`-guarded counter across DI scopes for test
+  signalling.
+
+All comments left in the source explain the WHY (not the `codeql[...]`
+suppression marker), so a future reader understands the constraint
+without relying on a parser that does not exist.
+
 #### Quality findings (170 → 0)
 
 - **`cs/catch-of-all-exceptions` ×37** — converted to

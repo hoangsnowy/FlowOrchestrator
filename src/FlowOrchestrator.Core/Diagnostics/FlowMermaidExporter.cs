@@ -161,10 +161,8 @@ public static class FlowMermaidExporter
             return;
         }
 
-        // codeql[cs/linq/missed-select] loop has side effects beyond projection: emits StringBuilder edges, one per (trigger × entry) pair.
-        foreach (var triggerName in manifest.Triggers.Keys)
+        foreach (var triggerId in manifest.Triggers.Keys.Select(t => "T_" + SafeId(t)))
         {
-            var triggerId = "T_" + SafeId(triggerName);
             foreach (var entry in entrySteps)
             {
                 sb.Append("    ").Append(triggerId).Append(" --> ").Append(SafeId(entry)).AppendLine();

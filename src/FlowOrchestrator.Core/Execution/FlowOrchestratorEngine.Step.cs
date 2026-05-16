@@ -89,7 +89,9 @@ public sealed partial class FlowOrchestratorEngine
                 result = await _stepExecutor.ExecuteAsync(ctx, flow, step).ConfigureAwait(false);
                 await _outputsRepository.SaveStepOutputAsync(ctx, flow, step, result).ConfigureAwait(false);
             }
-            // codeql[cs/catch-of-all-exceptions] handler boundary: any exception (incl. OCE) becomes a Failed StepResult by design
+            // Handler boundary: any exception (including OperationCanceledException) is captured
+            // and converted to a Failed StepResult. Step execution must never propagate exceptions
+            // out of RunStepAsync — the engine catches everything and persists the failure.
             catch (Exception ex)
             {
                 handlerException = ex;

@@ -45,7 +45,7 @@ public sealed partial class FlowOrchestratorEngine
             {
                 EngineLog.TriggerRejectedDisabledFlow(_logger, triggerContext.Flow.Id, triggerContext.Trigger.Key);
                 activity?.SetTag("flow.disabled", true);
-                return new { runId = (Guid?)null, disabled = true };
+                return new { runId = default(Guid?), disabled = true };
             }
 
             var idempotencyKey = TryGetIdempotencyKey(triggerContext.TriggerHeaders);

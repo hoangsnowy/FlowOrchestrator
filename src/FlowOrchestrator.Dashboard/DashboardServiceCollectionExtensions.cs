@@ -1038,11 +1038,12 @@ public static class DashboardServiceCollectionExtensions
                 flowName = s.FlowName,
                 triggerKey = s.TriggerKey,
                 cron = s.CronOverride ?? "",
-                nextExecution = (DateTime?)null,
-                lastExecution = (DateTime?)null,
-                // Literals widened to string? so the anonymous type matches activeJobs' nullable shape
-                // — keeps Concat happy without relaxing nullability annotations elsewhere.
-                // codeql[cs/useless-cast-to-self] cast is required for anonymous-type member type unification (string vs string?).
+                nextExecution = default(DateTime?),
+                lastExecution = default(DateTime?),
+                // Casts to string? are load-bearing for NRT — keep anonymous-type member shape
+                // identical to activeJobs (whose source IRecurringJobInfo has nullable strings),
+                // otherwise the Concat below fails CS8620. CodeQL strips NRT annotations and
+                // reports these as "cast-to-self"; they are not. False positives.
                 lastJobId = (string?)"",
                 lastJobState = (string?)"Paused",
                 timeZoneId = (string?)"",
@@ -1311,10 +1312,8 @@ public static class DashboardServiceCollectionExtensions
             return false;
         }
 
-        // codeql[cs/linq/missed-select] loop has side effects beyond projection: short-circuits with multiple early returns based on q-value parsing.
-        foreach (var part in acceptEncoding.Split(','))
+        foreach (var entry in acceptEncoding.Split(',').Select(p => p.Trim()))
         {
-            var entry = part.Trim();
             if (entry.Length == 0)
             {
                 continue;
@@ -1335,10 +1334,8 @@ public static class DashboardServiceCollectionExtensions
 
             // Walk the ";q=<value>" parameter list. Anything that's not a
             // valid double, or any q-value > 0, is treated as accepted.
-            // codeql[cs/linq/missed-select] loop has side effects beyond projection: short-circuits on first q parameter (returns false for q=0, true otherwise).
-            foreach (var rawParam in entry[(semi + 1)..].Split(';'))
+            foreach (var p in entry[(semi + 1)..].Split(';').Select(x => x.Trim()))
             {
-                var p = rawParam.Trim();
                 if (!p.StartsWith("q=", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;

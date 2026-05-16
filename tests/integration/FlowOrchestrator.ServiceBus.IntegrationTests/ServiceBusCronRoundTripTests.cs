@@ -196,8 +196,8 @@ internal sealed class CronTickHandler : IStepHandler
     /// <inheritdoc/>
     public ValueTask<object?> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance step)
     {
-        // Static counter is intentional: DI creates per-scope handler instances, tests need a single shared count.
-        // codeql[cs/static-field-written-by-instance] — atomic via Interlocked.Increment; waiters guarded by _gate lock.
+        // Static counter is intentional: DI creates per-scope handler instances, tests need a
+        // single shared count. Writes are atomic via Interlocked.Increment; waiters guarded by _gate lock.
         var n = Interlocked.Increment(ref _count);
         lock (_gate)
         {

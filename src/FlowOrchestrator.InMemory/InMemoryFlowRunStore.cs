@@ -263,12 +263,10 @@ public sealed class InMemoryFlowRunStore :
             durations[i] = new List<double>(capacity: 4);
         }
 
-        // codeql[cs/linq/missed-where] loop has side effects beyond projection: increments per-bucket counters and appends to durations[idx] — histogram fill, not a projection.
-        foreach (var r in _runs.Values)
+        foreach (var r in _runs.Values
+            .Where(x => x.StartedAt >= anchor && x.StartedAt < until)
+            .Where(x => !flowId.HasValue || x.FlowId == flowId.Value))
         {
-            if (r.StartedAt < anchor || r.StartedAt >= until) continue;
-            if (flowId.HasValue && r.FlowId != flowId.Value) continue;
-
             var idx = (int)((r.StartedAt - anchor).TotalMilliseconds / bucketSize.TotalMilliseconds);
             if (idx < 0 || idx >= totalBuckets) continue;
 

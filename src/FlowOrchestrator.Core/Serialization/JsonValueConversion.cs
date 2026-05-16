@@ -200,7 +200,8 @@ internal static class JsonValueConversion
         out object? value)
     {
         value = null;
-        // codeql[cs/linq/missed-where] loop has side effects beyond projection: assigns the `out value` parameter via TryGetValue on first match.
+        // Loop assigns the `out value` parameter via TryGetValue on first match — cannot be
+        // expressed as a pure Where().Any() because LINQ predicates can't write to out parameters.
         foreach (var candidateName in GetCandidateNames(property, options))
         {
             if (lookup.TryGetValue(candidateName, out value))
