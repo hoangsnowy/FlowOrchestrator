@@ -43,10 +43,10 @@ public sealed class DashboardTestServer : IDisposable
         GlobalConfiguration.Configuration.UseInMemoryStorage();
 
         ScheduleStateStore.GetAllAsync().Returns(Array.Empty<FlowScheduleState>());
-        ScheduleStateStore.GetAsync(Arg.Any<string>()).Returns((FlowScheduleState?)null);
+        ScheduleStateStore.GetAsync(Arg.Any<string>()).Returns((FlowScheduleState?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
         EventReader.GetRunEventsAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<int>())
             .Returns(Array.Empty<FlowEventRecord>());
-        RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).Returns((FlowRunControlRecord?)null);
+        RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).Returns((FlowRunControlRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
         TriggerInspector.GetJobsAsync().Returns(Array.Empty<RecurringTriggerInfo>());
         RuntimeStore.GetStepStatusesAsync(Arg.Any<Guid>())
             .Returns(new Dictionary<string, StepStatus>());

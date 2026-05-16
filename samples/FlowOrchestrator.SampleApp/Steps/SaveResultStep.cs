@@ -62,7 +62,7 @@ public sealed class SaveResultStep : IStepHandler<SaveResultStepInput>
                 new { ctx.RunId, Data = JsonSerializer.Serialize(summary), CreatedAt = DateTimeOffset.UtcNow })
                 .ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "[SaveResult] Could not write to {Table} (table may not exist in sample DB — this is expected)", table);
         }

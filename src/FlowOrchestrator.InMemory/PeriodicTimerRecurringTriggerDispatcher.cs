@@ -93,8 +93,9 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     public void Dispose()
     {
         // Synchronous fallback for DI containers that only call IDisposable.Dispose.
+        // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break shutdown
         try { StopAsync(CancellationToken.None).GetAwaiter().GetResult(); }
-        catch { /* swallow on shutdown */ }
+        catch (Exception) { /* swallow on shutdown */ }
         _cts?.Dispose();
     }
 
@@ -115,7 +116,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             }
         }
         catch (OperationCanceledException) { /* shutdown */ }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Recurring-trigger loop terminated unexpectedly.");
         }
@@ -147,7 +148,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             state.LastJobId = jobId;
             state.LastJobState = "Succeeded";
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             state.LastJobId = jobId;
             state.LastJobState = "Failed";
@@ -232,7 +233,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 var orchestrator = scope.ServiceProvider.GetRequiredService<IFlowOrchestrator>();
                 await orchestrator.TriggerByScheduleAsync(flowId, triggerKey, null, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "EnqueueTrigger for Flow={FlowId} TriggerKey={TriggerKey} failed.",
                     flowId, triggerKey);

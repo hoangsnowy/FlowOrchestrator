@@ -147,8 +147,8 @@ public class StepEnvelopeEdgeCaseTests
         // Assert — the key is present in the inputs dict with a null value, identical to
         // the JsonValueKind.Null path. Handlers that read the input via TryGetValue or
         // null-coalesce see the same shape regardless of producer-side encoding.
-        Assert.True(step.Inputs.ContainsKey("empty"));
-        Assert.Null(step.Inputs["empty"]);
+        Assert.True(step.Inputs.TryGetValue("empty", out var emptyValue));
+        Assert.Null(emptyValue);
     }
 
     [Fact]

@@ -124,14 +124,13 @@ public static class DashboardServiceCollectionExtensions
 
         // Validate name fast (before any DI mutation) so misuse fails at registration,
         // not lazily on first request.
-        foreach (var builtIn in Enum.GetNames<WebhookSignatureScheme>())
+        var collision = Enum.GetNames<WebhookSignatureScheme>()
+            .FirstOrDefault(builtIn => string.Equals(schemeName, builtIn, StringComparison.OrdinalIgnoreCase));
+        if (collision is not null)
         {
-            if (string.Equals(schemeName, builtIn, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ArgumentException(
-                    $"'{schemeName}' collides with the built-in WebhookSignatureScheme.{builtIn} value; use a publisher-specific name.",
-                    nameof(schemeName));
-            }
+            throw new ArgumentException(
+                $"'{schemeName}' collides with the built-in WebhookSignatureScheme.{collision} value; use a publisher-specific name.",
+                nameof(schemeName));
         }
 
         services.AddKeyedScoped<IWebhookSignatureVerifier, TVerifier>(schemeName);
@@ -929,7 +928,7 @@ public static class DashboardServiceCollectionExtensions
             if (!string.IsNullOrWhiteSpace(run.TriggerDataJson))
             {
                 try { data = JsonDocument.Parse(run.TriggerDataJson).RootElement.Clone(); }
-                catch { data = null; }
+                catch (JsonException) { data = null; }
             }
 
             // Strip the caller-supplied idempotency header from the rehydrated headers.
@@ -1041,8 +1040,9 @@ public static class DashboardServiceCollectionExtensions
                 cron = s.CronOverride ?? "",
                 nextExecution = (DateTime?)null,
                 lastExecution = (DateTime?)null,
-                // Cast to string? so the anonymous type matches activeJobs' nullable shape
+                // Literals widened to string? so the anonymous type matches activeJobs' nullable shape
                 // — keeps Concat happy without relaxing nullability annotations elsewhere.
+                // codeql[cs/useless-cast-to-self] cast is required for anonymous-type member type unification (string vs string?).
                 lastJobId = (string?)"",
                 lastJobState = (string?)"Paused",
                 timeZoneId = (string?)"",
@@ -1067,7 +1067,7 @@ public static class DashboardServiceCollectionExtensions
                 triggerDispatcher.TriggerOnce(jobId);
                 await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' triggered." });
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(http.Response,new { error = ex.Message });
@@ -1311,6 +1311,7 @@ public static class DashboardServiceCollectionExtensions
             return false;
         }
 
+        // codeql[cs/linq/missed-select] loop has side effects beyond projection: short-circuits with multiple early returns based on q-value parsing.
         foreach (var part in acceptEncoding.Split(','))
         {
             var entry = part.Trim();
@@ -1334,6 +1335,7 @@ public static class DashboardServiceCollectionExtensions
 
             // Walk the ";q=<value>" parameter list. Anything that's not a
             // valid double, or any q-value > 0, is treated as accepted.
+            // codeql[cs/linq/missed-select] loop has side effects beyond projection: short-circuits on first q parameter (returns false for q=0, true otherwise).
             foreach (var rawParam in entry[(semi + 1)..].Split(';'))
             {
                 var p = rawParam.Trim();
@@ -1516,19 +1518,18 @@ public static class DashboardServiceCollectionExtensions
         try
         {
             var doc = JsonSerializer.Deserialize<JsonElement>(manifestJson);
-            if (doc.TryGetProperty("triggers", out var triggers) || doc.TryGetProperty("Triggers", out triggers))
+            if ((doc.TryGetProperty("triggers", out var triggers) || doc.TryGetProperty("Triggers", out triggers))
+                && triggers.TryGetProperty(triggerKey, out var trigger)
+                && (trigger.TryGetProperty("inputs", out var inputs) || trigger.TryGetProperty("Inputs", out inputs))
+                && inputs.TryGetProperty("cronExpression", out var cron))
             {
-                if (triggers.TryGetProperty(triggerKey, out var trigger))
-                {
-                    if (trigger.TryGetProperty("inputs", out var inputs) || trigger.TryGetProperty("Inputs", out inputs))
-                    {
-                        if (inputs.TryGetProperty("cronExpression", out var cron))
-                            return cron.GetString();
-                    }
-                }
+                return cron.GetString();
             }
         }
-        catch { }
+        catch (JsonException)
+        {
+            // best-effort: manifest may not declare cron
+        }
         return null;
     }
 

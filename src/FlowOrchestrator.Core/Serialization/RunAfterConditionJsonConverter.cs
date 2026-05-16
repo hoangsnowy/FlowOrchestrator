@@ -91,6 +91,7 @@ public sealed class RunAfterConditionJsonConverter : JsonConverter<RunAfterCondi
 
     private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
     {
+        // codeql[cs/linq/missed-where] loop has side effects beyond projection: assigns the `out value` parameter on first match.
         foreach (var prop in element.EnumerateObject())
         {
             if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))

@@ -71,7 +71,7 @@ public static class SseEndpointHandler
         var connection = new SseConnection(ct, runIdFilter);
         await using var registration = broadcaster.Register(connection);
 
-        var heartbeat = new PeriodicTimer(heartbeatInterval ?? HeartbeatInterval);
+        using var heartbeat = new PeriodicTimer(heartbeatInterval ?? HeartbeatInterval);
         try
         {
             // Two cooperating loops: one drains events as they arrive, the other emits keep-alive
@@ -89,10 +89,6 @@ public static class SseEndpointHandler
         catch (IOException)
         {
             // Broken pipe — also expected on disconnect.
-        }
-        finally
-        {
-            heartbeat.Dispose();
         }
     }
 

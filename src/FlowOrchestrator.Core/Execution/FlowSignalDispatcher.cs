@@ -127,7 +127,8 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         {
             await _dispatcher.ScheduleStepAsync(ctx, flow, step, ResumeDelay, ct).ConfigureAwait(false);
         }
-        catch
+        // codeql[cs/catch-of-all-exceptions] best-effort dispatcher prod; signal is already delivered, retry happens on next tick
+        catch (Exception)
         {
             // Intentionally swallowed; signal is still delivered, handler will observe on next dispatch.
         }

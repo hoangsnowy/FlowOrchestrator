@@ -55,7 +55,7 @@ public sealed class FlowStoreHealthCheck : IHealthCheck
             return HealthCheckResult.Unhealthy(
                 $"Flow store probe timed out after {_timeout.TotalMilliseconds:N0} ms.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return HealthCheckResult.Unhealthy("Flow store is unreachable.", ex);
         }

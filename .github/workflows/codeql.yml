@@ -66,7 +66,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          queries: security-extended
+          queries: security-extended,security-and-quality
 
       # Manual build pinned to the libraries solution file — repo root contains
       # multiple .slnx files (Unit/Integration/Regression/Libraries) which made

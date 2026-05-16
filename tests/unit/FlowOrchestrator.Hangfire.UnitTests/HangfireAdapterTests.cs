@@ -120,7 +120,7 @@ public sealed class HangfireAdapterTests
     public async Task ScheduleStepAsync_ReturnsNullWhenClientReturnsNull()
     {
         // Arrange
-        _jobClient.Create(Arg.Any<Job>(), Arg.Any<IState>()).Returns((string)null!);
+        _jobClient.Create(Arg.Any<Job>(), Arg.Any<IState>()).Returns((string)null!); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
         var sut = new HangfireStepDispatcher(_jobClient);
         var ctx = MakeContext();
         var flow = MakeFlow();

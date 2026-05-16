@@ -27,8 +27,8 @@ public class StepMetadataJsonConverterTests
         Assert.IsType<StepMetadata>(result);
         Assert.IsNotType<LoopStepMetadata>(result);
         Assert.Equal("LogMessage", result!.Type);
-        Assert.True(result.RunAfter.ContainsKey("step0"));
-        Assert.Contains(StepStatus.Succeeded, result.RunAfter["step0"]);
+        Assert.True(result.RunAfter.TryGetValue("step0", out var step0Statuses));
+        Assert.Contains(StepStatus.Succeeded, step0Statuses!);
         Assert.True(result.Inputs.ContainsKey("message"));
     }
 
@@ -56,8 +56,8 @@ public class StepMetadataJsonConverterTests
         var loop = Assert.IsType<LoopStepMetadata>(result);
         Assert.Equal("ForEach", loop.Type);
         Assert.Equal(5, loop.ConcurrencyLimit);
-        Assert.True(loop.Steps.ContainsKey("child1"));
-        Assert.Equal("Process", loop.Steps["child1"].Type);
+        Assert.True(loop.Steps.TryGetValue("child1", out var child1));
+        Assert.Equal("Process", child1!.Type);
     }
 
     [Fact]
@@ -98,8 +98,8 @@ public class StepMetadataJsonConverterTests
         // Assert
         Assert.NotNull(deserialized);
         Assert.Equal(original.Type, deserialized!.Type);
-        Assert.True(deserialized.RunAfter.ContainsKey("prev"));
-        Assert.Equal(new[] { StepStatus.Succeeded, StepStatus.Failed }, deserialized.RunAfter["prev"]);
+        Assert.True(deserialized.RunAfter.TryGetValue("prev", out var prevStatuses));
+        Assert.Equal(new[] { StepStatus.Succeeded, StepStatus.Failed }, prevStatuses!);
     }
 
     [Fact]
@@ -127,8 +127,8 @@ public class StepMetadataJsonConverterTests
         // Assert
         var loop = Assert.IsType<LoopStepMetadata>(deserialized);
         Assert.Equal(3, loop.ConcurrencyLimit);
-        Assert.True(loop.Steps.ContainsKey("inner"));
-        Assert.Equal("Process", loop.Steps["inner"].Type);
+        Assert.True(loop.Steps.TryGetValue("inner", out var inner));
+        Assert.Equal("Process", inner!.Type);
     }
 
     [Fact]

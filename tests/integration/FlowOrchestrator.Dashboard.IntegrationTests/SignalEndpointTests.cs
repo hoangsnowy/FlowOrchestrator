@@ -22,12 +22,13 @@ public sealed class SignalEndpointTests : IDisposable
     public async Task POST_signal_returns_404_when_run_missing()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync(
+        using var response = await _client.PostAsync(
             $"/flows/api/runs/{Guid.NewGuid()}/signals/approval",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
+            content);
 
         // Assert
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -40,11 +41,12 @@ public sealed class SignalEndpointTests : IDisposable
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
             .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Succeeded" });
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync(
+        using var response = await _client.PostAsync(
             $"/flows/api/runs/{runId}/signals/approval",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
+            content);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -57,11 +59,12 @@ public sealed class SignalEndpointTests : IDisposable
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
             .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+        using var content = new StringContent("{not-json", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync(
+        using var response = await _client.PostAsync(
             $"/flows/api/runs/{runId}/signals/approval",
-            new StringContent("{not-json", Encoding.UTF8, "application/json"));
+            content);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -78,11 +81,12 @@ public sealed class SignalEndpointTests : IDisposable
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
                 new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null)));
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync(
+        using var response = await _client.PostAsync(
             $"/flows/api/runs/{runId}/signals/approval",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
+            content);
 
         // Assert
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -99,11 +103,12 @@ public sealed class SignalEndpointTests : IDisposable
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
                 new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, "wait_step", DateTimeOffset.UtcNow)));
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync(
+        using var response = await _client.PostAsync(
             $"/flows/api/runs/{runId}/signals/approval",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
+            content);
 
         // Assert
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -121,11 +126,12 @@ public sealed class SignalEndpointTests : IDisposable
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
                 new SignalDeliveryResult(SignalDeliveryStatus.Delivered, "wait_for_approval", deliveredAt)));
+        using var content = new StringContent("""{"approved":true}""", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync(
+        using var response = await _client.PostAsync(
             $"/flows/api/runs/{runId}/signals/approval",
-            new StringContent("""{"approved":true}""", Encoding.UTF8, "application/json"));
+            content);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

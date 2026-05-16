@@ -73,9 +73,12 @@ public sealed partial class FlowGraphPlanner
             }
 
             var metadata = flat[key];
-            foreach (var dep in metadata.RunAfter.Keys.Select(d => ResolveTemplateDependencyKey(key, d)))
+            var resolvedDeps = metadata.RunAfter.Keys
+                .Select(d => ResolveTemplateDependencyKey(key, d))
+                .Where(dep => flat.ContainsKey(dep));
+            foreach (var dep in resolvedDeps)
             {
-                if (flat.ContainsKey(dep) && Visit(dep))
+                if (Visit(dep))
                 {
                     return true;
                 }
@@ -86,15 +89,7 @@ public sealed partial class FlowGraphPlanner
             return false;
         }
 
-        foreach (var key in flat.Keys)
-        {
-            if (Visit(key))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return flat.Keys.Any(Visit);
     }
 
     private static Dictionary<string, StepMetadata> FlattenTemplateSteps(StepCollection collection)

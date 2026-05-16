@@ -97,7 +97,7 @@ public sealed class RunEndpointTests : IDisposable
         var id = Guid.NewGuid();
         var run = new FlowRunRecord { Id = id, Status = "Succeeded", FlowName = "MyFlow" };
         _server.FlowRunStore.GetRunDetailAsync(id).Returns(run);
-        _server.OutputsRepository.GetTriggerHeadersAsync(id).Returns((IReadOnlyDictionary<string, string>?)null);
+        _server.OutputsRepository.GetTriggerHeadersAsync(id).Returns((IReadOnlyDictionary<string, string>?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
 
         // Act
         var response = await _client.GetAsync($"/flows/api/runs/{id}");
@@ -112,7 +112,7 @@ public sealed class RunEndpointTests : IDisposable
     public async Task GET_api_runs_by_id_returns_404_for_missing_run()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
 
         // Act
         var response = await _client.GetAsync($"/flows/api/runs/{Guid.NewGuid()}");
@@ -147,7 +147,7 @@ public sealed class RunEndpointTests : IDisposable
     public async Task GET_api_runs_steps_returns_404_for_missing_run()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
 
         // Act
         var response = await _client.GetAsync($"/flows/api/runs/{Guid.NewGuid()}/steps");
@@ -209,7 +209,7 @@ public sealed class RunEndpointTests : IDisposable
     public async Task POST_retry_returns_404_when_run_not_found()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
 
         // Act
         var response = await _client.PostAsync($"/flows/api/runs/{Guid.NewGuid()}/steps/step1/retry", null);
@@ -243,7 +243,7 @@ public sealed class RunEndpointTests : IDisposable
     public async Task POST_rerun_returns_404_when_run_missing()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
 
         // Act
         var response = await _client.PostAsync($"/flows/api/runs/{Guid.NewGuid()}/rerun", null);

@@ -201,7 +201,7 @@ public sealed class EngineSpanCoverageTests
     public async Task RunStepAsync_WhenStepReturnsPending_IncrementsPollAttemptsCounter()
     {
         // Arrange
-        var (stopped, listener) = StartListener();
+        var (_, listener) = StartListener();
         using var _ = listener;
 
         _stepExecutor.ExecuteAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())

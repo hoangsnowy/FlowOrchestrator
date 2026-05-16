@@ -299,7 +299,7 @@ internal sealed class ServiceBusRecurringTriggerHub
         {
             await _sender.Value.CancelScheduledMessageAsync(sequenceNumber).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogDebug(ex, "Could not cancel scheduled message {Seq} (already delivered or queue gone).", sequenceNumber);
         }

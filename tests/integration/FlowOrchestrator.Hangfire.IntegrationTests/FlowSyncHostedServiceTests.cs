@@ -42,7 +42,7 @@ public class FlowSyncHostedServiceTests
         repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
 
         var store = Substitute.For<IFlowStore>();
-        store.GetByIdAsync(flow.Id).Returns((FlowDefinitionRecord?)null);
+        store.GetByIdAsync(flow.Id).Returns((FlowDefinitionRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
         store.SaveAsync(Arg.Any<FlowDefinitionRecord>()).Returns(ci => ci.Arg<FlowDefinitionRecord>());
 
         var sut = CreateSut(repository, store);

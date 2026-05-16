@@ -18,15 +18,7 @@ public sealed partial class FlowGraphPlanner
         // exactly the manifest's sorted keys — return the cached array
         // directly. Avoids the SortedSet allocation, the sort, and the
         // ToArray copy on every call.
-        var needsExpansion = false;
-        foreach (var runtimeKey in runtimeStepKeys)
-        {
-            if (!cache.KeySet.Contains(runtimeKey))
-            {
-                needsExpansion = true;
-                break;
-            }
-        }
+        var needsExpansion = runtimeStepKeys.Any(runtimeKey => !cache.KeySet.Contains(runtimeKey));
 
         if (!needsExpansion)
         {

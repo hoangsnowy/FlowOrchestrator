@@ -48,7 +48,8 @@ internal static class JsonValueConversion
             result = Deserialize<T>(value, options);
             return true;
         }
-        catch
+        // codeql[cs/catch-of-all-exceptions] Try-pattern: by contract returns false on ANY conversion failure
+        catch (Exception)
         {
             result = default;
             return false;
@@ -80,12 +81,9 @@ internal static class JsonValueConversion
             return value;
         }
 
-        if (value is JsonElement element)
+        if (value is JsonElement element && element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
-            if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            {
-                return GetDefaultValue(targetType);
-            }
+            return GetDefaultValue(targetType);
         }
 
         if (value is IDictionary<string, object?> dictionary
@@ -140,7 +138,8 @@ internal static class JsonValueConversion
         {
             instance = Activator.CreateInstance(targetType);
         }
-        catch
+        // codeql[cs/catch-of-all-exceptions] Try-pattern: ctor of arbitrary target type may throw anything; bind fails cleanly
+        catch (Exception)
         {
             return false;
         }
@@ -201,6 +200,7 @@ internal static class JsonValueConversion
         out object? value)
     {
         value = null;
+        // codeql[cs/linq/missed-where] loop has side effects beyond projection: assigns the `out value` parameter via TryGetValue on first match.
         foreach (var candidateName in GetCandidateNames(property, options))
         {
             if (lookup.TryGetValue(candidateName, out value))
@@ -424,7 +424,8 @@ internal static class JsonValueConversion
 
             return result is not null;
         }
-        catch
+        // codeql[cs/catch-of-all-exceptions] Try-pattern: numeric parse may throw Format/Overflow; conversion fails cleanly
+        catch (Exception)
         {
             result = null;
             return false;

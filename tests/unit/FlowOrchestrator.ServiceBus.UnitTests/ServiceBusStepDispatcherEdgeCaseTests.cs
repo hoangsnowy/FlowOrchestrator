@@ -34,7 +34,6 @@ public class ServiceBusStepDispatcherEdgeCaseTests
         // path: the SB topic's duplicate-detection window will treat the second as a dupe.
         var scheduled = new DateTimeOffset(2026, 5, 2, 12, 0, 0, TimeSpan.Zero);
         var (ctx, flow, step) = Args(scheduled);
-        var (ctx2, _, _) = Args(scheduled);
         // Force the same RunId/StepKey/ScheduledTime — same dedup key.
         var step2 = new StepInstance(step.Key, step.Type) { RunId = ctx.RunId, ScheduledTime = scheduled };
 

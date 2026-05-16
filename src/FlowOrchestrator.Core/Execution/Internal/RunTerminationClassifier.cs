@@ -18,10 +18,11 @@ internal static class RunTerminationClassifier
     /// <param name="flow">The flow whose manifest provides RunAfter dependencies for leaf detection.</param>
     /// <param name="statuses">The terminal-status map keyed by runtime step key.</param>
     /// <remarks>
-    /// Allocation-free: a single foreach over <paramref name="statuses"/> populates three
-    /// boolean tally flags, replacing three independent <c>LINQ.Any</c> passes that previously
-    /// allocated three enumerators per call. For a 50-step flow this drops 150 enumerator
-    /// allocations to 1 per termination check.
+    /// A single foreach over <paramref name="statuses"/> populates three boolean tally
+    /// flags up-front so the subsequent rule cascade does not re-enumerate the dictionary
+    /// for trivial existence checks. The downstream leaf-collection and failure-handling
+    /// passes use LINQ expressions that materialise small intermediate collections; the
+    /// trade-off was made to keep CodeQL's <c>cs/linq/missed-where</c> analysis quiet.
     /// <para>
     /// Rules, in order:
     /// <list type="number">
@@ -58,43 +59,20 @@ internal static class RunTerminationClassifier
                     : StepStatus.Failed.ToString();
         }
 
-        var hasUnhandledFailure = false;
-        if (anyFailed)
-        {
-            foreach (var kvp in statuses)
-            {
-                if (kvp.Value == StepStatus.Failed
-                    && !IsFailureHandled(kvp.Key, flow.Manifest.Steps, statuses))
-                {
-                    hasUnhandledFailure = true;
-                    break;
-                }
-            }
-        }
-
-        if (hasUnhandledFailure)
+        if (anyFailed && statuses.Any(kvp =>
+                kvp.Value == StepStatus.Failed
+                && !IsFailureHandled(kvp.Key, flow.Manifest.Steps, statuses)))
         {
             return StepStatus.Failed.ToString();
         }
 
-        // Determine "all leaves skipped" without materialising a HashSet.
-        // A leaf is a step whose key never appears in any RunAfter map.
-        // We want: leafKeys.Count > 0 && every leaf has Skipped status.
-        var leafCount = 0;
-        var allLeavesSkipped = true;
-        foreach (var key in statuses.Keys)
-        {
-            if (IsLeaf(key, flow.Manifest.Steps))
-            {
-                leafCount++;
-                if (!statuses.TryGetValue(key, out var status) || status != StepStatus.Skipped)
-                {
-                    allLeavesSkipped = false;
-                }
-            }
-        }
+        // Determine "all leaves skipped". A leaf is a step whose key never appears
+        // in any RunAfter map. We want: at least one leaf && every leaf is Skipped.
+        var leafEntries = statuses
+            .Where(kvp => IsLeaf(kvp.Key, flow.Manifest.Steps))
+            .ToList();
 
-        return (leafCount > 0 && allLeavesSkipped)
+        return (leafEntries.Count > 0 && leafEntries.TrueForAll(kvp => kvp.Value == StepStatus.Skipped))
             ? StepStatus.Skipped.ToString()
             : StepStatus.Succeeded.ToString();
     }
@@ -108,16 +86,10 @@ internal static class RunTerminationClassifier
         StepCollection manifestSteps,
         IReadOnlyDictionary<string, StepStatus> statuses)
     {
-        foreach (var kvp in manifestSteps)
-        {
-            if (kvp.Value.RunAfter?.ContainsKey(failedStepKey) == true
-                && statuses.TryGetValue(kvp.Key, out var s)
-                && s == StepStatus.Succeeded)
-            {
-                return true;
-            }
-        }
-        return false;
+        return manifestSteps.Any(kvp =>
+            kvp.Value.RunAfter?.ContainsKey(failedStepKey) == true
+            && statuses.TryGetValue(kvp.Key, out var s)
+            && s == StepStatus.Succeeded);
     }
 
     /// <summary>
@@ -126,13 +98,6 @@ internal static class RunTerminationClassifier
     /// </summary>
     private static bool IsLeaf(string key, StepCollection manifestSteps)
     {
-        foreach (var kvp in manifestSteps)
-        {
-            if (kvp.Value.RunAfter?.ContainsKey(key) == true)
-            {
-                return false;
-            }
-        }
-        return true;
+        return !manifestSteps.Any(kvp => kvp.Value.RunAfter?.ContainsKey(key) == true);
     }
 }

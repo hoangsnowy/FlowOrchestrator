@@ -44,7 +44,7 @@ public sealed partial class FlowOrchestratorEngine
             {
                 await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
             }
@@ -111,7 +111,7 @@ public sealed partial class FlowOrchestratorEngine
         {
             await _eventNotifier.PublishAsync(evt, ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             EngineLog.EventNotifierFailed(_logger, ex, evt.Type);
         }
@@ -175,7 +175,7 @@ public sealed partial class FlowOrchestratorEngine
                     StepKey = stepKey
                 }).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             EngineLog.EventPersistenceFailed(_logger, ex, type);
         }

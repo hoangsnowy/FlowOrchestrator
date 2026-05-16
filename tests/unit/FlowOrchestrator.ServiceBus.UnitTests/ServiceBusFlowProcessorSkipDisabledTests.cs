@@ -42,7 +42,7 @@ public class ServiceBusFlowProcessorSkipDisabledTests
 
         // Act — StartAsync will fail when it actually tries CreateProcessor on the fake conn,
         // but we only need to observe topology calls before that point.
-        try { await sut.StartAsync(CancellationToken.None); } catch { /* expected — fake conn */ }
+        try { await sut.StartAsync(CancellationToken.None); } catch (Exception ex) when (ex is not OperationCanceledException) { /* expected — fake conn */ }
 
         // Assert
         Assert.Contains(flowEnabled.Id, topology.EnsuredSubscriptions);

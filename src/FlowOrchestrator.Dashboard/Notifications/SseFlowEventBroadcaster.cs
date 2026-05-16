@@ -48,6 +48,7 @@ public sealed class SseFlowEventBroadcaster : IFlowEventNotifier
 
         // Snapshot is unnecessary — ConcurrentDictionary enumeration is safe and we tolerate
         // a connection registering or disposing mid-publish (it just gets the next event or none).
+        // codeql[cs/linq/missed-select] loop has side effects beyond projection: writes the event to every matching connection's channel.
         foreach (var pair in _connections)
         {
             var conn = pair.Value;

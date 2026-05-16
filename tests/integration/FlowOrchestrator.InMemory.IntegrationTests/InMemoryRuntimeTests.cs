@@ -131,14 +131,14 @@ public sealed class InMemoryRuntimeTests
         services.AddHostedService<InMemoryStepRunnerHostedService>();
         var sp = services.BuildServiceProvider();
 
-        var cts = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         var runner = sp.GetServices<IHostedService>().OfType<InMemoryStepRunnerHostedService>().Single();
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();
         var step = MakeStep();
 
         // Act
-        var runTask = runner.StartAsync(cts.Token);
+        await runner.StartAsync(cts.Token);
         await channel.Writer.WriteAsync(new InMemoryStepEnvelope(ctx, flow, step, "e1"));
         await firstCallTcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cts.Cancel();
@@ -178,7 +178,7 @@ public sealed class InMemoryRuntimeTests
         services.AddHostedService<InMemoryStepRunnerHostedService>();
         var sp = services.BuildServiceProvider();
 
-        var cts = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         var runner = sp.GetServices<IHostedService>().OfType<InMemoryStepRunnerHostedService>().Single();
         var ctx = MakeContext(Guid.NewGuid());
         var flow = MakeFlow();

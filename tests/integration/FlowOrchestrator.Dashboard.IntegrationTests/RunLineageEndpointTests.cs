@@ -60,7 +60,7 @@ public sealed class RunLineageEndpointTests : IDisposable
     public async Task GET_lineage_returns_404_when_run_missing()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
 
         // Act
         var response = await _client.GetAsync($"/flows/api/runs/{Guid.NewGuid()}/lineage");

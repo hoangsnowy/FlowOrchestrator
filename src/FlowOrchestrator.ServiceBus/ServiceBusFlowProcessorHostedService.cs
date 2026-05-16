@@ -108,8 +108,9 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
     {
         foreach (var (_, processor) in _processors)
         {
+            // codeql[cs/catch-of-all-exceptions] shutdown path: any exception (incl. OCE) must not break stop
             try { await processor.StopProcessingAsync(cancellationToken).ConfigureAwait(false); }
-            catch { /* swallow on shutdown */ }
+            catch (Exception) { /* swallow on shutdown */ }
         }
     }
 
@@ -120,7 +121,7 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
         {
             envelope = JsonSerializer.Deserialize<StepEnvelope>(args.Message.Body.ToArray());
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Failed to deserialise step message {MessageId}; dead-lettering.", args.Message.MessageId);
             await args.DeadLetterMessageAsync(args.Message, "deserialisation-failed", ex.Message, args.CancellationToken).ConfigureAwait(false);
@@ -168,7 +169,8 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
     {
         foreach (var (_, processor) in _processors)
         {
-            try { await processor.DisposeAsync().ConfigureAwait(false); } catch { /* swallow */ }
+            // codeql[cs/catch-of-all-exceptions] dispose path: any exception (incl. OCE) must not break shutdown
+            try { await processor.DisposeAsync().ConfigureAwait(false); } catch (Exception) { /* swallow */ }
         }
         _processors.Clear();
     }
