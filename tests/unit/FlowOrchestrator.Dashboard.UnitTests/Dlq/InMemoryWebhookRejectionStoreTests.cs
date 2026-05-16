@@ -172,4 +172,82 @@ public sealed class InMemoryWebhookRejectionStoreTests
         Assert.Single(rejected);
         Assert.False(rejected[0].IsAccepted);
     }
+
+    [Fact]
+    public async Task QueryAsync_search_with_null_remote_ip_field_does_not_throw()
+    {
+        // Arrange — guards the CodeQL "extracted Where-predicate locals" refactor where
+        // `searchMatchesIp = r.RemoteIp?.Contains(search ?? string.Empty, ...)` runs for every
+        // record, even when `search` is null. A record with RemoteIp = null must not NRE when
+        // any of the three extracted match-helpers are computed.
+        var clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch.AddSeconds(1700000000));
+        var store = new InMemoryWebhookRejectionStore(maxEntries: 50, clock);
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = _flow,
+            TriggerKey = "webhook",
+            Reason = "rate_limited",
+            RemoteIp = null,                  // <-- the critical null field
+            ReceivedAt = clock.GetUtcNow(),
+            IsAccepted = false,
+        });
+
+        // Act + Assert (no throw)
+        var nullSearchPage = await store.QueryAsync(new WebhookRejectionQuery(Search: null));
+        var nonMatchingSearchPage = await store.QueryAsync(new WebhookRejectionQuery(Search: "no-such-substring"));
+        var matchingSearchPage = await store.QueryAsync(new WebhookRejectionQuery(Search: "rate"));
+
+        // Null search: matches everything. Non-matching: matches nothing. Matching reason: 1 row.
+        Assert.Equal(1, nullSearchPage.Total);
+        Assert.Equal(0, nonMatchingSearchPage.Total);
+        Assert.Equal(1, matchingSearchPage.Total);
+    }
+
+    [Fact]
+    public async Task QueryAsync_combined_filters_search_accepted_flow_all_applied()
+    {
+        // Arrange — exercises the AND-chain across all three predicate dimensions to lock the
+        // post-refactor extracted-locals semantics: matchesAcceptedFilter && matchesRejectedFilter
+        // && matchesFlowFilter && matchesReasonFilter && matchesSearchFilter.
+        var clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch.AddSeconds(1700000000));
+        var store = new InMemoryWebhookRejectionStore(maxEntries: 50, clock);
+        var otherFlow = Guid.Parse("00000000-0000-0000-0000-000000000777");
+
+        // 1) match: matching flow, rejected, "github" trigger contains "git"
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = _flow, TriggerKey = "github-events", Reason = "signature_invalid",
+            IsAccepted = false, ReceivedAt = clock.GetUtcNow(),
+        });
+        // 2) excluded by accepted-only: this row is Accepted but we filter for rejected
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = _flow, TriggerKey = "github-events", Reason = "accepted",
+            IsAccepted = true, ReceivedAt = clock.GetUtcNow(),
+        });
+        // 3) excluded by flow filter: different flow, even though trigger matches
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = otherFlow, TriggerKey = "github-events", Reason = "signature_invalid",
+            IsAccepted = false, ReceivedAt = clock.GetUtcNow(),
+        });
+        // 4) excluded by search filter: matching flow + rejected but trigger doesn't contain "git"
+        await store.WriteAsync(new WebhookRejectionRecord
+        {
+            FlowId = _flow, TriggerKey = "stripe-events", Reason = "signature_invalid",
+            IsAccepted = false, ReceivedAt = clock.GetUtcNow(),
+        });
+
+        // Act
+        var page = await store.QueryAsync(new WebhookRejectionQuery(
+            FlowId: _flow,
+            IncludeAccepted: false,    // only rejected (excludes #2)
+            IncludeRejected: true,
+            Search: "git"));           // trigger contains "git" (excludes #4)
+
+        // Assert — only #1 survives all four predicates.
+        Assert.Equal(1, page.Total);
+        Assert.Equal("github-events", page.Items[0].TriggerKey);
+        Assert.False(page.Items[0].IsAccepted);
+    }
 }

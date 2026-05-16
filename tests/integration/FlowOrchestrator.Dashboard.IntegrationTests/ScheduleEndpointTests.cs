@@ -5,6 +5,7 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
+using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -83,7 +84,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/trigger", null);
@@ -131,7 +132,7 @@ public sealed class ScheduleEndpointTests : IDisposable
 
         _server.FlowStore.GetByIdAsync(flowId)
             .Returns(new FlowDefinitionRecord { Id = flowId, Name = "DailyFlow", IsEnabled = true });
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/pause", null);
@@ -197,8 +198,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).Returns((FlowDefinitionRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        _server.FlowStore.GetByIdAsync(flowId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/resume", null);
@@ -226,7 +227,7 @@ public sealed class ScheduleEndpointTests : IDisposable
                 IsEnabled = true,
                 ManifestJson = manifestJson
             });
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PutAsync(
@@ -295,8 +296,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).Returns((FlowDefinitionRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        _server.FlowStore.GetByIdAsync(flowId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PutAsync(

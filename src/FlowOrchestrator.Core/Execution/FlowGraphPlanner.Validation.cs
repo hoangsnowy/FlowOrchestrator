@@ -76,12 +76,9 @@ public sealed partial class FlowGraphPlanner
             var resolvedDeps = metadata.RunAfter.Keys
                 .Select(d => ResolveTemplateDependencyKey(key, d))
                 .Where(dep => flat.ContainsKey(dep));
-            foreach (var dep in resolvedDeps)
+            if (resolvedDeps.Any(Visit))
             {
-                if (Visit(dep))
-                {
-                    return true;
-                }
+                return true;
             }
 
             visiting.Remove(key);

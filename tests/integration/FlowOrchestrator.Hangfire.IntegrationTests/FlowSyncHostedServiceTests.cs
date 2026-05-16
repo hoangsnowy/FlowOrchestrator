@@ -5,6 +5,7 @@ using FlowOrchestrator.Hangfire;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Hangfire.Tests;
 
@@ -42,7 +43,7 @@ public class FlowSyncHostedServiceTests
         repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
 
         var store = Substitute.For<IFlowStore>();
-        store.GetByIdAsync(flow.Id).Returns((FlowDefinitionRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        store.GetByIdAsync(flow.Id).ReturnsNull();
         store.SaveAsync(Arg.Any<FlowDefinitionRecord>()).Returns(ci => ci.Arg<FlowDefinitionRecord>());
 
         var sut = CreateSut(repository, store);

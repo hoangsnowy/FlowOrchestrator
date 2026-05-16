@@ -107,10 +107,11 @@ public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
                 var matchesFlowFilter = query.FlowId is null || r.FlowId == query.FlowId;
                 var matchesReasonFilter = string.IsNullOrEmpty(query.Reason)
                     || string.Equals(r.Reason, query.Reason, StringComparison.OrdinalIgnoreCase);
+                var searchMatchesReason = r.Reason?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
+                var searchMatchesTrigger = r.TriggerKey?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
+                var searchMatchesIp = r.RemoteIp?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
                 var matchesSearchFilter = string.IsNullOrEmpty(search)
-                    || (r.Reason?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
-                    || (r.TriggerKey?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
-                    || (r.RemoteIp?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+                    || searchMatchesReason || searchMatchesTrigger || searchMatchesIp;
                 return matchesAcceptedFilter
                     && matchesRejectedFilter
                     && matchesFlowFilter

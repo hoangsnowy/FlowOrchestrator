@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using FlowOrchestrator.Core.Storage;
+using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -22,7 +23,7 @@ public sealed class SignalEndpointTests : IDisposable
     public async Task POST_signal_returns_404_when_run_missing()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null); // codeql[cs/useless-upcast] disambiguates NSubstitute overload
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).ReturnsNull();
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
