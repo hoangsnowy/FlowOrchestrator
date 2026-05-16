@@ -42,7 +42,7 @@ public static class EngineLogScope
         };
         if (!string.IsNullOrEmpty(stepKey))
         {
-            state["StepKey"] = stepKey;
+            state["StepKey"] = LogSafe.Strip(stepKey);
         }
         if (attempt.HasValue)
         {

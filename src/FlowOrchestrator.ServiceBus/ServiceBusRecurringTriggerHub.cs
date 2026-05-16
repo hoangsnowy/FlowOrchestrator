@@ -5,6 +5,7 @@ using Cronos;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -89,11 +90,13 @@ internal sealed class ServiceBusRecurringTriggerHub
         // PeriodicTimer dispatcher's signature. ScheduleNextAsync now throws on failure so the
         // self-perpetuating consumer can redeliver; for the registration-time call we still log
         // and continue, since FlowSyncHostedService will re-attempt via the next sync cycle.
+        var safeJobId = LogSafe.Strip(jobId);
+        var safeCron = LogSafe.Strip(cronExpression);
         _ = ScheduleNextAsync(jobId, flowId, triggerKey, cronExpression, nextFire, CancellationToken.None)
             .ContinueWith(t =>
-                _logger.LogError(t.Exception, "Failed to schedule first firing for {JobId} at {FireAt:O}.", jobId, nextFire),
+                _logger.LogError(t.Exception, "Failed to schedule first firing for {JobId} at {FireAt:O}.", safeJobId, nextFire),
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
-        _logger.LogInformation("Registered recurring job {JobId} (cron='{Cron}').", jobId, cronExpression);
+        _logger.LogInformation("Registered recurring job {JobId} (cron='{Cron}').", safeJobId, safeCron);
     }
 
     /// <inheritdoc/>
@@ -101,7 +104,7 @@ internal sealed class ServiceBusRecurringTriggerHub
     {
         if (_jobs.TryRemove(jobId, out var state))
         {
-            _logger.LogInformation("Removed recurring job {JobId}.", jobId);
+            _logger.LogInformation("Removed recurring job {JobId}.", LogSafe.Strip(jobId));
             // Best-effort cancellation of any in-flight scheduled message.
             if (state.LastSequenceNumber is { } seq)
             {
@@ -231,7 +234,7 @@ internal sealed class ServiceBusRecurringTriggerHub
         {
             _logger.LogDebug(
                 "Skipping ScheduleNextAsync for {JobId}: job is no longer registered (flow disabled or removed).",
-                jobId);
+                LogSafe.Strip(jobId));
             return;
         }
 

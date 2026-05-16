@@ -151,7 +151,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
         {
             state.LastJobId = jobId;
             state.LastJobState = "Failed";
-            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", jobId, state.FlowId);
+            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", LogSafe.Strip(jobId), state.FlowId);
             // Swallow so a single failure cannot kill the timer loop.
         }
         finally
@@ -202,14 +202,14 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 return existing;
             });
 
-        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", jobId, cronExpression);
+        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", LogSafe.Strip(jobId), LogSafe.Strip(cronExpression));
     }
 
     /// <inheritdoc/>
     public void Remove(string jobId)
     {
         if (_jobs.TryRemove(jobId, out _))
-            _logger.LogInformation("Removed recurring job {JobId}.", jobId);
+            _logger.LogInformation("Removed recurring job {JobId}.", LogSafe.Strip(jobId));
     }
 
     /// <inheritdoc/>
