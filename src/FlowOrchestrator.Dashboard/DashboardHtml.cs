@@ -67,9 +67,12 @@ internal sealed class PrecompressedDashboardPage
 /// <remarks>
 /// The page is assembled from three embedded resources — <c>Assets/index.html</c>
 /// (shell), <c>Assets/dashboard.css</c>, and <c>Assets/dashboard.js</c> — at
-/// static-init time. The CSS and JS are inlined into the shell via the
-/// <c>{{INLINE_CSS}}</c> and <c>{{INLINE_JS}}</c> placeholders, producing a
-/// single template cached in <see cref="Template"/>. Per-request
+/// static-init time. CSS is inlined via <c>{{INLINE_CSS}}</c>; JS is inlined
+/// via the JS-comment placeholder <c>/*FLOW_DASHBOARD_INLINE_JS*/</c> (the
+/// comment form keeps the &lt;script&gt; body syntactically valid for static
+/// analyzers like CodeQL, which would otherwise parse <c>{{...}}</c> as a
+/// useless JavaScript expression). The result is a single template cached
+/// in <see cref="Template"/>. Per-request
 /// <see cref="Render"/> only does the runtime placeholder substitutions
 /// (<c>{{BASE_PATH}}</c>, <c>{{PAGE_TITLE}}</c>, etc.).
 /// <para>
@@ -191,7 +194,7 @@ internal static class DashboardHtml
 
         return html
             .Replace("{{INLINE_CSS}}", css, StringComparison.Ordinal)
-            .Replace("{{INLINE_JS}}", js, StringComparison.Ordinal);
+            .Replace("/*FLOW_DASHBOARD_INLINE_JS*/", js, StringComparison.Ordinal);
     }
 
     /// <summary>Reads an embedded text resource by its logical name.</summary>

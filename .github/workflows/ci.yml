@@ -10,6 +10,11 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+# Least-privilege default for all jobs. No job in this workflow writes to the
+# repo, creates releases, or comments on issues — read-only contents suffice.
+permissions:
+  contents: read
+
 jobs:
   unit:
     name: Unit Tests (${{ matrix.tfm }})
