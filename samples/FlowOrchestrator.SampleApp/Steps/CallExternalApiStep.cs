@@ -93,8 +93,7 @@ public sealed class CallExternalApiStep : PollableStepHandler<CallExternalApiSte
         if (string.IsNullOrWhiteSpace(responseBody))
             return JsonSerializer.SerializeToElement<object?>(null);
 
-        var looksLikeJson = IsLikelyJson(mediaType, responseBody);
-        if ((looksLikeJson || !looksLikeJson) && TryParseJsonElement(responseBody, out var parsed))
+        if (IsLikelyJson(mediaType, responseBody) && TryParseJsonElement(responseBody, out var parsed))
         {
             parsedAsJson = true;
             return parsed;
