@@ -1785,7 +1785,7 @@ async function loadEventsIntoDrawer(runId) {
   const body = $('events-drawer-body');
   if (!body) return;
   try {
-    const events = await fetchJSON(BASE+'/runs/'+runId+'/events?take=500');
+    const events = await fetchJSON(BASE+'/runs/'+encodeURIComponent(runId)+'/events?take=500');
     if (!events || events.length === 0) {
       body.innerHTML = '<div class="step-inspector-empty">Event stream not enabled on this backend. Configure <code>IFlowEventReader</code> to see the raw event log.</div>';
       return;
@@ -2201,7 +2201,7 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
   // Cancel any in-flight detail fetch — fixes race when user clicks a different run mid-load.
   const signal = newRunDetailController().signal;
   try {
-    const run = await fetchJSON(BASE+'/runs/'+id, { signal });
+    const run = await fetchJSON(BASE+'/runs/'+encodeURIComponent(id), { signal });
     if (selectedRunId !== id) return; // user navigated away mid-fetch
     currentRun = run;
     const steps = run.steps || [];
@@ -2251,7 +2251,7 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
 
 async function loadLineage(runId, signal) {
   try {
-    const lineage = await fetchJSON(BASE+'/runs/'+runId+'/lineage', signal ? { signal } : undefined);
+    const lineage = await fetchJSON(BASE+'/runs/'+encodeURIComponent(runId)+'/lineage', signal ? { signal } : undefined);
     if (selectedRunId !== runId) return; // user navigated away
     const target = $('lineage-derived');
     if (!target) return;
