@@ -365,7 +365,7 @@ public sealed class WebhookSecurityPipeline
         {
             headersJson = JsonSerializer.Serialize(headers);
         }
-        catch { /* headers shouldn't fail to serialize but stay defensive */ }
+        catch (JsonException) { /* headers shouldn't fail to serialize but stay defensive */ }
         return new WebhookRejectionRecord
         {
             FlowId = flowId,
@@ -511,6 +511,7 @@ public sealed class WebhookSecurityPipeline
                 };
                 if (names is not null)
                 {
+                    // codeql[cs/linq/missed-select] loop has side effects beyond projection: AddRange merges each resolved preset's entries into the outer `entries` accumulator.
                     foreach (var n in names)
                     {
                         var resolved = KnownPublisherCidrs.TryGet(n);

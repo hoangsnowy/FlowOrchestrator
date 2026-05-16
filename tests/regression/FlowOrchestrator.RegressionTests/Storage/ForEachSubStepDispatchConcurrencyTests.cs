@@ -29,15 +29,14 @@ public sealed class ForEachSubStepDispatchConcurrencyTests
         var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Act — every replica races to dispatch every sub-step.
-        var tasks = (
-            from r in Enumerable.Range(0, replicas)
-            from key in subStepKeys
-            select Task.Run(async () =>
+        var tasks = Enumerable.Range(0, replicas)
+            .SelectMany(_ => subStepKeys)
+            .Select(key => Task.Run(async () =>
             {
                 await startGate.Task;
                 return (Key: key, Won: await store.TryRecordDispatchAsync(runId, key));
-            })
-        ).ToArray();
+            }))
+            .ToArray();
 
         startGate.SetResult();
         var results = await Task.WhenAll(tasks);

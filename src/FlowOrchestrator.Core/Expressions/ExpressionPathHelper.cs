@@ -29,13 +29,10 @@ internal static class ExpressionPathHelper
                 continue;
             }
 
-            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var idx))
+            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var idx) && idx >= 0 && idx < target.GetArrayLength())
             {
-                if (idx >= 0 && idx < target.GetArrayLength())
-                {
-                    target = target[idx];
-                    continue;
-                }
+                target = target[idx];
+                continue;
             }
 
             return false;

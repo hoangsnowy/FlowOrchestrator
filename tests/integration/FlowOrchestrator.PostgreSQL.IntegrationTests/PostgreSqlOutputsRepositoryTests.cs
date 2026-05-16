@@ -3,6 +3,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using NSubstitute;
+using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.PostgreSQL.Tests;
 
@@ -24,7 +25,7 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
         var flow = Substitute.For<IFlowDefinition>();
         var trigger = Substitute.For<ITrigger>();
         trigger.Data.Returns(new { OrderId = 42, Customer = "Test" });
-        trigger.Headers.Returns((IReadOnlyDictionary<string, string>?)null);
+        trigger.Headers.ReturnsNull();
 
         // Act
         await _repo.SaveTriggerDataAsync(ctx, flow, trigger);
@@ -57,9 +58,9 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
         var ctx = MakeTriggerContext(runId);
         var flow = Substitute.For<IFlowDefinition>();
         var trigger = Substitute.For<ITrigger>();
-        trigger.Data.Returns((object?)null);
+        trigger.Data.ReturnsNull();
         var headers = new Dictionary<string, string> { ["X-Request-Id"] = "abc123" };
-        trigger.Headers.Returns((IReadOnlyDictionary<string, string>)headers);
+        trigger.Headers.Returns(headers);
 
         // Act
         await _repo.SaveTriggerHeadersAsync(ctx, flow, trigger);
@@ -92,7 +93,7 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
         var step = Substitute.For<IStepInstance>();
         step.Key.Returns("step1");
         var result = Substitute.For<IStepResult>();
-        result.Result.Returns((object?)new { Value = 99 });
+        result.Result.Returns(new { Value = 99 });
 
         // Act
         await _repo.SaveStepOutputAsync(ctx, flow, step, result);
@@ -127,11 +128,11 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
         step.Key.Returns("overwrite-step");
 
         var result1 = Substitute.For<IStepResult>();
-        result1.Result.Returns((object?)new { Value = 1 });
+        result1.Result.Returns(new { Value = 1 });
         await _repo.SaveStepOutputAsync(ctx, flow, step, result1);
 
         var result2 = Substitute.For<IStepResult>();
-        result2.Result.Returns((object?)new { Value = 2 });
+        result2.Result.Returns(new { Value = 2 });
 
         // Act
         await _repo.SaveStepOutputAsync(ctx, flow, step, result2);

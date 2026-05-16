@@ -93,7 +93,7 @@ public sealed class ReplayProtectionGate
         // Build nonce. Prefer explicit header; otherwise hash body+timestamp so
         // identical replays share the same key but different deliveries don't.
         var nonce = TryHeader(headers, nonceHeader) ?? DefaultNonce(body, tsString);
-        var expiresAt = ts.AddSeconds(toleranceSeconds * 2);
+        var expiresAt = ts.AddSeconds(2d * toleranceSeconds);
         var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, ct).ConfigureAwait(false);
         if (!registered)
             return new ReplayResult(Decision.ReplayRejected, skew, "nonce_seen");

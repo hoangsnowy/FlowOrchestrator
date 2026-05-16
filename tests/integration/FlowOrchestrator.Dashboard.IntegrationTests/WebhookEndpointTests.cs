@@ -108,11 +108,11 @@ public sealed class WebhookEndpointTests : IDisposable
         _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
         request.Headers.Add("X-Webhook-Key", "supersecret");
 
         // Act
-        var response = await _client.SendAsync(request);
+        using var response = await _client.SendAsync(request);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -127,11 +127,11 @@ public sealed class WebhookEndpointTests : IDisposable
         _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
         request.Headers.Add("Authorization", "Bearer mytoken");
 
         // Act
-        var response = await _client.SendAsync(request);
+        using var response = await _client.SendAsync(request);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -146,11 +146,11 @@ public sealed class WebhookEndpointTests : IDisposable
         _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
         request.Headers.Add("X-Webhook-Key", "wrongsecret");
 
         // Act
-        var response = await _client.SendAsync(request);
+        using var response = await _client.SendAsync(request);
 
         // Assert
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
@@ -181,10 +181,10 @@ public sealed class WebhookEndpointTests : IDisposable
         _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
-        var content = new StringContent("not-json", System.Text.Encoding.UTF8, "application/json");
+        using var content = new StringContent("not-json", System.Text.Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync($"/flows/api/webhook/{id}", content);
+        using var response = await _client.PostAsync($"/flows/api/webhook/{id}", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

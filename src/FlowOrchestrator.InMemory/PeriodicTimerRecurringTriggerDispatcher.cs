@@ -93,8 +93,9 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     public void Dispose()
     {
         // Synchronous fallback for DI containers that only call IDisposable.Dispose.
+        // Dispose path: any exception (incl. OCE) must not break shutdown.
         try { StopAsync(CancellationToken.None).GetAwaiter().GetResult(); }
-        catch { /* swallow on shutdown */ }
+        catch (Exception ex) when (ex is not null) { /* swallow on shutdown */ }
         _cts?.Dispose();
     }
 
@@ -115,7 +116,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             }
         }
         catch (OperationCanceledException) { /* shutdown */ }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Recurring-trigger loop terminated unexpectedly.");
         }
@@ -147,11 +148,11 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             state.LastJobId = jobId;
             state.LastJobState = "Succeeded";
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             state.LastJobId = jobId;
             state.LastJobState = "Failed";
-            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", jobId, state.FlowId);
+            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", jobId.Replace('\r', '_').Replace('\n', '_'), state.FlowId);
             // Swallow so a single failure cannot kill the timer loop.
         }
         finally
@@ -202,14 +203,14 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 return existing;
             });
 
-        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", jobId, cronExpression);
+        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", jobId.Replace('\r', '_').Replace('\n', '_'), cronExpression.Replace('\r', '_').Replace('\n', '_'));
     }
 
     /// <inheritdoc/>
     public void Remove(string jobId)
     {
         if (_jobs.TryRemove(jobId, out _))
-            _logger.LogInformation("Removed recurring job {JobId}.", jobId);
+            _logger.LogInformation("Removed recurring job {JobId}.", jobId.Replace('\r', '_').Replace('\n', '_'));
     }
 
     /// <inheritdoc/>
@@ -232,7 +233,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 var orchestrator = scope.ServiceProvider.GetRequiredService<IFlowOrchestrator>();
                 await orchestrator.TriggerByScheduleAsync(flowId, triggerKey, null, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "EnqueueTrigger for Flow={FlowId} TriggerKey={TriggerKey} failed.",
                     flowId, triggerKey);

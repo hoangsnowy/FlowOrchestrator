@@ -61,7 +61,7 @@ public sealed class ProcessOrderItemStep : IStepHandler<ProcessOrderItemInput>
             JsonElement el                                            => el.GetRawText(),
             string s                                                  => s,
             null                                                      => "(null)",
-            var other                                                  => other.ToString()
+            _                                                          => input.OrderId.ToString()
         };
 
         _logger.LogInformation(

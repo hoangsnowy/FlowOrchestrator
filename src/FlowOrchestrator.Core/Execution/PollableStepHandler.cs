@@ -49,7 +49,7 @@ public abstract class PollableStepHandler<TInput> : IStepHandler<TInput>
         }
         catch (Exception ex)
         {
-            activity.RecordError(ex);
+            activity?.RecordError(ex);
             throw;
         }
         var (result, parsedAsJson) = fetched;

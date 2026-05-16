@@ -47,7 +47,7 @@ public sealed class FlowRunRecoveryConcurrencyTests
         FlowRunRecoveryHostedService MakeSut() =>
             new(
                 sharedStore,
-                new[] { (IFlowRunRuntimeStore)sharedStore },
+                new IFlowRunRuntimeStore[] { sharedStore },
                 flowRepo,
                 planner,
                 dispatcher,
@@ -88,7 +88,7 @@ public sealed class FlowRunRecoveryConcurrencyTests
 
         var sut = new FlowRunRecoveryHostedService(
             sharedStore,
-            new[] { (IFlowRunRuntimeStore)sharedStore },
+            new IFlowRunRuntimeStore[] { sharedStore },
             flowRepo,
             planner,
             dispatcher,

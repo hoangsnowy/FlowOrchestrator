@@ -152,7 +152,7 @@ internal sealed class RunRecoverer
                 "FlowRunRecoveryHostedService: closed zombie run {RunId} as {Status} (all steps terminal but run remained Running).",
                 run.Id, terminalStatus);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
                 "FlowRunRecoveryHostedService: failed to close zombie run {RunId}.", run.Id);
@@ -176,15 +176,9 @@ internal sealed class RunRecoverer
             return false;
         }
 
-        string? jobId;
-        if (delay.HasValue)
-        {
-            jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, ct).ConfigureAwait(false);
-        }
-        else
-        {
-            jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
-        }
+        var jobId = delay.HasValue
+            ? await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, ct).ConfigureAwait(false)
+            : await _dispatcher.EnqueueStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
 
         if (jobId is not null)
         {
@@ -192,7 +186,7 @@ internal sealed class RunRecoverer
             {
                 await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex,
                     "FlowRunRecoveryHostedService: failed to annotate dispatch for step '{StepKey}'.", step.Key);
@@ -210,7 +204,7 @@ internal sealed class RunRecoverer
             ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(run.Id).ConfigureAwait(false);
             ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(run.Id).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
                 "FlowRunRecoveryHostedService: could not restore trigger data for run {RunId}.", run.Id);

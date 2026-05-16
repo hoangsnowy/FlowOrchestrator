@@ -59,7 +59,7 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
 
         await _sqlEdge.StartAsync();
 
-        _configPath = Path.Combine(Path.GetTempPath(), $"sb-emulator-config-{Guid.NewGuid():N}.json");
+        _configPath = Path.Join(Path.GetTempPath(), $"sb-emulator-config-{Guid.NewGuid():N}.json");
         await File.WriteAllTextAsync(_configPath, BuildConfigJson(TestFlowId, CronTestFlowId));
 
         var freeAmqp = GetFreeTcpPort();
@@ -90,7 +90,7 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
         if (_network is not null) await _network.DisposeAsync();
         if (_configPath is not null && File.Exists(_configPath))
         {
-            try { File.Delete(_configPath); } catch { /* best-effort cleanup */ }
+            try { File.Delete(_configPath); } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort cleanup */ }
         }
     }
 

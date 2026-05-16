@@ -1,5 +1,6 @@
 using System.Net;
 using FlowOrchestrator.Core.Storage;
+using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -50,7 +51,7 @@ public sealed class FlowCatalogEndpointTests : IDisposable
     public async Task GET_api_flows_by_id_returns_404_for_missing_flow()
     {
         // Arrange
-        _server.FlowStore.GetByIdAsync(Arg.Any<Guid>()).Returns((FlowDefinitionRecord?)null);
+        _server.FlowStore.GetByIdAsync(Arg.Any<Guid>()).ReturnsNull();
 
         // Act
         var response = await _client.GetAsync($"/flows/api/flows/{Guid.NewGuid()}");

@@ -71,7 +71,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
 
-        var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
         {
             Content = new ByteArrayContent(body) { Headers = { { "Content-Type", "application/json" } } },
         };
@@ -80,7 +80,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         req.Headers.Add("X-Webhook-Timestamp", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
 
         // Act
-        var response = await client.SendAsync(req);
+        using var response = await client.SendAsync(req);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -100,7 +100,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
 
-        var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
         {
             Content = new ByteArrayContent(body) { Headers = { { "Content-Type", "application/json" } } },
         };
@@ -108,7 +108,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         req.Headers.Add("X-Webhook-Timestamp", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
 
         // Act
-        var response = await client.SendAsync(req);
+        using var response = await client.SendAsync(req);
 
         // Assert
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
@@ -163,13 +163,13 @@ public sealed class WebhookHardeningPipelineE2ETests
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = new byte[128 * 1024];
 
-        var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
         {
             Content = new ByteArrayContent(body) { Headers = { { "Content-Type", "application/octet-stream" } } },
         };
 
         // Act
-        var response = await client.SendAsync(req);
+        using var response = await client.SendAsync(req);
 
         // Assert
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
@@ -188,14 +188,14 @@ public sealed class WebhookHardeningPipelineE2ETests
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
 
-        var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
         {
             Content = new ByteArrayContent(body) { Headers = { { "Content-Type", "application/json" } } },
         };
         req.Headers.Add("X-Hub-Signature-256", "sha256=" + new string('0', 64));
 
         // Act
-        var response = await client.SendAsync(req);
+        using var response = await client.SendAsync(req);
 
         // Assert
         Assert.True(response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Accepted,
@@ -216,14 +216,14 @@ public sealed class WebhookHardeningPipelineE2ETests
         server.FlowRepository.GetAllFlowsAsync().Returns(new[] { offFlow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
-        var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
         {
             Content = new ByteArrayContent(Encoding.UTF8.GetBytes("{}")) { Headers = { { "Content-Type", "application/json" } } },
         };
         req.Headers.Add("X-Hub-Signature-256", "sha256=" + new string('0', 64));
 
         // Act
-        var response = await client.SendAsync(req);
+        using var response = await client.SendAsync(req);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -256,14 +256,14 @@ public sealed class WebhookHardeningPipelineE2ETests
         server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
-        var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/legacy-flow")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/legacy-flow")
         {
             Content = new ByteArrayContent(Encoding.UTF8.GetBytes("{}")) { Headers = { { "Content-Type", "application/json" } } },
         };
         req.Headers.Add("X-Webhook-Key", "legacy-shared-secret");
 
         // Act
-        var response = await client.SendAsync(req);
+        using var response = await client.SendAsync(req);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

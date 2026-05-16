@@ -120,12 +120,9 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator
         {
             ctx.TriggerData = fromRepo;
         }
-        else if (ctx.TriggerData is null)
+        else if (ctx.TriggerData is null && ctx is ITriggerContext triggerContext && triggerContext.Trigger is not null)
         {
-            if (ctx is ITriggerContext triggerContext && triggerContext.Trigger is not null)
-            {
-                ctx.TriggerData = triggerContext.Trigger.Data;
-            }
+            ctx.TriggerData = triggerContext.Trigger.Data;
         }
 
         if (ctx.TriggerHeaders is null)

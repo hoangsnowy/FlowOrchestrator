@@ -54,6 +54,8 @@ internal sealed class TestStepHandler : IStepHandler
     /// <inheritdoc/>
     public ValueTask<object?> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance step)
     {
+        // Static counter is intentional: DI creates per-scope handler instances, tests need a single shared count.
+        // codeql[cs/static-field-written-by-instance] — atomic via Interlocked.Increment / Volatile.
         var n = Interlocked.Increment(ref _count);
         Volatile.Read(ref _signal)?.TrySetResult(n);
         return new ValueTask<object?>(new { ok = true, n });

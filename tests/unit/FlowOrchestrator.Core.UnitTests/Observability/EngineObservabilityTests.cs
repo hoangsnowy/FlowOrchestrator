@@ -202,8 +202,8 @@ public sealed class EngineObservabilityTests
 
         // Assert
         Assert.Contains(logger.Scopes, s =>
-            s.ContainsKey("RunId") && s["RunId"]?.Equals(ctx.RunId) == true &&
-            s.ContainsKey("FlowId") && s["FlowId"]?.Equals(flow.Id) == true);
+            s.TryGetValue("RunId", out var runIdVal) && runIdVal?.Equals(ctx.RunId) == true &&
+            s.TryGetValue("FlowId", out var flowIdVal) && flowIdVal?.Equals(flow.Id) == true);
     }
 
     [Fact]
@@ -231,9 +231,9 @@ public sealed class EngineObservabilityTests
 
         // Assert
         Assert.Contains(logger.Scopes, s =>
-            s.ContainsKey("RunId") && s["RunId"]?.Equals(runId) == true &&
-            s.ContainsKey("FlowId") && s["FlowId"]?.Equals(flow.Id) == true &&
-            s.ContainsKey("StepKey") && (string?)s["StepKey"] == "step1");
+            s.TryGetValue("RunId", out var runIdVal) && runIdVal?.Equals(runId) == true &&
+            s.TryGetValue("FlowId", out var flowIdVal) && flowIdVal?.Equals(flow.Id) == true &&
+            s.TryGetValue("StepKey", out var stepKeyVal) && (string?)stepKeyVal == "step1");
     }
 
     // ── Test logger that records every BeginScope state ───────────────────────

@@ -187,14 +187,11 @@ public sealed class InMemoryFlowRunStore :
             ? keySet.Keys.ToList()
             : new List<string>();
 
-        var steps = new List<FlowStepRecord>(stepKeys.Count);
-        foreach (var stepKey in stepKeys)
-        {
-            if (_steps.TryGetValue((runId, stepKey), out var record))
-            {
-                steps.Add(CloneStepRecord(record));
-            }
-        }
+        var steps = stepKeys
+            .Select(stepKey => _steps.TryGetValue((runId, stepKey), out var record) ? record : null)
+            .Where(record => record is not null)
+            .Select(record => CloneStepRecord(record!))
+            .ToList();
         steps.Sort(static (a, b) => a.StartedAt.CompareTo(b.StartedAt));
 
         // Attempts: use _stepAttemptCounters for the per-step attempt count,
@@ -266,6 +263,7 @@ public sealed class InMemoryFlowRunStore :
             durations[i] = new List<double>(capacity: 4);
         }
 
+        // codeql[cs/linq/missed-where] loop has side effects beyond projection: increments per-bucket counters and appends to durations[idx] — histogram fill, not a projection.
         foreach (var r in _runs.Values)
         {
             if (r.StartedAt < anchor || r.StartedAt >= until) continue;
@@ -456,14 +454,10 @@ public sealed class InMemoryFlowRunStore :
                 new Dictionary<string, StepStatus>(StringComparer.Ordinal));
         }
 
-        var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
-        foreach (var stepKey in stepKeys.Keys)
-        {
-            if (_steps.TryGetValue((runId, stepKey), out var record))
-            {
-                map[stepKey] = ParseStepStatus(record.Status);
-            }
-        }
+        var map = stepKeys.Keys
+            .Select(stepKey => (stepKey, record: _steps.TryGetValue((runId, stepKey), out var r) ? r : null))
+            .Where(pair => pair.record is not null)
+            .ToDictionary(pair => pair.stepKey, pair => ParseStepStatus(pair.record!.Status), StringComparer.Ordinal);
         return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
     }
 

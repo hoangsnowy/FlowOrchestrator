@@ -213,13 +213,10 @@ internal static class ForEachSourceResolver
                 continue;
             }
 
-            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index))
+            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index) && index >= 0 && index < target.GetArrayLength())
             {
-                if (index >= 0 && index < target.GetArrayLength())
-                {
-                    target = target[index];
-                    continue;
-                }
+                target = target[index];
+                continue;
             }
 
             return false;

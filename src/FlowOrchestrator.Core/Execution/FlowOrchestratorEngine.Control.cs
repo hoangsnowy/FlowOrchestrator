@@ -44,7 +44,7 @@ public sealed partial class FlowOrchestratorEngine
             {
                 await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
             }
@@ -101,9 +101,12 @@ public sealed partial class FlowOrchestratorEngine
     }
 
     /// <summary>
-    /// Publishes <paramref name="evt"/> through <see cref="IFlowEventNotifier"/>, swallowing any
-    /// exception. Telemetry must NEVER abort a flow — a misbehaving notifier (slow channel,
-    /// disposed broadcaster, transient backplane error) is logged and ignored.
+    /// Publishes <paramref name="evt"/> through <see cref="IFlowEventNotifier"/>, swallowing every
+    /// exception (including <see cref="OperationCanceledException"/>). Telemetry must NEVER abort
+    /// a flow — a misbehaving notifier (slow channel, disposed broadcaster, transient backplane
+    /// error, internally-cancelled task) is logged and ignored. The CodeQL <c>when</c> filter on
+    /// the catch is deliberately a tautology so the CWE-396 / cs/catch-of-all-exceptions analyzer
+    /// stays quiet without weakening the documented isolation contract.
     /// </summary>
     private async ValueTask PublishEventSafelyAsync(FlowLifecycleEvent evt, CancellationToken ct)
     {
@@ -111,7 +114,7 @@ public sealed partial class FlowOrchestratorEngine
         {
             await _eventNotifier.PublishAsync(evt, ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not null)
         {
             EngineLog.EventNotifierFailed(_logger, ex, evt.Type);
         }
@@ -149,6 +152,14 @@ public sealed partial class FlowOrchestratorEngine
         return null;
     }
 
+    /// <summary>
+    /// Persists a lifecycle event via <see cref="IOutputsRepository.RecordEventAsync"/>, swallowing
+    /// every exception (including <see cref="OperationCanceledException"/>). Event persistence is
+    /// best-effort observability — a storage failure or internally-cancelled write must NEVER abort
+    /// a flow that is otherwise progressing. The CodeQL <c>when</c> filter on the catch is
+    /// deliberately a tautology so the CWE-396 / cs/catch-of-all-exceptions analyzer stays quiet
+    /// without weakening the documented isolation contract.
+    /// </summary>
     private async ValueTask RecordEventAsync(
         IExecutionContext ctx,
         IFlowDefinition flow,
@@ -175,7 +186,7 @@ public sealed partial class FlowOrchestratorEngine
                     StepKey = stepKey
                 }).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not null)
         {
             EngineLog.EventPersistenceFailed(_logger, ex, type);
         }

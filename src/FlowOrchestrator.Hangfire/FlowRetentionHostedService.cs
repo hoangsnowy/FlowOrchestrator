@@ -55,7 +55,7 @@ internal sealed class FlowRetentionHostedService : BackgroundService
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex, "Flow retention cleanup failed for store {StoreType}.", store.GetType().Name);
             }

@@ -37,14 +37,13 @@ public sealed class WebhookCustomVerifierRegistry
     public void Register(string schemeName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(schemeName);
-        foreach (var builtIn in Enum.GetNames<WebhookSignatureScheme>())
+        var collision = Enum.GetNames<WebhookSignatureScheme>()
+            .FirstOrDefault(builtIn => string.Equals(schemeName, builtIn, StringComparison.OrdinalIgnoreCase));
+        if (collision is not null)
         {
-            if (string.Equals(schemeName, builtIn, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ArgumentException(
-                    $"'{schemeName}' collides with the built-in WebhookSignatureScheme.{builtIn} value; use a publisher-specific name.",
-                    nameof(schemeName));
-            }
+            throw new ArgumentException(
+                $"'{schemeName}' collides with the built-in WebhookSignatureScheme.{collision} value; use a publisher-specific name.",
+                nameof(schemeName));
         }
         _schemes.Add(schemeName);
     }

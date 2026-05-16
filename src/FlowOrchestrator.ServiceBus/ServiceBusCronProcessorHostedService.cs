@@ -62,7 +62,8 @@ internal sealed class ServiceBusCronProcessorHostedService : BackgroundService
         catch (OperationCanceledException) { /* shutting down */ }
         finally
         {
-            try { await _processor.StopProcessingAsync(CancellationToken.None).ConfigureAwait(false); } catch { /* swallow */ }
+            // Dispose path: any exception (incl. OCE) must not break shutdown.
+            try { await _processor.StopProcessingAsync(CancellationToken.None).ConfigureAwait(false); } catch (Exception ex) when (ex is not null) { /* swallow */ }
             await _processor.DisposeAsync().ConfigureAwait(false);
         }
     }
@@ -74,7 +75,7 @@ internal sealed class ServiceBusCronProcessorHostedService : BackgroundService
         {
             envelope = JsonSerializer.Deserialize<CronEnvelope>(args.Message.Body.ToArray());
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Failed to deserialise cron message {MessageId}; dead-lettering.", args.Message.MessageId);
             await args.DeadLetterMessageAsync(args.Message, "deserialisation-failed", ex.Message, args.CancellationToken).ConfigureAwait(false);

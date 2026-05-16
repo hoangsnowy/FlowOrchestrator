@@ -92,7 +92,7 @@ public sealed partial class FlowOrchestratorEngine
                     triggerContext.JobId,
                     triggerContext.SourceRunId).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 EngineLog.RunStartTrackingFailed(_logger, ex);
             }

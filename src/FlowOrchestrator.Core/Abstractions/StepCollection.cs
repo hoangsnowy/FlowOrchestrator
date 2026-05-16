@@ -83,22 +83,11 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
     /// <returns>The next step, or <see langword="null"/> if none declares <paramref name="currentKey"/> as a dependency.</returns>
     public StepMetadata? FindNextStep(string currentKey)
     {
-        foreach (var kvp in this)
-        {
-            var metadata = kvp.Value;
-            if (ReferenceEquals(metadata, null))
-            {
-                continue;
-            }
-
-            if (metadata.RunAfter.TryGetValue(currentKey, out var condition)
-                && condition?.Statuses is { Length: > 0 })
-            {
-                return metadata;
-            }
-        }
-
-        return null;
+        return this.Values
+            .Where(metadata => !ReferenceEquals(metadata, null))
+            .FirstOrDefault(metadata =>
+                metadata.RunAfter.TryGetValue(currentKey, out var condition)
+                && condition?.Statuses is { Length: > 0 });
     }
 
     /// <summary>

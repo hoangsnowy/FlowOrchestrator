@@ -109,7 +109,7 @@ internal sealed class StepHandlerMetadata<THandler> : IStepHandlerMetadata
         {
             typedInput = JsonValueConversion.Deserialize<TInput>(step.Inputs, _jsonOptions);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new StepResult
             {

@@ -76,7 +76,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         {
             activeRuns = await _runStore.GetActiveRunsAsync().ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "FlowRunRecoveryHostedService: could not query active runs — recovery skipped.");
             return;
@@ -120,7 +120,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
             {
                 await recoverer.RecoverRunAsync(run, flow, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex,
                     "FlowRunRecoveryHostedService: error recovering run {RunId} — continuing with next run.", run.Id);

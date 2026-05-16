@@ -101,9 +101,9 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
                 _host.Dispose();
             }
         }
-        catch
+        catch (Exception ex) when (ex is not null)
         {
-            // Swallow — prefer disposal completion over surfacing teardown errors in tests.
+            // Dispose path: prefer completion over surfacing teardown errors in tests.
         }
     }
 

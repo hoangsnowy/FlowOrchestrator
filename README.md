@@ -2,9 +2,15 @@
 
 **Code-first DAG orchestration for .NET. Runs on Hangfire, in-process, or Azure Service Bus.**
 
-[![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
+[![CI](https://img.shields.io/github/actions/workflow/status/hoangsnowy/FlowOrchestrator/ci.yml?branch=main&label=CI)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/hoangsnowy/FlowOrchestrator/codeql.yml?branch=main&label=CodeQL)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/codeql.yml)
+[![Tests](https://img.shields.io/badge/tests-1557%20unit%20%C2%B7%20276%20integration%20%C2%B7%20162%20regression%20%C2%B7%2033%20e2e-brightgreen)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Core?label=NuGet)](https://www.nuget.org/packages/FlowOrchestrator.Core)
 [![Downloads](https://img.shields.io/nuget/dt/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
+[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4)](https://dotnet.microsoft.com/)
+[![SLSA Level 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
 [![License](https://img.shields.io/github/license/hoangsnowy/FlowOrchestrator)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/hoangsnowy/FlowOrchestrator)](https://github.com/hoangsnowy/FlowOrchestrator/commits/main)
 [![Stars](https://img.shields.io/github/stars/hoangsnowy/FlowOrchestrator?style=social)](https://github.com/hoangsnowy/FlowOrchestrator)
 
 **[📖 Documentation](https://hoangsnowy.github.io/FlowOrchestrator/)** · **[NuGet](https://www.nuget.org/packages/FlowOrchestrator.Core)** · **[GitHub](https://github.com/hoangsnowy/FlowOrchestrator)**

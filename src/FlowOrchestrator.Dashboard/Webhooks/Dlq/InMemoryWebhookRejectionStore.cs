@@ -73,9 +73,14 @@ public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
             snapshot = _entries.ToArray();
         }
         var filtered = snapshot
-            .Where(r => (includeAccepted || !r.IsAccepted)
-                        && (flowId is null || r.FlowId == flowId)
-                        && (string.IsNullOrEmpty(reason) || string.Equals(r.Reason, reason, StringComparison.OrdinalIgnoreCase)))
+            .Where(r =>
+            {
+                var matchesAcceptedFilter = includeAccepted || !r.IsAccepted;
+                var matchesFlowFilter = flowId is null || r.FlowId == flowId;
+                var matchesReasonFilter = string.IsNullOrEmpty(reason)
+                    || string.Equals(r.Reason, reason, StringComparison.OrdinalIgnoreCase);
+                return matchesAcceptedFilter && matchesFlowFilter && matchesReasonFilter;
+            })
             .Skip(skip)
             .Take(take)
             .ToArray();
@@ -95,14 +100,24 @@ public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
         }
         var search = query.Search;
         var filtered = snapshot
-            .Where(r => (query.IncludeAccepted || !r.IsAccepted)
-                        && (query.IncludeRejected || r.IsAccepted)
-                        && (query.FlowId is null || r.FlowId == query.FlowId)
-                        && (string.IsNullOrEmpty(query.Reason) || string.Equals(r.Reason, query.Reason, StringComparison.OrdinalIgnoreCase))
-                        && (string.IsNullOrEmpty(search)
-                            || (r.Reason?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
-                            || (r.TriggerKey?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
-                            || (r.RemoteIp?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)))
+            .Where(r =>
+            {
+                var matchesAcceptedFilter = query.IncludeAccepted || !r.IsAccepted;
+                var matchesRejectedFilter = query.IncludeRejected || r.IsAccepted;
+                var matchesFlowFilter = query.FlowId is null || r.FlowId == query.FlowId;
+                var matchesReasonFilter = string.IsNullOrEmpty(query.Reason)
+                    || string.Equals(r.Reason, query.Reason, StringComparison.OrdinalIgnoreCase);
+                var searchMatchesReason = r.Reason?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
+                var searchMatchesTrigger = r.TriggerKey?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
+                var searchMatchesIp = r.RemoteIp?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
+                var matchesSearchFilter = string.IsNullOrEmpty(search)
+                    || searchMatchesReason || searchMatchesTrigger || searchMatchesIp;
+                return matchesAcceptedFilter
+                    && matchesRejectedFilter
+                    && matchesFlowFilter
+                    && matchesReasonFilter
+                    && matchesSearchFilter;
+            })
             .ToArray();
         var page = filtered.Skip(skip).Take(take).ToArray();
         return ValueTask.FromResult(new WebhookRejectionPage(page, filtered.Length));

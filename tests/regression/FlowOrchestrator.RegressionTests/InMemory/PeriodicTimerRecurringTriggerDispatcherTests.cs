@@ -348,7 +348,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     public async Task StartStop_LifecycleIsClean()
     {
         // Arrange
-        var (dispatcher, _, sp) = CreateSut();
+        var (dispatcher, _, _) = CreateSut();
 
         // Act + Assert (no exceptions on start/stop)
         await dispatcher.StartAsync(CancellationToken.None);

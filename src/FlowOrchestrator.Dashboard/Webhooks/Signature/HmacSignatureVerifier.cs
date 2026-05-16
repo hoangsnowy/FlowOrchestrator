@@ -100,6 +100,7 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
         // run every comparison regardless of an early hit.
         var matchedCurrent = false;
         var matchedPrevious = false;
+        // codeql[cs/linq/missed-where] loop has side effects beyond projection: constant-time security check must not short-circuit; flags accumulate via |= across every candidate × every key.
         foreach (var candidate in candidates)
         {
             if (!TryDecode(candidate, spec.Encoding, out var candidateBytes))

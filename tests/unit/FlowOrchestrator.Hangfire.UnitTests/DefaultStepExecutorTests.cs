@@ -176,8 +176,8 @@ public class DefaultStepExecutorTests
         await executor.ExecuteAsync(ctx, flow, step);
 
         // Assert
-        Assert.True(step.Inputs.ContainsKey("payload"));
-        var payload = Assert.IsType<JsonElement>(step.Inputs["payload"]);
+        Assert.True(step.Inputs.TryGetValue("payload", out var payloadValue));
+        var payload = Assert.IsType<JsonElement>(payloadValue);
         Assert.Equal(JsonValueKind.Object, payload.ValueKind);
         Assert.Equal("ORD-1", payload.GetProperty("orderId").GetString());
     }
@@ -405,10 +405,10 @@ public class DefaultStepExecutorTests
 
         // Assert
         Assert.Equal(StepStatus.Pending, result.Status);
-        Assert.True(step.Inputs.ContainsKey("__pollAttempt"));
-        Assert.True(step.Inputs.ContainsKey("__pollStartedAtUtc"));
-        Assert.Equal(5, ReadInt(step.Inputs["__pollAttempt"]));
-        Assert.Equal(PollStateMutatingHandler.NextStartedAtUtc, ReadString(step.Inputs["__pollStartedAtUtc"]));
+        Assert.True(step.Inputs.TryGetValue("__pollAttempt", out var pollAttemptValue));
+        Assert.True(step.Inputs.TryGetValue("__pollStartedAtUtc", out var pollStartedValue));
+        Assert.Equal(5, ReadInt(pollAttemptValue));
+        Assert.Equal(PollStateMutatingHandler.NextStartedAtUtc, ReadString(pollStartedValue));
     }
 
     [Fact]

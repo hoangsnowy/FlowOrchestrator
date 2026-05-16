@@ -135,11 +135,11 @@ public sealed class WebhookDashboardEndpointTests
         var store = server.Services.GetRequiredService<IWebhookRejectionStore>();
         for (var i = 0; i < 50; i++)
             await store.WriteAsync(new WebhookRejectionRecord { FlowId = Guid.NewGuid(), Reason = "padding-payload-row-" + i, ReceivedAt = DateTimeOffset.UtcNow });
-        var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "/flows/api/webhooks/recent?take=50&includeTotal=true");
+        using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "/flows/api/webhooks/recent?take=50&includeTotal=true");
         req.Headers.AcceptEncoding.ParseAdd("br, gzip");
 
         // Act
-        var response = await server.Client.SendAsync(req);
+        using var response = await server.Client.SendAsync(req);
 
         // Assert — server picked Brotli, set Vary, body decompresses to valid JSON.
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -159,11 +159,11 @@ public sealed class WebhookDashboardEndpointTests
         var store = server.Services.GetRequiredService<IWebhookRejectionStore>();
         for (var i = 0; i < 20; i++)
             await store.WriteAsync(new WebhookRejectionRecord { FlowId = Guid.NewGuid(), Reason = "gz-pad-" + i, ReceivedAt = DateTimeOffset.UtcNow });
-        var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "/flows/api/webhooks/recent?take=20&includeTotal=true");
+        using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "/flows/api/webhooks/recent?take=20&includeTotal=true");
         req.Headers.AcceptEncoding.ParseAdd("gzip");
 
         // Act
-        var response = await server.Client.SendAsync(req);
+        using var response = await server.Client.SendAsync(req);
 
         // Assert
         Assert.Equal("gzip", response.Content.Headers.ContentEncoding.FirstOrDefault());

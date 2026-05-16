@@ -31,12 +31,11 @@ public sealed class CidrMatcher
     /// <param name="entries">Raw entry strings.</param>
     public CidrMatcher(IEnumerable<string> entries)
     {
-        var list = new List<Entry>();
-        foreach (var raw in entries ?? Array.Empty<string>())
-        {
-            if (TryParse(raw, out var entry)) list.Add(entry);
-        }
-        _entries = list.ToArray();
+        _entries = (entries ?? Array.Empty<string>())
+            .Select(raw => TryParse(raw, out var entry) ? (Success: true, Entry: entry) : (Success: false, Entry: default))
+            .Where(parsed => parsed.Success)
+            .Select(parsed => parsed.Entry)
+            .ToArray();
     }
 
     /// <summary>Returns <see langword="true"/> when <paramref name="address"/> falls inside any registered entry.</summary>
@@ -45,13 +44,11 @@ public sealed class CidrMatcher
     {
         if (address is null || _entries.Length == 0) return false;
         var bytes = address.GetAddressBytes();
-        foreach (var entry in _entries)
-        {
-            if (entry.Family != address.AddressFamily) continue;
-            if (entry.Kind == EntryKind.Cidr && PrefixMatches(bytes, entry.Network!, entry.Bits)) return true;
-            if (entry.Kind == EntryKind.Range && InRange(bytes, entry.RangeStart!, entry.RangeEnd!)) return true;
-        }
-        return false;
+        return _entries
+            .Where(entry => entry.Family == address.AddressFamily)
+            .Any(entry =>
+                (entry.Kind == EntryKind.Cidr && PrefixMatches(bytes, entry.Network!, entry.Bits))
+                || (entry.Kind == EntryKind.Range && InRange(bytes, entry.RangeStart!, entry.RangeEnd!)));
     }
 
     private static bool PrefixMatches(byte[] address, byte[] network, int bits)

@@ -5,6 +5,7 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
+using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -83,7 +84,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/trigger", null);
@@ -131,7 +132,7 @@ public sealed class ScheduleEndpointTests : IDisposable
 
         _server.FlowStore.GetByIdAsync(flowId)
             .Returns(new FlowDefinitionRecord { Id = flowId, Name = "DailyFlow", IsEnabled = true });
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/pause", null);
@@ -197,8 +198,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).Returns((FlowDefinitionRecord?)null);
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.FlowStore.GetByIdAsync(flowId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/resume", null);
@@ -226,7 +227,7 @@ public sealed class ScheduleEndpointTests : IDisposable
                 IsEnabled = true,
                 ManifestJson = manifestJson
             });
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PutAsync(
@@ -295,8 +296,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).Returns((FlowDefinitionRecord?)null);
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.FlowStore.GetByIdAsync(flowId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
 
         // Act
         var response = await _client.PutAsync(
@@ -353,10 +354,10 @@ public sealed class ScheduleEndpointTests : IDisposable
         flow.Id.Returns(flowId);
         flow.Manifest.Returns(new FlowManifest());
         _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
-        var content = new StringContent("not-json", Encoding.UTF8, "application/json");
+        using var content = new StringContent("not-json", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync($"/flows/api/flows/{flowId}/trigger", content);
+        using var response = await _client.PostAsync($"/flows/api/flows/{flowId}/trigger", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -371,10 +372,10 @@ public sealed class ScheduleEndpointTests : IDisposable
         flow.Id.Returns(flowId);
         flow.Manifest.Returns(new FlowManifest());
         _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
-        var content = new StringContent("""{"orderId":42}""", Encoding.UTF8, "application/json");
+        using var content = new StringContent("""{"orderId":42}""", Encoding.UTF8, "application/json");
 
         // Act
-        var response = await _client.PostAsync($"/flows/api/flows/{flowId}/trigger", content);
+        using var response = await _client.PostAsync($"/flows/api/flows/{flowId}/trigger", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
