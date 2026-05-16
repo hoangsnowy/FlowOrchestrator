@@ -32,7 +32,7 @@ jobs:
       matrix:
         include:
           - language: csharp
-            build-mode: autobuild
+            build-mode: manual
 
           - language: javascript-typescript
             build-mode: none
@@ -42,21 +42,22 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup .NET
         if: matrix.language == 'csharp'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
             8.0.x
             9.0.x
+            10.0.x
 
       - name: Setup Node.js
         if: matrix.language == 'javascript-typescript'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -67,23 +68,16 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended,security-and-quality
 
-      # Optional restore for large .NET solutions
-      - name: Restore dependencies
+      # Manual build pinned to the libraries solution file — repo root contains
+      # multiple .slnx files (Unit/Integration/Regression/Libraries) which made
+      # `autobuild` fail with MSB1011 ("specify which project or solution file").
+      - name: Restore (csharp)
         if: matrix.language == 'csharp'
-        run: dotnet restore
+        run: dotnet restore FlowOrchestrator.slnx
 
-      # Autobuild for .NET
-      - name: Autobuild
+      - name: Build (csharp)
         if: matrix.language == 'csharp'
-        uses: github/codeql-action/autobuild@v4
-
-      # Fallback manual build if autobuild becomes unstable
-      # - name: Build
-      #   if: matrix.language == 'csharp'
-      #   run: |
-      #     dotnet build FlowOrchestrator.sln \
-      #       --configuration Release \
-      #       --no-restore
+        run: dotnet build FlowOrchestrator.slnx --configuration Release --no-restore
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

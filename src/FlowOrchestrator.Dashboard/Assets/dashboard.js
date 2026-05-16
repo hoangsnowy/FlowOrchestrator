@@ -46,8 +46,30 @@ let sseDegraded = false;
 let sseWatchdogTimer = null;
 
 function $(id) { return document.getElementById(id); }
+
+// Escape an arbitrary string for safe embedding inside a single-quoted JS
+// string literal — escape backslashes FIRST, then single quotes. Used when we
+// must build an inline onclick="fn('...')" handler (e.g. SVG <g> elements).
+// CodeQL flags the lone .replace(/'/) form as incomplete sanitization.
+function escJsString(s) {
+  return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+// Same-origin guard for every dashboard fetch. The dashboard only ever talks
+// to its own API base, so any URL that resolves to a different origin is a
+// client-side request-forgery vector (CodeQL: js/client-side-request-forgery).
+// Throws synchronously before the network call.
+function assertSameOriginUrl(url) {
+  const parsed = new URL(url, window.location.origin);
+  if (parsed.origin !== window.location.origin) {
+    throw new Error('Refusing cross-origin dashboard fetch: ' + parsed.origin);
+  }
+  return parsed.toString();
+}
+
 async function fetchJSON(url, opts) {
-  const r = await fetch(url, opts || undefined);
+  const safe = assertSameOriginUrl(url);
+  const r = await fetch(safe, opts || undefined);
   if (!r.ok) {
     const err = new Error(r.statusText || ('HTTP ' + r.status));
     err.status = r.status;
@@ -689,9 +711,12 @@ async function loadFlows(opts) {
     // Fetch flows + per-flow timeseries + last-run snapshot in parallel.
     // The 24h timeseries (server-aggregated) feeds sparkline + health badge per card.
     // The light /runs?take=N call gives us "last run timestamp" without scanning 500 rows client-side.
-    const [flows, hourly, lastRunsList] = await Promise.all([
+    // Per-flow 24h timeseries is fetched lower down (one call per card); we
+    // only need flows + the lightweight last-runs list at this point. The
+    // aggregate timeseries call below was a remnant of the pre-per-card layout
+    // and is no longer consumed — dropped to silence js/unused-local-variable.
+    const [flows, lastRunsList] = await Promise.all([
       fetchJSON(BASE+'/flows', { signal }),
-      fetchJSON(BASE+'/runs/timeseries?bucket=hour&hours=24', { signal }).catch(() => ({ buckets: [] })),
       fetchJSON(BASE+'/runs?take=200', { signal }).catch(() => [])
     ]);
     allFlows = flows;
@@ -983,7 +1008,6 @@ function renderDAG(manifest) {
   const nodeW = 180, nodeH = 44, padX = 60, padY = 30;
 
   const levels = {};
-  const placed = new Set();
 
   function getLevel(key) {
     if (levels[key] !== undefined) return levels[key];
@@ -1154,7 +1178,7 @@ function renderRunDAG(steps, manifest, selectedKey) {
     const p = positions[key];
     const status = statusMap[key] || 'Pending';
     const ns = nodeStyle(status);
-    const safeKey = key.replace(/'/g, "\\'");
+    const safeKey = escJsString(key);
     const runtimeStep = stepMap[key];
     const attemptCount = runtimeStep ? getStepAttemptCount(runtimeStep) : 1;
     const dur = runtimeStep && runtimeStep.startedAt ? duration(runtimeStep.startedAt, runtimeStep.completedAt) : '\u2014';
@@ -1761,7 +1785,7 @@ async function loadEventsIntoDrawer(runId) {
   const body = $('events-drawer-body');
   if (!body) return;
   try {
-    const events = await fetchJSON(BASE+'/runs/'+runId+'/events?take=500');
+    const events = await fetchJSON(BASE+'/runs/'+encodeURIComponent(runId)+'/events?take=500');
     if (!events || events.length === 0) {
       body.innerHTML = '<div class="step-inspector-empty">Event stream not enabled on this backend. Configure <code>IFlowEventReader</code> to see the raw event log.</div>';
       return;
@@ -1861,7 +1885,7 @@ function renderGantt(steps, manifest, selectedKey) {
     if (s.status === 'Pending' || s.status === 'Skipped') { x = gutterW; w = Math.max(chartW * 0.02, 6); }
     if (s.status === 'Running') fill = 'url(#gantt-running-hatch)';
     const selected = s.stepKey === selectedKey;
-    const safeKey = s.stepKey.replace(/'/g, "\\'");
+    const safeKey = escJsString(s.stepKey);
     svg += '<g onclick="selectStep(\''+safeKey+'\')" style="cursor:pointer">'
       +'<text class="gantt-gutter-label" x="10" y="'+(y+rowH*0.65)+'">'+esc(s.stepKey)+'</text>'
       +'<rect class="gantt-bar'+(selected?' gantt-bar-selected':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+rowH+'"'
@@ -2177,7 +2201,7 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
   // Cancel any in-flight detail fetch — fixes race when user clicks a different run mid-load.
   const signal = newRunDetailController().signal;
   try {
-    const run = await fetchJSON(BASE+'/runs/'+id, { signal });
+    const run = await fetchJSON(BASE+'/runs/'+encodeURIComponent(id), { signal });
     if (selectedRunId !== id) return; // user navigated away mid-fetch
     currentRun = run;
     const steps = run.steps || [];
@@ -2204,7 +2228,22 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
     if (isAbortError(e)) return;
     console.error('Run detail error', e);
     if (detailEl && !preserveScroll) {
-      detailEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load run. <button class="btn-retry" onclick="selectRun(\''+id+'\')">Retry</button></div>';
+      // Build the retry button via DOM APIs instead of string interpolation:
+      // `id` flows from the URL hash and was being concatenated into both an
+      // HTML context and a JS-string context inside onclick="", which CodeQL
+      // flagged as js/xss. The closure-bound listener removes the injection
+      // vector entirely.
+      detailEl.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.className = 'empty-msg empty-msg--error';
+      wrap.appendChild(document.createTextNode('Failed to load run. '));
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn-retry';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => selectRun(id));
+      wrap.appendChild(retryBtn);
+      detailEl.appendChild(wrap);
       showError('Failed to load run', e.message);
     }
   }
@@ -2212,7 +2251,7 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
 
 async function loadLineage(runId, signal) {
   try {
-    const lineage = await fetchJSON(BASE+'/runs/'+runId+'/lineage', signal ? { signal } : undefined);
+    const lineage = await fetchJSON(BASE+'/runs/'+encodeURIComponent(runId)+'/lineage', signal ? { signal } : undefined);
     if (selectedRunId !== runId) return; // user navigated away
     const target = $('lineage-derived');
     if (!target) return;

@@ -129,6 +129,7 @@ public sealed class DashboardRootPageTests : IDisposable
 
         // Assert
         Assert.DoesNotContain("{{INLINE_JS}}", html);
+        Assert.DoesNotContain("/*FLOW_DASHBOARD_INLINE_JS*/", html);
     }
 
     [Fact]
