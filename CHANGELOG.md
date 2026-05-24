@@ -6,6 +6,44 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.27.2] - 2026-05-24
+
+### Performance
+
+- **PostgreSQL deep run search now actually uses the `pg_trgm` trigram indexes.**
+  The deep step match was `COALESCE(fs.output_json, '') ILIKE @term` inside a
+  correlated `EXISTS`; the `COALESCE` wrapper made the column opaque to the
+  plain-column trigram GIN index, so the query sequential-scanned every step row.
+  Rewritten as a de-correlated `fr.id IN (SELECT run_id FROM flow_steps WHERE
+  step_key / error_message / output_json ILIKE @term)` over **bare** columns,
+  letting the planner use a BitmapOr across the three trigram indexes. Measured
+  on 100k runs / 500k steps: deep search ~462 ms → ~151 ms (step-side scan
+  310 ms → 9 ms). Matched rows are unchanged (dropping `COALESCE` is safe — the
+  search term is non-empty, and both `NULL ILIKE '%x%'` and `'' ILIKE '%x%'` are
+  false). See `docs/benchmarks/sql-deep-search-investigation-2026-05-24.md`.
+- **SQL Server deep run search** has no substring index (`LIKE '%term%'` is
+  non-sargable) and Full-Text Search is intentionally not used. It is best
+  **bounded** by `flowId` / a start-time window — already supported via
+  `/flows/api/runs` `?flowId` / `?from` / `?to`. Bounding by flow cuts the
+  scanned step rows ~8× (~7.9 s → ~1.0 s on the 500k-step dataset). Documented;
+  no schema change.
+
+### Fixed
+
+- **Restored the non-breaking `IFlowRunStore.GetRunsPageAsync` surface.** 1.27.0
+  inadvertently added the `startedFrom` / `startedTo` parameters directly onto the
+  existing five-argument method — a source/binary break for external
+  `IFlowRunStore` implementers (their five-argument override no longer satisfied
+  the interface). The five-argument method is restored unchanged; the tiered +
+  time-window parameters now live only on the additive default-interface overload
+  `GetRunsPageAsync(…, bool deepSearch, DateTimeOffset? startedFrom, DateTimeOffset? startedTo)`,
+  so custom stores compile and stay correct again.
+- **Run-search pagination total no longer reports 0 on an empty page past the end.**
+  The single-pass `COUNT(*) OVER()` emits no row when the requested page is empty
+  (e.g. `skip` beyond the last match), leaving `TotalCount` at its 0 initial value.
+  The SQL Server and PostgreSQL stores now run an explicit `COUNT` in that case so
+  the reported total stays the full filtered count for page math.
+
 ## [1.27.1] - 2026-05-24
 
 ### Performance

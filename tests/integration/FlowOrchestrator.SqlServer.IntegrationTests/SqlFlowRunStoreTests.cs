@@ -238,13 +238,30 @@ public sealed class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
         var now = DateTimeOffset.UtcNow;
 
         // Act
-        var (inRange, inTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, now.AddHours(-1), now.AddHours(1));
-        var (afterRange, afterTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, now.AddHours(1), null);
+        var (inRange, inTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, deepSearch: true, startedFrom: now.AddHours(-1), startedTo: now.AddHours(1));
+        var (afterRange, afterTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, deepSearch: true, startedFrom: now.AddHours(1));
 
         // Assert
         Assert.Equal(1, inTotal);
         Assert.Single(inRange);
         Assert.Equal(0, afterTotal);
         Assert.Empty(afterRange);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_empty_page_past_end_still_reports_full_total()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        for (var i = 0; i < 3; i++)
+            await _store.StartRunAsync(flowId, "PastEndFlow", Guid.NewGuid(), "manual", null, null);
+
+        // Act — skip past the last matching row: COUNT(*) OVER() emits no row, so the store must
+        // fall back to an explicit COUNT rather than report total 0.
+        var (runs, total) = await _store.GetRunsPageAsync(flowId, null, 100, 10, null);
+
+        // Assert
+        Assert.Empty(runs);
+        Assert.Equal(3, total);
     }
 }

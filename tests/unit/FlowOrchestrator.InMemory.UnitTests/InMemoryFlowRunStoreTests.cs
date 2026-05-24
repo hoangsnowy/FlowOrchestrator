@@ -264,8 +264,8 @@ public class InMemoryFlowRunStoreTests
         var now = DateTimeOffset.UtcNow;
 
         // Act
-        var inRange = await _sut.GetRunsPageAsync(flowId: flowId, startedFrom: now.AddHours(-1), startedTo: now.AddHours(1));
-        var afterRange = await _sut.GetRunsPageAsync(flowId: flowId, startedFrom: now.AddHours(1));
+        var inRange = await _sut.GetRunsPageAsync(flowId, null, 0, 50, null, deepSearch: true, startedFrom: now.AddHours(-1), startedTo: now.AddHours(1));
+        var afterRange = await _sut.GetRunsPageAsync(flowId, null, 0, 50, null, deepSearch: true, startedFrom: now.AddHours(1));
 
         // Assert
         Assert.Equal(1, inRange.TotalCount);

@@ -140,10 +140,8 @@ public sealed class PostgreSqlFlowRunStore :
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null,
-        DateTimeOffset? startedFrom = null,
-        DateTimeOffset? startedTo = null)
-        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+        string? search = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true);
 
     public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
         Guid? flowId,
@@ -170,21 +168,24 @@ public sealed class PostgreSqlFlowRunStore :
         if (!string.IsNullOrWhiteSpace(search))
         {
             searchLike = $"%{EscapeLikePattern(search)}%";
-            // Always match the cheap top-level run columns. The per-step EXISTS scan
-            // (incl. output_json; flow_step_attempts excluded as duplicated history) is only
-            // added for deep search; pg_trgm GIN indexes accelerate the ILIKE scans.
-            var stepExists = deepSearch
+            // Always match the cheap top-level run columns. The per-step match (incl.
+            // output_json; flow_step_attempts excluded as duplicated history) is only added
+            // for deep search. It is a de-correlated IN over BARE columns (no COALESCE): a
+            // COALESCE(col,'') wrapper makes the column opaque to the plain-column pg_trgm GIN
+            // index (forcing a sequential scan), and a correlated EXISTS is harder for the
+            // planner to satisfy from the index. With bare columns the planner uses a BitmapOr
+            // across the step_key / error_message / output_json trigram indexes. Dropping
+            // COALESCE is behaviour-preserving here: search is non-empty, and both `NULL ILIKE
+            // '%x%'` and `'' ILIKE '%x%'` are false.
+            var stepMatch = deepSearch
                 ? """
 
-                    OR EXISTS (
-                        SELECT 1
+                    OR fr.id IN (
+                        SELECT fs.run_id
                         FROM flow_steps AS fs
-                        WHERE fs.run_id = fr.id
-                          AND (
-                                COALESCE(fs.step_key, '') ILIKE @SearchLike
-                                OR COALESCE(fs.error_message, '') ILIKE @SearchLike
-                                OR COALESCE(fs.output_json, '') ILIKE @SearchLike
-                              )
+                        WHERE fs.step_key ILIKE @SearchLike
+                           OR fs.error_message ILIKE @SearchLike
+                           OR fs.output_json ILIKE @SearchLike
                     )
                     """
                 : string.Empty;
@@ -196,7 +197,7 @@ public sealed class PostgreSqlFlowRunStore :
                     OR COALESCE(fr.trigger_key, '') ILIKE @SearchLike
                     OR COALESCE(fr.status, '') ILIKE @SearchLike
                     OR COALESCE(fr.background_job_id, '') ILIKE @SearchLike
-                """ + stepExists + """
+                """ + stepMatch + """
 
                 )
                 """);
@@ -224,6 +225,12 @@ public sealed class PostgreSqlFlowRunStore :
             (run, total) => { totalCount = total; return run; },
             parameters,
             splitOn: "TotalCount")).AsList();
+
+        // COUNT(*) OVER() emits no row — and therefore no total — when the page itself is empty
+        // (e.g. skip past the last matching row). Fall back to an explicit COUNT so the reported
+        // total stays the full filtered count for page-math, not 0. (::int — PG COUNT is bigint.)
+        if (rows.Count == 0 && skip > 0)
+            totalCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*)::int FROM flow_runs AS fr{whereSql}", parameters);
 
         return (rows, totalCount);
     }

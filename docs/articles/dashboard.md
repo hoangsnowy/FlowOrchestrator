@@ -150,8 +150,18 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 name, trigger key, status, and background job id, plus the run's **current**
 step rows — step key, error message, and output JSON. Superseded retry
 *attempt* history is not searched (its output duplicates the current step row).
-On PostgreSQL these substring searches are accelerated by `pg_trgm` GIN indexes
-that the migrator creates best-effort at startup.
+
+Performance by backend:
+- **PostgreSQL** — the step-level substring match is index-accelerated by the
+  `pg_trgm` GIN indexes the migrator creates best-effort at startup (the query
+  is shaped as a de-correlated `IN` over bare columns so the planner can use
+  them). Grant `CREATE EXTENSION` (or pre-create `pg_trgm`) to keep it fast.
+- **SQL Server** — `LIKE '%term%'` is non-sargable and there is no substring
+  index (Full-Text Search is intentionally not used), so a deep search over a
+  large step history is a scan. **Bound it** with `?flowId=` and/or the
+  `?from=` / `?to=` window — that cuts the scanned rows dramatically (≈8× per
+  flow on the benchmark dataset). See
+  [the deep-search investigation](../benchmarks/sql-deep-search-investigation-2026-05-24.md).
 
 **Start-time window (`?from=` / `?to=`)** accepts ISO-8601 timestamps and bounds
 the search to runs started within `[from, to]`, which keeps a search over a large
