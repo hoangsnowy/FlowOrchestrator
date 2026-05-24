@@ -6,6 +6,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Performance
+
+- **In-memory deep run search is no longer quadratic.** `InMemoryFlowRunStore`
+  deep search (`deepSearch: true`) scanned the global step dictionary per
+  candidate run — O(runs × total_steps) — so latency and allocation grew
+  quadratically with run history. It now enumerates each run's steps via the
+  existing `_stepKeysByRun` index (O(runs × steps_in_run)). At 10,000 stored
+  runs a deep search drops from ~25 s / 4.6 GB to ~24 ms / 2.6 MB. Added a
+  BenchmarkDotNet case (`tests/benchmarks/.../RunSearchBenchmarks.cs`)
+  characterising the quick vs deep tiers and the before/after.
+
 ## [1.27.0] - 2026-05-24
 
 ### Changed — RUN search performance + dependency roll-up

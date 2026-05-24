@@ -689,13 +689,25 @@ public sealed class InMemoryFlowRunStore :
         if (!deepSearch)
             return false;
 
-        // Deep search also scans the current step rows (incl. OutputJson). Attempt history is
-        // intentionally not searched — it duplicates the current step row and is the dominant cost.
-        return _steps.Values.Any(s =>
-            s.RunId == run.Id
-            && (ContainsIgnoreCase(s.StepKey, search)
-                || ContainsIgnoreCase(s.ErrorMessage, search)
-                || ContainsIgnoreCase(s.OutputJson, search)));
+        // Deep search also scans this run's current step rows (incl. OutputJson). Enumerate via
+        // the per-run step-key index (O(steps_in_run)) and direct-look-up each step, instead of
+        // scanning the global _steps dictionary (O(total_steps) per run — quadratic over run
+        // history). Attempt history is intentionally not searched — it duplicates the current row.
+        if (!_stepKeysByRun.TryGetValue(run.Id, out var stepKeys))
+            return false;
+
+        foreach (var stepKey in stepKeys.Keys)
+        {
+            if (_steps.TryGetValue((run.Id, stepKey), out var s)
+                && (ContainsIgnoreCase(s.StepKey, search)
+                    || ContainsIgnoreCase(s.ErrorMessage, search)
+                    || ContainsIgnoreCase(s.OutputJson, search)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool ContainsIgnoreCase(string? value, string search)
