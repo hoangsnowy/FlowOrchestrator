@@ -390,6 +390,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .btn-copy-icon:hover{background:var(--accent-light);color:var(--accent)}
 .step-detail-body{padding:10px 12px;font-family:'JetBrains Mono',monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto;color:var(--text)}
 .step-detail.step-detail-error .step-detail-body{background:var(--danger-bg);color:var(--danger-text)}
+.step-detail.step-detail-skip .step-detail-body{background:var(--skip-bg);color:var(--skip-text)}
 .step-actions{margin-top:6px;display:flex;gap:6px}
 .badge-cron{background:var(--accent-light);color:var(--accent);border:1px solid #F0C5B5;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px}
 .badge-paused{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)}

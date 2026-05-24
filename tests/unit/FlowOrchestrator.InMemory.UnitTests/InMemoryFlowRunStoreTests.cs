@@ -234,7 +234,7 @@ public class InMemoryFlowRunStoreTests
     }
 
     [Fact]
-    public async Task GetRunsPageAsync_SearchesByAttemptHistoryErrorMessage()
+    public async Task GetRunsPageAsync_DoesNotSearchSupersededAttemptHistory()
     {
         // Arrange
         var runId = Guid.NewGuid();
@@ -244,13 +244,135 @@ public class InMemoryFlowRunStoreTests
         await _sut.RecordStepStartAsync(runId, "payment", "Payment", null, null);
         await _sut.RecordStepCompleteAsync(runId, "payment", "Succeeded", "{\"ok\":true}", null);
 
-        // Act
+        // Act — "timeout on first attempt" now lives only in the superseded attempt
+        // history (the current step row was overwritten by the successful retry).
+        // Attempt history is intentionally excluded from search.
         var page = await _sut.GetRunsPageAsync(search: "timeout on first");
 
         // Assert
-        Assert.Equal(1, page.TotalCount);
-        Assert.Single(page.Runs);
-        Assert.Equal(runId, page.Runs[0].Id);
+        Assert.Equal(0, page.TotalCount);
+        Assert.Empty(page.Runs);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_FiltersByStartedDateRange()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(flowId, "Flow1", runId, "manual", null, null);
+        var now = DateTimeOffset.UtcNow;
+
+        // Act
+        var inRange = await _sut.GetRunsPageAsync(flowId: flowId, startedFrom: now.AddHours(-1), startedTo: now.AddHours(1));
+        var afterRange = await _sut.GetRunsPageAsync(flowId: flowId, startedFrom: now.AddHours(1));
+
+        // Assert
+        Assert.Equal(1, inRange.TotalCount);
+        Assert.Single(inRange.Runs);
+        Assert.Equal(0, afterRange.TotalCount);
+        Assert.Empty(afterRange.Runs);
+    }
+
+    [Fact]
+    public async Task GetRunDetailAsync_SkippedStep_CarriesSkipReasonInErrorMessage()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow1", runId, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId, "notify", "Notify", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "notify", "Skipped", null, "Recipient opted out");
+
+        // Act — a handler-returned Skipped result's FailedReason is persisted as the
+        // step's ErrorMessage and surfaced in step detail (what the dashboard renders).
+        var detail = await _sut.GetRunDetailAsync(runId);
+
+        // Assert
+        var step = Assert.Single(detail!.Steps!);
+        Assert.Equal("Skipped", step.Status);
+        Assert.Equal("Recipient opted out", step.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_QuickSearch_DoesNotMatchStepOutputOrError()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "FlowQ", runId, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "pay", "Failed", "{\"tx\":\"deeponly7788\"}", "boom deepmsg9001");
+
+        // Act — quick search (deepSearch:false) scans only top-level run columns.
+        var byOutput = await _sut.GetRunsPageAsync(null, null, 0, 50, "deeponly7788", false);
+        var byError = await _sut.GetRunsPageAsync(null, null, 0, 50, "deepmsg9001", false);
+
+        // Assert
+        Assert.Empty(byOutput.Runs);
+        Assert.Empty(byError.Runs);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_QuickSearch_MatchesTopLevelColumns()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(flowId, "QuickFlowName", runId, "quicktrigger", null, "quickjob1");
+
+        // Act + Assert — every top-level column is matched by quick search.
+        foreach (var term in new[] { runId.ToString(), "QuickFlowName", "quicktrigger", "Running", "quickjob1" })
+        {
+            var page = await _sut.GetRunsPageAsync(null, null, 0, 50, term, false);
+            Assert.Contains(page.Runs, r => r.Id == runId);
+        }
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_DeepSearch_AndLegacyOverload_MatchStepLevelTerm()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "FlowD", runId, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "pay", "Succeeded", "{\"tx\":\"steplevel555\"}", null);
+
+        // Act — deep search and the legacy overload both reach into step output.
+        var deep = await _sut.GetRunsPageAsync(null, null, 0, 50, "steplevel555", true);
+        var legacy = await _sut.GetRunsPageAsync(search: "steplevel555");
+
+        // Assert
+        Assert.Contains(deep.Runs, r => r.Id == runId);
+        Assert.Contains(legacy.Runs, r => r.Id == runId);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_LegacyOverload_EqualsDeepSearch()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var ids = new List<Guid>();
+        for (var i = 0; i < 3; i++)
+        {
+            var rid = Guid.NewGuid();
+            ids.Add(rid);
+            await _sut.StartRunAsync(flowId, "ParityFlow", rid, "manual", null, null);
+            await _sut.RecordStepStartAsync(rid, "s", "T", null, null);
+            await _sut.RecordStepCompleteAsync(rid, "s", "Succeeded", "{\"k\":\"parityz\"}", null);
+        }
+
+        // Act — the legacy 5-arg overload must equal deepSearch:true for a fixed dataset.
+        var legacy = await _sut.GetRunsPageAsync(flowId, null, 0, 50, "parityz");
+        var deep = await _sut.GetRunsPageAsync(flowId, null, 0, 50, "parityz", true);
+
+        // Assert
+        Assert.Equal(3, legacy.TotalCount);
+        Assert.Equal(deep.TotalCount, legacy.TotalCount);
+        Assert.Equal(deep.Runs.Count, legacy.Runs.Count);
+        foreach (var id in ids)
+        {
+            Assert.Contains(legacy.Runs, r => r.Id == id);
+            Assert.Contains(deep.Runs, r => r.Id == id);
+        }
     }
 
     [Fact]

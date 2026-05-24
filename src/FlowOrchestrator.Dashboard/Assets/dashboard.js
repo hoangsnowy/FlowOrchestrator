@@ -179,6 +179,10 @@ function renderStepDebugPanels(step) {
   if (step.status === 'Skipped') {
     const tracePanel = renderWhyWhenSkippedPanel(step);
     if (tracePanel) return tracePanel;
+    // Surface the skip reason carried on errorMessage (handler-provided message or the
+    // prerequisite-cascade reason). Falls back to the generic hint only when no reason exists.
+    const reasonPanel = renderDetailPanel('Skip reason', step.errorMessage, true, 'skip');
+    if (reasonPanel) return reasonPanel;
     return '<div style="margin-top:5px;font-size:11px;color:var(--skip-text);font-style:italic">'
       + 'Not executed \u2014 retry the failed step above to resume this flow.'
       + '</div>';
@@ -458,20 +462,33 @@ let _cmdkOpen = false;
 let _cmdkResults = [];
 let _cmdkActiveIdx = 0;
 let _cmdkReturnFocus = null;
+// Server-backed quick run search for the palette: runs fetched via the cheap
+// top-level-only path (deep=false), merged with the client-side allRuns.
+let _cmdkServerRuns = [];
+let _cmdkRunsAbort = null;
+let _cmdkRunsDebounceTimer = null;
 
 function openCmdK() {
   if (_cmdkOpen) return;
   _cmdkOpen = true;
   _cmdkReturnFocus = document.activeElement;
+  _cmdkCancelRunsFetch();
+  _cmdkServerRuns = [];
   $('cmdk-backdrop').classList.add('open');
   const dlg = $('cmdk'); dlg.classList.add('open'); dlg.removeAttribute('hidden');
   const input = $('cmdk-input'); input.value = ''; input.focus();
   renderCmdK('');
 }
 
+function _cmdkCancelRunsFetch() {
+  if (_cmdkRunsDebounceTimer) { clearTimeout(_cmdkRunsDebounceTimer); _cmdkRunsDebounceTimer = null; }
+  if (_cmdkRunsAbort) { try { _cmdkRunsAbort.abort(); } catch {} _cmdkRunsAbort = null; }
+}
+
 function closeCmdK() {
   if (!_cmdkOpen) return;
   _cmdkOpen = false;
+  _cmdkCancelRunsFetch();
   $('cmdk-backdrop').classList.remove('open');
   const dlg = $('cmdk'); dlg.classList.remove('open'); dlg.setAttribute('hidden', '');
   if (_cmdkReturnFocus && typeof _cmdkReturnFocus.focus === 'function') {
@@ -503,9 +520,15 @@ function _cmdkBuildItems() {
   for (const f of (allFlows || [])) {
     items.push({ kind: 'flow', label: f.name, sub: 'Flow · v' + f.version, action: () => { closeCmdK(); navigate('flows'); openFlowDetail(f.id); } });
   }
-  for (const r of (allRuns || [])) {
+  // Client-side runs first (instant), then server quick-search runs; dedupe by id.
+  const seenRuns = new Set();
+  const pushRun = (r) => {
+    if (!r || !r.id || seenRuns.has(r.id)) return;
+    seenRuns.add(r.id);
     items.push({ kind: 'run', label: r.id.slice(0, 8) + '… ' + (r.flowName || ''), sub: 'Run · ' + r.status, action: () => { closeCmdK(); navigate('runs'); selectRun(r.id); } });
-  }
+  };
+  for (const r of (allRuns || [])) pushRun(r);
+  for (const r of (_cmdkServerRuns || [])) pushRun(r);
   items.push({ kind: 'action', label: 'Toggle dark mode', sub: 'Theme', action: () => { closeCmdK(); toggleTheme(); } });
   items.push({ kind: 'action', label: 'Density: Cozy', sub: 'Display', action: () => { closeCmdK(); setDensity('cozy'); } });
   items.push({ kind: 'action', label: 'Density: Compact', sub: 'Display', action: () => { closeCmdK(); setDensity('compact'); } });
@@ -561,6 +584,36 @@ function _cmdkActivate(idx) {
   if (it && typeof it.action === 'function') it.action();
 }
 
+// Palette input: instant client-side paint, then debounce-fetch the server quick
+// search (cheap top-level-only path) so runs outside the loaded page are findable.
+function _cmdkOnInput(value) {
+  renderCmdK(value);
+  const q = (value || '').trim();
+  _cmdkCancelRunsFetch();
+  if (q.length < 2) {
+    if (_cmdkServerRuns.length) { _cmdkServerRuns = []; renderCmdK(value); }
+    return;
+  }
+  _cmdkRunsDebounceTimer = setTimeout(() => { _cmdkFetchServerRuns(q); }, 150);
+}
+
+async function _cmdkFetchServerRuns(query) {
+  const ctrl = new AbortController();
+  _cmdkRunsAbort = ctrl;
+  try {
+    const runs = await fetchJSON(BASE + '/runs?take=20&deep=false&search=' + encodeURIComponent(query), { signal: ctrl.signal });
+    if (!_cmdkOpen || ctrl.signal.aborted) return;
+    _cmdkServerRuns = Array.isArray(runs) ? runs : [];
+    const inp = $('cmdk-input');
+    renderCmdK(inp ? inp.value : query);
+  } catch (e) {
+    if (isAbortError(e)) return;
+    // Non-fatal: the palette still shows client-side results.
+  } finally {
+    if (_cmdkRunsAbort === ctrl) _cmdkRunsAbort = null;
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   // Open palette on Cmd/Ctrl+K from anywhere.
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
@@ -578,7 +631,7 @@ document.addEventListener('keydown', (e) => {
 // Bind input listener once on DOM ready (script runs after body so element exists).
 (function bindCmdK(){
   const input = document.getElementById('cmdk-input');
-  if (input) input.addEventListener('input', () => renderCmdK(input.value));
+  if (input) input.addEventListener('input', () => _cmdkOnInput(input.value));
 })();
 
 // ── Mobile sidebar (≤991px) ──────────────────────────────────────────

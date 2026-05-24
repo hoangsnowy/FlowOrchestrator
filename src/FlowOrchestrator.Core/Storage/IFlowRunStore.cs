@@ -51,9 +51,38 @@ public interface IFlowRunStore
     Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50);
 
     /// <summary>
-    /// Returns a paginated run list with total count, supporting filtering by flow, status, and search text.
+    /// Returns a paginated run list with total count, supporting filtering by flow, status,
+    /// free-text search, and an optional start-time window.
     /// </summary>
-    Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(Guid? flowId = null, string? status = null, int skip = 0, int take = 50, string? search = null);
+    /// <param name="flowId">Restricts results to a single flow when set.</param>
+    /// <param name="status">Restricts results to runs in the given status when set.</param>
+    /// <param name="skip">Number of leading rows to skip (offset pagination).</param>
+    /// <param name="take">Maximum number of rows to return.</param>
+    /// <param name="search">
+    /// Free-text term matched (case-insensitively) against run identity columns and the
+    /// current step records (step key, error message, output JSON). Step <i>attempt</i>
+    /// history is intentionally not searched — its output duplicates the current step row.
+    /// </param>
+    /// <param name="startedFrom">Lower inclusive bound on <see cref="FlowRunRecord.StartedAt"/> when set; bounds the scan.</param>
+    /// <param name="startedTo">Upper inclusive bound on <see cref="FlowRunRecord.StartedAt"/> when set; bounds the scan.</param>
+    Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(Guid? flowId = null, string? status = null, int skip = 0, int take = 50, string? search = null, DateTimeOffset? startedFrom = null, DateTimeOffset? startedTo = null);
+
+    /// <summary>
+    /// Tiered variant of <see cref="GetRunsPageAsync(Guid?, string?, int, int, string?, DateTimeOffset?, DateTimeOffset?)"/>
+    /// that lets the caller opt out of the per-step search scan via <c>deepSearch</c>.
+    /// </summary>
+    /// <remarks>
+    /// When <c>deepSearch</c> is <see langword="true"/> (the behaviour of the non-tiered overload),
+    /// <c>search</c> also matches the current step records (step key, error message, output JSON) via a
+    /// correlated sub-query. When <see langword="false"/>, only the top-level run columns
+    /// (id, flow name, trigger key, status, background job id) are matched — index-friendlier and far
+    /// cheaper, suited to typeahead such as the command palette.
+    /// The default implementation delegates to the deep overload, so existing
+    /// <see cref="IFlowRunStore"/> providers keep compiling and stay correct (they simply do not get
+    /// the quick-search speedup until they override this method).
+    /// </remarks>
+    Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(Guid? flowId, string? status, int skip, int take, string? search, bool deepSearch, DateTimeOffset? startedFrom = null, DateTimeOffset? startedTo = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, startedFrom, startedTo);
 
     /// <summary>
     /// Returns full run detail including all step records and their attempt history,

@@ -187,4 +187,64 @@ public sealed class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
         Assert.True(total >= 1);
         Assert.True(runs.All(r => r.FlowName == uniqueName));
     }
+
+    [Fact]
+    public async Task GetRunsPageAsync_search_matches_current_step_output_json()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var token = $"txid{Guid.NewGuid():N}";
+        await _store.StartRunAsync(flowId, "OutputJsonFlow", runId, "manual", null, null);
+        await _store.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _store.RecordStepCompleteAsync(runId, "pay", "Succeeded", $"{{\"transactionId\":\"{token}\"}}", null);
+
+        // Act — search inside the current step's output JSON is preserved.
+        var (runs, total) = await _store.GetRunsPageAsync(null, null, 0, 10, token);
+
+        // Assert (also locks the single-pass COUNT(*) OVER() total to the exact match count)
+        Assert.Equal(1, total);
+        Assert.Single(runs);
+        Assert.Equal(runId, runs[0].Id);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_search_excludes_superseded_attempt_history()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var token = $"attempttok{Guid.NewGuid():N}";
+        await _store.StartRunAsync(flowId, "AttemptHistoryFlow", runId, "manual", null, null);
+        await _store.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _store.RecordStepCompleteAsync(runId, "pay", "Failed", null, $"gateway {token} failed");
+        await _store.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _store.RecordStepCompleteAsync(runId, "pay", "Succeeded", "{\"ok\":true}", null);
+
+        // Act — the token survives only in the superseded attempt history, which is no longer searched.
+        var (runs, total) = await _store.GetRunsPageAsync(null, null, 0, 10, token);
+
+        // Assert
+        Assert.Equal(0, total);
+        Assert.Empty(runs);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_filters_by_started_date_range()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        await _store.StartRunAsync(flowId, "DateRangeFlow", Guid.NewGuid(), "manual", null, null);
+        var now = DateTimeOffset.UtcNow;
+
+        // Act
+        var (inRange, inTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, now.AddHours(-1), now.AddHours(1));
+        var (afterRange, afterTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, now.AddHours(1), null);
+
+        // Assert
+        Assert.Equal(1, inTotal);
+        Assert.Single(inRange);
+        Assert.Equal(0, afterTotal);
+        Assert.Empty(afterRange);
+    }
 }

@@ -155,7 +155,7 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null, null)
+        IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null, null, null, null, deepSearch: true)
             .OrderByDescending(r => r.StartedAt)
             .Skip(skip).Take(take)
             .ToList();
@@ -167,9 +167,22 @@ public sealed class InMemoryFlowRunStore :
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null)
+        string? search = null,
+        DateTimeOffset? startedFrom = null,
+        DateTimeOffset? startedTo = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+
+    public Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+        Guid? flowId,
+        string? status,
+        int skip,
+        int take,
+        string? search,
+        bool deepSearch,
+        DateTimeOffset? startedFrom = null,
+        DateTimeOffset? startedTo = null)
     {
-        var filtered = ApplyRunsFilter(flowId, status, search).OrderByDescending(r => r.StartedAt).ToList();
+        var filtered = ApplyRunsFilter(flowId, status, search, startedFrom, startedTo, deepSearch).OrderByDescending(r => r.StartedAt).ToList();
         var totalCount = filtered.Count;
         IReadOnlyList<FlowRunRecord> runs = filtered.Skip(skip).Take(take).ToList();
         return Task.FromResult((runs, totalCount));
@@ -640,7 +653,7 @@ public sealed class InMemoryFlowRunStore :
         return Task.CompletedTask;
     }
 
-    private IEnumerable<FlowRunRecord> ApplyRunsFilter(Guid? flowId, string? status, string? search)
+    private IEnumerable<FlowRunRecord> ApplyRunsFilter(Guid? flowId, string? status, string? search, DateTimeOffset? startedFrom, DateTimeOffset? startedTo, bool deepSearch)
     {
         var query = _runs.Values.AsEnumerable();
 
@@ -650,13 +663,19 @@ public sealed class InMemoryFlowRunStore :
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(r => string.Equals(r.Status, status, StringComparison.OrdinalIgnoreCase));
 
+        if (startedFrom.HasValue)
+            query = query.Where(r => r.StartedAt >= startedFrom.Value);
+
+        if (startedTo.HasValue)
+            query = query.Where(r => r.StartedAt <= startedTo.Value);
+
         if (!string.IsNullOrWhiteSpace(search))
-            query = query.Where(r => MatchesRunSearch(r, search));
+            query = query.Where(r => MatchesRunSearch(r, search, deepSearch));
 
         return query;
     }
 
-    private bool MatchesRunSearch(FlowRunRecord run, string search)
+    private bool MatchesRunSearch(FlowRunRecord run, string search, bool deepSearch)
     {
         if (ContainsIgnoreCase(run.Id.ToString(), search)
             || ContainsIgnoreCase(run.FlowName, search)
@@ -667,20 +686,16 @@ public sealed class InMemoryFlowRunStore :
             return true;
         }
 
-        var stepMatch = _steps.Values.Any(s =>
+        if (!deepSearch)
+            return false;
+
+        // Deep search also scans the current step rows (incl. OutputJson). Attempt history is
+        // intentionally not searched — it duplicates the current step row and is the dominant cost.
+        return _steps.Values.Any(s =>
             s.RunId == run.Id
             && (ContainsIgnoreCase(s.StepKey, search)
                 || ContainsIgnoreCase(s.ErrorMessage, search)
                 || ContainsIgnoreCase(s.OutputJson, search)));
-
-        if (stepMatch)
-            return true;
-
-        return _stepAttempts.Values.Any(a =>
-            a.RunId == run.Id
-            && (ContainsIgnoreCase(a.StepKey, search)
-                || ContainsIgnoreCase(a.ErrorMessage, search)
-                || ContainsIgnoreCase(a.OutputJson, search)));
     }
 
     private static bool ContainsIgnoreCase(string? value, string search)

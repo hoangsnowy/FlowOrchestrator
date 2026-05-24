@@ -34,7 +34,7 @@ public sealed class RunEndpointTests : IDisposable
     {
         // Arrange
         var run = new FlowRunRecord { Id = Guid.NewGuid(), Status = "Succeeded", FlowName = "F" };
-        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 10, null)
+        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 10, null, true, null, null)
             .Returns(([run], 1));
 
         // Act
@@ -51,7 +51,7 @@ public sealed class RunEndpointTests : IDisposable
     public async Task GET_api_runs_with_status_filter_uses_GetRunsPageAsync()
     {
         // Arrange
-        _server.FlowRunStore.GetRunsPageAsync(null, "Failed", 0, 50, null)
+        _server.FlowRunStore.GetRunsPageAsync(null, "Failed", 0, 50, null, true, null, null)
             .Returns((Array.Empty<FlowRunRecord>(), 0));
 
         // Act
@@ -59,7 +59,22 @@ public sealed class RunEndpointTests : IDisposable
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, "Failed", 0, 50, null);
+        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, "Failed", 0, 50, null, true, null, null);
+    }
+
+    [Fact]
+    public async Task GET_api_runs_with_deep_false_uses_quick_search()
+    {
+        // Arrange
+        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 20, "abc", false, null, null)
+            .Returns((Array.Empty<FlowRunRecord>(), 0));
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?search=abc&take=20&deep=false");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, null, 0, 20, "abc", false, null, null);
     }
 
     [Fact]
