@@ -140,10 +140,8 @@ public sealed class PostgreSqlFlowRunStore :
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null,
-        DateTimeOffset? startedFrom = null,
-        DateTimeOffset? startedTo = null)
-        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+        string? search = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true);
 
     public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
         Guid? flowId,
@@ -227,6 +225,12 @@ public sealed class PostgreSqlFlowRunStore :
             (run, total) => { totalCount = total; return run; },
             parameters,
             splitOn: "TotalCount")).AsList();
+
+        // COUNT(*) OVER() emits no row — and therefore no total — when the page itself is empty
+        // (e.g. skip past the last matching row). Fall back to an explicit COUNT so the reported
+        // total stays the full filtered count for page-math, not 0. (::int — PG COUNT is bigint.)
+        if (rows.Count == 0 && skip > 0)
+            totalCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*)::int FROM flow_runs AS fr{whereSql}", parameters);
 
         return (rows, totalCount);
     }

@@ -129,10 +129,8 @@ public sealed class SqlFlowRunStore :
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null,
-        DateTimeOffset? startedFrom = null,
-        DateTimeOffset? startedTo = null)
-        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+        string? search = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true);
 
     public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
         Guid? flowId,
@@ -190,9 +188,8 @@ public sealed class SqlFlowRunStore :
         }
 
         var whereSql = whereClauses.Count > 0 ? $" WHERE {string.Join(" AND ", whereClauses)}" : string.Empty;
-        // Single pass: COUNT(*) OVER() yields the full filtered total alongside the page,
-        // avoiding a second scan of the same predicate. An empty page beyond the last row
-        // reports total 0, which matches the page being empty.
+        // Single pass: COUNT(*) OVER() returns the full filtered total alongside each page row,
+        // avoiding a second scan of the same predicate.
         var pageSql = "SELECT fr.Id, fr.FlowId, fr.FlowName, fr.Status, fr.TriggerKey, fr.TriggerDataJson, fr.BackgroundJobId, fr.StartedAt, fr.CompletedAt, fr.SourceRunId, COUNT(*) OVER() AS TotalCount FROM FlowRuns AS fr"
             + whereSql
             + " ORDER BY fr.StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY";
@@ -204,6 +201,12 @@ public sealed class SqlFlowRunStore :
             (run, total) => { totalCount = total; return run; },
             parameters,
             splitOn: "TotalCount")).AsList();
+
+        // COUNT(*) OVER() emits no row — and therefore no total — when the page itself is empty
+        // (e.g. skip past the last matching row). Fall back to an explicit COUNT so the reported
+        // total stays the full filtered count for page-math, not 0.
+        if (rows.Count == 0 && skip > 0)
+            totalCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM FlowRuns AS fr{whereSql}", parameters);
 
         return (rows, totalCount);
     }

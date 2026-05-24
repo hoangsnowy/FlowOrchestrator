@@ -28,6 +28,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   scanned step rows ~8× (~7.9 s → ~1.0 s on the 500k-step dataset). Documented;
   no schema change.
 
+### Fixed
+
+- **Restored the non-breaking `IFlowRunStore.GetRunsPageAsync` surface.** 1.27.0
+  inadvertently added the `startedFrom` / `startedTo` parameters directly onto the
+  existing five-argument method — a source/binary break for external
+  `IFlowRunStore` implementers (their five-argument override no longer satisfied
+  the interface). The five-argument method is restored unchanged; the tiered +
+  time-window parameters now live only on the additive default-interface overload
+  `GetRunsPageAsync(…, bool deepSearch, DateTimeOffset? startedFrom, DateTimeOffset? startedTo)`,
+  so custom stores compile and stay correct again.
+- **Run-search pagination total no longer reports 0 on an empty page past the end.**
+  The single-pass `COUNT(*) OVER()` emits no row when the requested page is empty
+  (e.g. `skip` beyond the last match), leaving `TotalCount` at its 0 initial value.
+  The SQL Server and PostgreSQL stores now run an explicit `COUNT` in that case so
+  the reported total stays the full filtered count for page math.
+
 ## [1.27.1] - 2026-05-24
 
 ### Performance

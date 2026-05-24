@@ -167,10 +167,8 @@ public sealed class InMemoryFlowRunStore :
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null,
-        DateTimeOffset? startedFrom = null,
-        DateTimeOffset? startedTo = null)
-        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+        string? search = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true);
 
     public Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
         Guid? flowId,
