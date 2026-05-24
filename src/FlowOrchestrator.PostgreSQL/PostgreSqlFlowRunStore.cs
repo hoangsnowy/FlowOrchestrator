@@ -170,21 +170,24 @@ public sealed class PostgreSqlFlowRunStore :
         if (!string.IsNullOrWhiteSpace(search))
         {
             searchLike = $"%{EscapeLikePattern(search)}%";
-            // Always match the cheap top-level run columns. The per-step EXISTS scan
-            // (incl. output_json; flow_step_attempts excluded as duplicated history) is only
-            // added for deep search; pg_trgm GIN indexes accelerate the ILIKE scans.
-            var stepExists = deepSearch
+            // Always match the cheap top-level run columns. The per-step match (incl.
+            // output_json; flow_step_attempts excluded as duplicated history) is only added
+            // for deep search. It is a de-correlated IN over BARE columns (no COALESCE): a
+            // COALESCE(col,'') wrapper makes the column opaque to the plain-column pg_trgm GIN
+            // index (forcing a sequential scan), and a correlated EXISTS is harder for the
+            // planner to satisfy from the index. With bare columns the planner uses a BitmapOr
+            // across the step_key / error_message / output_json trigram indexes. Dropping
+            // COALESCE is behaviour-preserving here: search is non-empty, and both `NULL ILIKE
+            // '%x%'` and `'' ILIKE '%x%'` are false.
+            var stepMatch = deepSearch
                 ? """
 
-                    OR EXISTS (
-                        SELECT 1
+                    OR fr.id IN (
+                        SELECT fs.run_id
                         FROM flow_steps AS fs
-                        WHERE fs.run_id = fr.id
-                          AND (
-                                COALESCE(fs.step_key, '') ILIKE @SearchLike
-                                OR COALESCE(fs.error_message, '') ILIKE @SearchLike
-                                OR COALESCE(fs.output_json, '') ILIKE @SearchLike
-                              )
+                        WHERE fs.step_key ILIKE @SearchLike
+                           OR fs.error_message ILIKE @SearchLike
+                           OR fs.output_json ILIKE @SearchLike
                     )
                     """
                 : string.Empty;
@@ -196,7 +199,7 @@ public sealed class PostgreSqlFlowRunStore :
                     OR COALESCE(fr.trigger_key, '') ILIKE @SearchLike
                     OR COALESCE(fr.status, '') ILIKE @SearchLike
                     OR COALESCE(fr.background_job_id, '') ILIKE @SearchLike
-                """ + stepExists + """
+                """ + stepMatch + """
 
                 )
                 """);
