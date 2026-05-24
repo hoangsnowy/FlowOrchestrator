@@ -1,14 +1,17 @@
 using FlowOrchestrator.Core.Storage;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FlowOrchestrator.PostgreSQL.Tests;
 
 public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixture>
 {
     private readonly PostgreSqlFlowRunStore _store;
+    private readonly string _connectionString;
 
     public PostgreSqlFlowRunStoreTests(PostgreSqlFixture fixture)
     {
-        _store = new PostgreSqlFlowRunStore(fixture.ConnectionString);
+        _connectionString = fixture.ConnectionString;
+        _store = new PostgreSqlFlowRunStore(_connectionString);
     }
 
     [Fact]
@@ -186,5 +189,100 @@ public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixtur
         // Assert
         Assert.True(total >= 1);
         Assert.True(runs.All(r => r.FlowName == uniqueName));
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_search_matches_current_step_output_json()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var token = $"txid{Guid.NewGuid():N}";
+        await _store.StartRunAsync(flowId, "OutputJsonFlow", runId, "manual", null, null);
+        await _store.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _store.RecordStepCompleteAsync(runId, "pay", "Succeeded", $"{{\"transactionId\":\"{token}\"}}", null);
+
+        // Act — search inside the current step's output JSON is preserved.
+        var (runs, total) = await _store.GetRunsPageAsync(null, null, 0, 10, token);
+
+        // Assert (also locks the single-pass COUNT(*) OVER() total to the exact match count)
+        Assert.Equal(1, total);
+        Assert.Single(runs);
+        Assert.Equal(runId, runs[0].Id);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_search_excludes_superseded_attempt_history()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var token = $"attempttok{Guid.NewGuid():N}";
+        await _store.StartRunAsync(flowId, "AttemptHistoryFlow", runId, "manual", null, null);
+        await _store.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _store.RecordStepCompleteAsync(runId, "pay", "Failed", null, $"gateway {token} failed");
+        await _store.RecordStepStartAsync(runId, "pay", "Pay", null, null);
+        await _store.RecordStepCompleteAsync(runId, "pay", "Succeeded", "{\"ok\":true}", null);
+
+        // Act — the token survives only in the superseded attempt history, which is no longer searched.
+        var (runs, total) = await _store.GetRunsPageAsync(null, null, 0, 10, token);
+
+        // Assert
+        Assert.Equal(0, total);
+        Assert.Empty(runs);
+    }
+
+    [Fact]
+    public async Task GetRunsPageAsync_filters_by_started_date_range()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        await _store.StartRunAsync(flowId, "DateRangeFlow", Guid.NewGuid(), "manual", null, null);
+        var now = DateTimeOffset.UtcNow;
+
+        // Act
+        var (inRange, inTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, now.AddHours(-1), now.AddHours(1));
+        var (afterRange, afterTotal) = await _store.GetRunsPageAsync(flowId, null, 0, 10, null, now.AddHours(1), null);
+
+        // Assert
+        Assert.Equal(1, inTotal);
+        Assert.Single(inRange);
+        Assert.Equal(0, afterTotal);
+        Assert.Empty(afterRange);
+    }
+
+    [Fact]
+    public async Task Migrator_is_idempotent_and_trigram_step_does_not_throw()
+    {
+        // Arrange — the fixture already ran the migrator once at startup.
+        var migrator = new PostgreSqlFlowOrchestratorMigrator(
+            _connectionString,
+            NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance);
+
+        // Act — a second run must be a no-op (CREATE ... IF NOT EXISTS / CREATE EXTENSION IF NOT EXISTS),
+        // and the optional pg_trgm trigram step must never abort the migration.
+        var ex = await Record.ExceptionAsync(() => migrator.StartAsync(CancellationToken.None));
+
+        // Assert
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task RecordSkippedStepAsync_persists_evaluation_trace_json()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var trace = "{\"expression\":\"@triggerBody().amount > 1000\",\"resolved\":\"5 > 1000\",\"result\":false}";
+        await _store.StartRunAsync(flowId, "TraceFlow", runId, "manual", null, null);
+
+        // Act — the 5-arg overload must persist the When-clause trace (PG parity with SQL Server).
+        await _store.RecordSkippedStepAsync(runId, "branch", "Branch", "When clause false", trace);
+        var detail = await _store.GetRunDetailAsync(runId);
+
+        // Assert
+        var step = Assert.Single(detail!.Steps!, s => s.StepKey == "branch");
+        Assert.Equal("Skipped", step.Status);
+        Assert.Equal(trace, step.EvaluationTraceJson);
     }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -570,10 +571,20 @@ public static class DashboardServiceCollectionExtensions
             bool includeTotal = query.TryGetValue("includeTotal", out var includeTotalValues)
                 && bool.TryParse(includeTotalValues, out var includeTotalParsed)
                 && includeTotalParsed;
+            DateTimeOffset? startedFrom = query.TryGetValue("from", out var fromValues)
+                && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fromParsed)
+                ? fromParsed : null;
+            DateTimeOffset? startedTo = query.TryGetValue("to", out var toValues)
+                && DateTimeOffset.TryParse(toValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var toParsed)
+                ? toParsed : null;
+            // Deep search (default) also scans step rows; deep=false|0 is the cheap top-level-only
+            // quick search used by the command palette typeahead.
+            var deepRaw = query.TryGetValue("deep", out var deepValues) ? deepValues.ToString() : null;
+            bool deepSearch = !(string.Equals(deepRaw, "false", StringComparison.OrdinalIgnoreCase) || deepRaw == "0");
 
-            if (includeTotal || !string.IsNullOrWhiteSpace(status) || !string.IsNullOrWhiteSpace(search))
+            if (includeTotal || !string.IsNullOrWhiteSpace(status) || !string.IsNullOrWhiteSpace(search) || startedFrom.HasValue || startedTo.HasValue)
             {
-                var page = await store.GetRunsPageAsync(flowId, status, skip, take, search);
+                var page = await store.GetRunsPageAsync(flowId, status, skip, take, search, deepSearch, startedFrom, startedTo);
                 if (includeTotal)
                 {
                     await WriteJsonAsync(http.Response,new

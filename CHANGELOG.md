@@ -6,6 +6,64 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-05-24
+
+### Changed — RUN search performance + dependency roll-up
+
+- **RUN search no longer scans superseded step-attempt history.** Both the
+  SQL Server and PostgreSQL stores previously `LIKE`/`ILIKE`-scanned the
+  `OutputJson` of every row in `FlowSteps` **and** `FlowStepAttempts`. The
+  attempt-history scan (the dominant cost — its output duplicates the current
+  step row) is removed. Search still matches run identity columns
+  (id / flow name / trigger key / status / job id) and the **current** step
+  rows including their output JSON, so searching inside step output is
+  preserved. Searching by text that survives only in a superseded retry
+  attempt is the one behaviour that changes.
+- **Single-pass pagination count.** The page query now derives its total via
+  `COUNT(*) OVER()` instead of a second `COUNT(*)` query, halving the work for
+  a filtered/searched page.
+- **PostgreSQL substring search is now index-accelerated.** The migrator
+  best-effort creates the `pg_trgm` extension and GIN trigram indexes on the
+  searched columns (`flow_name`, `trigger_key`, and `flow_steps`
+  `step_key` / `error_message` / `output_json`), so `ILIKE '%term%'` can use an
+  index. Creation is wrapped so a missing extension or insufficient privilege
+  logs a warning and the migration still succeeds (search falls back to a
+  sequential scan).
+- **Optional start-time window on run search.** `IFlowRunStore.GetRunsPageAsync`
+  and the dashboard `GET /api/runs` endpoint accept `startedFrom` / `startedTo`
+  (`from` / `to` ISO-8601 query params) to bound the scan. The new parameters
+  are optional and additive.
+- **Tiered run search (quick vs deep).** A new non-breaking
+  `IFlowRunStore.GetRunsPageAsync(..., bool deepSearch, ...)` default-interface
+  overload lets callers opt out of the per-step search scan. `deepSearch: true`
+  (the default, and the behaviour of every existing overload) matches the current
+  step rows; `deepSearch: false` matches only the cheap top-level run columns and
+  is far cheaper for typeahead. The dashboard `GET /api/runs` endpoint accepts
+  `deep=false` (or `deep=0`) to select the quick path; the response shape is
+  unchanged. External `IFlowRunStore` implementers keep compiling and stay correct
+  via the default delegation.
+- **Command palette (Cmd/Ctrl+K) run search is server-backed.** Run lookup now
+  debounce-fetches the quick path (`/api/runs?deep=false`) with request
+  cancellation, so a run id outside the loaded page is findable instantly without
+  scanning step output.
+- **Dependencies:** Dapper 2.1.72 → 2.1.79, Testcontainers (+ MsSql + PostgreSql)
+  4.11.0 → 4.12.0, Aspire.Hosting.{PostgreSQL,SqlServer,Azure.ServiceBus}
+  13.3.2 → 13.3.4, Microsoft.AspNetCore.TestHost 8.0.26 → 8.0.27,
+  coverlet.collector 10.0.0 → 10.0.1, actions/setup-node 5 → 6.
+
+### Fixed
+
+- **Skip reason is shown in run step detail again.** A step that returns
+  `Skipped` with a reason persisted the message all the way to the API, but the
+  dashboard only rendered a message panel for `Failed` steps. Skipped steps now
+  display their reason in a skip-styled "Skip reason" panel.
+- **PostgreSQL now persists the When-clause "Why skipped" evaluation trace.** The
+  `evaluation_trace_json` column, its read path, and the trace-aware
+  `RecordSkippedStepAsync` overload existed only on the SQL Server backend; on
+  PostgreSQL the trace was silently dropped (the dashboard "Why skipped" panel was
+  always empty). The PostgreSQL migrator now adds the column to `flow_steps` /
+  `flow_step_attempts` and the store reads and writes it, matching SQL Server.
+
 ## [1.26.3] - 2026-05-16
 
 ### Security — second CodeQL sweep + telemetry-isolation regression fix

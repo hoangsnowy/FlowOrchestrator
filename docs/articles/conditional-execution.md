@@ -157,6 +157,10 @@ shows a **"Why skipped"** panel under the step in the run timeline. The panel di
 This makes "why didn't this step run?" answerable from the dashboard alone — no log
 diving required.
 
+For skips that are **not** driven by a `When` clause — a prerequisite-cascade skip,
+or a handler that returns `StepStatus.Skipped` with a `FailedReason` — the step detail
+shows the reason text in a **"Skip reason"** panel instead of the trace panel.
+
 ## Anti-pattern: throwing exceptions to skip a step
 
 Some authors fake conditional execution by throwing an exception inside a step handler,

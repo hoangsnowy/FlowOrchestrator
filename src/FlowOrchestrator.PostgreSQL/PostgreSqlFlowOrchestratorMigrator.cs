@@ -29,9 +29,13 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = MigrationSql;
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = MigrationSql;
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await TryCreateTrigramIndexesAsync(conn, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation("FlowOrchestrator PostgreSQL migrations completed.");
         }
@@ -43,6 +47,33 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// Creates <c>pg_trgm</c> GIN indexes that accelerate the substring (<c>ILIKE</c>)
+    /// run-search query. Best-effort: the <c>pg_trgm</c> extension requires a privilege
+    /// that some managed PostgreSQL roles lack, so any failure here is logged as a warning
+    /// and swallowed — run search still works (the planner falls back to a sequential scan).
+    /// </summary>
+    /// <remarks>
+    /// Kept out of the mandatory <see cref="MigrationSql"/> batch so a missing-privilege
+    /// failure cannot abort the schema migration and prevent the host from starting.
+    /// </remarks>
+    private async Task TryCreateTrigramIndexesAsync(NpgsqlConnection conn, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = TrigramSql;
+            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("FlowOrchestrator PostgreSQL pg_trgm search indexes ensured.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "FlowOrchestrator PostgreSQL pg_trgm index creation was skipped (extension unavailable or insufficient privilege). Run search remains functional via sequential scan.");
+        }
+    }
 
     private const string MigrationSql = """
         CREATE TABLE IF NOT EXISTS flow_definitions (
@@ -190,6 +221,10 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
         ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
         CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
 
+        -- When-clause evaluation trace columns (idempotent), parity with the SQL Server backend.
+        ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
+        ALTER TABLE flow_step_attempts ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
+
         -- Webhook hardening tables (v1.25).
         CREATE TABLE IF NOT EXISTS webhook_replay_nonces (
             flow_id     UUID         NOT NULL,
@@ -218,5 +253,17 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
         CREATE INDEX IF NOT EXISTS ix_webhook_rejections_flow_received ON webhook_rejections (flow_id, received_at DESC);
         CREATE INDEX IF NOT EXISTS ix_webhook_rejections_reason ON webhook_rejections (reason);
         CREATE INDEX IF NOT EXISTS ix_webhook_rejections_received_at ON webhook_rejections (received_at DESC);
+        """;
+
+    // Trigram (pg_trgm) GIN indexes for substring run-search acceleration. Run separately
+    // from MigrationSql via TryCreateTrigramIndexesAsync because CREATE EXTENSION may be denied
+    // on locked-down roles; a failure must not abort the mandatory schema migration.
+    private const string TrigramSql = """
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
+        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_name_trgm     ON flow_runs  USING gin (flow_name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_flow_runs_trigger_key_trgm   ON flow_runs  USING gin (trigger_key gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_trgm      ON flow_steps USING gin (step_key gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_flow_steps_error_message_trgm ON flow_steps USING gin (error_message gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_flow_steps_output_json_trgm   ON flow_steps USING gin (output_json gin_trgm_ops);
         """;
 }

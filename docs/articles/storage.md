@@ -75,6 +75,14 @@ builder.Services.AddFlowOrchestrator(options =>
 
 `FlowOrchestratorPgMigrator` creates the same table set in PostgreSQL on startup. Uses `Npgsql` — no EF Core dependency. PostgreSQL table names are snake_case (`flow_runs`, `webhook_replay_nonces`, `webhook_rejections`, …).
 
+The migrator also makes a **best-effort** attempt to enable the `pg_trgm`
+extension and create GIN trigram indexes that accelerate the dashboard run
+search (`?search=`) — substring `ILIKE` matching on `flow_name`, `trigger_key`,
+and the `flow_steps` `step_key` / `error_message` / `output_json` columns. If
+the connection role lacks the `CREATE EXTENSION` privilege the step is skipped
+with a warning and search still works via a sequential scan; grant the privilege
+(or pre-create the extension) to keep search fast on large histories.
+
 ### Webhook hardening backends (v1.25)
 
 The replay-nonce + DLQ stores default to in-memory (single-replica only). For multi-replica deployments register the backend-specific implementations:

@@ -136,7 +136,7 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/flows/api/runs` | List runs — queryable: `?flowId=`, `?status=`, `?search=`, `?skip=`, `?take=` |
+| `GET` | `/flows/api/runs` | List runs — queryable: `?flowId=`, `?status=`, `?search=`, `?from=`, `?to=`, `?deep=`, `?skip=`, `?take=` |
 | `GET` | `/flows/api/runs/active` | List currently-running runs |
 | `GET` | `/flows/api/runs/stats` | Aggregate statistics for the dashboard overview |
 | `GET` | `/flows/api/runs/{id}` | Run detail with trigger headers/body |
@@ -145,6 +145,22 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 | `GET` | `/flows/api/runs/{runId}/control` | Timeout, cancellation, idempotency state |
 | `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative cancellation |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
+
+**Run search (`?search=`)** matches (case-insensitively) the run's id, flow
+name, trigger key, status, and background job id, plus the run's **current**
+step rows — step key, error message, and output JSON. Superseded retry
+*attempt* history is not searched (its output duplicates the current step row).
+On PostgreSQL these substring searches are accelerated by `pg_trgm` GIN indexes
+that the migrator creates best-effort at startup.
+
+**Start-time window (`?from=` / `?to=`)** accepts ISO-8601 timestamps and bounds
+the search to runs started within `[from, to]`, which keeps a search over a large
+run history fast.
+
+**Quick vs deep search (`?deep=`)** defaults to deep (the step-row scan described
+above). Pass `deep=false` (or `deep=0`) for the quick path that matches only the
+top-level run columns (id / flow name / trigger key / status / job id) — much
+cheaper, used by the Cmd/Ctrl+K command palette for instant run typeahead.
 
 ### Realtime Event Stream (SSE)
 

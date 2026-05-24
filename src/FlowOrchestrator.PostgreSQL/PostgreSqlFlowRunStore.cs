@@ -135,12 +135,25 @@ public sealed class PostgreSqlFlowRunStore :
         return page.Runs;
     }
 
-    public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+    public Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
         Guid? flowId = null,
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null)
+        string? search = null,
+        DateTimeOffset? startedFrom = null,
+        DateTimeOffset? startedTo = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+
+    public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+        Guid? flowId,
+        string? status,
+        int skip,
+        int take,
+        string? search,
+        bool deepSearch,
+        DateTimeOffset? startedFrom = null,
+        DateTimeOffset? startedTo = null)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var whereClauses = new List<string>();
@@ -148,19 +161,21 @@ public sealed class PostgreSqlFlowRunStore :
             whereClauses.Add("fr.flow_id = @FlowId");
         if (!string.IsNullOrWhiteSpace(status))
             whereClauses.Add("fr.status = @Status");
+        if (startedFrom.HasValue)
+            whereClauses.Add("fr.started_at >= @StartedFrom");
+        if (startedTo.HasValue)
+            whereClauses.Add("fr.started_at <= @StartedTo");
 
         var searchLike = (string?)null;
         if (!string.IsNullOrWhiteSpace(search))
         {
             searchLike = $"%{EscapeLikePattern(search)}%";
-            whereClauses.Add(
-                """
-                (
-                    fr.id::text ILIKE @SearchLike
-                    OR COALESCE(fr.flow_name, '') ILIKE @SearchLike
-                    OR COALESCE(fr.trigger_key, '') ILIKE @SearchLike
-                    OR COALESCE(fr.status, '') ILIKE @SearchLike
-                    OR COALESCE(fr.background_job_id, '') ILIKE @SearchLike
+            // Always match the cheap top-level run columns. The per-step EXISTS scan
+            // (incl. output_json; flow_step_attempts excluded as duplicated history) is only
+            // added for deep search; pg_trgm GIN indexes accelerate the ILIKE scans.
+            var stepExists = deepSearch
+                ? """
+
                     OR EXISTS (
                         SELECT 1
                         FROM flow_steps AS fs
@@ -171,39 +186,46 @@ public sealed class PostgreSqlFlowRunStore :
                                 OR COALESCE(fs.output_json, '') ILIKE @SearchLike
                               )
                     )
-                    OR EXISTS (
-                        SELECT 1
-                        FROM flow_step_attempts AS fsa
-                        WHERE fsa.run_id = fr.id
-                          AND (
-                                COALESCE(fsa.step_key, '') ILIKE @SearchLike
-                                OR COALESCE(fsa.error_message, '') ILIKE @SearchLike
-                                OR COALESCE(fsa.output_json, '') ILIKE @SearchLike
-                              )
-                    )
+                    """
+                : string.Empty;
+            whereClauses.Add(
+                """
+                (
+                    fr.id::text ILIKE @SearchLike
+                    OR COALESCE(fr.flow_name, '') ILIKE @SearchLike
+                    OR COALESCE(fr.trigger_key, '') ILIKE @SearchLike
+                    OR COALESCE(fr.status, '') ILIKE @SearchLike
+                    OR COALESCE(fr.background_job_id, '') ILIKE @SearchLike
+                """ + stepExists + """
+
                 )
                 """);
         }
 
         var whereSql = whereClauses.Count > 0 ? $" WHERE {string.Join(" AND ", whereClauses)}" : string.Empty;
-        var countSql = $"SELECT COUNT(*) FROM flow_runs AS fr{whereSql}";
+        // Single pass: COUNT(*) OVER() yields the full filtered total alongside the page,
+        // avoiding a second scan of the same predicate.
         var pageSql = $"""
             SELECT fr.id AS "Id", fr.flow_id AS "FlowId", fr.flow_name AS "FlowName",
                    fr.status AS "Status", fr.trigger_key AS "TriggerKey",
                    fr.trigger_data_json AS "TriggerDataJson", fr.background_job_id AS "BackgroundJobId",
                    fr.started_at AS "StartedAt", fr.completed_at AS "CompletedAt",
-                   fr.source_run_id AS "SourceRunId"
+                   fr.source_run_id AS "SourceRunId", COUNT(*) OVER()::int AS "TotalCount"
             FROM flow_runs AS fr
             """ + whereSql + """
              ORDER BY fr.started_at DESC
             LIMIT @Take OFFSET @Skip
             """;
 
-        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike };
-        var totalCount = await conn.ExecuteScalarAsync<int>(countSql, parameters);
-        var rows = await conn.QueryAsync<FlowRunRecord>(pageSql, parameters);
+        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom, StartedTo = startedTo };
+        var totalCount = 0;
+        var rows = (await conn.QueryAsync<FlowRunRecord, int, FlowRunRecord>(
+            pageSql,
+            (run, total) => { totalCount = total; return run; },
+            parameters,
+            splitOn: "TotalCount")).AsList();
 
-        return (rows.AsList(), totalCount);
+        return (rows, totalCount);
     }
 
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
@@ -217,7 +239,8 @@ public sealed class PostgreSqlFlowRunStore :
             SELECT run_id AS "RunId", step_key AS "StepKey", step_type AS "StepType",
                    status AS "Status", input_json AS "InputJson", output_json AS "OutputJson",
                    error_message AS "ErrorMessage", job_id AS "JobId",
-                   started_at AS "StartedAt", completed_at AS "CompletedAt"
+                   started_at AS "StartedAt", completed_at AS "CompletedAt",
+                   evaluation_trace_json AS "EvaluationTraceJson"
             FROM flow_steps
             WHERE run_id = @RunId
             ORDER BY started_at
@@ -231,7 +254,8 @@ public sealed class PostgreSqlFlowRunStore :
                    step_type AS "StepType", status AS "Status",
                    input_json AS "InputJson", output_json AS "OutputJson",
                    error_message AS "ErrorMessage", job_id AS "JobId",
-                   started_at AS "StartedAt", completed_at AS "CompletedAt"
+                   started_at AS "StartedAt", completed_at AS "CompletedAt",
+                   evaluation_trace_json AS "EvaluationTraceJson"
             FROM flow_step_attempts
             WHERE run_id = @RunId
             ORDER BY step_key, attempt_no
@@ -440,6 +464,42 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
         await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Records a <see cref="StepStatus.Skipped"/> step and persists the When-clause
+    /// evaluation trace onto the current step row and its latest attempt.
+    /// </summary>
+    /// <remarks>
+    /// Overrides the runtime-store default so PostgreSQL surfaces the "Why skipped"
+    /// trace in run detail, matching the SQL Server backend.
+    /// </remarks>
+    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
+    {
+        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
+        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(evaluationTraceJson))
+            return;
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+
+        await conn.ExecuteAsync(
+            "UPDATE flow_steps SET evaluation_trace_json = @Trace WHERE run_id = @RunId AND step_key = @StepKey",
+            new { RunId = runId, StepKey = stepKey, Trace = evaluationTraceJson }, tx).ConfigureAwait(false);
+
+        await conn.ExecuteAsync(
+            """
+            UPDATE flow_step_attempts SET evaluation_trace_json = @Trace
+            WHERE run_id = @RunId AND step_key = @StepKey
+              AND attempt_no = (
+                    SELECT MAX(attempt_no) FROM flow_step_attempts
+                    WHERE run_id = @RunId AND step_key = @StepKey)
+            """,
+            new { RunId = runId, StepKey = stepKey, Trace = evaluationTraceJson }, tx).ConfigureAwait(false);
+
+        await tx.CommitAsync().ConfigureAwait(false);
     }
 
     public async Task<string?> GetRunStatusAsync(Guid runId)

@@ -124,12 +124,25 @@ public sealed class SqlFlowRunStore :
         return page.Runs;
     }
 
-    public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+    public Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
         Guid? flowId = null,
         string? status = null,
         int skip = 0,
         int take = 50,
-        string? search = null)
+        string? search = null,
+        DateTimeOffset? startedFrom = null,
+        DateTimeOffset? startedTo = null)
+        => GetRunsPageAsync(flowId, status, skip, take, search, deepSearch: true, startedFrom, startedTo);
+
+    public async Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(
+        Guid? flowId,
+        string? status,
+        int skip,
+        int take,
+        string? search,
+        bool deepSearch,
+        DateTimeOffset? startedFrom = null,
+        DateTimeOffset? startedTo = null)
     {
         await using var conn = new SqlConnection(_connectionString);
         var whereClauses = new List<string>();
@@ -137,17 +150,20 @@ public sealed class SqlFlowRunStore :
             whereClauses.Add("fr.FlowId = @FlowId");
         if (!string.IsNullOrWhiteSpace(status))
             whereClauses.Add("fr.Status = @Status");
+        if (startedFrom.HasValue)
+            whereClauses.Add("fr.StartedAt >= @StartedFrom");
+        if (startedTo.HasValue)
+            whereClauses.Add("fr.StartedAt <= @StartedTo");
         var searchLike = (string?)null;
         if (!string.IsNullOrWhiteSpace(search))
         {
             searchLike = $"%{EscapeLikePattern(search)}%";
-            whereClauses.Add("""
-                (
-                    CAST(fr.Id AS NVARCHAR(36)) LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.FlowName, '') LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.TriggerKey, '') LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.Status, '') LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.BackgroundJobId, '') LIKE @SearchLike ESCAPE '\'
+            // Always match the cheap top-level run columns. The per-step EXISTS scan
+            // (incl. OutputJson; FlowStepAttempts is excluded as duplicated history) is only
+            // added for deep search — quick search stays index-friendlier for typeahead.
+            var stepExists = deepSearch
+                ? """
+
                     OR EXISTS (
                         SELECT 1
                         FROM FlowSteps AS fs
@@ -158,31 +174,38 @@ public sealed class SqlFlowRunStore :
                                 OR ISNULL(fs.OutputJson, '') LIKE @SearchLike ESCAPE '\'
                               )
                     )
-                    OR EXISTS (
-                        SELECT 1
-                        FROM FlowStepAttempts AS fsa
-                        WHERE fsa.RunId = fr.Id
-                          AND (
-                                ISNULL(fsa.StepKey, '') LIKE @SearchLike ESCAPE '\'
-                                OR ISNULL(fsa.ErrorMessage, '') LIKE @SearchLike ESCAPE '\'
-                                OR ISNULL(fsa.OutputJson, '') LIKE @SearchLike ESCAPE '\'
-                              )
-                    )
+                    """
+                : string.Empty;
+            whereClauses.Add("""
+                (
+                    CAST(fr.Id AS NVARCHAR(36)) LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.FlowName, '') LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.TriggerKey, '') LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.Status, '') LIKE @SearchLike ESCAPE '\'
+                    OR ISNULL(fr.BackgroundJobId, '') LIKE @SearchLike ESCAPE '\'
+                """ + stepExists + """
+
                 )
                 """);
         }
 
         var whereSql = whereClauses.Count > 0 ? $" WHERE {string.Join(" AND ", whereClauses)}" : string.Empty;
-        var countSql = $"SELECT COUNT(*) FROM FlowRuns AS fr{whereSql}";
-        var pageSql = "SELECT fr.Id, fr.FlowId, fr.FlowName, fr.Status, fr.TriggerKey, fr.TriggerDataJson, fr.BackgroundJobId, fr.StartedAt, fr.CompletedAt, fr.SourceRunId FROM FlowRuns AS fr"
+        // Single pass: COUNT(*) OVER() yields the full filtered total alongside the page,
+        // avoiding a second scan of the same predicate. An empty page beyond the last row
+        // reports total 0, which matches the page being empty.
+        var pageSql = "SELECT fr.Id, fr.FlowId, fr.FlowName, fr.Status, fr.TriggerKey, fr.TriggerDataJson, fr.BackgroundJobId, fr.StartedAt, fr.CompletedAt, fr.SourceRunId, COUNT(*) OVER() AS TotalCount FROM FlowRuns AS fr"
             + whereSql
             + " ORDER BY fr.StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY";
 
-        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike };
-        var totalCount = await conn.ExecuteScalarAsync<int>(countSql, parameters);
-        var rows = await conn.QueryAsync<FlowRunRecord>(pageSql, parameters);
+        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom, StartedTo = startedTo };
+        var totalCount = 0;
+        var rows = (await conn.QueryAsync<FlowRunRecord, int, FlowRunRecord>(
+            pageSql,
+            (run, total) => { totalCount = total; return run; },
+            parameters,
+            splitOn: "TotalCount")).AsList();
 
-        return (rows.AsList(), totalCount);
+        return (rows, totalCount);
     }
 
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
