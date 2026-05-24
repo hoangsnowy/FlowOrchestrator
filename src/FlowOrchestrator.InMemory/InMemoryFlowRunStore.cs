@@ -696,18 +696,11 @@ public sealed class InMemoryFlowRunStore :
         if (!_stepKeysByRun.TryGetValue(run.Id, out var stepKeys))
             return false;
 
-        foreach (var stepKey in stepKeys.Keys)
-        {
-            if (_steps.TryGetValue((run.Id, stepKey), out var s)
-                && (ContainsIgnoreCase(s.StepKey, search)
-                    || ContainsIgnoreCase(s.ErrorMessage, search)
-                    || ContainsIgnoreCase(s.OutputJson, search)))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return stepKeys.Keys.Any(stepKey =>
+            _steps.TryGetValue((run.Id, stepKey), out var s)
+            && (ContainsIgnoreCase(s.StepKey, search)
+                || ContainsIgnoreCase(s.ErrorMessage, search)
+                || ContainsIgnoreCase(s.OutputJson, search)));
     }
 
     private static bool ContainsIgnoreCase(string? value, string search)
