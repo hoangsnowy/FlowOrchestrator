@@ -6,6 +6,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.27.1] - 2026-05-24
+
 ### Performance
 
 - **In-memory deep run search is no longer quadratic.** `InMemoryFlowRunStore`
