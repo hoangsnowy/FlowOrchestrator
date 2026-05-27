@@ -6,6 +6,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.27.3] - 2026-05-27
+
+### Dependencies
+
+- Bumped the Aspire AppHost hosting packages from **13.3.4 → 13.3.5**
+  (`Aspire.Hosting.PostgreSQL`, `Aspire.Hosting.SqlServer`,
+  `Aspire.Hosting.Azure.ServiceBus`). AppHost / sample-orchestration only — no
+  change to any shipped library package surface.
+
+### Tests
+
+- **De-flaked `WaitForSignalTests.HappyPath_SignalArrives_StepSucceeds_DownstreamConsumesPayload`.**
+  The assertion read `wait_for_approval`'s status from the `WaitForRunAsync`
+  snapshot, which could observe the step momentarily back in `Running` — a poll
+  re-dispatch queued before the signal can fire after the run is already
+  terminal and re-flip the pollable step. The test now reads the step's settled
+  status from a consistent run-store snapshot (the same race the sibling
+  `MultipleWaiters_*` test already guards against). Product behaviour unchanged.
+
 ## [1.27.2] - 2026-05-24
 
 ### Performance
