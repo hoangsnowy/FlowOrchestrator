@@ -30,6 +30,7 @@ public sealed class WaitForSignalTests
 
         var runId = await StartRunAsync(host);
         var signals = host.Services.GetRequiredService<IFlowSignalDispatcher>();
+        var runStore = host.Services.GetRequiredService<IFlowRunStore>();
 
         await WaitForWaiterAsync(host, runId, "wait_for_approval");
 
@@ -39,12 +40,19 @@ public sealed class WaitForSignalTests
 
         var result = await host.WaitForRunAsync(runId, TerminalTimeout);
 
+        // wait_for_approval is a pollable step: a poll re-dispatch queued before the
+        // signal can fire after the run is already terminal and momentarily re-flip the
+        // step to "Running" in the snapshot WaitForRunAsync returns. Read its settled
+        // status from a consistent run-store snapshot — same race as MultipleWaiters_*.
+        var settled = await WaitForStepStatusAsync(runStore, runId, "wait_for_approval", StepStatus.Succeeded);
+        var waitStep = settled!.Steps!.First(s => s.StepKey == "wait_for_approval");
+
         // Assert
         Assert.Equal(SignalDeliveryStatus.Delivered, delivery.Status);
         Assert.Equal("wait_for_approval", delivery.StepKey);
         Assert.False(result.TimedOut);
         Assert.Equal(RunStatus.Succeeded, result.Status);
-        Assert.Equal(StepStatus.Succeeded, result.Steps["wait_for_approval"].Status);
+        Assert.Equal("Succeeded", waitStep.Status);
         Assert.Equal(StepStatus.Succeeded, result.Steps["finalize"].Status);
         Assert.Equal("alice", result.Steps["finalize"].Output.GetProperty("Echoed").GetString());
     }
