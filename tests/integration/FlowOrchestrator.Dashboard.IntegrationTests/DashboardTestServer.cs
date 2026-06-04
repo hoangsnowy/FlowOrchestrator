@@ -6,6 +6,7 @@ using Hangfire;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute.ReturnsExtensions;
 
@@ -38,7 +39,30 @@ public sealed class DashboardTestServer : IDisposable
     public IRecurringTriggerDispatcher TriggerDispatcher { get; } = Substitute.For<IRecurringTriggerDispatcher>();
     public IRecurringTriggerInspector TriggerInspector { get; } = Substitute.For<IRecurringTriggerInspector>();
 
+    /// <summary>Spins up the dashboard with optional inline option configuration via the <see cref="Action{T}"/> overload.</summary>
     public DashboardTestServer(Action<FlowDashboardOptions>? configureOptions = null)
+        : this(services =>
+        {
+            if (configureOptions is not null)
+                services.AddFlowDashboard(configureOptions);
+            else
+                services.AddFlowDashboard();
+        })
+    {
+    }
+
+    /// <summary>
+    /// Spins up the dashboard via the <c>AddFlowDashboard(IConfiguration, Action&lt;FlowDashboardOptions&gt;)</c>
+    /// overload, exercising the config-bind-then-delegate registration path.
+    /// </summary>
+    /// <param name="configuration">Configuration bound into <see cref="FlowDashboardOptions"/> (e.g. Basic Auth).</param>
+    /// <param name="configureOptions">Delegate applied after binding, for code-only settings.</param>
+    public DashboardTestServer(IConfiguration configuration, Action<FlowDashboardOptions> configureOptions)
+        : this(services => services.AddFlowDashboard(configuration, configureOptions))
+    {
+    }
+
+    private DashboardTestServer(Action<IServiceCollection> registerDashboard)
     {
         // Configure Hangfire in-memory so any background job infrastructure works during tests.
         GlobalConfiguration.Configuration.UseInMemoryStorage();
@@ -74,10 +98,7 @@ public sealed class DashboardTestServer : IDisposable
         builder.Services.AddSingleton(TriggerDispatcher);
         builder.Services.AddSingleton(TriggerInspector);
 
-        if (configureOptions is not null)
-            builder.Services.AddFlowDashboard(configureOptions);
-        else
-            builder.Services.AddFlowDashboard();
+        registerDashboard(builder.Services);
 
         _app = builder.Build();
         _app.MapFlowDashboard("/flows");

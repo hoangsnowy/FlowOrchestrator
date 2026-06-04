@@ -196,6 +196,38 @@ public static class DashboardServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers dashboard services, binds <see cref="FlowDashboardOptions"/> from
+    /// <paramref name="configuration"/> under <paramref name="sectionName"/>, then applies
+    /// <paramref name="configureOptions"/> on top.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configuration">Application configuration used to bind dashboard options (e.g. <c>BasicAuth</c>, <c>Branding</c>).</param>
+    /// <param name="configureOptions">Delegate applied after binding, for values set in code (e.g. webhook enforcement).</param>
+    /// <param name="sectionName">Configuration section name; defaults to <see cref="FlowDashboardOptions.DefaultSectionName"/>.</param>
+    /// <remarks>
+    /// Binding runs before the delegate, so code-set values in <paramref name="configureOptions"/>
+    /// override or augment the bound configuration. Use this overload when you need both
+    /// <c>appsettings.json</c> values (such as <see cref="FlowDashboardBasicAuthOptions"/>) and
+    /// code-only configuration (such as <see cref="FlowDashboardOptions.UseWebhookSecurity"/>) in a
+    /// single registration — calling the <see cref="Action{T}"/> overload alone does <b>not</b> read
+    /// configuration, which silently disables config-driven Basic Auth.
+    /// </remarks>
+    public static IServiceCollection AddFlowDashboard(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        Action<FlowDashboardOptions> configureOptions,
+        string sectionName = FlowDashboardOptions.DefaultSectionName)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(configureOptions);
+
+        services.AddFlowDashboard();
+        services.Configure<FlowDashboardOptions>(configuration.GetSection(sectionName));
+        services.Configure(configureOptions);
+        return services;
+    }
+
+    /// <summary>
     /// Maps the FlowOrchestrator dashboard SPA, REST API endpoints, and webhook receiver
     /// onto <paramref name="endpoints"/> under <paramref name="basePath"/>.
     /// Optionally applies Basic Auth if configured in <see cref="FlowDashboardOptions.BasicAuth"/>.
