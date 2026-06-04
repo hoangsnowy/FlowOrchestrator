@@ -104,6 +104,32 @@ public sealed class BasicAuthEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task GET_root_page_without_auth_returns_401()
+    {
+        // Arrange
+
+        // Act
+        var response = await _client.GetAsync("/flows");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GET_root_page_with_correct_credentials_returns_200()
+    {
+        // Arrange
+        _client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes("admin:secret123")));
+
+        // Act
+        var response = await _client.GetAsync("/flows");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task No_auth_required_when_credentials_not_configured()
     {
         // Arrange
