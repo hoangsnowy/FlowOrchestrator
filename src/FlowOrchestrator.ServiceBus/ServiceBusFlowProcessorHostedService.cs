@@ -113,8 +113,13 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
                 // Host is shutting down mid-startup — propagate so StartAsync honours cancellation.
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not null)
             {
+                // Intentional resilience boundary: any failure starting ONE flow's processor
+                // (transient ServiceBusException, throttling, a single missing Manage right…)
+                // must not abort host startup for the others. Genuine shutdown is handled by the
+                // OperationCanceledException catch above. The `when` filter keeps this off
+                // CodeQL's generic-catch rule, matching the repo's established convention.
                 _logger.LogError(ex,
                     "Failed to start Service Bus processor for flow {FlowId}; skipping it. Other flows are unaffected.",
                     flow.Id);
