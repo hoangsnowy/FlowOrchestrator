@@ -302,4 +302,35 @@ public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixtur
         Assert.Empty(runs);
         Assert.Equal(3, total);
     }
+
+    [Fact]
+    public async Task RecordStepStartAsync_concurrent_attempts_same_step_do_not_throw_and_number_contiguously()
+    {
+        // Arrange — the serializable SELECT MAX(attempt_no)+1 read fails with SQLSTATE 40001
+        // when attempts for the same step start concurrently. The bounded retry loop must absorb
+        // those conflicts so the calls complete without throwing (matching SQL Server's blocking
+        // UPDLOCK/HOLDLOCK semantics) and every attempt is recorded with a unique number.
+        // Concurrency is kept modest so the 3-retry budget comfortably resolves the contention
+        // (PostgreSQL aborts the loser immediately, and each retry re-reads the committed MAX).
+        const int concurrency = 4;
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await _store.StartRunAsync(flowId, "ConcurrentAttemptFlow", runId, "manual", null, null);
+
+        // Each task uses its own store/connection so the inserts genuinely contend in the DB.
+        var stores = Enumerable.Range(0, concurrency)
+            .Select(_ => new PostgreSqlFlowRunStore(_connectionString))
+            .ToArray();
+
+        // Act — fan out concurrent starts for the SAME (runId, stepKey).
+        var tasks = stores.Select(s => s.RecordStepStartAsync(runId, "race", "Race", null, null)).ToArray();
+        var ex = await Record.ExceptionAsync(() => Task.WhenAll(tasks));
+
+        // Assert — no serialization failure surfaced, and attempt numbers are exactly 1..concurrency.
+        Assert.Null(ex);
+        var detail = await _store.GetRunDetailAsync(runId);
+        var step = Assert.Single(detail!.Steps!, s => s.StepKey == "race");
+        var attemptNumbers = step.Attempts!.Select(a => a.Attempt).OrderBy(n => n).ToArray();
+        Assert.Equal(Enumerable.Range(1, concurrency).ToArray(), attemptNumbers);
+    }
 }

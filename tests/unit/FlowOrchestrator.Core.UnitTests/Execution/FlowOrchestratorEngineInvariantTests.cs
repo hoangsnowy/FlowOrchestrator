@@ -201,6 +201,64 @@ public sealed class FlowOrchestratorEngineInvariantTests
     }
 
     [Fact]
+    public async Task RunStepAsync_WhenPendingRescheduleThrows_ReassertsDispatchLedger_NotStranded()
+    {
+        // Arrange — finding C2. A polling step returns Pending; the engine releases the dispatch
+        // ledger + claim and tries to reschedule, but the dispatcher throws (transient broker
+        // error). Without the fix the step is left status=Pending, claim-released, dispatch-row
+        // removed, and unscheduled — stranded, because recovery treats a Pending step as in-flight
+        // and never re-enqueues it. The fix re-asserts the dispatch ledger before the exception
+        // propagates so the step is never "both released and unscheduled".
+        var store = new InMemoryFlowRunStore();
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(flowId);
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection { ["step1"] = new StepMetadata { Type = "Work" } }
+        });
+
+        _stepExecutor.ExecuteAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
+            .ReturnsForAnyArgs(new ValueTask<IStepResult>(new StepResult
+            {
+                Key = "step1",
+                Status = StepStatus.Pending,
+                DelayNextStep = TimeSpan.FromSeconds(5)
+            }));
+
+        var scheduleException = new InvalidOperationException("dispatcher transient failure");
+        _dispatcher.ScheduleStepAsync(
+                Arg.Any<IExecutionContext>(),
+                Arg.Any<IFlowDefinition>(),
+                Arg.Any<IStepInstance>(),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>())
+            .Returns<ValueTask<string?>>(_ => throw scheduleException);
+
+        var engine = CreateEngine(runtimeStore: store, runStoreOverride: store);
+
+        // Act — the reschedule failure must surface to the caller (runtime job-retry depends on it).
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            engine.RunStepAsync(MakeCtx(runId), flow, new StepInstance("step1", "Work") { RunId = runId })
+                .AsTask());
+
+        // Assert — same exception bubbled up, AND the dispatch ledger was restored so the step is
+        // recoverable: it is recorded as dispatched, and its claim was released so a retry can
+        // re-claim. The forbidden post-failure state (released + unscheduled) is thereby avoided.
+        Assert.Same(scheduleException, thrown);
+
+        var dispatched = await store.GetDispatchedStepKeysAsync(runId);
+        Assert.Contains("step1", dispatched);
+
+        var claimed = await store.GetClaimedStepKeysAsync(runId);
+        Assert.DoesNotContain("step1", claimed);
+    }
+
+    [Fact]
     public async Task RunStepAsync_WhenPending_AlsoReleasesStepClaim_v122()
     {
         // Arrange — pre-1.22 the claim leaked across Pending re-schedules and the next poll

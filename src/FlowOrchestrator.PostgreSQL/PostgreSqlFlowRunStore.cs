@@ -1,4 +1,3 @@
-using System.Data;
 using Dapper;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
@@ -53,11 +52,34 @@ public sealed class PostgreSqlFlowRunStore :
         return rows.AsList();
     }
 
+    /// <summary>
+    /// Records the start of a step attempt, allocating the next attempt number while holding a
+    /// transaction-scoped advisory lock keyed on the step so concurrent attempts serialise.
+    /// </summary>
+    /// <remarks>
+    /// SQL Server serialises the <c>MAX(attempt_no)+1</c> allocation with <c>UPDLOCK, HOLDLOCK</c>
+    /// — it blocks the second writer rather than aborting it. Postgres has no equivalent row-range
+    /// hint for this read-then-insert, and a plain <c>Serializable</c> transaction surfaces the
+    /// concurrent collision as an error (either a 40001 serialization failure or, more commonly
+    /// here, a 23505 unique-violation on <c>flow_step_attempts_pkey</c> when both transactions
+    /// compute the same attempt number). To match SQL Server's non-throwing semantics, this method
+    /// takes a <c>pg_advisory_xact_lock</c> keyed on <c>(run_id, step_key)</c> at the top of the
+    /// transaction: concurrent callers for the same step block until the holder commits, so the
+    /// next <c>MAX(attempt_no)</c> read always sees prior attempts. The lock is released
+    /// automatically when the transaction commits or rolls back.
+    /// </remarks>
     public async Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.Serializable);
+        await using var tx = await conn.BeginTransactionAsync();
+
+        // Serialise attempt-number allocation for this step across connections (mirrors SQL
+        // Server's UPDLOCK/HOLDLOCK). hashtextextended maps the composite key to the bigint the
+        // advisory-lock API expects; the lock is transaction-scoped (auto-released on commit/rollback).
+        await conn.ExecuteAsync(
+            "SELECT pg_advisory_xact_lock(hashtextextended(@LockKey, 0))",
+            new { LockKey = $"{runId:N}:{stepKey}" }, tx);
 
         var attemptNo = await conn.ExecuteScalarAsync<int>(
             "SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM flow_step_attempts WHERE run_id = @RunId AND step_key = @StepKey",

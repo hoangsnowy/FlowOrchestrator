@@ -5,10 +5,12 @@ namespace FlowOrchestrator.SqlServer.Tests;
 public sealed class SqlFlowStoreTests : IClassFixture<SqlServerFixture>
 {
     private readonly SqlFlowStore _store;
+    private readonly string _connectionString;
 
     public SqlFlowStoreTests(SqlServerFixture fixture)
     {
-        _store = new SqlFlowStore(fixture.ConnectionString);
+        _connectionString = fixture.ConnectionString;
+        _store = new SqlFlowStore(_connectionString);
     }
 
     [Fact]
@@ -61,6 +63,32 @@ public sealed class SqlFlowStoreTests : IClassFixture<SqlServerFixture>
         // Assert
         Assert.Equal("Updated", updated.Name);
         Assert.Equal("2.0", updated.Version);
+    }
+
+    [Fact]
+    public async Task SaveAsync_concurrent_first_save_of_same_id_does_not_throw_and_leaves_one_row()
+    {
+        // Arrange — two independent stores (separate connections) race to first-save the SAME
+        // new flow Id. The prior SELECT-then-INSERT was non-atomic: both saw "not exists" and
+        // raced into duplicate INSERTs → PK violation. The MERGE WITH (HOLDLOCK) upsert serialises
+        // them so the loser matches and UPDATEs instead of throwing.
+        var id = Guid.NewGuid();
+        var storeA = new SqlFlowStore(_connectionString);
+        var storeB = new SqlFlowStore(_connectionString);
+
+        // Act — start both saves before awaiting either, maximising overlap.
+        var taskA = storeA.SaveAsync(new FlowDefinitionRecord { Id = id, Name = "ConcurrentA", Version = "1.0", IsEnabled = true });
+        var taskB = storeB.SaveAsync(new FlowDefinitionRecord { Id = id, Name = "ConcurrentB", Version = "2.0", IsEnabled = false });
+        var saved = await Task.WhenAll(taskA, taskB);
+
+        // Assert — neither call threw, both observed the same row, and exactly one row exists.
+        Assert.All(saved, r => Assert.Equal(id, r.Id));
+        var fetched = await _store.GetByIdAsync(id);
+        Assert.NotNull(fetched);
+        // The winning writer is non-deterministic, but the persisted name must match exactly one
+        // of the two candidates (no torn write) and there is a single row for the Id.
+        Assert.Contains(fetched!.Name, new[] { "ConcurrentA", "ConcurrentB" });
+        Assert.Equal(1, (await _store.GetAllAsync()).Count(r => r.Id == id));
     }
 
     [Fact]

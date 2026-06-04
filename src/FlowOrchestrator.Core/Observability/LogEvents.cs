@@ -63,4 +63,10 @@ public static class LogEvents
 
     /// <summary>The realtime <c>IFlowEventNotifier</c> threw while publishing. Engine continues; log is informational.</summary>
     public static readonly EventId EventNotifierFailed = new(3003, nameof(EventNotifierFailed));
+
+    /// <summary>
+    /// Re-asserting the dispatch ledger after a failed pending reschedule itself failed. The
+    /// original reschedule exception still propagates; this log records the best-effort fallback miss.
+    /// </summary>
+    public static readonly EventId DispatchReassertFailed = new(3004, nameof(DispatchReassertFailed));
 }

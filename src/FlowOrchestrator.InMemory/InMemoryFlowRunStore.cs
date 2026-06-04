@@ -555,10 +555,12 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> RequestCancelAsync(Guid runId, string? reason)
     {
+        // Mirror the SQL backends' UPDATE ... WHERE RunId=@RunId semantics: return false when
+        // no control record exists (do NOT fabricate a phantom record). The IFlowRunControlStore
+        // contract specifies true only when an existing record was found AND updated.
         if (!_runControls.TryGetValue(runId, out var control))
         {
-            control = new FlowRunControlRecord { RunId = runId };
-            _runControls[runId] = control;
+            return Task.FromResult(false);
         }
 
         if (control.CancelRequested)
@@ -574,10 +576,11 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
     {
+        // Mirror the SQL backends: return false when no control record exists rather than
+        // creating one. See RequestCancelAsync for the contract rationale.
         if (!_runControls.TryGetValue(runId, out var control))
         {
-            control = new FlowRunControlRecord { RunId = runId };
-            _runControls[runId] = control;
+            return Task.FromResult(false);
         }
 
         if (control.TimedOutAtUtc is not null)
@@ -613,8 +616,10 @@ public sealed class InMemoryFlowRunStore :
 
     public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
+        // Strictly-less-than the cutoff, matching both SQL backends (`completed_at < @CutoffUtc`).
+        // A run completed exactly AT the cutoff is retained.
         var obsoleteRunIds = _runs.Values
-            .Where(r => r.CompletedAt is not null && r.CompletedAt <= cutoffUtc)
+            .Where(r => r.CompletedAt is not null && r.CompletedAt < cutoffUtc)
             .Select(r => r.Id)
             .ToArray();
 

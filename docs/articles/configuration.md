@@ -160,10 +160,9 @@ options.Retention.SweepInterval = TimeSpan.FromHours(1);
 ```csharp
 builder.Services.AddFlowDashboard(options =>
 {
-    options.Title = "My App Workflows";
-    options.Subtitle = "Production";
-    options.LogoUrl = "/logo.svg";
-    options.BasicAuth.Enabled = true;
+    options.Branding.Title = "My App Workflows";
+    options.Branding.Subtitle = "Production";
+    options.Branding.LogoUrl = "/logo.svg";
     options.BasicAuth.Username = "admin";
     options.BasicAuth.Password = "changeme";
 });
@@ -174,11 +173,12 @@ Or via `appsettings.json`:
 ```json
 {
   "FlowDashboard": {
-    "Title": "My App Workflows",
-    "Subtitle": "Production",
-    "LogoUrl": "/logo.svg",
+    "Branding": {
+      "Title": "My App Workflows",
+      "Subtitle": "Production",
+      "LogoUrl": "/logo.svg"
+    },
     "BasicAuth": {
-      "Enabled": true,
       "Username": "admin",
       "Password": "changeme"
     }
@@ -188,13 +188,16 @@ Or via `appsettings.json`:
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Title` | `string` | `"FlowOrchestrator"` | Displayed in the browser tab and navigation bar |
-| `Subtitle` | `string?` | — | Small label next to the title (environment, version, etc.) |
-| `LogoUrl` | `string?` | — | URL of a custom logo image shown in the navbar |
-| `BasicAuth.Enabled` | `bool` | `false` | Protect all dashboard routes with HTTP Basic Auth |
-| `BasicAuth.Username` | `string?` | — | Required when `BasicAuth.Enabled = true` |
-| `BasicAuth.Password` | `string?` | — | Required when `BasicAuth.Enabled = true` |
+| `Branding.Title` | `string` | `"FlowOrchestrator Dashboard"` | Displayed in the browser tab and navigation bar |
+| `Branding.Subtitle` | `string` | `"Dashboard"` | Small label next to the title (environment, version, etc.) |
+| `Branding.LogoUrl` | `string?` | — | URL of a custom logo image shown in the navbar |
+| `BasicAuth.Username` | `string?` | — | Basic Auth username |
+| `BasicAuth.Password` | `string?` | — | Basic Auth password |
+| `BasicAuth.Realm` | `string` | `"FlowOrchestrator Dashboard"` | `WWW-Authenticate` realm returned in 401 responses |
 | `WebhookSecurity` | `WebhookSecurityOptions` | (Off) | Enterprise webhook hardening pipeline. Configure via `UseWebhookSecurity(b => …)` — see below. |
+
+> [!NOTE]
+> Basic Auth is enforced when **both** `BasicAuth.Username` and `BasicAuth.Password` are set. There is no separate `Enabled` flag — leaving either blank disables authentication.
 
 ### WebhookSecurityOptions
 

@@ -197,7 +197,27 @@ public sealed partial class FlowOrchestratorEngine
                     await _runtimeStore.ReleaseStepClaimAsync(ctx.RunId, step.Key).ConfigureAwait(false);
                 }
                 step.ScheduledTime = DateTimeOffset.UtcNow + retryDelay;
-                await TryScheduleStepAsync(ctx, flow, step, retryDelay).ConfigureAwait(false);
+                // Reschedule the poll. If the dispatcher throws (transient queue/broker error)
+                // after the two guards above were already released, the step would otherwise be
+                // left in the worst possible state: status Pending, no claim, no dispatch row,
+                // and nothing enqueued — stranded until a host restart, and even then the
+                // recovery service treats a Pending step as in-flight and never re-enqueues it.
+                // Re-assert the dispatch ledger before letting the exception propagate so the
+                // step is never "both released and unscheduled": the dispatch-ledger invariant
+                // (a non-terminal step is always either claimed, dispatched, or has queued work)
+                // is preserved, and the runtime's own job-retry can drive the next attempt.
+                // The claim deliberately stays released so that retried attempt can re-claim.
+                try
+                {
+                    await TryScheduleStepAsync(ctx, flow, step, retryDelay).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Catch-all-and-rethrow: every failure mode (including OperationCanceledException)
+                    // must re-assert the ledger before propagating; the exception is never swallowed.
+                    await ReassertDispatchAfterFailedRescheduleAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                    throw;
+                }
 
                 await RecordEventAsync(ctx, flow, step, "step.pending", $"Step '{step.Key}' pending for {retryDelay}.")
                     .ConfigureAwait(false);
@@ -361,6 +381,32 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         return descendants;
+    }
+
+    /// <summary>
+    /// Best-effort restore of the dispatch-ledger row for a <see cref="StepStatus.Pending"/>
+    /// step whose reschedule threw, ensuring the step is never left simultaneously
+    /// claim-released, dispatch-released, and unscheduled.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step whose reschedule failed.</param>
+    /// <remarks>
+    /// Idempotent: <see cref="IFlowRunStore.TryRecordDispatchAsync"/> is a no-op when the row
+    /// already exists (the failure happened inside the dispatcher after the ledger was
+    /// re-recorded), and re-inserts it when the failure happened before (the ledger was still
+    /// released). Swallows its own exceptions — it runs on the failure path and must never
+    /// mask the original reschedule exception, which the caller rethrows.
+    /// </remarks>
+    private async Task ReassertDispatchAfterFailedRescheduleAsync(Guid runId, string stepKey)
+    {
+        try
+        {
+            await _runStore.TryRecordDispatchAsync(runId, stepKey).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.DispatchReassertFailed(_logger, ex, stepKey);
+        }
     }
 
     private async Task RecordSkippedCurrentStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, string terminalStatus)

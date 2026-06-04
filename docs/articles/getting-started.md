@@ -84,6 +84,8 @@ Step handlers contain the actual business logic. Register them by type name — 
 
 ```csharp
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution;
+using Microsoft.Extensions.Logging;
 
 // Input class — properties map to keys in StepMetadata.Inputs
 public sealed class LogMessageInput
