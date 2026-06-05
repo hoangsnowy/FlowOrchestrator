@@ -6,6 +6,88 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-06-05
+
+### Added
+
+- **`AddFlowDashboard(IConfiguration, Action<FlowDashboardOptions>)` overload.**
+  Binds dashboard options from configuration **first**, then applies the delegate
+  on top, so a single registration can take both `appsettings.json` values (Basic
+  Auth, branding) and code-only settings (webhook enforcement). Closes a footgun
+  where switching to the delegate-only overload silently dropped config-bound
+  Basic Auth — the dashboard would stop requiring login with no error.
+
+### Fixed
+
+- **Service Bus "Trigger now" forked the recurring schedule.** `TriggerOnce`
+  enqueued the live cron, so a manual fire on an active job spawned a second
+  self-perpetuating chain and the cron fired twice forever. It now enqueues a
+  one-off (empty cron), matching `EnqueueTriggerAsync`.
+- **One flow's startup failure aborted every Service Bus processor.** The
+  per-flow loop in `ServiceBusFlowProcessorHostedService.StartAsync` had no
+  isolation; a single subscription/StartProcessing error took down processing for
+  all flows. Each flow is now wrapped (log + continue); genuine shutdown still
+  propagates.
+- **SQL Server signal delivery stranded a second waiter.** The delivery CTE was
+  missing `AND DeliveredAt IS NULL`, so two `WaitForSignal` steps on the same
+  `(run, signal)` left the second one never delivered. Aligned with the
+  PostgreSQL implementation; the InMemory store had the same class of bug and now
+  delivers to the oldest undelivered waiter.
+- **`@triggerHeaders()[']` (malformed) threw `ArgumentOutOfRangeException`** in
+  `TriggerExpressionResolver`; added the `Length >= 4` bracket guard the sibling
+  resolver already had.
+- **Run termination mis-classified `ForEach`-only runs.** Leaf / failure-handled
+  detection compared template `RunAfter` keys against runtime loop keys
+  (`loop.0.child`); runtime keys are now normalised before matching.
+- **A failed reschedule on the `Pending` path could strand a step.** The engine
+  released the claim + dispatch ledger before rescheduling; a throw left the step
+  released-and-unscheduled until restart. It now re-asserts the dispatch ledger on
+  failure before propagating.
+- **InMemory control store fabricated a phantom record.** `RequestCancelAsync` /
+  `MarkTimedOutAsync` returned `true` (and created a record) for a missing run;
+  they now return `false`, matching the SQL backends and the
+  `IFlowRunControlStore` contract.
+- **`SqlFlowStore.SaveAsync` could throw a PK violation** under a concurrent
+  first-write; replaced the SELECT-then-INSERT with an atomic `MERGE`.
+- **PostgreSQL `RecordStepStartAsync` collided under concurrency** (40001 / 23505);
+  replaced the serializable-retry approach with a transaction-scoped
+  `pg_advisory_xact_lock` keyed on the step, mirroring SQL Server's blocking
+  semantics.
+- **`GetStatisticsAsync` "today" bucket** was computed in the host/session time
+  zone on the SQL backends and in UTC on InMemory; all three now bucket in UTC so
+  the dashboard counts agree across backends and don't flip around local midnight.
+- **InMemory retention cutoff** used `<=`; changed to `<` to match both SQL
+  backends.
+
+### Security
+
+- **Webhook X-Forwarded-For spoofing.** When the configured forwarded-header depth
+  was ≥ the actual hop count, client-IP resolution clamped to the leftmost,
+  attacker-controlled entry (allow-list spoofing / rate-limit evasion); it now
+  falls back to the connection remote IP.
+- **Unbounded request bodies.** The dashboard `/trigger`, `/cancel`, and cron-PUT
+  endpoints now enforce a request-body size cap, matching the webhook path.
+
+### Dependencies
+
+- Bumped `Aspire.Hosting.PostgreSQL`, `Aspire.Hosting.SqlServer`, and
+  `Aspire.Hosting.Azure.ServiceBus` **13.3.5 → 13.4.2** (AppHost / sample only).
+  Note: the newer Aspire provisions a PostgreSQL 18+ image whose data directory
+  layout is incompatible with older dev volumes — a fresh volume (or `pg_upgrade`)
+  is required.
+- Bumped `Npgsql` **10.0.2 → 10.0.3** and `Microsoft.NET.Test.Sdk`
+  **18.5.1 → 18.6.0**.
+
+### Documentation
+
+- Corrected the dashboard configuration docs: options live on `Branding`
+  (`options.Branding.Title` etc.), Basic Auth activates when both `Username` and
+  `Password` are set (there is no `BasicAuth.Enabled`), the `/api/schedules` tab is
+  runtime-agnostic (not Hangfire-specific), the SQL Server table count is fourteen,
+  the step-handler quickstart includes its required `using` directives, and the
+  non-existent `UseSqlServer(connectionString, autoMigrate: false)` overload was
+  removed.
+
 ## [1.27.3] - 2026-05-27
 
 ### Dependencies
