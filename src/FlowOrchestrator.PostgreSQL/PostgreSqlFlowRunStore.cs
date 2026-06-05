@@ -303,10 +303,12 @@ public sealed class PostgreSqlFlowRunStore :
         var stats = new DashboardStatistics();
         stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(DISTINCT flow_id) FROM flow_runs");
         stats.ActiveRuns = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM flow_runs WHERE status = 'Running'");
+        // "Today" is bucketed in UTC so the count matches the other backends regardless of the
+        // database session time zone (completed_at::date / CURRENT_DATE would otherwise use it).
         stats.CompletedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Succeeded' AND completed_at::date = CURRENT_DATE");
+            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Succeeded' AND (completed_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date");
         stats.FailedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Failed' AND completed_at::date = CURRENT_DATE");
+            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Failed' AND (completed_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date");
         return stats;
     }
 

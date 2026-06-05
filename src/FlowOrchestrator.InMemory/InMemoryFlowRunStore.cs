@@ -237,13 +237,15 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<DashboardStatistics> GetStatisticsAsync()
     {
-        var today = DateTimeOffset.UtcNow.Date;
+        // "Today" is bucketed in UTC (via UtcDateTime) so the count matches the SQL backends
+        // regardless of the offset carried on a stored CompletedAt.
+        var today = DateTimeOffset.UtcNow.UtcDateTime.Date;
         var stats = new DashboardStatistics
         {
             TotalFlows = _runs.Values.Select(r => r.FlowId).Distinct().Count(),
             ActiveRuns = _runs.Values.Count(r => r.Status == "Running"),
-            CompletedToday = _runs.Values.Count(r => r.CompletedAt?.Date == today && r.Status == "Succeeded"),
-            FailedToday = _runs.Values.Count(r => r.CompletedAt?.Date == today && r.Status == "Failed")
+            CompletedToday = _runs.Values.Count(r => r.CompletedAt?.UtcDateTime.Date == today && r.Status == "Succeeded"),
+            FailedToday = _runs.Values.Count(r => r.CompletedAt?.UtcDateTime.Date == today && r.Status == "Failed")
         };
         return Task.FromResult(stats);
     }

@@ -238,10 +238,13 @@ public sealed class SqlFlowRunStore :
         var stats = new DashboardStatistics();
         stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(DISTINCT FlowId) FROM FlowRuns");
         stats.ActiveRuns = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Running'");
+        // "Today" is bucketed in UTC so the count is identical across storage backends and
+        // independent of the SQL Server host's local time zone (SYSDATETIMEOFFSET would otherwise
+        // use the server's offset). CompletedAt is converted to UTC before truncating to a date.
         stats.CompletedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Succeeded' AND CAST(CompletedAt AS DATE) = CAST(SYSDATETIMEOFFSET() AS DATE)");
+            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Succeeded' AND CAST(CompletedAt AT TIME ZONE 'UTC' AS DATE) = CAST(SYSUTCDATETIME() AS DATE)");
         stats.FailedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Failed' AND CAST(CompletedAt AS DATE) = CAST(SYSDATETIMEOFFSET() AS DATE)");
+            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Failed' AND CAST(CompletedAt AT TIME ZONE 'UTC' AS DATE) = CAST(SYSUTCDATETIME() AS DATE)");
         return stats;
     }
 

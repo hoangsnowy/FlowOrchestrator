@@ -1,5 +1,6 @@
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 
 namespace FlowOrchestrator.PostgreSQL.Tests;
 
@@ -139,6 +140,33 @@ public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixtur
         // Assert
         Assert.True(stats.TotalFlows >= 1);
         Assert.True(stats.ActiveRuns >= 1);
+    }
+
+    [Fact]
+    public async Task GetStatisticsAsync_CompletedToday_buckets_in_UTC_and_excludes_older_runs()
+    {
+        // Arrange
+        var baseline = (await _store.GetStatisticsAsync()).CompletedToday;
+        var todayRun = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "StatToday", todayRun, "manual", null, null);
+        await _store.CompleteRunAsync(todayRun, "Succeeded"); // completed_at = NOW() (today, UTC)
+        var oldRun = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "StatOld", oldRun, "manual", null, null);
+        await _store.CompleteRunAsync(oldRun, "Succeeded");
+        await using (var conn = new NpgsqlConnection(_connectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "UPDATE flow_runs SET completed_at = NOW() - INTERVAL '2 days' WHERE id = @id", conn);
+            cmd.Parameters.AddWithValue("id", oldRun);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // Act
+        var stats = await _store.GetStatisticsAsync();
+
+        // Assert
+        Assert.Equal(baseline + 1, stats.CompletedToday); // today's run counted; the 2-day-old run excluded
     }
 
     [Fact]
