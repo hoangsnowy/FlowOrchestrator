@@ -25,7 +25,7 @@ builder.Services.AddFlowDashboard(builder.Configuration);
 // Inline configuration via delegate
 builder.Services.AddFlowDashboard(options =>
 {
-    options.Title = "OrderHub";
+    options.Branding.Title = "OrderHub";
     options.BasicAuth.Username = "admin";
     options.BasicAuth.Password = "secret";
 });
@@ -41,11 +41,12 @@ builder.Services.AddFlowDashboard();
 ```json
 {
   "FlowDashboard": {
-    "Title": "OrderHub Workflows",
-    "Subtitle": "Production",
-    "LogoUrl": "/images/logo.png",
+    "Branding": {
+      "Title": "OrderHub Workflows",
+      "Subtitle": "Production",
+      "LogoUrl": "/images/logo.png"
+    },
     "BasicAuth": {
-      "Enabled": true,
       "Username": "admin",
       "Password": "changeme"
     }
@@ -55,12 +56,15 @@ builder.Services.AddFlowDashboard();
 
 | Option | Default | Description |
 |---|---|---|
-| `Title` | `"FlowOrchestrator"` | Browser tab title and navbar heading |
-| `Subtitle` | — | Small label next to the title (e.g. environment name) |
-| `LogoUrl` | — | URL of a custom logo image |
-| `BasicAuth.Enabled` | `false` | Enable HTTP Basic Auth on all dashboard routes |
-| `BasicAuth.Username` | — | Required when `BasicAuth.Enabled = true` |
-| `BasicAuth.Password` | — | Required when `BasicAuth.Enabled = true` |
+| `Branding.Title` | `"FlowOrchestrator Dashboard"` | Browser tab title and navbar heading |
+| `Branding.Subtitle` | `"Dashboard"` | Small label next to the title (e.g. environment name) |
+| `Branding.LogoUrl` | — | URL of a custom logo image |
+| `BasicAuth.Username` | — | Basic Auth username |
+| `BasicAuth.Password` | — | Basic Auth password |
+| `BasicAuth.Realm` | `"FlowOrchestrator Dashboard"` | `WWW-Authenticate` realm returned in 401 responses |
+
+> [!NOTE]
+> Basic Auth is enforced when **both** `BasicAuth.Username` and `BasicAuth.Password` are set. There is no separate `Enabled` flag — leaving either blank disables authentication.
 
 ---
 
@@ -97,7 +101,7 @@ Click a run to open the **run timeline**:
 
 ### Scheduled
 
-Lists all Hangfire recurring jobs registered by cron triggers.
+Lists all recurring cron jobs registered by cron triggers. The data comes from `IRecurringTriggerInspector`, so it is runtime-agnostic — the same tab works under the Hangfire, in-memory, and Service Bus runtimes.
 
 Actions per job:
 - **Trigger Now** — fires the job immediately outside of the schedule
@@ -201,7 +205,7 @@ and replace the dashboard's broadcaster registration. The default
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/flows/api/schedules` | List Hangfire recurring jobs |
+| `GET` | `/flows/api/schedules` | List recurring cron jobs (runtime-agnostic via `IRecurringTriggerInspector`) |
 | `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
 | `POST` | `/flows/api/schedules/{jobId}/pause` | Pause a recurring job |
 | `POST` | `/flows/api/schedules/{jobId}/resume` | Resume a paused recurring job |

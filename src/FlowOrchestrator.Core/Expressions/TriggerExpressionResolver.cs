@@ -112,9 +112,13 @@ internal static class TriggerExpressionResolver
         }
 
         string? headerName = null;
-        if (remainder.StartsWith("['", StringComparison.Ordinal) && remainder.EndsWith("']", StringComparison.Ordinal))
+        // `['x']` / `["x"]` need at least 4 chars; without this guard, `"[']"` (length 3)
+        // satisfies both StartsWith and EndsWith — the shared middle quote — and the
+        // `[2..^2]` slice degenerates to `[2..1]`, throwing ArgumentOutOfRangeException.
+        // Mirrors the guard already present in ForEachSourceResolver.
+        if (remainder.Length >= 4 && remainder.StartsWith("['", StringComparison.Ordinal) && remainder.EndsWith("']", StringComparison.Ordinal))
             headerName = remainder[2..^2];
-        else if (remainder.StartsWith("[\"", StringComparison.Ordinal) && remainder.EndsWith("\"]", StringComparison.Ordinal))
+        else if (remainder.Length >= 4 && remainder.StartsWith("[\"", StringComparison.Ordinal) && remainder.EndsWith("\"]", StringComparison.Ordinal))
             headerName = remainder[2..^2];
 
         if (headerName is not null)

@@ -36,25 +36,30 @@ public sealed class SqlFlowStore : IFlowStore
     public async Task<FlowDefinitionRecord> SaveAsync(FlowDefinitionRecord record)
     {
         await using var conn = new SqlConnection(_connectionString);
-        var existing = await conn.QuerySingleOrDefaultAsync<int>(
-            "SELECT 1 FROM FlowDefinitions WHERE Id = @Id", new { record.Id });
-
-        if (existing == 1)
-        {
-            await conn.ExecuteAsync("""
-                UPDATE FlowDefinitions
-                SET Name = @Name, Version = @Version, ManifestJson = @ManifestJson,
-                    IsEnabled = @IsEnabled, UpdatedAt = SYSDATETIMEOFFSET()
-                WHERE Id = @Id
-                """, record);
-        }
-        else
-        {
-            await conn.ExecuteAsync("""
-                INSERT INTO FlowDefinitions (Id, Name, Version, ManifestJson, IsEnabled, CreatedAt, UpdatedAt)
-                VALUES (@Id, @Name, @Version, @ManifestJson, @IsEnabled, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())
-                """, record);
-        }
+        // Atomic upsert. The prior SELECT-then-INSERT/UPDATE was non-atomic: two concurrent
+        // first-saves of the same Id both observed "not exists" and raced into duplicate INSERTs,
+        // throwing a PK violation. MERGE with (HOLDLOCK, UPDLOCK) takes a serializable key-range
+        // lock in *update* mode on the target key, so the second writer blocks until the first
+        // commits and then matches and UPDATEs. UPDLOCK is what prevents the classic
+        // concurrent-MERGE deadlock: without it both writers take a range S-lock on the empty
+        // gap and then deadlock trying to upgrade to X for the INSERT. (Mirrors the upsert intent
+        // of SqlFlowScheduleStateStore.SaveAsync and the ON CONFLICT upsert in the Postgres backend.)
+        // CreatedAt is set only on INSERT so the original creation timestamp survives updates.
+        await conn.ExecuteAsync("""
+            MERGE FlowDefinitions WITH (HOLDLOCK, UPDLOCK) AS target
+            USING (SELECT @Id AS Id) AS source
+            ON target.Id = source.Id
+            WHEN MATCHED THEN
+                UPDATE SET
+                    Name = @Name,
+                    Version = @Version,
+                    ManifestJson = @ManifestJson,
+                    IsEnabled = @IsEnabled,
+                    UpdatedAt = SYSDATETIMEOFFSET()
+            WHEN NOT MATCHED THEN
+                INSERT (Id, Name, Version, ManifestJson, IsEnabled, CreatedAt, UpdatedAt)
+                VALUES (@Id, @Name, @Version, @ManifestJson, @IsEnabled, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+            """, record);
 
         return (await GetByIdAsync(record.Id))!;
     }

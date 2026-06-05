@@ -575,6 +575,130 @@ public class InMemoryFlowRunStoreTests
         Assert.Equal(1, buckets.Sum(b => b.Failed));
     }
 
+    [Fact]
+    public async Task RequestCancelAsync_NoControlRecord_ReturnsFalse()
+    {
+        // Arrange — no ConfigureRunAsync call, so no control record exists for this run.
+        var runId = Guid.NewGuid();
+
+        // Act — must NOT fabricate a phantom record; mirrors the SQL backends' UPDATE-miss.
+        var result = await _sut.RequestCancelAsync(runId, "user requested");
+
+        // Assert
+        Assert.False(result);
+        Assert.Null(await _sut.GetRunControlAsync(runId));
+    }
+
+    [Fact]
+    public async Task RequestCancelAsync_ExistingControlRecord_ReturnsTrue_AndSetsFlag()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", idempotencyKey: null, timeoutAtUtc: null);
+
+        // Act
+        var result = await _sut.RequestCancelAsync(runId, "user requested");
+
+        // Assert
+        Assert.True(result);
+        var control = await _sut.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.True(control!.CancelRequested);
+        Assert.Equal("user requested", control.CancelReason);
+        Assert.NotNull(control.CancelRequestedAtUtc);
+    }
+
+    [Fact]
+    public async Task RequestCancelAsync_AlreadyCancelled_ReturnsFalse()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, null);
+        await _sut.RequestCancelAsync(runId, "first");
+
+        // Act
+        var second = await _sut.RequestCancelAsync(runId, "second");
+
+        // Assert
+        Assert.False(second);
+        var control = await _sut.GetRunControlAsync(runId);
+        Assert.Equal("first", control!.CancelReason);
+    }
+
+    [Fact]
+    public async Task MarkTimedOutAsync_NoControlRecord_ReturnsFalse()
+    {
+        // Arrange — no control record for this run.
+        var runId = Guid.NewGuid();
+
+        // Act
+        var result = await _sut.MarkTimedOutAsync(runId, "timed out");
+
+        // Assert — must not fabricate a record; parity with the SQL backends.
+        Assert.False(result);
+        Assert.Null(await _sut.GetRunControlAsync(runId));
+    }
+
+    [Fact]
+    public async Task MarkTimedOutAsync_ExistingControlRecord_ReturnsTrue_AndSetsFlags()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        // Act
+        var result = await _sut.MarkTimedOutAsync(runId, "deadline exceeded");
+
+        // Assert
+        Assert.True(result);
+        var control = await _sut.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.NotNull(control!.TimedOutAtUtc);
+        Assert.True(control.CancelRequested);
+        Assert.Equal("deadline exceeded", control.CancelReason);
+    }
+
+    [Fact]
+    public async Task MarkTimedOutAsync_AlreadyTimedOut_ReturnsFalse()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, null);
+        await _sut.MarkTimedOutAsync(runId, "first timeout");
+
+        // Act
+        var second = await _sut.MarkTimedOutAsync(runId, "second timeout");
+
+        // Assert
+        Assert.False(second);
+    }
+
+    [Fact]
+    public async Task CleanupAsync_RetainsRunCompletedExactlyAtCutoff()
+    {
+        // Arrange — strict less-than semantics: a run completed AT the cutoff is retained,
+        // a run completed BEFORE the cutoff is removed (parity with both SQL backends).
+        var cutoff = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var atCutoffRunId = Guid.NewGuid();
+        var beforeCutoffRunId = Guid.NewGuid();
+
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow", atCutoffRunId, "manual", null, null);
+        await _sut.StartRunAsync(Guid.NewGuid(), "Flow", beforeCutoffRunId, "manual", null, null);
+        await _sut.CompleteRunAsync(atCutoffRunId, "Succeeded");
+        await _sut.CompleteRunAsync(beforeCutoffRunId, "Succeeded");
+
+        // Force exact completion timestamps relative to the cutoff.
+        (await _sut.GetRunDetailAsync(atCutoffRunId))!.CompletedAt = cutoff;
+        (await _sut.GetRunDetailAsync(beforeCutoffRunId))!.CompletedAt = cutoff.AddTicks(-1);
+
+        // Act
+        await _sut.CleanupAsync(cutoff, CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(await _sut.GetRunDetailAsync(atCutoffRunId));
+        Assert.Null(await _sut.GetRunDetailAsync(beforeCutoffRunId));
+    }
+
     private async Task SeedRun(Guid flowId, DateTimeOffset startedAt, string status, double? durationMs)
     {
         var runId = Guid.NewGuid();

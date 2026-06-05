@@ -61,4 +61,4 @@ nunit-*.xml
 .claude/settings.local.json
 # Claude Code — runtime/session-local artifacts (never shared)
 .claude/scheduled_tasks.lock
-.claude/worktrees/
+.claude/worktrees/BenchmarkDotNet.Artifacts/

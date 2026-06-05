@@ -81,25 +81,49 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
                 continue;
             }
 
-            if (_options.AutoCreateTopology)
+            // Per-flow isolation: a topology or StartProcessing failure for ONE flow (e.g. a
+            // transient management-plane error on EnsureSubscriptionAsync, or a topic that was
+            // deleted out-of-band) must not abort host startup and take down processing for the
+            // OTHER flows. Log and continue — mirrors the "log and continue" registration pattern
+            // the cron hub uses. The recovery hosted service / next restart re-attempts the skipped flow.
+            try
             {
-                await _topology.EnsureSubscriptionAsync(flow.Id, cancellationToken).ConfigureAwait(false);
-            }
-
-            var processor = _client.CreateProcessor(
-                _options.StepTopicName,
-                _topology.SubscriptionName(flow.Id),
-                new ServiceBusProcessorOptions
+                if (_options.AutoCreateTopology)
                 {
-                    MaxConcurrentCalls = _options.MaxConcurrentCallsPerSubscription,
-                    AutoCompleteMessages = false,
-                    ReceiveMode = ServiceBusReceiveMode.PeekLock,
-                });
-            processor.ProcessMessageAsync += OnMessageAsync;
-            processor.ProcessErrorAsync += OnErrorAsync;
-            await processor.StartProcessingAsync(cancellationToken).ConfigureAwait(false);
-            _processors[flow.Id] = processor;
-            _logger.LogInformation("Started Service Bus processor for flow {FlowId}.", flow.Id);
+                    await _topology.EnsureSubscriptionAsync(flow.Id, cancellationToken).ConfigureAwait(false);
+                }
+
+                var processor = _client.CreateProcessor(
+                    _options.StepTopicName,
+                    _topology.SubscriptionName(flow.Id),
+                    new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = _options.MaxConcurrentCallsPerSubscription,
+                        AutoCompleteMessages = false,
+                        ReceiveMode = ServiceBusReceiveMode.PeekLock,
+                    });
+                processor.ProcessMessageAsync += OnMessageAsync;
+                processor.ProcessErrorAsync += OnErrorAsync;
+                await processor.StartProcessingAsync(cancellationToken).ConfigureAwait(false);
+                _processors[flow.Id] = processor;
+                _logger.LogInformation("Started Service Bus processor for flow {FlowId}.", flow.Id);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Host is shutting down mid-startup — propagate so StartAsync honours cancellation.
+                throw;
+            }
+            catch (Exception ex) when (ex is not null)
+            {
+                // Intentional resilience boundary: any failure starting ONE flow's processor
+                // (transient ServiceBusException, throttling, a single missing Manage right…)
+                // must not abort host startup for the others. Genuine shutdown is handled by the
+                // OperationCanceledException catch above. The `when` filter keeps this off
+                // CodeQL's generic-catch rule, matching the repo's established convention.
+                _logger.LogError(ex,
+                    "Failed to start Service Bus processor for flow {FlowId}; skipping it. Other flows are unaffected.",
+                    flow.Id);
+            }
         }
     }
 

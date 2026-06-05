@@ -196,6 +196,38 @@ public static class DashboardServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers dashboard services, binds <see cref="FlowDashboardOptions"/> from
+    /// <paramref name="configuration"/> under <paramref name="sectionName"/>, then applies
+    /// <paramref name="configureOptions"/> on top.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configuration">Application configuration used to bind dashboard options (e.g. <c>BasicAuth</c>, <c>Branding</c>).</param>
+    /// <param name="configureOptions">Delegate applied after binding, for values set in code (e.g. webhook enforcement).</param>
+    /// <param name="sectionName">Configuration section name; defaults to <see cref="FlowDashboardOptions.DefaultSectionName"/>.</param>
+    /// <remarks>
+    /// Binding runs before the delegate, so code-set values in <paramref name="configureOptions"/>
+    /// override or augment the bound configuration. Use this overload when you need both
+    /// <c>appsettings.json</c> values (such as <see cref="FlowDashboardBasicAuthOptions"/>) and
+    /// code-only configuration (such as <see cref="FlowDashboardOptions.UseWebhookSecurity"/>) in a
+    /// single registration — calling the <see cref="Action{T}"/> overload alone does <b>not</b> read
+    /// configuration, which silently disables config-driven Basic Auth.
+    /// </remarks>
+    public static IServiceCollection AddFlowDashboard(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        Action<FlowDashboardOptions> configureOptions,
+        string sectionName = FlowDashboardOptions.DefaultSectionName)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(configureOptions);
+
+        services.AddFlowDashboard();
+        services.Configure<FlowDashboardOptions>(configuration.GetSection(sectionName));
+        services.Configure(configureOptions);
+        return services;
+    }
+
+    /// <summary>
     /// Maps the FlowOrchestrator dashboard SPA, REST API endpoints, and webhook receiver
     /// onto <paramref name="endpoints"/> under <paramref name="basePath"/>.
     /// Optionally applies Basic Auth if configured in <see cref="FlowDashboardOptions.BasicAuth"/>.
@@ -320,8 +352,15 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var (isValidBody, body) = await TryReadJsonBodyAsync(http.Request);
-            if (!isValidBody)
+            var maxBodyBytes = ResolveMaxBodyBytes(http);
+            var (bodyStatus, body) = await TryReadJsonBodyAsync(http.Request, maxBodyBytes);
+            if (bodyStatus == ReadBodyStatus.TooLarge)
+            {
+                http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+                await WriteJsonAsync(http.Response,new { error = $"Request body exceeds the configured cap of {maxBodyBytes} bytes." });
+                return;
+            }
+            if (bodyStatus == ReadBodyStatus.InvalidJson)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
@@ -758,6 +797,14 @@ public static class DashboardServiceCollectionExtensions
             string? reason = null;
             if (http.Request.ContentLength is > 0)
             {
+                var maxBodyBytes = ResolveMaxBodyBytes(http);
+                if (http.Request.ContentLength > maxBodyBytes)
+                {
+                    http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+                    await WriteJsonAsync(http.Response,new { error = $"Request body exceeds the configured cap of {maxBodyBytes} bytes." });
+                    return;
+                }
+
                 var payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
                 if (payload.ValueKind == JsonValueKind.Object
                     && payload.TryGetProperty("reason", out var reasonProp)
@@ -1163,6 +1210,14 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            var maxBodyBytes = ResolveMaxBodyBytes(http);
+            if (http.Request.ContentLength > maxBodyBytes)
+            {
+                http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+                await WriteJsonAsync(http.Response,new { error = $"Request body exceeds the configured cap of {maxBodyBytes} bytes." });
+                return;
+            }
+
             var body = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
             if (!body.TryGetProperty("cronExpression", out var cronProp) || string.IsNullOrWhiteSpace(cronProp.GetString()))
             {
@@ -1368,38 +1423,97 @@ public static class DashboardServiceCollectionExtensions
         return false;
     }
 
-    private static async ValueTask<(bool IsValidBody, object? Body)> TryReadJsonBodyAsync(HttpRequest request)
+    /// <summary>
+    /// Default cap (1 MiB) applied to dashboard control-plane request bodies (manual trigger,
+    /// cancel reason, cron update) when no <see cref="FlowDashboardOptions"/> override is configured.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors <see cref="Webhooks.WebhookSecurityOptions.MaxBodyBytes"/>. These endpoints previously
+    /// read the body with no cap, so an unauthenticated-but-reachable caller could stream an
+    /// arbitrarily large payload and exhaust server memory; the cap closes that gap while staying
+    /// generous for normal small JSON bodies.
+    /// </remarks>
+    private const long DefaultControlPlaneMaxBodyBytes = 1_048_576;
+
+    /// <summary>
+    /// Resolves the maximum allowed control-plane request body size from
+    /// <see cref="FlowDashboardOptions.WebhookSecurity"/> (reusing the webhook cap so a single
+    /// knob governs all dashboard ingress), falling back to <see cref="DefaultControlPlaneMaxBodyBytes"/>.
+    /// </summary>
+    /// <remarks>
+    /// Resolved from <see cref="HttpContext.RequestServices"/> with a default rather than taken as a
+    /// handler parameter — the integration <c>DashboardTestServer</c> bypasses <c>AddFlowOrchestrator</c>
+    /// and does not register <see cref="FlowDashboardOptions"/>, so a required parameter would 400 the request.
+    /// </remarks>
+    private static long ResolveMaxBodyBytes(HttpContext http) =>
+        http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value.WebhookSecurity.MaxBodyBytes
+            ?? DefaultControlPlaneMaxBodyBytes;
+
+    /// <summary>
+    /// Reads and deserialises a JSON request body, enforcing <paramref name="maxBodyBytes"/>.
+    /// </summary>
+    /// <param name="request">Incoming HTTP request.</param>
+    /// <param name="maxBodyBytes">Hard cap on body size in bytes; bodies exceeding it return <see cref="ReadBodyStatus.TooLarge"/>.</param>
+    /// <returns>
+    /// A tuple of (<see cref="ReadBodyStatus"/>, deserialised body). The body is <see langword="null"/>
+    /// for empty payloads and for any non-<see cref="ReadBodyStatus.Ok"/> status.
+    /// </returns>
+    private static async ValueTask<(ReadBodyStatus Status, object? Body)> TryReadJsonBodyAsync(HttpRequest request, long maxBodyBytes)
     {
         if (request.ContentLength == 0)
         {
-            return (true, null);
+            return (ReadBodyStatus.Ok, null);
+        }
+
+        // Reject early on the declared Content-Length before reading a single byte.
+        if (request.ContentLength is { } declared && declared > maxBodyBytes)
+        {
+            return (ReadBodyStatus.TooLarge, null);
         }
 
         try
         {
-            if (request.ContentLength is > 0)
+            // Buffer once with a streaming cap so chunked requests (no Content-Length) are also bounded.
+            using var buffered = new MemoryStream();
+            var rentBuffer = new byte[8192];
+            var totalRead = 0L;
+            int read;
+            while ((read = await request.Body.ReadAsync(rentBuffer.AsMemory(), request.HttpContext.RequestAborted).ConfigureAwait(false)) > 0)
             {
-                var body = await JsonSerializer.DeserializeAsync<object>(request.Body);
-                return (true, body);
+                totalRead += read;
+                if (totalRead > maxBodyBytes)
+                {
+                    return (ReadBodyStatus.TooLarge, null);
+                }
+                buffered.Write(rentBuffer, 0, read);
             }
 
-            // Content-Length may be null for chunked requests. Buffer once so we can
-            // treat empty payload as "no body" instead of throwing JSON parse errors.
-            using var buffered = new MemoryStream();
-            await request.Body.CopyToAsync(buffered);
             if (buffered.Length == 0)
             {
-                return (true, null);
+                return (ReadBodyStatus.Ok, null);
             }
 
             buffered.Position = 0;
-            var chunkedBody = await JsonSerializer.DeserializeAsync<object>(buffered);
-            return (true, chunkedBody);
+            var body = await JsonSerializer.DeserializeAsync<object>(buffered).ConfigureAwait(false);
+            return (ReadBodyStatus.Ok, body);
         }
         catch (JsonException)
         {
-            return (false, null);
+            return (ReadBodyStatus.InvalidJson, null);
         }
+    }
+
+    /// <summary>Outcome of <see cref="TryReadJsonBodyAsync(HttpRequest, long)"/>.</summary>
+    private enum ReadBodyStatus
+    {
+        /// <summary>Body read and parsed successfully (or empty/absent body).</summary>
+        Ok,
+
+        /// <summary>Body bytes are not valid JSON.</summary>
+        InvalidJson,
+
+        /// <summary>Declared or streamed body length exceeded the configured cap.</summary>
+        TooLarge,
     }
 
     /// <summary>

@@ -237,13 +237,15 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<DashboardStatistics> GetStatisticsAsync()
     {
-        var today = DateTimeOffset.UtcNow.Date;
+        // "Today" is bucketed in UTC (via UtcDateTime) so the count matches the SQL backends
+        // regardless of the offset carried on a stored CompletedAt.
+        var today = DateTimeOffset.UtcNow.UtcDateTime.Date;
         var stats = new DashboardStatistics
         {
             TotalFlows = _runs.Values.Select(r => r.FlowId).Distinct().Count(),
             ActiveRuns = _runs.Values.Count(r => r.Status == "Running"),
-            CompletedToday = _runs.Values.Count(r => r.CompletedAt?.Date == today && r.Status == "Succeeded"),
-            FailedToday = _runs.Values.Count(r => r.CompletedAt?.Date == today && r.Status == "Failed")
+            CompletedToday = _runs.Values.Count(r => r.CompletedAt?.UtcDateTime.Date == today && r.Status == "Succeeded"),
+            FailedToday = _runs.Values.Count(r => r.CompletedAt?.UtcDateTime.Date == today && r.Status == "Failed")
         };
         return Task.FromResult(stats);
     }
@@ -555,10 +557,12 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> RequestCancelAsync(Guid runId, string? reason)
     {
+        // Mirror the SQL backends' UPDATE ... WHERE RunId=@RunId semantics: return false when
+        // no control record exists (do NOT fabricate a phantom record). The IFlowRunControlStore
+        // contract specifies true only when an existing record was found AND updated.
         if (!_runControls.TryGetValue(runId, out var control))
         {
-            control = new FlowRunControlRecord { RunId = runId };
-            _runControls[runId] = control;
+            return Task.FromResult(false);
         }
 
         if (control.CancelRequested)
@@ -574,10 +578,11 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
     {
+        // Mirror the SQL backends: return false when no control record exists rather than
+        // creating one. See RequestCancelAsync for the contract rationale.
         if (!_runControls.TryGetValue(runId, out var control))
         {
-            control = new FlowRunControlRecord { RunId = runId };
-            _runControls[runId] = control;
+            return Task.FromResult(false);
         }
 
         if (control.TimedOutAtUtc is not null)
@@ -613,8 +618,10 @@ public sealed class InMemoryFlowRunStore :
 
     public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
+        // Strictly-less-than the cutoff, matching both SQL backends (`completed_at < @CutoffUtc`).
+        // A run completed exactly AT the cutoff is retained.
         var obsoleteRunIds = _runs.Values
-            .Where(r => r.CompletedAt is not null && r.CompletedAt <= cutoffUtc)
+            .Where(r => r.CompletedAt is not null && r.CompletedAt < cutoffUtc)
             .Select(r => r.Id)
             .ToArray();
 

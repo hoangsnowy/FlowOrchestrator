@@ -113,18 +113,58 @@ internal sealed class ServiceBusRecurringTriggerHub
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Enqueues the one-off message with an EMPTY cron so the cron consumer
+    /// (<see cref="ServiceBusCronProcessorHostedService.OnMessageAsync"/>) does NOT self-perpetuate
+    /// a follow-up firing — its perpetuation branch only runs when <c>envelope.Cron</c> is non-empty.
+    /// Passing <see cref="JobState.EffectiveCron"/> here would fork the schedule: the manual "Trigger now"
+    /// message would spawn its own recurring chain on top of the existing one, firing the job twice
+    /// forever. The already-scheduled chain keeps the recurrence alive, so the manual fire is purely additive.
+    /// </remarks>
     public void TriggerOnce(string jobId)
     {
-        if (!_jobs.TryGetValue(jobId, out var state)) return;
-
         // Schedule a one-off message for "now" — picked up immediately by the cron consumer.
+        // cron: string.Empty => consumer fires once and does not perpetuate (see remarks).
+        if (!TryBuildTriggerOnceMessage(jobId, out var flowId, out var triggerKey, out _))
+        {
+            return;
+        }
+
         _ = EnqueueCronMessageAsync(
             jobId,
-            state.FlowId,
-            state.TriggerKey,
-            state.EffectiveCron,
+            flowId,
+            triggerKey,
+            cron: string.Empty,
             _timeProvider.GetUtcNow(),
             CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Resolves the registered job's identity for a one-off <see cref="TriggerOnce"/> fire and
+    /// exposes the one-off <see cref="ServiceBusMessage"/> it would enqueue. Exists as a testable
+    /// seam: the unit suite asserts that the produced message carries an EMPTY
+    /// <see cref="CronEnvelope.Cron"/> so the cron consumer does not fork the recurring schedule.
+    /// </summary>
+    /// <param name="jobId">The registered job to fire once.</param>
+    /// <param name="flowId">When found, the resolved flow id.</param>
+    /// <param name="triggerKey">When found, the resolved trigger key.</param>
+    /// <param name="message">When found, the one-off message (empty cron) that would be enqueued.</param>
+    /// <returns><see langword="true"/> when the job is registered; otherwise <see langword="false"/>.</returns>
+    internal bool TryBuildTriggerOnceMessage(string jobId, out Guid flowId, out string triggerKey, out ServiceBusMessage? message)
+    {
+        if (!_jobs.TryGetValue(jobId, out var state))
+        {
+            flowId = default;
+            triggerKey = string.Empty;
+            message = null;
+            return false;
+        }
+
+        flowId = state.FlowId;
+        triggerKey = state.TriggerKey;
+        var now = _timeProvider.GetUtcNow();
+        message = BuildCronMessage(jobId, flowId, triggerKey, cron: string.Empty, now, now);
+        return true;
     }
 
     /// <inheritdoc/>
@@ -245,13 +285,30 @@ internal sealed class ServiceBusRecurringTriggerHub
         }
     }
 
-    private async Task<long?> EnqueueCronMessageAsync(
+    /// <summary>
+    /// Builds the <see cref="ServiceBusMessage"/> (and embedded <see cref="CronEnvelope"/>) for a
+    /// cron firing without touching the sender. Extracted as an <c>internal static</c> seam so the
+    /// unit suite can assert envelope semantics — most importantly that <see cref="TriggerOnce"/>
+    /// emits an EMPTY <see cref="CronEnvelope.Cron"/> (one-off, no self-perpetuation) — without a
+    /// live Service Bus connection.
+    /// </summary>
+    /// <param name="jobId">Stable scheduler job identifier.</param>
+    /// <param name="flowId">Flow whose cron trigger should fire.</param>
+    /// <param name="triggerKey">Manifest trigger key.</param>
+    /// <param name="cron">
+    /// Cron expression to embed. Pass <see cref="string.Empty"/> for a one-off fire so the consumer
+    /// does not schedule a follow-up tick.
+    /// </param>
+    /// <param name="fireAt">UTC instant the message should fire.</param>
+    /// <param name="now">Current UTC instant, used to decide whether to set <c>ScheduledEnqueueTime</c>.</param>
+    /// <returns>A fully-populated message ready to hand to <c>ScheduleMessageAsync</c>.</returns>
+    internal static ServiceBusMessage BuildCronMessage(
         string jobId,
         Guid flowId,
         string triggerKey,
         string cron,
         DateTimeOffset fireAt,
-        CancellationToken ct)
+        DateTimeOffset now)
     {
         var envelope = new CronEnvelope
         {
@@ -272,10 +329,23 @@ internal sealed class ServiceBusRecurringTriggerHub
         msg.ApplicationProperties["TriggerKey"] = triggerKey;
         msg.ApplicationProperties["JobId"] = jobId;
 
-        if (fireAt > _timeProvider.GetUtcNow())
+        if (fireAt > now)
         {
             msg.ScheduledEnqueueTime = fireAt;
         }
+
+        return msg;
+    }
+
+    private async Task<long?> EnqueueCronMessageAsync(
+        string jobId,
+        Guid flowId,
+        string triggerKey,
+        string cron,
+        DateTimeOffset fireAt,
+        CancellationToken ct)
+    {
+        var msg = BuildCronMessage(jobId, flowId, triggerKey, cron, fireAt, _timeProvider.GetUtcNow());
 
         try
         {

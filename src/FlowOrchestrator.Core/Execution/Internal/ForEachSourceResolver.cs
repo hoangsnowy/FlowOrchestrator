@@ -11,10 +11,11 @@ namespace FlowOrchestrator.Core.Execution.Internal;
 /// </list>
 /// </summary>
 /// <remarks>
-/// Carries a local copy of the trigger-expression parser (rather than delegating to
-/// <see cref="Expressions.TriggerExpressionResolver"/>) because the ForEach path adds a
-/// <c>Length &gt;= 4</c> guard for header-key brackets that the canonical resolver does not
-/// yet enforce — unifying is a follow-up PR.
+/// Carries a local copy of the trigger-expression parser rather than delegating to
+/// <see cref="Expressions.TriggerExpressionResolver"/>. Both parsers apply the same
+/// <c>Length &gt;= 4</c> guard for header-key brackets (so malformed accessors such as
+/// <c>@triggerHeaders()[']</c> resolve to a clean unrecognised result instead of throwing);
+/// unifying the two into a single shared parser is a follow-up PR.
 /// </remarks>
 internal static class ForEachSourceResolver
 {

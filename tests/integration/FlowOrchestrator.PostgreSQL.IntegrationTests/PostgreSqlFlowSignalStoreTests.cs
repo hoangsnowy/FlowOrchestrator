@@ -84,6 +84,38 @@ public sealed class PostgreSqlFlowSignalStoreTests : IClassFixture<PostgreSqlFix
     }
 
     [Fact]
+    public async Task DeliverSignal_two_waiters_same_signal_deliver_twice_both_resume()
+    {
+        // Arrange — two waiters on the same RunId + signal name, distinct step keys. The CTE
+        // already filters on delivered_at IS NULL; this locks in the fan-out behaviour so the
+        // second delivery reaches the second waiter rather than re-selecting the first.
+        var runId = Guid.NewGuid();
+        await _store.RegisterWaiterAsync(runId, "first", "approval", null);
+        await Task.Delay(20); // ensure distinct created_at ordering
+        await _store.RegisterWaiterAsync(runId, "second", "approval", null);
+
+        // Act
+        var first = await _store.DeliverSignalAsync(runId, "approval", """{"n":1}""");
+        var second = await _store.DeliverSignalAsync(runId, "approval", """{"n":2}""");
+
+        // Assert
+        Assert.Equal(SignalDeliveryStatus.Delivered, first.Status);
+        Assert.Equal(SignalDeliveryStatus.Delivered, second.Status);
+        Assert.Equal("first", first.StepKey);
+        Assert.Equal("second", second.StepKey);
+
+        var firstWaiter = await _store.GetWaiterAsync(runId, "first");
+        var secondWaiter = await _store.GetWaiterAsync(runId, "second");
+        Assert.NotNull(firstWaiter!.DeliveredAt);
+        Assert.NotNull(secondWaiter!.DeliveredAt);
+        Assert.Equal("""{"n":1}""", firstWaiter.PayloadJson);
+        Assert.Equal("""{"n":2}""", secondWaiter.PayloadJson);
+
+        var third = await _store.DeliverSignalAsync(runId, "approval", "{}");
+        Assert.Equal(SignalDeliveryStatus.AlreadyDelivered, third.Status);
+    }
+
+    [Fact]
     public async Task DeliverSignal_no_waiter_returns_NotFound()
     {
         // Arrange

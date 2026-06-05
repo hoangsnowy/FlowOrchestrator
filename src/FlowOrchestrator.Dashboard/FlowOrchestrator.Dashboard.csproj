@@ -19,6 +19,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Exposes internal seams (e.g. WebhookSecurityPipeline.ResolveClientIp) to the test suite. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>FlowOrchestrator.Dashboard.IntegrationTests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       The dashboard SPA is shipped as three sibling assets — HTML shell, CSS,
       and JS — embedded as resources inside the assembly. DashboardHtml loads

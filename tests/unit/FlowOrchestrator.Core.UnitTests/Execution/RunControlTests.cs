@@ -117,6 +117,10 @@ public sealed class RunControlTests
         var flow = MakeSingleStepFlow(flowId);
 
         await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+        // Configure the run-control record first, mirroring what the engine's TriggerAsync does.
+        // RequestCancelAsync updates an existing control record (and returns false if none exists),
+        // so the record must be present before the cancel request is recorded.
+        await store.ConfigureRunAsync(runId, flowId, "manual", null, null);
         await store.RequestCancelAsync(runId, "Test cancellation");
 
         // Act
@@ -143,6 +147,10 @@ public sealed class RunControlTests
         var flow = MakeSingleStepFlow(flowId);
 
         await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+        // Configure the run-control record first, mirroring what the engine's TriggerAsync does.
+        // MarkTimedOutAsync updates an existing control record (and returns false if none exists),
+        // so the record must be present before the timeout is recorded.
+        await store.ConfigureRunAsync(runId, flowId, "manual", null, null);
         await store.MarkTimedOutAsync(runId, "Deadline exceeded");
 
         // Act

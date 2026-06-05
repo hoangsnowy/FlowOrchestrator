@@ -202,4 +202,122 @@ public class RunTerminationClassifierTests
         // Assert
         Assert.Equal(StepStatus.Succeeded.ToString(), status);
     }
+
+    // ── Finding C4: runtime loop keys vs template RunAfter keys ───────────────
+    // The loop body's runtime keys are "loop.<index>.<child>"; before the fix, leaf detection
+    // compared those against the manifest's TEMPLATE RunAfter keys, so the loop step itself was
+    // wrongly treated as a leaf and its Succeeded status leaked into the run's terminal status —
+    // an all-skipped loop body reported Succeeded instead of Skipped.
+
+    private static IFlowDefinition FlowWithForEach(string loopKey, StepCollection body)
+    {
+        var steps = new StepCollection
+        {
+            [loopKey] = new LoopStepMetadata { Type = "foreach", Steps = body }
+        };
+        return FlowWith(steps);
+    }
+
+    [Fact]
+    public void ForEachLoop_AllIterationsSkipped_ReturnsSkipped()
+    {
+        // Arrange — loop step succeeded as a dispatcher, but every iteration of its single
+        // child step was skipped. The leaves are the iteration steps, all Skipped.
+        var flow = FlowWithForEach("loop", new StepCollection
+        {
+            ["child"] = new StepMetadata { Type = "Work" }
+        });
+        var statuses = new Dictionary<string, StepStatus>
+        {
+            ["loop"] = StepStatus.Succeeded,
+            ["loop.0.child"] = StepStatus.Skipped,
+            ["loop.1.child"] = StepStatus.Skipped
+        };
+
+        // Act
+        var status = RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
+
+        // Assert — the loop step is not a leaf (its iterations are), so the all-skipped body wins.
+        Assert.Equal(StepStatus.Skipped.ToString(), status);
+    }
+
+    [Fact]
+    public void ForEachLoop_IterationsSucceeded_ReturnsSucceeded()
+    {
+        // Arrange — same shape, but the iterations succeeded; the run must remain Succeeded.
+        var flow = FlowWithForEach("loop", new StepCollection
+        {
+            ["child"] = new StepMetadata { Type = "Work" }
+        });
+        var statuses = new Dictionary<string, StepStatus>
+        {
+            ["loop"] = StepStatus.Succeeded,
+            ["loop.0.child"] = StepStatus.Succeeded,
+            ["loop.1.child"] = StepStatus.Succeeded
+        };
+
+        // Act
+        var status = RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
+
+        // Assert
+        Assert.Equal(StepStatus.Succeeded.ToString(), status);
+    }
+
+    [Fact]
+    public void ForEachLoop_SequentialBody_AllSkipped_ReturnsSkipped()
+    {
+        // Arrange — two-step loop body where 'second' runs after 'first' (a sibling dependency
+        // expressed as the bare template key). The runtime predecessor is "loop.0.first", so the
+        // dependency must be resolved into runtime space for 'first' to be recognised as non-leaf.
+        var flow = FlowWithForEach("loop", new StepCollection
+        {
+            ["first"] = new StepMetadata { Type = "Work" },
+            ["second"] = new StepMetadata
+            {
+                Type = "Work",
+                RunAfter = new RunAfterCollection { ["first"] = [StepStatus.Succeeded] }
+            }
+        });
+        var statuses = new Dictionary<string, StepStatus>
+        {
+            ["loop"] = StepStatus.Succeeded,
+            ["loop.0.first"] = StepStatus.Skipped,
+            ["loop.0.second"] = StepStatus.Skipped
+        };
+
+        // Act
+        var status = RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
+
+        // Assert — only "loop.0.second" is a leaf and it is Skipped → the run is Skipped.
+        Assert.Equal(StepStatus.Skipped.ToString(), status);
+    }
+
+    [Fact]
+    public void ForEachLoop_RecoveryHandlerInsideBody_HandlesIterationFailure()
+    {
+        // Arrange — inside the loop body, 'recover' runs after a failed 'work' and succeeds.
+        // The failed iteration step ("loop.0.work") must be matched to its recovery handler via
+        // runtime-key resolution, otherwise the unhandled-failure rule would force Failed.
+        var flow = FlowWithForEach("loop", new StepCollection
+        {
+            ["work"] = new StepMetadata { Type = "Work" },
+            ["recover"] = new StepMetadata
+            {
+                Type = "Recover",
+                RunAfter = new RunAfterCollection { ["work"] = [StepStatus.Failed] }
+            }
+        });
+        var statuses = new Dictionary<string, StepStatus>
+        {
+            ["loop"] = StepStatus.Succeeded,
+            ["loop.0.work"] = StepStatus.Failed,
+            ["loop.0.recover"] = StepStatus.Succeeded
+        };
+
+        // Act
+        var status = RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
+
+        // Assert — the in-body failure is handled, and a leaf ("loop.0.recover") succeeded.
+        Assert.Equal(StepStatus.Succeeded.ToString(), status);
+    }
 }

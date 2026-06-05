@@ -1,14 +1,17 @@
 using FlowOrchestrator.Core.Storage;
+using Microsoft.Data.SqlClient;
 
 namespace FlowOrchestrator.SqlServer.Tests;
 
 public sealed class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
 {
     private readonly SqlFlowRunStore _store;
+    private readonly string _connectionString;
 
     public SqlFlowRunStoreTests(SqlServerFixture fixture)
     {
         _store = new SqlFlowRunStore(fixture.ConnectionString);
+        _connectionString = fixture.ConnectionString;
     }
 
     [Fact]
@@ -136,6 +139,33 @@ public sealed class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
         // Assert
         Assert.True(stats.TotalFlows >= 1);
         Assert.True(stats.ActiveRuns >= 1);
+    }
+
+    [Fact]
+    public async Task GetStatisticsAsync_CompletedToday_buckets_in_UTC_and_excludes_older_runs()
+    {
+        // Arrange
+        var baseline = (await _store.GetStatisticsAsync()).CompletedToday;
+        var todayRun = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "StatToday", todayRun, "manual", null, null);
+        await _store.CompleteRunAsync(todayRun, "Succeeded"); // CompletedAt = SYSDATETIMEOFFSET() (today, UTC)
+        var oldRun = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "StatOld", oldRun, "manual", null, null);
+        await _store.CompleteRunAsync(oldRun, "Succeeded");
+        await using (var conn = new SqlConnection(_connectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new SqlCommand(
+                "UPDATE FlowRuns SET CompletedAt = DATEADD(day, -2, SYSUTCDATETIME()) WHERE Id = @id", conn);
+            cmd.Parameters.AddWithValue("@id", oldRun);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // Act
+        var stats = await _store.GetStatisticsAsync();
+
+        // Assert
+        Assert.Equal(baseline + 1, stats.CompletedToday); // today's run counted; the 2-day-old run excluded
     }
 
     [Fact]

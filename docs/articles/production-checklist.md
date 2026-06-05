@@ -9,7 +9,7 @@ For *changing* a flow once it is in production, see [Versioning Flows](versionin
 
 ## 1. Storage and Persistence
 
-FlowOrchestrator writes to twelve tables. The auto-migrator
+FlowOrchestrator writes to fourteen tables. The auto-migrator
 (`FlowOrchestratorSqlMigrator`) creates them idempotently on startup.
 
 | Table | Holds |
@@ -26,6 +26,8 @@ FlowOrchestrator writes to twelve tables. The auto-migrator
 | `FlowEvents` | State-transition audit log (when event persistence is enabled). |
 | `FlowSignalWaiters` | Parked `WaitForSignal` steps. |
 | `FlowScheduleStates` | Recurring-trigger sync state. |
+| `WebhookReplayNonces` | Seen webhook timestamp/nonce pairs for replay protection (TTL-expired). |
+| `WebhookRejections` | Webhook hardening DLQ + recent-deliveries log (rejected and accepted). |
 
 > [!WARNING]
 > **`UseInMemory()` is not for production.** All run data is stored in-process and
@@ -225,16 +227,21 @@ A major bump may rename or split tables. The release notes include the migration
 path; run it in a non-production environment first and verify with a smoke run
 (see below).
 
-### Disabling the auto-migrator
+### Owning DDL changes
 
-If your operations team owns DDL changes:
+`FlowOrchestratorSqlMigrator` is always registered by `UseSqlServer(connectionString)`
+and runs automatically on startup — there is currently **no built-in opt-out**
+(the overload takes only the connection string).
 
-```csharp
-options.UseSqlServer(connectionString, autoMigrate: false);
-```
+If your operations team must own DDL changes, you have two options:
 
-…then run the migration script (published in each release) under your own
-deployment pipeline.
+1. **Point the app's connection string at a database where its principal lacks
+   DDL rights.** The migrator's `CREATE TABLE … IF NOT EXISTS` statements become
+   no-ops once the schema already exists; if the schema is missing, startup fails
+   loudly rather than silently creating tables.
+2. **Apply the schema yourself** (DDL published in each release / reproduced from
+   `FlowOrchestratorSqlMigrator`) under your own deployment pipeline before the app
+   starts, so every guarded `IF NOT EXISTS` block is already satisfied.
 
 ### Smoke-run verification
 

@@ -55,8 +55,11 @@ internal sealed class SqlFlowSignalStore : IFlowSignalStore
     {
         await using var conn = new SqlConnection(_connectionString);
 
-        // Atomic: only update the row if no payload has been delivered yet.
-        // Returns 1 row when delivered, 0 rows when (a) no waiter matches or (b) already delivered.
+        // Atomic conditional update. The CTE narrows to the single OLDEST UNDELIVERED waiter
+        // (the `AND DeliveredAt IS NULL` filter is essential: without it, a second waiter for
+        // the same RunId+SignalName never receives the signal, because the CTE keeps re-selecting
+        // the first — already-delivered — row). Returns 1 row when delivered, 0 rows when
+        // (a) no waiter matches or (b) every matching waiter is already delivered.
         var rows = await conn.QueryAsync<DeliveryRow>(
             new CommandDefinition(
                 """
@@ -64,13 +67,13 @@ internal sealed class SqlFlowSignalStore : IFlowSignalStore
                     SELECT TOP (1) *
                     FROM [FlowSignalWaiters]
                     WHERE RunId = @RunId AND SignalName = @SignalName
+                      AND DeliveredAt IS NULL
                     ORDER BY CreatedAt
                 )
                 UPDATE target
                 SET DeliveredAt = SYSDATETIMEOFFSET(),
                     PayloadJson = @PayloadJson
-                OUTPUT inserted.StepKey, inserted.DeliveredAt
-                WHERE target.DeliveredAt IS NULL;
+                OUTPUT inserted.StepKey, inserted.DeliveredAt;
                 """,
                 new
                 {
