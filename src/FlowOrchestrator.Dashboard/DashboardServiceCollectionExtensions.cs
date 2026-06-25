@@ -605,6 +605,11 @@ public static class DashboardServiceCollectionExtensions
             Guid? flowId = query.TryGetValue("flowId", out var flowIdValues) && Guid.TryParse(flowIdValues, out var fid) ? fid : null;
             string? status = query.TryGetValue("status", out var statusValues) ? statusValues.ToString() : null;
             string? search = query.TryGetValue("search", out var searchValues) ? searchValues.ToString() : null;
+            // The dashboard renders the "Skipped" run status under the display label "Blocked",
+            // so a user typing what they see in the run search box would otherwise match nothing
+            // (the store searches the raw status column). Resolve the display label back to its
+            // canonical status token here — keeping the "Blocked" vocabulary inside the UI layer.
+            search = RunStatusDisplay.ResolveSearchAlias(search);
             int skip = query.TryGetValue("skip", out var skipValues) && int.TryParse(skipValues, out var s) ? s : 0;
             int take = query.TryGetValue("take", out var takeValues) && int.TryParse(takeValues, out var t) ? t : 50;
             bool includeTotal = query.TryGetValue("includeTotal", out var includeTotalValues)

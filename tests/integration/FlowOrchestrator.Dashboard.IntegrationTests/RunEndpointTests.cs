@@ -78,6 +78,22 @@ public sealed class RunEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task GET_api_runs_resolves_blocked_search_alias_to_skipped_status()
+    {
+        // Arrange — "Blocked" is the dashboard's display label for the canonical "Skipped"
+        // run status; a user searching the label must still match Skipped runs.
+        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 50, "Skipped", true, null, null)
+            .Returns((Array.Empty<FlowRunRecord>(), 0));
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?search=blocked");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, null, 0, 50, "Skipped", true, null, null);
+    }
+
+    [Fact]
     public async Task GET_api_runs_active_returns_200()
     {
         // Arrange
