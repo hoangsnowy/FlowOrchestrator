@@ -59,8 +59,14 @@ internal static class ForEachSourceResolver
                 return [];
             }
 
+            // Materialise each item into a plain CLR value graph rather than leaving it as a
+            // JsonElement. The item becomes __loopItem on each child step, which the engine may
+            // serialise through a runtime job store (Hangfire / Service Bus) using Newtonsoft.Json
+            // — and System.Text.Json.JsonElement does NOT round-trip through Newtonsoft, so a
+            // JsonElement item silently failed the child job and hung the run. Plain primitives /
+            // Dictionary / List round-trip through both serialisers and the handler input binder.
             return element.EnumerateArray()
-                .Select(x => (object?)x.Clone())
+                .Select(MaterializeJsonValue)
                 .ToList();
         }
 
@@ -81,6 +87,29 @@ internal static class ForEachSourceResolver
 
         return [];
     }
+
+    /// <summary>
+    /// Converts a <see cref="JsonElement"/> into a plain CLR value graph
+    /// (<see langword="string"/> / <see langword="long"/> / <see langword="double"/> /
+    /// <see langword="bool"/> / <see langword="null"/>, nested <see cref="Dictionary{TKey,TValue}"/>
+    /// for objects and <see cref="List{T}"/> for arrays). Unlike a raw <see cref="JsonElement"/>,
+    /// the result round-trips through Newtonsoft.Json (used by the Hangfire / Service Bus runtime
+    /// job stores) and the handler input binder.
+    /// </summary>
+    private static object? MaterializeJsonValue(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.String => element.GetString(),
+        // Cast to object so the conditional keeps long vs double — without it the ternary
+        // unifies to double and every integer item would box as 1.0 instead of 1.
+        JsonValueKind.Number => element.TryGetInt64(out var l) ? l : (object)element.GetDouble(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null or JsonValueKind.Undefined => null,
+        JsonValueKind.Object => element.EnumerateObject()
+            .ToDictionary(p => p.Name, p => MaterializeJsonValue(p.Value), StringComparer.Ordinal),
+        JsonValueKind.Array => element.EnumerateArray().Select(MaterializeJsonValue).ToList(),
+        _ => element.GetRawText()
+    };
 
     /// <summary>
     /// Fast-path check shared by the trigger-body and trigger-headers resolvers:
