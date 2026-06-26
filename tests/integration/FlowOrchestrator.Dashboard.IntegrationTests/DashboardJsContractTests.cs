@@ -157,6 +157,22 @@ public sealed class DashboardJsContractTests : IDisposable
         Assert.Contains("function restoreRunsFiltersFromRoute(", html);
     }
 
+    // ── Run status filter covers every terminal status ───────────────────────
+
+    [Fact]
+    public async Task GET_root_run_status_filter_lists_cancelled_and_timedout()
+    {
+        // Arrange — runs can terminate as Cancelled or TimedOut (RunTerminationClassifier
+        // + engine control flow), so the status dropdown must offer them as filter options.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("<option value=\"Cancelled\">Cancelled</option>", html, StringComparison.Ordinal);
+        Assert.Contains("<option value=\"TimedOut\">Timed Out</option>", html, StringComparison.Ordinal);
+    }
+
     // ── Memory cleanup on unload ──────────────────────────────────────────────
 
     [Fact]

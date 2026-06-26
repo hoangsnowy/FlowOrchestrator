@@ -230,7 +230,14 @@ public sealed partial class FlowOrchestratorEngine
             {
                 foreach (var child in hintChildren)
                 {
-                    if (flow.Manifest.Steps.FindStep(child.StepKey) is not null)
+                    // Reject hints that target a STATIC DAG step (one the planner dispatches on
+                    // its own) — but NOT loop fan-out children. A ForEach child key carries a
+                    // runtime iteration index ("{loop}.{index}.{child}"); StepCollection.FindStep
+                    // deliberately resolves such keys to the loop's template child, so without the
+                    // IsDynamicFanOutKey exemption this guard threw on every legitimate iteration,
+                    // leaving the loop step Succeeded while its children were never dispatched and
+                    // the downstream step never ran (the run hung forever).
+                    if (!IsDynamicFanOutKey(child.StepKey) && flow.Manifest.Steps.FindStep(child.StepKey) is not null)
                     {
                         throw new InvalidOperationException(
                             $"DispatchHint targeted static DAG step '{child.StepKey}'. " +
@@ -278,6 +285,29 @@ public sealed partial class FlowOrchestratorEngine
         {
             _contextAccessor.CurrentContext = null;
         }
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="stepKey"/> is a dynamic loop
+    /// fan-out child — i.e. it carries a runtime iteration-index segment shaped
+    /// <c>{loopKey}.{index}.{childKey}</c>. Such keys are produced by
+    /// <see cref="ForEachStepHandler"/> and must NOT trip the static-DAG dispatch-hint guard,
+    /// even though <see cref="Abstractions.StepCollection.FindStep"/> resolves them to the
+    /// loop's template child. A key qualifies when any segment after the first parses as a
+    /// non-negative integer; the first segment is always the loop step's own (non-numeric) key.
+    /// </summary>
+    private static bool IsDynamicFanOutKey(string stepKey)
+    {
+        var segments = stepKey.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 1; i < segments.Length; i++)
+        {
+            if (int.TryParse(segments[i], out var index) && index >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <inheritdoc/>

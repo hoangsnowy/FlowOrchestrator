@@ -272,6 +272,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .badge-succeeded{background:var(--success-bg);color:var(--success-text);border:1px solid var(--success-border)}
 .badge-failed{background:var(--danger-bg);color:var(--danger-text);border:1px solid var(--danger-border)}
 .badge-skipped{background:var(--skip-bg);color:var(--skip-text);border:1px solid var(--skip-border)}
+.badge-cancelled{background:var(--skip-bg);color:var(--skip-text);border:1px solid var(--skip-border)}
+.badge-timedout{background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn-border)}
 
 .flow-detail-panel{display:none;flex-direction:column;flex:1;overflow:hidden}
 .flow-detail-panel.show{display:flex}
