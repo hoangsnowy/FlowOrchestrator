@@ -53,35 +53,53 @@ public sealed partial class FlowOrchestratorEngine
         return true;
     }
 
+    /// <summary>
+    /// Returns <see langword="true"/> when the run still has a step that is in flight, claimed by a
+    /// worker, or dispatched-but-not-yet-picked-up — i.e. work that could still advance or complete
+    /// the run. Used to gate run completion and to keep the periodic timeout sweep from latching a run
+    /// that is not actually stuck.
+    /// </summary>
+    private async Task<bool> HasInFlightWorkAsync(Guid runId)
+    {
+        if (_runtimeStore is null)
+        {
+            return false;
+        }
+
+        var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
+        if (statuses.Values.Any(IsInFlight))
+        {
+            return true;
+        }
+
+        var claimed = await _runtimeStore.GetClaimedStepKeysAsync(runId).ConfigureAwait(false);
+        if (claimed.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        {
+            return true;
+        }
+
+        // Dispatch ledger check — closes a CI-only race observed in the v1.23.0 publish run
+        // (HappyPathTests.LinearFlow_runs_to_completion: Expected 3 steps, got 2). A step
+        // can have been dispatched (TryRecordDispatchAsync = true, EnqueueStepAsync queued
+        // the work) but not yet picked up by the consumer — in that window neither the step
+        // status nor the claim ledger reflects it, so the prior two checks pass and the
+        // engine completes the run prematurely. Under CI CPU contention the gap between
+        // dispatch and claim widens enough for this to fire. Guarding against it makes
+        // termination strictly safer with no production downside.
+        var dispatched = await _runStore.GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
+        if (dispatched.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private async Task TryCompleteRunAsync(Guid runId, string status)
     {
-        if (_runtimeStore is not null)
+        if (await HasInFlightWorkAsync(runId).ConfigureAwait(false))
         {
-            var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
-            if (statuses.Values.Any(IsInFlight))
-            {
-                return;
-            }
-
-            var claimed = await _runtimeStore.GetClaimedStepKeysAsync(runId).ConfigureAwait(false);
-            if (claimed.Except(statuses.Keys, StringComparer.Ordinal).Any())
-            {
-                return;
-            }
-
-            // Dispatch ledger check — closes a CI-only race observed in the v1.23.0 publish run
-            // (HappyPathTests.LinearFlow_runs_to_completion: Expected 3 steps, got 2). A step
-            // can have been dispatched (TryRecordDispatchAsync = true, EnqueueStepAsync queued
-            // the work) but not yet picked up by the consumer — in that window neither the step
-            // status nor the claim ledger reflects it, so the prior two checks pass and the
-            // engine completes the run prematurely. Under CI CPU contention the gap between
-            // dispatch and claim widens enough for this to fire. Guarding against it makes
-            // termination strictly safer with no production downside.
-            var dispatched = await _runStore.GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
-            if (dispatched.Except(statuses.Keys, StringComparer.Ordinal).Any())
-            {
-                return;
-            }
+            return;
         }
 
         await _runStore.CompleteRunAsync(runId, status).ConfigureAwait(false);
@@ -186,9 +204,18 @@ public sealed partial class FlowOrchestratorEngine
                     continue;
                 }
 
-                // Latch the timeout, then attempt completion. TryCompleteRunAsync respects the
-                // in-flight / claim / dispatch guards — a run with a live worker stays Running and
-                // converges to TimedOut when that step next hits the termination gate.
+                // Only enforce on genuinely stuck runs. A run with a live/queued step is not stuck —
+                // its deadline is enforced by the dispatch-time gate on that step's next dispatch. If
+                // we latched TimedOut here while the final in-flight step then completed successfully,
+                // the graph continuation (which classifies terminal status from step statuses, not the
+                // control record) would complete the run as Succeeded, leaving the control record and
+                // the run status inconsistent. Skipping in-flight runs avoids that entirely.
+                if (await HasInFlightWorkAsync(run.Id).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                // Stuck run: latch the timeout on the control record and complete the run as TimedOut.
                 await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false);
                 await TryCompleteRunAsync(run.Id, "TimedOut").ConfigureAwait(false);
             }

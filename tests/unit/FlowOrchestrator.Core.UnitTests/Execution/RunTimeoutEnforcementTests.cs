@@ -46,15 +46,18 @@ public sealed class RunTimeoutEnforcementTests
             _logger);
 
     [Fact]
-    public async Task EnforceDueTimeoutsAsync_LapsedActiveRun_MarksTimedOutAndCompletesRun()
+    public async Task EnforceDueTimeoutsAsync_StuckRunningRunWithFailedStep_MarksTimedOutAndCompletesRun()
     {
-        // Arrange — active run whose deadline has already passed, nothing in flight.
+        // Arrange — the production scenario: a step failed and left nothing scheduled, so the run sat
+        // Running past its deadline. No in-flight work remains → the sweep must complete it TimedOut.
         var store = new InMemoryFlowRunStore();
         var engine = CreateEngine(store);
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
         await store.ConfigureRunAsync(runId, flowId, "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        await store.RecordStepStartAsync(runId, "step1", "Work", "{}", "job1");
+        await store.RecordStepCompleteAsync(runId, "step1", "Failed", null, "upstream 404");
 
         // Act
         await engine.EnforceDueTimeoutsAsync();
@@ -110,10 +113,12 @@ public sealed class RunTimeoutEnforcementTests
     }
 
     [Fact]
-    public async Task EnforceDueTimeoutsAsync_RunWithInFlightStep_LatchesTimeoutButDoesNotComplete()
+    public async Task EnforceDueTimeoutsAsync_RunWithInFlightStep_IsLeftUntouched()
     {
-        // Arrange — lapsed deadline but a step is still Running: the in-flight guard must prevent
-        // force-completion. The run stays Running (converges to TimedOut once the step finishes).
+        // Arrange — lapsed deadline but a step is still Running: the run is NOT stuck. The periodic
+        // sweep must leave it entirely alone (no latch, no completion) so the dispatch-time gate can
+        // enforce the deadline on the step's next dispatch. Latching here would risk an inconsistent
+        // TimedOut(control)/Succeeded(run) state if the final in-flight step then completed.
         var store = new InMemoryFlowRunStore();
         var engine = CreateEngine(store);
         var flowId = Guid.NewGuid();
@@ -125,10 +130,10 @@ public sealed class RunTimeoutEnforcementTests
         // Act
         await engine.EnforceDueTimeoutsAsync();
 
-        // Assert
+        // Assert — untouched: still Running, deadline not latched.
         Assert.Equal("Running", await store.GetRunStatusAsync(runId));
         var control = await store.GetRunControlAsync(runId);
         Assert.NotNull(control);
-        Assert.NotNull(control!.TimedOutAtUtc);
+        Assert.Null(control!.TimedOutAtUtc);
     }
 }
