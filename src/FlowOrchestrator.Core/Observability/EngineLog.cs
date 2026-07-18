@@ -46,6 +46,9 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3004, Level = LogLevel.Warning, Message = "Failed to re-assert dispatch ledger for step {StepKey} after a failed pending reschedule.")]
     public static partial void DispatchReassertFailed(ILogger logger, Exception ex, string stepKey);
 
+    [LoggerMessage(EventId = 3005, Level = LogLevel.Warning, Message = "Timeout enforcement failed for run {RunId}; continuing with next run.")]
+    public static partial void TimeoutEnforcementRunFailed(ILogger logger, Exception ex, Guid runId);
+
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
 

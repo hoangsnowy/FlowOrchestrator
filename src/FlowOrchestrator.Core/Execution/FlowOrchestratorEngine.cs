@@ -33,7 +33,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// (<c>FlowOrchestratorEngine.Control.cs</c>).
 /// </para>
 /// </remarks>
-public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator
+public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTimeoutEnforcer
 {
     private readonly IStepDispatcher _dispatcher;
     private readonly IFlowExecutor _flowExecutor;

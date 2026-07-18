@@ -621,6 +621,28 @@ public sealed class PostgreSqlFlowRunStore :
         return affected > 0;
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> ExtendDeadlineAsync(Guid runId, DateTimeOffset? newTimeoutAtUtc)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        // Every SET expression reads the pre-update row, so the CASEs evaluate the OLD timed_out_at_utc:
+        // un-latch the cancel fields only when the termination was timeout-induced, preserving a
+        // genuine user cancellation. timed_out_at_utc is cleared unconditionally.
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE flow_run_controls
+            SET timeout_at_utc = @NewTimeoutAtUtc,
+                cancel_requested        = CASE WHEN timed_out_at_utc IS NOT NULL THEN FALSE ELSE cancel_requested END,
+                cancel_reason           = CASE WHEN timed_out_at_utc IS NOT NULL THEN NULL  ELSE cancel_reason END,
+                cancel_requested_at_utc = CASE WHEN timed_out_at_utc IS NOT NULL THEN NULL  ELSE cancel_requested_at_utc END,
+                timed_out_at_utc        = NULL
+            WHERE run_id = @RunId
+            """,
+            new { RunId = runId, NewTimeoutAtUtc = newTimeoutAtUtc });
+
+        return affected > 0;
+    }
+
     public async Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

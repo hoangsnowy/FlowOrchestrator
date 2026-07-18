@@ -152,6 +152,54 @@ public sealed partial class FlowOrchestratorEngine
         return null;
     }
 
+    /// <inheritdoc/>
+    public async Task EnforceDueTimeoutsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_runControlStore is null)
+        {
+            return;
+        }
+
+        var activeRuns = await _runStore.GetActiveRunsAsync().ConfigureAwait(false);
+        if (activeRuns.Count == 0)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var run in activeRuns)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                var control = await _runControlStore.GetRunControlAsync(run.Id).ConfigureAwait(false);
+
+                // Only lapsed, not-already-timed-out runs are eligible.
+                if (control?.TimeoutAtUtc is null
+                    || control.TimedOutAtUtc is not null
+                    || now < control.TimeoutAtUtc.Value)
+                {
+                    continue;
+                }
+
+                // Latch the timeout, then attempt completion. TryCompleteRunAsync respects the
+                // in-flight / claim / dispatch guards — a run with a live worker stays Running and
+                // converges to TimedOut when that step next hits the termination gate.
+                await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false);
+                await TryCompleteRunAsync(run.Id, "TimedOut").ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Per-run isolation: a single bad run must never abort the whole sweep.
+                EngineLog.TimeoutEnforcementRunFailed(_logger, ex, run.Id);
+            }
+        }
+    }
+
     /// <summary>
     /// Persists a lifecycle event via <see cref="IOutputsRepository.RecordEventAsync"/>, swallowing
     /// every exception (including <see cref="OperationCanceledException"/>). Event persistence is

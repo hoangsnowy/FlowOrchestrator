@@ -543,6 +543,28 @@ public sealed class SqlFlowRunStore :
         return affected > 0;
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> ExtendDeadlineAsync(Guid runId, DateTimeOffset? newTimeoutAtUtc)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        // Every SET expression reads the pre-update row, so the CASEs evaluate the OLD TimedOutAtUtc:
+        // un-latch the cancel fields only when the termination was timeout-induced, preserving a
+        // genuine user cancellation. TimedOutAtUtc is cleared unconditionally.
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE FlowRunControls
+            SET TimeoutAtUtc = @NewTimeoutAtUtc,
+                CancelRequested      = CASE WHEN TimedOutAtUtc IS NOT NULL THEN 0    ELSE CancelRequested END,
+                CancelReason         = CASE WHEN TimedOutAtUtc IS NOT NULL THEN NULL ELSE CancelReason END,
+                CancelRequestedAtUtc = CASE WHEN TimedOutAtUtc IS NOT NULL THEN NULL ELSE CancelRequestedAtUtc END,
+                TimedOutAtUtc        = NULL
+            WHERE RunId = @RunId
+            """,
+            new { RunId = runId, NewTimeoutAtUtc = newTimeoutAtUtc });
+
+        return affected > 0;
+    }
+
     public async Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
     {
         await using var conn = new SqlConnection(_connectionString);

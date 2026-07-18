@@ -598,6 +598,31 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(true);
     }
 
+    /// <inheritdoc/>
+    public Task<bool> ExtendDeadlineAsync(Guid runId, DateTimeOffset? newTimeoutAtUtc)
+    {
+        // Mirror the SQL backends: return false when no control record exists rather than
+        // creating one. See RequestCancelAsync for the contract rationale.
+        if (!_runControls.TryGetValue(runId, out var control))
+        {
+            return Task.FromResult(false);
+        }
+
+        control.TimeoutAtUtc = newTimeoutAtUtc;
+
+        // Only un-latch a timeout-induced termination. A genuine user cancellation
+        // (CancelRequested set while TimedOutAtUtc was null) must survive a retry.
+        if (control.TimedOutAtUtc is not null)
+        {
+            control.TimedOutAtUtc = null;
+            control.CancelRequested = false;
+            control.CancelReason = null;
+            control.CancelRequestedAtUtc = null;
+        }
+
+        return Task.FromResult(true);
+    }
+
     public Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
     {
         var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);

@@ -75,12 +75,16 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddHostedService<FlowSyncHostedService>();
         services.AddHostedService<FlowRetentionHostedService>();
         services.AddHostedService<FlowRunRecoveryHostedService>();
+        services.AddHostedService<FlowTimeoutEnforcementHostedService>();
 
         services.AddTransient<IFlowExecutor, FlowExecutor>();
         services.AddSingleton<IFlowGraphPlanner, FlowGraphPlanner>();
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();
 
         services.AddTransient<IFlowOrchestrator, FlowOrchestratorEngine>();
+        // Same engine instance type also drives the periodic timeout sweep. Resolved per-tick inside
+        // a scope by FlowTimeoutEnforcementHostedService (the engine has scoped dependencies).
+        services.AddTransient<IRunTimeoutEnforcer, FlowOrchestratorEngine>();
 
         // Runtime-specific adapters: use TryAdd so that an alternative runtime (e.g. UseInMemoryRuntime())
         // registered earlier inside the configure callback takes priority over the Hangfire defaults.
