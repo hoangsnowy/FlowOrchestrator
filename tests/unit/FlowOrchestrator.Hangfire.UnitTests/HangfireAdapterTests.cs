@@ -93,7 +93,7 @@ public sealed class HangfireAdapterTests
 
         // Assert
         _jobClient.Received(1).Create(
-            Arg.Is<Job>(j => j.Type == typeof(IHangfireStepRunner)),
+            Arg.Is<Job>(j => j!.Type == typeof(IHangfireStepRunner)),
             Arg.Any<IState>());
     }
 
@@ -112,7 +112,7 @@ public sealed class HangfireAdapterTests
 
         // Assert
         _jobClient.Received(1).Create(
-            Arg.Is<Job>(j => j.Type == typeof(IHangfireStepRunner)),
+            Arg.Is<Job>(j => j!.Type == typeof(IHangfireStepRunner)),
             Arg.Any<IState>());
     }
 
@@ -166,7 +166,7 @@ public sealed class HangfireAdapterTests
         // Assert
         _recurringManager.Received(1).AddOrUpdate(
             Arg.Any<string>(),
-            Arg.Is<Job>(j => j.Type == typeof(IHangfireFlowTrigger)),
+            Arg.Is<Job>(j => j!.Type == typeof(IHangfireFlowTrigger)),
             Arg.Any<string>(),
             Arg.Any<RecurringJobOptions>());
     }
@@ -212,7 +212,7 @@ public sealed class HangfireAdapterTests
 
         // Assert
         _jobClient.Received(1).Create(
-            Arg.Is<Job>(j => j.Type == typeof(IHangfireFlowTrigger)),
+            Arg.Is<Job>(j => j!.Type == typeof(IHangfireFlowTrigger)),
             Arg.Is<IState>(s => s is EnqueuedState));
     }
 

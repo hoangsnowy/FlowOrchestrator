@@ -118,6 +118,18 @@ public sealed class SqlFlowRunStore :
             new { Id = runId, Status = status });
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> CompleteRunIfActiveAsync(Guid runId, string status)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        // Guarded, atomic transition: only a still-Running run is completed, and rows-affected tells
+        // the caller whether THIS call won the race — so the lifecycle event fires exactly once.
+        var affected = await conn.ExecuteAsync(
+            "UPDATE FlowRuns SET Status = @Status, CompletedAt = SYSDATETIMEOFFSET() WHERE Id = @Id AND Status = 'Running'",
+            new { Id = runId, Status = status });
+        return affected > 0;
+    }
+
     public async Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
         var page = await GetRunsPageAsync(flowId, null, skip, take, null);
@@ -532,13 +544,36 @@ public sealed class SqlFlowRunStore :
         var affected = await conn.ExecuteAsync(
             """
             UPDATE FlowRunControls
-            SET TimedOutAtUtc = COALESCE(TimedOutAtUtc, SYSDATETIMEOFFSET()),
+            SET TimedOutAtUtc = SYSDATETIMEOFFSET(),
                 CancelRequested = 1,
                 CancelReason = COALESCE(@Reason, CancelReason, 'Run timed out.'),
                 CancelRequestedAtUtc = COALESCE(CancelRequestedAtUtc, SYSDATETIMEOFFSET())
             WHERE RunId = @RunId
+              AND TimedOutAtUtc IS NULL
             """,
             new { RunId = runId, Reason = reason });
+
+        return affected > 0;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> ExtendDeadlineAsync(Guid runId, DateTimeOffset? newTimeoutAtUtc)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        // Every SET expression reads the pre-update row, so the CASEs evaluate the OLD TimedOutAtUtc:
+        // un-latch the cancel fields only when the termination was timeout-induced, preserving a
+        // genuine user cancellation. TimedOutAtUtc is cleared unconditionally.
+        var affected = await conn.ExecuteAsync(
+            """
+            UPDATE FlowRunControls
+            SET TimeoutAtUtc = @NewTimeoutAtUtc,
+                CancelRequested      = CASE WHEN TimedOutAtUtc IS NOT NULL THEN 0    ELSE CancelRequested END,
+                CancelReason         = CASE WHEN TimedOutAtUtc IS NOT NULL THEN NULL ELSE CancelReason END,
+                CancelRequestedAtUtc = CASE WHEN TimedOutAtUtc IS NOT NULL THEN NULL ELSE CancelRequestedAtUtc END,
+                TimedOutAtUtc        = NULL
+            WHERE RunId = @RunId
+            """,
+            new { RunId = runId, NewTimeoutAtUtc = newTimeoutAtUtc });
 
         return affected > 0;
     }

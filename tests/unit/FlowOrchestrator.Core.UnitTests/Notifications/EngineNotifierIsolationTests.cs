@@ -98,9 +98,9 @@ public sealed class EngineNotifierIsolationTests
         // Assert
         await notifier.Received(1).PublishAsync(
             Arg.Is<FlowLifecycleEvent>(e =>
-                ((RunStartedEvent)e).RunId == ctx.RunId &&
-                ((RunStartedEvent)e).FlowId == flow.Id &&
-                ((RunStartedEvent)e).TriggerKey == "manual"),
+                ((RunStartedEvent)e!).RunId == ctx.RunId &&
+                ((RunStartedEvent)e!).FlowId == flow.Id &&
+                ((RunStartedEvent)e!).TriggerKey == "manual"),
             Arg.Any<CancellationToken>());
     }
 

@@ -8,7 +8,6 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -68,10 +67,10 @@ public sealed class DashboardTestServer : IDisposable
         GlobalConfiguration.Configuration.UseInMemoryStorage();
 
         ScheduleStateStore.GetAllAsync().Returns(Array.Empty<FlowScheduleState>());
-        ScheduleStateStore.GetAsync(Arg.Any<string>()).ReturnsNull();
+        ScheduleStateStore.GetAsync(Arg.Any<string>()).Returns(default(FlowScheduleState?));
         EventReader.GetRunEventsAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<int>())
             .Returns(Array.Empty<FlowEventRecord>());
-        RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).ReturnsNull();
+        RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).Returns(default(FlowRunControlRecord?));
         TriggerInspector.GetJobsAsync().Returns(Array.Empty<RecurringTriggerInfo>());
         RuntimeStore.GetStepStatusesAsync(Arg.Any<Guid>())
             .Returns(new Dictionary<string, StepStatus>());

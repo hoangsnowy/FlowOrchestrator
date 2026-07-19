@@ -369,6 +369,16 @@ public sealed partial class FlowOrchestratorEngine
         ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
         ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(runId).ConfigureAwait(false);
 
+        // Give the run a fresh execution window before re-dispatch. Without this, a step retried after
+        // the run's timeout deadline lapsed (or after the run was latched TimedOut) would be immediately
+        // skipped by the termination gate in RunStepAsync — the handler would never run. The refreshed
+        // deadline reuses trigger-time resolution so it still honours the runaway-loop bound.
+        if (_runControlStore is not null)
+        {
+            var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
+            await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
+        }
+
         return await RunStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
     }
 

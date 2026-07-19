@@ -294,4 +294,111 @@ public sealed class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
         Assert.Empty(runs);
         Assert.Equal(3, total);
     }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_NoControlRecord_ReturnsFalse()
+    {
+        // Arrange — no ConfigureRunAsync, so no control record exists.
+        var runId = Guid.NewGuid();
+
+        // Act
+        var result = await _store.ExtendDeadlineAsync(runId, DateTimeOffset.UtcNow.AddMinutes(10));
+
+        // Assert
+        Assert.False(result);
+    }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_AfterTimeout_ClearsTimeoutLatchAndRefreshesDeadline()
+    {
+        // Arrange — a run latched TimedOut (also sets the cancel fields).
+        var runId = Guid.NewGuid();
+        await _store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-5));
+        await _store.MarkTimedOutAsync(runId, "deadline exceeded");
+        var newDeadline = DateTimeOffset.UtcNow.AddMinutes(10);
+
+        // Act
+        var result = await _store.ExtendDeadlineAsync(runId, newDeadline);
+
+        // Assert — the timeout-induced termination is fully un-latched and the deadline refreshed.
+        Assert.True(result);
+        var control = await _store.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.Null(control!.TimedOutAtUtc);
+        Assert.False(control.CancelRequested);
+        Assert.Null(control.CancelReason);
+        Assert.Null(control.CancelRequestedAtUtc);
+        Assert.NotNull(control.TimeoutAtUtc);
+    }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_PreservesGenuineUserCancellation()
+    {
+        // Arrange — a user-cancelled run (TimedOutAtUtc stays null).
+        var runId = Guid.NewGuid();
+        await _store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, null);
+        await _store.RequestCancelAsync(runId, "user requested");
+
+        // Act
+        var result = await _store.ExtendDeadlineAsync(runId, DateTimeOffset.UtcNow.AddMinutes(10));
+
+        // Assert — only timeout-induced state is cleared; the user cancellation survives.
+        Assert.True(result);
+        var control = await _store.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.True(control!.CancelRequested);
+        Assert.Equal("user requested", control.CancelReason);
+        Assert.Null(control.TimedOutAtUtc);
+    }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_NullDeadline_ClearsTimeoutBound()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        // Act
+        var result = await _store.ExtendDeadlineAsync(runId, null);
+
+        // Assert
+        Assert.True(result);
+        var control = await _store.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.Null(control!.TimeoutAtUtc);
+    }
+
+    [Fact]
+    public async Task CompleteRunIfActiveAsync_TransitionsRunningOnce_ThenReturnsFalse()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "F", runId, "manual", null, null);
+
+        // Act
+        var first = await _store.CompleteRunIfActiveAsync(runId, "Succeeded");
+        var second = await _store.CompleteRunIfActiveAsync(runId, "TimedOut");
+
+        // Assert — guarded UPDATE transitions exactly once; the first writer's status stands.
+        Assert.True(first);
+        Assert.False(second);
+        var detail = await _store.GetRunDetailAsync(runId);
+        Assert.Equal("Succeeded", detail!.Status);
+    }
+
+    [Fact]
+    public async Task MarkTimedOutAsync_AlreadyTimedOut_ReturnsFalse()
+    {
+        // Arrange — align the contract with the InMemory backend (Finding 3): a repeat is a no-op.
+        var runId = Guid.NewGuid();
+        await _store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var first = await _store.MarkTimedOutAsync(runId, "deadline exceeded");
+
+        // Act
+        var second = await _store.MarkTimedOutAsync(runId, "again");
+
+        // Assert
+        Assert.True(first);
+        Assert.False(second);
+    }
 }

@@ -45,6 +45,30 @@ public interface IFlowRunStore
     Task CompleteRunAsync(Guid runId, string status);
 
     /// <summary>
+    /// Transitions the run to a terminal <paramref name="status"/> only if it is still active
+    /// (<c>Running</c>), reporting whether this call performed the transition. Makes run completion
+    /// idempotent and safe against concurrent completers — notably the graph continuation and the
+    /// periodic timeout sweep (single- or multi-instance) — so a run's lifecycle event is published
+    /// exactly once and its terminal status is set by exactly one writer.
+    /// </summary>
+    /// <param name="runId">The run to complete.</param>
+    /// <param name="status">The terminal status to set.</param>
+    /// <returns>
+    /// <see langword="true"/> if this call transitioned a <c>Running</c> run to <paramref name="status"/>;
+    /// <see langword="false"/> if the run was already in a terminal state (another writer won).
+    /// </returns>
+    /// <remarks>
+    /// Default implementation delegates to <see cref="CompleteRunAsync"/> and reports <see langword="true"/>,
+    /// so existing custom <see cref="IFlowRunStore"/> implementations compile unchanged (retaining their
+    /// prior, non-idempotent completion behaviour).
+    /// </remarks>
+    async Task<bool> CompleteRunIfActiveAsync(Guid runId, string status)
+    {
+        await CompleteRunAsync(runId, status).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
     /// Returns a page of run records, optionally filtered by <paramref name="flowId"/>.
     /// Results are ordered by start time descending.
     /// </summary>

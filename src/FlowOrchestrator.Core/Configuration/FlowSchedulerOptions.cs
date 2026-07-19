@@ -21,10 +21,24 @@ public sealed class FlowSchedulerOptions
 public sealed class FlowRunControlOptions
 {
     /// <summary>
-    /// Default timeout applied to every run. Steps check this deadline and exit if exceeded.
-    /// <see langword="null"/> disables timeout enforcement globally.
+    /// Default timeout applied to every run. Enforcement is twofold: lazily when a step is dispatched
+    /// after the deadline (the step is skipped and the run marked <c>TimedOut</c>), and proactively by
+    /// the periodic sweep governed by <see cref="TimeoutEnforcementInterval"/>. A per-run override may
+    /// be supplied via the trigger payload's <c>runTimeoutSeconds</c>. <see langword="null"/> disables
+    /// the default timeout globally.
     /// </summary>
     public TimeSpan? DefaultRunTimeout { get; set; }
+
+    /// <summary>
+    /// How often the periodic timeout-enforcement sweep runs, proactively marking runs whose
+    /// <c>TimeoutAtUtc</c> has passed as <c>TimedOut</c> so a stuck run does not sit <c>Running</c>
+    /// indefinitely. <see langword="null"/> or a non-positive value disables the sweep.
+    /// </summary>
+    /// <remarks>
+    /// The sweep is cheap when no run has a deadline (no <see cref="DefaultRunTimeout"/> and no per-run
+    /// override) — it queries active runs and finds nothing to do.
+    /// </remarks>
+    public TimeSpan? TimeoutEnforcementInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Name of the HTTP header that carries the caller-supplied idempotency key

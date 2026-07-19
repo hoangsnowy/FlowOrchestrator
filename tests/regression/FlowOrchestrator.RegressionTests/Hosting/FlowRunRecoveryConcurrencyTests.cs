@@ -64,7 +64,7 @@ public sealed class FlowRunRecoveryConcurrencyTests
         await dispatcher.Received(1).EnqueueStepAsync(
             Arg.Any<IExecutionContext>(),
             flow,
-            Arg.Is<IStepInstance>(s => s.Key == "step1"),
+            Arg.Is<IStepInstance>(s => s!.Key == "step1"),
             Arg.Any<CancellationToken>());
     }
 

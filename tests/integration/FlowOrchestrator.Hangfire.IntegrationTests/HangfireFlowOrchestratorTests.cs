@@ -8,7 +8,6 @@ using Hangfire;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
-using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Hangfire.Tests;
 
@@ -172,7 +171,7 @@ public class HangfireFlowOrchestratorTests
 
         var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded, Result = "ok" };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).ReturnsNull();
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
@@ -218,7 +217,7 @@ public class HangfireFlowOrchestratorTests
 
         var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).ReturnsNull();
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
@@ -238,7 +237,7 @@ public class HangfireFlowOrchestratorTests
 
         var stepResult = new StepResult { Key = "step1", Status = StepStatus.Failed, ReThrow = true, FailedReason = "critical" };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).ReturnsNull();
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         // Act
         var act = () => sut.RunStepAsync(ctx, flow.Id, step).AsTask();
@@ -329,7 +328,7 @@ public class HangfireFlowOrchestratorTests
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
-        await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Cancelled");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(ctx.RunId, "Cancelled");
     }
 
     [Fact]
@@ -375,13 +374,13 @@ public class HangfireFlowOrchestratorTests
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
         // Downstream-blocking is controlled by the statuses dict above, not by the claim.
         runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(true);
-        runtimeStore.GetRunStatusAsync(runId).ReturnsNull();
+        runtimeStore.GetRunStatusAsync(runId).Returns(default(string?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: run must complete as Failed, not Skipped
-        await _runStore.Received(1).CompleteRunAsync(runId, "Failed");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(runId, "Failed");
     }
 
     [Fact]
@@ -425,7 +424,7 @@ public class HangfireFlowOrchestratorTests
 
         var succeededResult = new StepResult { Key = "step_c", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(succeededResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).ReturnsNull();
+        _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).Returns(default(IStepInstance?));
 
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
@@ -439,13 +438,13 @@ public class HangfireFlowOrchestratorTests
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
         // Downstream-blocking is controlled by the statuses dict above, not by the claim.
         runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(true);
-        runtimeStore.GetRunStatusAsync(runId).ReturnsNull();
+        runtimeStore.GetRunStatusAsync(runId).Returns(default(string?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: all leaves Skipped → run = Skipped, not Succeeded
-        await _runStore.Received(1).CompleteRunAsync(runId, "Skipped");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(runId, "Skipped");
     }
 
     [Fact]
@@ -484,7 +483,7 @@ public class HangfireFlowOrchestratorTests
 
         var succeededResult = new StepResult { Key = "happy_path", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(succeededResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).ReturnsNull();
+        _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).Returns(default(IStepInstance?));
 
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
@@ -497,13 +496,13 @@ public class HangfireFlowOrchestratorTests
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
         // Downstream-blocking is controlled by the statuses dict above, not by the claim.
         runtimeStore.TryClaimStepAsync(runId, Arg.Any<string>()).Returns(true);
-        runtimeStore.GetRunStatusAsync(runId).ReturnsNull();
+        runtimeStore.GetRunStatusAsync(runId).Returns(default(string?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: mixed leaves (one Succeeded, one Skipped) → run = Succeeded
-        await _runStore.Received(1).CompleteRunAsync(runId, "Succeeded");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(runId, "Succeeded");
     }
 
     [Fact]
@@ -523,7 +522,7 @@ public class HangfireFlowOrchestratorTests
 
         var stepResult = new StepResult { Key = "loop1", Status = StepStatus.Succeeded, DispatchHint = hint };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).ReturnsNull();
+        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         await sut.RunStepAsync(ctx, flow.Id, step);
 

@@ -674,6 +674,109 @@ public class InMemoryFlowRunStoreTests
     }
 
     [Fact]
+    public async Task ExtendDeadlineAsync_NoControlRecord_ReturnsFalse()
+    {
+        // Arrange — no ConfigureRunAsync call, so no control record exists for this run.
+        var runId = Guid.NewGuid();
+
+        // Act
+        var result = await _sut.ExtendDeadlineAsync(runId, DateTimeOffset.UtcNow.AddMinutes(10));
+
+        // Assert
+        Assert.False(result);
+        Assert.Null(await _sut.GetRunControlAsync(runId));
+    }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_AfterTimeout_ClearsTimeoutLatchAndRefreshesDeadline()
+    {
+        // Arrange — a run that has been latched TimedOut (which also sets the cancel fields).
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-5));
+        await _sut.MarkTimedOutAsync(runId, "deadline exceeded");
+        var newDeadline = DateTimeOffset.UtcNow.AddMinutes(10);
+
+        // Act
+        var result = await _sut.ExtendDeadlineAsync(runId, newDeadline);
+
+        // Assert — timeout-induced termination is fully un-latched and the deadline is refreshed.
+        Assert.True(result);
+        var control = await _sut.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.Equal(newDeadline, control!.TimeoutAtUtc);
+        Assert.Null(control.TimedOutAtUtc);
+        Assert.False(control.CancelRequested);
+        Assert.Null(control.CancelReason);
+        Assert.Null(control.CancelRequestedAtUtc);
+    }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_PreservesGenuineUserCancellation()
+    {
+        // Arrange — a run cancelled by the user (TimedOutAtUtc stays null).
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, null);
+        await _sut.RequestCancelAsync(runId, "user requested");
+
+        // Act
+        var result = await _sut.ExtendDeadlineAsync(runId, DateTimeOffset.UtcNow.AddMinutes(10));
+
+        // Assert — the user cancellation survives; only timeout-induced state is cleared.
+        Assert.True(result);
+        var control = await _sut.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.True(control!.CancelRequested);
+        Assert.Equal("user requested", control.CancelReason);
+        Assert.Null(control.TimedOutAtUtc);
+    }
+
+    [Fact]
+    public async Task ExtendDeadlineAsync_NullDeadline_ClearsTimeoutBound()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        // Act
+        var result = await _sut.ExtendDeadlineAsync(runId, null);
+
+        // Assert
+        Assert.True(result);
+        var control = await _sut.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.Null(control!.TimeoutAtUtc);
+    }
+
+    [Fact]
+    public async Task CompleteRunIfActiveAsync_TransitionsRunningOnce_ThenReturnsFalse()
+    {
+        // Arrange — a running run; two concurrent completers race to finish it.
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "F", runId, "manual", null, null);
+
+        // Act — first call wins the transition, second finds it already terminal.
+        var first = await _sut.CompleteRunIfActiveAsync(runId, "Succeeded");
+        var second = await _sut.CompleteRunIfActiveAsync(runId, "TimedOut");
+
+        // Assert — exactly one transition; the first writer's status stands.
+        Assert.True(first);
+        Assert.False(second);
+        Assert.Equal("Succeeded", await _sut.GetRunStatusAsync(runId));
+    }
+
+    [Fact]
+    public async Task CompleteRunIfActiveAsync_UnknownRun_ReturnsFalse()
+    {
+        // Arrange
+
+        // Act
+        var result = await _sut.CompleteRunIfActiveAsync(Guid.NewGuid(), "Succeeded");
+
+        // Assert
+        Assert.False(result);
+    }
+
+    [Fact]
     public async Task CleanupAsync_RetainsRunCompletedExactlyAtCutoff()
     {
         // Arrange — strict less-than semantics: a run completed AT the cutoff is retained,

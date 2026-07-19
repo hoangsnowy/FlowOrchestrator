@@ -5,7 +5,6 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -84,7 +83,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/trigger", null);
@@ -132,7 +131,7 @@ public sealed class ScheduleEndpointTests : IDisposable
 
         _server.FlowStore.GetByIdAsync(flowId)
             .Returns(new FlowDefinitionRecord { Id = flowId, Name = "DailyFlow", IsEnabled = true });
-        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/pause", null);
@@ -141,7 +140,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         _server.TriggerDispatcher.Received(1).Remove(jobId);
         await _server.ScheduleStateStore.Received(1)
-            .SaveAsync(Arg.Is<FlowScheduleState>(s => s.JobId == jobId && s.IsPaused));
+            .SaveAsync(Arg.Is<FlowScheduleState>(s => s!.JobId == jobId && s.IsPaused));
     }
 
     [Fact]
@@ -198,8 +197,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).ReturnsNull();
-        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
+        _server.FlowStore.GetByIdAsync(flowId).Returns(default(FlowDefinitionRecord?));
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/resume", null);
@@ -227,7 +226,7 @@ public sealed class ScheduleEndpointTests : IDisposable
                 IsEnabled = true,
                 ManifestJson = manifestJson
             });
-        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PutAsync(
@@ -238,7 +237,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         _server.TriggerDispatcher.Received(1).RegisterOrUpdate(jobId, flowId, "cron", newCron);
         await _server.ScheduleStateStore.Received(1)
-            .SaveAsync(Arg.Is<FlowScheduleState>(s => s.CronOverride == newCron));
+            .SaveAsync(Arg.Is<FlowScheduleState>(s => s!.CronOverride == newCron));
     }
 
     [Fact]
@@ -271,7 +270,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         _server.TriggerDispatcher.DidNotReceive()
             .RegisterOrUpdate(Arg.Any<string>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>());
         await _server.ScheduleStateStore.Received(1)
-            .SaveAsync(Arg.Is<FlowScheduleState>(s => s.CronOverride == newCron));
+            .SaveAsync(Arg.Is<FlowScheduleState>(s => s!.CronOverride == newCron));
     }
 
     [Fact]
@@ -296,8 +295,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).ReturnsNull();
-        _server.ScheduleStateStore.GetAsync(jobId).ReturnsNull();
+        _server.FlowStore.GetByIdAsync(flowId).Returns(default(FlowDefinitionRecord?));
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PutAsync(
@@ -324,7 +323,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         await _server.FlowOrchestrator.Received(1).TriggerAsync(
-            Arg.Is<ITriggerContext>(ctx => ctx.Flow.Id == flowId && ctx.Trigger.Key == "manual"),
+            Arg.Is<ITriggerContext>(ctx => ctx!.Flow.Id == flowId && ctx.Trigger.Key == "manual"),
             Arg.Any<CancellationToken>());
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("runId", body);
@@ -380,7 +379,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         await _server.FlowOrchestrator.Received(1).TriggerAsync(
-            Arg.Is<ITriggerContext>(ctx => ctx.Trigger.Data != null),
+            Arg.Is<ITriggerContext>(ctx => ctx!.Trigger.Data != null),
             Arg.Any<CancellationToken>());
     }
 }

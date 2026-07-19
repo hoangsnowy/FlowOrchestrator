@@ -97,9 +97,9 @@ public class FlowRunRecoveryHostedServiceTests
 
         // Assert
         await _dispatcher.Received(1).EnqueueStepAsync(
-            Arg.Is<IExecutionContext>(c => c.RunId == runId),
+            Arg.Is<IExecutionContext>(c => c!.RunId == runId),
             flow,
-            Arg.Is<IStepInstance>(s => s.Key == "step1"),
+            Arg.Is<IStepInstance>(s => s!.Key == "step1"),
             Arg.Any<CancellationToken>());
     }
 

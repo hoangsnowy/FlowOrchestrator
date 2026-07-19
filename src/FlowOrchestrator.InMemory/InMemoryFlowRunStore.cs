@@ -153,6 +153,29 @@ public sealed class InMemoryFlowRunStore :
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
+    public Task<bool> CompleteRunIfActiveAsync(Guid runId, string status)
+    {
+        // Serialise the check-then-set on the run record so two concurrent completers (graph
+        // continuation + timeout sweep) can never both observe Running and both transition it.
+        if (!_runs.TryGetValue(runId, out var run))
+        {
+            return Task.FromResult(false);
+        }
+
+        lock (run)
+        {
+            if (!string.Equals(run.Status, "Running", StringComparison.Ordinal))
+            {
+                return Task.FromResult(false);
+            }
+
+            run.Status = status;
+            run.CompletedAt = DateTimeOffset.UtcNow;
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
         IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null, null, null, null, deepSearch: true)
@@ -594,6 +617,31 @@ public sealed class InMemoryFlowRunStore :
         control.CancelRequested = true;
         control.CancelReason = reason ?? "Run timed out.";
         control.CancelRequestedAtUtc ??= DateTimeOffset.UtcNow;
+
+        return Task.FromResult(true);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> ExtendDeadlineAsync(Guid runId, DateTimeOffset? newTimeoutAtUtc)
+    {
+        // Mirror the SQL backends: return false when no control record exists rather than
+        // creating one. See RequestCancelAsync for the contract rationale.
+        if (!_runControls.TryGetValue(runId, out var control))
+        {
+            return Task.FromResult(false);
+        }
+
+        control.TimeoutAtUtc = newTimeoutAtUtc;
+
+        // Only un-latch a timeout-induced termination. A genuine user cancellation
+        // (CancelRequested set while TimedOutAtUtc was null) must survive a retry.
+        if (control.TimedOutAtUtc is not null)
+        {
+            control.TimedOutAtUtc = null;
+            control.CancelRequested = false;
+            control.CancelReason = null;
+            control.CancelRequestedAtUtc = null;
+        }
 
         return Task.FromResult(true);
     }
