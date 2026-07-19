@@ -6,6 +6,54 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-07-19
+
+### Added
+
+- **Retry now refreshes a run's execution window.** New
+  `IFlowRunControlStore.ExtendDeadlineAsync(runId, newTimeoutAtUtc)` (shipped as a
+  default interface method so existing custom control stores compile unchanged),
+  implemented in InMemory / SQL Server / PostgreSQL. `RetryStepAsync` calls it
+  before re-dispatch so a step retried after the run's timeout deadline lapsed
+  actually re-executes instead of being skipped by the termination gate.
+- **Periodic timeout-enforcement service.** New `IRunTimeoutEnforcer` +
+  `FlowTimeoutEnforcementHostedService`, governed by
+  `FlowRunControlOptions.TimeoutEnforcementInterval` (default 30 s; null/non-positive
+  disables). It proactively completes genuinely stuck runs (past their deadline with
+  no in-flight work) as `TimedOut`, so a run whose step threw and left nothing
+  scheduled no longer sits `Running` indefinitely.
+- **Idempotent run completion.** New `IFlowRunStore.CompleteRunIfActiveAsync`
+  (default interface method) — a guarded, atomic `Running → terminal` transition
+  that reports whether the caller won the race, so a run's lifecycle event fires
+  exactly once even with concurrent completers (graph continuation + timeout sweep,
+  single- or multi-instance).
+
+### Fixed
+
+- **Dashboard Retry was a permanent no-op past a run's timeout deadline.**
+  `RetryStepAsync` reset only the run/step rows, never the control record, so once
+  `TimeoutAtUtc` lapsed (or the run was latched `TimedOut`) the re-dispatched step
+  was skipped as `"Run is TimedOut."` before the handler ran — the run was
+  unrecoverable from the dashboard. It now refreshes the deadline (un-latching only
+  timeout-induced termination, preserving a genuine user cancel).
+- **A stuck `Running` run no longer sits forever.** `MarkTimedOutAsync`'s
+  "timeout-enforcement background service" now actually exists (see Added).
+- **Timeout enforcement no longer mislabels a user cancellation.** A genuine user
+  cancel wins over a merely-lapsed deadline, and the sweep finalizes a stuck,
+  user-cancelled run as `Cancelled` (without latching the timeout), so a later retry
+  still preserves the cancellation.
+- **`MarkTimedOutAsync` return-value contract aligned across backends.** SQL Server
+  and PostgreSQL now guard on `timed_out_at_utc IS NULL`, so a repeat call is a true
+  no-op returning `false`, matching the InMemory store.
+
+### Dependencies
+
+- Microsoft.Extensions.Logging 10.0.8 → 10.0.9; OpenTelemetry 1.15.3 → 1.16.0;
+  OpenTelemetry.Instrumentation.AspNetCore 1.15.2 → 1.16.0; System.Text.Json
+  10.0.8 → 10.0.9; Testcontainers 4.12.0 → 4.13.0; actions/setup-node 6 → 7;
+  Azure.Messaging.ServiceBus 7.20.1 → 7.20.2; Microsoft.NET.Test.Sdk 18.7.0 →
+  18.8.0; NSubstitute 5.3.0 → 6.0.0 (test-suite migrated to its nullable-annotated API).
+
 ## [1.28.0] - 2026-06-05
 
 ### Added
