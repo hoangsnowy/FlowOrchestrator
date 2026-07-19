@@ -194,7 +194,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
         await _dispatcher.Received(1).ScheduleStepAsync(
             Arg.Any<IExecutionContext>(),
             flow,
-            Arg.Is<IStepInstance>(s => s.Key == "step1"),
+            Arg.Is<IStepInstance>(s => s!.Key == "step1"),
             Arg.Is<TimeSpan>(d => d == TimeSpan.FromSeconds(5)),
             Arg.Any<CancellationToken>());
         Assert.True(scheduleObservedReleaseFirst);

@@ -4,7 +4,6 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -53,7 +52,7 @@ public sealed class RunLineageEndpointTests : IDisposable
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         await _server.FlowOrchestrator.Received(1).TriggerAsync(
-            Arg.Is<ITriggerContext>(ctx => ctx.SourceRunId == sourceRunId),
+            Arg.Is<ITriggerContext>(ctx => ctx!.SourceRunId == sourceRunId),
             Arg.Any<CancellationToken>());
     }
 
@@ -61,7 +60,7 @@ public sealed class RunLineageEndpointTests : IDisposable
     public async Task GET_lineage_returns_404_when_run_missing()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).ReturnsNull();
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
 
         // Act
         var response = await _client.GetAsync($"/flows/api/runs/{Guid.NewGuid()}/lineage");

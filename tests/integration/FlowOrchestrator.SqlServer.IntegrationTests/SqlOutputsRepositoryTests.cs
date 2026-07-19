@@ -3,7 +3,6 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using NSubstitute;
-using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.SqlServer.Tests;
 
@@ -25,7 +24,7 @@ public sealed class SqlOutputsRepositoryTests : IClassFixture<SqlServerFixture>
         var flow = Substitute.For<IFlowDefinition>();
         var trigger = Substitute.For<ITrigger>();
         trigger.Data.Returns(new { OrderId = 42, Customer = "Test" });
-        trigger.Headers.ReturnsNull();
+        trigger.Headers.Returns((IReadOnlyDictionary<string, string>?)null);
 
         // Act
         await _repo.SaveTriggerDataAsync(ctx, flow, trigger);
@@ -57,7 +56,7 @@ public sealed class SqlOutputsRepositoryTests : IClassFixture<SqlServerFixture>
         var ctx = MakeTriggerContext(runId);
         var flow = Substitute.For<IFlowDefinition>();
         var trigger = Substitute.For<ITrigger>();
-        trigger.Data.ReturnsNull();
+        trigger.Data.Returns((object?)null);
         var headers = new Dictionary<string, string> { ["X-Request-Id"] = "abc123" };
         trigger.Headers.Returns(headers);
 

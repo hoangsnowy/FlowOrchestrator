@@ -84,7 +84,7 @@ public sealed class RetryStepCascadeAdvanceTests
 
         ValueTask<string?> Capture(NSubstitute.Core.CallInfo call)
         {
-            var step = call.Arg<IStepInstance>();
+            var step = call.Arg<IStepInstance>()!;
             enqueued.Add(step.Key);
             pending.Enqueue(step);
             return new ValueTask<string?>("job-" + step.Key);
@@ -111,7 +111,7 @@ public sealed class RetryStepCascadeAdvanceTests
                 Arg.Any<IStepInstance>())
             .Returns(call =>
             {
-                var step = call.Arg<IStepInstance>();
+                var step = call.Arg<IStepInstance>()!;
                 return new ValueTask<IStepResult>(resultForStep(step.Key));
             });
 

@@ -68,7 +68,7 @@ public sealed class HangfireStepDispatcherConcurrencyTests
             .Create(Arg.Any<Job>(), Arg.Any<IState>())
             .Returns(callInfo =>
             {
-                capturedStates.Add(callInfo.Arg<IState>());
+                capturedStates.Add(callInfo.Arg<IState>()!);
                 return Guid.NewGuid().ToString();
             });
 

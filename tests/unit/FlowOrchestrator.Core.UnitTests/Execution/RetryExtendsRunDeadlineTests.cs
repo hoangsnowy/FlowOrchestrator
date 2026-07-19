@@ -40,7 +40,7 @@ public sealed class RetryExtendsRunDeadlineTests
                 Arg.Any<IExecutionContext>(),
                 Arg.Any<IFlowDefinition>(),
                 Arg.Any<IStepInstance>())
-            .Returns(call => new ValueTask<IStepResult>(resultForStep(call.Arg<IStepInstance>().Key)));
+            .Returns(call => new ValueTask<IStepResult>(resultForStep(call.Arg<IStepInstance>()!.Key)));
 
         _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
 

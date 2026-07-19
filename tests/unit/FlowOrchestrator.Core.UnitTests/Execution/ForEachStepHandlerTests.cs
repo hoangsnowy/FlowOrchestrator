@@ -2,7 +2,6 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using NSubstitute;
-using NSubstitute.ReturnsExtensions;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -17,7 +16,7 @@ public class ForEachStepHandlerTests
         var ctx = Substitute.For<IExecutionContext>();
         ctx.RunId.Returns(Guid.NewGuid());
         ctx.TriggerData.Returns(triggerData);
-        ctx.TriggerHeaders.ReturnsNull();
+        ctx.TriggerHeaders.Returns((IReadOnlyDictionary<string, string>?)null);
         return ctx;
     }
 

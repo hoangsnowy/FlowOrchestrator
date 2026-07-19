@@ -145,9 +145,9 @@ public sealed class InMemoryRuntimeTests
 
         // Assert
         await engine.Received(1).RunStepAsync(
-            Arg.Is<IExecutionContext>(c => c.RunId == ctx.RunId),
+            Arg.Is<IExecutionContext>(c => c!.RunId == ctx.RunId),
             Arg.Any<IFlowDefinition>(),
-            Arg.Is<IStepInstance>(s => s.Key == step.Key),
+            Arg.Is<IStepInstance>(s => s!.Key == step.Key),
             Arg.Any<CancellationToken>());
     }
 
