@@ -83,7 +83,7 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/trigger", null);
@@ -131,7 +131,7 @@ public sealed class ScheduleEndpointTests : IDisposable
 
         _server.FlowStore.GetByIdAsync(flowId)
             .Returns(new FlowDefinitionRecord { Id = flowId, Name = "DailyFlow", IsEnabled = true });
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/pause", null);
@@ -197,8 +197,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).Returns((FlowDefinitionRecord?)null);
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.FlowStore.GetByIdAsync(flowId).Returns(default(FlowDefinitionRecord?));
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PostAsync($"/flows/api/schedules/{jobId}/resume", null);
@@ -226,7 +226,7 @@ public sealed class ScheduleEndpointTests : IDisposable
                 IsEnabled = true,
                 ManifestJson = manifestJson
             });
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PutAsync(
@@ -295,8 +295,8 @@ public sealed class ScheduleEndpointTests : IDisposable
         // Arrange
         var flowId = Guid.NewGuid();
         var jobId = JobId(flowId, "cron");
-        _server.FlowStore.GetByIdAsync(flowId).Returns((FlowDefinitionRecord?)null);
-        _server.ScheduleStateStore.GetAsync(jobId).Returns((FlowScheduleState?)null);
+        _server.FlowStore.GetByIdAsync(flowId).Returns(default(FlowDefinitionRecord?));
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
 
         // Act
         var response = await _client.PutAsync(

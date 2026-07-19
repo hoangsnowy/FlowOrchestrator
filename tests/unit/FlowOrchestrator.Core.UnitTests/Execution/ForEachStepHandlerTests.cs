@@ -16,7 +16,7 @@ public class ForEachStepHandlerTests
         var ctx = Substitute.For<IExecutionContext>();
         ctx.RunId.Returns(Guid.NewGuid());
         ctx.TriggerData.Returns(triggerData);
-        ctx.TriggerHeaders.Returns((IReadOnlyDictionary<string, string>?)null);
+        ctx.TriggerHeaders.Returns(default(IReadOnlyDictionary<string, string>?));
         return ctx;
     }
 

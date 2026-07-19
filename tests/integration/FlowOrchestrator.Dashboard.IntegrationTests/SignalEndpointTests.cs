@@ -22,7 +22,7 @@ public sealed class SignalEndpointTests : IDisposable
     public async Task POST_signal_returns_404_when_run_missing()
     {
         // Arrange
-        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns((FlowRunRecord?)null);
+        _server.FlowRunStore.GetRunDetailAsync(Arg.Any<Guid>()).Returns(default(FlowRunRecord?));
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
