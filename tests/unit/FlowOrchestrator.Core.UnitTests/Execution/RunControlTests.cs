@@ -165,4 +165,36 @@ public sealed class RunControlTests
         var status = await store.GetRunStatusAsync(runId);
         Assert.Equal("TimedOut", status);
     }
+
+    [Fact]
+    public async Task RunStepAsync_UserCancelledAndDeadlineLapsed_CompletesAsCancelled_NotTimedOut()
+    {
+        // Arrange — a run cancelled by the user whose deadline ALSO lapsed. Cancel intent must win:
+        // the termination gate resolves Cancelled (not TimedOut), and the timeout latch is never set —
+        // otherwise a later retry would clear the cancellation.
+        var store = new InMemoryFlowRunStore();
+        var engine = CreateEngine(store);
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = MakeSingleStepFlow(flowId);
+
+        await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+        // Deadline already in the past AND a user cancellation on record.
+        await store.ConfigureRunAsync(runId, flowId, "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        await store.RequestCancelAsync(runId, "user requested");
+
+        // Act
+        await engine.RunStepAsync(
+            new CoreExecutionContext { RunId = runId },
+            flow,
+            new StepInstance("step1", "Work") { RunId = runId });
+
+        // Assert
+        await _stepExecutor.DidNotReceiveWithAnyArgs()
+            .ExecuteAsync(default!, default!, default!);
+        Assert.Equal("Cancelled", await store.GetRunStatusAsync(runId));
+        var control = await store.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.Null(control!.TimedOutAtUtc);
+    }
 }

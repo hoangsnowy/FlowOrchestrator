@@ -748,6 +748,35 @@ public class InMemoryFlowRunStoreTests
     }
 
     [Fact]
+    public async Task CompleteRunIfActiveAsync_TransitionsRunningOnce_ThenReturnsFalse()
+    {
+        // Arrange — a running run; two concurrent completers race to finish it.
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "F", runId, "manual", null, null);
+
+        // Act — first call wins the transition, second finds it already terminal.
+        var first = await _sut.CompleteRunIfActiveAsync(runId, "Succeeded");
+        var second = await _sut.CompleteRunIfActiveAsync(runId, "TimedOut");
+
+        // Assert — exactly one transition; the first writer's status stands.
+        Assert.True(first);
+        Assert.False(second);
+        Assert.Equal("Succeeded", await _sut.GetRunStatusAsync(runId));
+    }
+
+    [Fact]
+    public async Task CompleteRunIfActiveAsync_UnknownRun_ReturnsFalse()
+    {
+        // Arrange
+
+        // Act
+        var result = await _sut.CompleteRunIfActiveAsync(Guid.NewGuid(), "Succeeded");
+
+        // Assert
+        Assert.False(result);
+    }
+
+    [Fact]
     public async Task CleanupAsync_RetainsRunCompletedExactlyAtCutoff()
     {
         // Arrange — strict less-than semantics: a run completed AT the cutoff is retained,

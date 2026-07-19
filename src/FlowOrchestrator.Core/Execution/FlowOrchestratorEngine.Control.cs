@@ -102,7 +102,15 @@ public sealed partial class FlowOrchestratorEngine
             return;
         }
 
-        await _runStore.CompleteRunAsync(runId, status).ConfigureAwait(false);
+        // Idempotent, race-safe completion: only the call that actually transitions the run out of
+        // Running publishes the lifecycle event and bumps telemetry. Collapses the race between the
+        // graph continuation and the periodic timeout sweep (single- or multi-instance) without a
+        // distributed lock — the TOCTOU between HasInFlightWorkAsync and the write is closed by the
+        // guarded transition inside CompleteRunIfActiveAsync.
+        if (!await _runStore.CompleteRunIfActiveAsync(runId, status).ConfigureAwait(false))
+        {
+            return;
+        }
 
         if (_observabilityOptions.EnableOpenTelemetry)
         {
@@ -156,15 +164,19 @@ public sealed partial class FlowOrchestratorEngine
             return "TimedOut";
         }
 
+        // A genuine user cancellation (CancelRequested set while never timed out) wins over a merely
+        // lapsed deadline — otherwise a cancelled run whose deadline also passed would be mislabelled
+        // TimedOut, and a subsequent retry would then clear the cancel latch. Checked BEFORE the
+        // deadline branch so cancel intent is honoured.
+        if (control.CancelRequested)
+        {
+            return "Cancelled";
+        }
+
         if (control.TimeoutAtUtc is not null && DateTimeOffset.UtcNow >= control.TimeoutAtUtc.Value)
         {
             await _runControlStore.MarkTimedOutAsync(runId, "Run timed out before scheduling next step.").ConfigureAwait(false);
             return "TimedOut";
-        }
-
-        if (control.CancelRequested)
-        {
-            return "Cancelled";
         }
 
         return null;
@@ -215,7 +227,18 @@ public sealed partial class FlowOrchestratorEngine
                     continue;
                 }
 
-                // Stuck run: latch the timeout on the control record and complete the run as TimedOut.
+                // A stuck run that the user already cancelled must be finalised as Cancelled, not
+                // mislabelled TimedOut. Because the eligibility gate above excluded TimedOutAtUtc, a
+                // set CancelRequested here can only be a genuine user cancel — so complete as Cancelled
+                // WITHOUT latching the timeout, preserving the cancel across any later retry.
+                if (control.CancelRequested)
+                {
+                    await TryCompleteRunAsync(run.Id, "Cancelled").ConfigureAwait(false);
+                    continue;
+                }
+
+                // Stuck run past its deadline: latch the timeout on the control record and complete
+                // the run as TimedOut.
                 await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false);
                 await TryCompleteRunAsync(run.Id, "TimedOut").ConfigureAwait(false);
             }

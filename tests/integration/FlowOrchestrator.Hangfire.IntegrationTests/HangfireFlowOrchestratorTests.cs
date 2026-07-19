@@ -328,7 +328,7 @@ public class HangfireFlowOrchestratorTests
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
-        await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Cancelled");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(ctx.RunId, "Cancelled");
     }
 
     [Fact]
@@ -380,7 +380,7 @@ public class HangfireFlowOrchestratorTests
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: run must complete as Failed, not Skipped
-        await _runStore.Received(1).CompleteRunAsync(runId, "Failed");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(runId, "Failed");
     }
 
     [Fact]
@@ -444,7 +444,7 @@ public class HangfireFlowOrchestratorTests
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: all leaves Skipped → run = Skipped, not Succeeded
-        await _runStore.Received(1).CompleteRunAsync(runId, "Skipped");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(runId, "Skipped");
     }
 
     [Fact]
@@ -502,7 +502,7 @@ public class HangfireFlowOrchestratorTests
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert: mixed leaves (one Succeeded, one Skipped) → run = Succeeded
-        await _runStore.Received(1).CompleteRunAsync(runId, "Succeeded");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(runId, "Succeeded");
     }
 
     [Fact]

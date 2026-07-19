@@ -434,4 +434,38 @@ public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixtur
         Assert.NotNull(control);
         Assert.Null(control!.TimeoutAtUtc);
     }
+
+    [Fact]
+    public async Task CompleteRunIfActiveAsync_TransitionsRunningOnce_ThenReturnsFalse()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "F", runId, "manual", null, null);
+
+        // Act
+        var first = await _store.CompleteRunIfActiveAsync(runId, "Succeeded");
+        var second = await _store.CompleteRunIfActiveAsync(runId, "TimedOut");
+
+        // Assert — guarded UPDATE transitions exactly once; the first writer's status stands.
+        Assert.True(first);
+        Assert.False(second);
+        var detail = await _store.GetRunDetailAsync(runId);
+        Assert.Equal("Succeeded", detail!.Status);
+    }
+
+    [Fact]
+    public async Task MarkTimedOutAsync_AlreadyTimedOut_ReturnsFalse()
+    {
+        // Arrange — align the contract with the InMemory backend (Finding 3): a repeat is a no-op.
+        var runId = Guid.NewGuid();
+        await _store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var first = await _store.MarkTimedOutAsync(runId, "deadline exceeded");
+
+        // Act
+        var second = await _store.MarkTimedOutAsync(runId, "again");
+
+        // Assert
+        Assert.True(first);
+        Assert.False(second);
+    }
 }

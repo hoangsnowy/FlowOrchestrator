@@ -151,6 +151,18 @@ public sealed class PostgreSqlFlowRunStore :
             new { Id = runId, Status = status });
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> CompleteRunIfActiveAsync(Guid runId, string status)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        // Guarded, atomic transition: only a still-Running run is completed, and rows-affected tells
+        // the caller whether THIS call won the race — so the lifecycle event fires exactly once.
+        var affected = await conn.ExecuteAsync(
+            "UPDATE flow_runs SET status = @Status, completed_at = NOW() WHERE id = @Id AND status = 'Running'",
+            new { Id = runId, Status = status });
+        return affected > 0;
+    }
+
     public async Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
         var page = await GetRunsPageAsync(flowId, null, skip, take, null);
@@ -610,11 +622,12 @@ public sealed class PostgreSqlFlowRunStore :
         var affected = await conn.ExecuteAsync(
             """
             UPDATE flow_run_controls
-            SET timed_out_at_utc = COALESCE(timed_out_at_utc, NOW()),
+            SET timed_out_at_utc = NOW(),
                 cancel_requested = TRUE,
                 cancel_reason = COALESCE(@Reason, cancel_reason, 'Run timed out.'),
                 cancel_requested_at_utc = COALESCE(cancel_requested_at_utc, NOW())
             WHERE run_id = @RunId
+              AND timed_out_at_utc IS NULL
             """,
             new { RunId = runId, Reason = reason });
 

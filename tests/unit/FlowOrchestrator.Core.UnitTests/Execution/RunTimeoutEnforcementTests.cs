@@ -1,6 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
@@ -27,7 +28,7 @@ public sealed class RunTimeoutEnforcementTests
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
-    private FlowOrchestratorEngine CreateEngine(InMemoryFlowRunStore store) =>
+    private FlowOrchestratorEngine CreateEngine(InMemoryFlowRunStore store, IFlowEventNotifier? notifier = null) =>
         new FlowOrchestratorEngine(
             _dispatcher,
             _flowExecutor,
@@ -43,7 +44,24 @@ public sealed class RunTimeoutEnforcementTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            notifier);
+
+    /// <summary>Counts published <see cref="RunCompletedEvent"/>s so tests can assert exactly-once completion.</summary>
+    private sealed class CountingNotifier : IFlowEventNotifier
+    {
+        private int _runCompleted;
+        public int RunCompletedCount => _runCompleted;
+
+        public ValueTask PublishAsync(FlowLifecycleEvent evt, CancellationToken ct = default)
+        {
+            if (evt is RunCompletedEvent)
+            {
+                Interlocked.Increment(ref _runCompleted);
+            }
+            return ValueTask.CompletedTask;
+        }
+    }
 
     [Fact]
     public async Task EnforceDueTimeoutsAsync_StuckRunningRunWithFailedStep_MarksTimedOutAndCompletesRun()
@@ -135,5 +153,53 @@ public sealed class RunTimeoutEnforcementTests
         var control = await store.GetRunControlAsync(runId);
         Assert.NotNull(control);
         Assert.Null(control!.TimedOutAtUtc);
+    }
+
+    [Fact]
+    public async Task EnforceDueTimeoutsAsync_StuckLapsedUserCancelledRun_CompletesAsCancelled_PreservingCancel()
+    {
+        // Arrange — a user cancelled a run that then got stuck past its deadline. The sweep must
+        // finalise it as Cancelled (honouring intent), NOT mislabel it TimedOut, and must NOT latch
+        // the timeout — otherwise a later retry would clear the cancel.
+        var store = new InMemoryFlowRunStore();
+        var engine = CreateEngine(store);
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+        await store.ConfigureRunAsync(runId, flowId, "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        await store.RequestCancelAsync(runId, "user requested");
+
+        // Act
+        await engine.EnforceDueTimeoutsAsync();
+
+        // Assert
+        Assert.Equal("Cancelled", await store.GetRunStatusAsync(runId));
+        var control = await store.GetRunControlAsync(runId);
+        Assert.NotNull(control);
+        Assert.Null(control!.TimedOutAtUtc);
+        Assert.True(control.CancelRequested);
+        Assert.Equal("user requested", control.CancelReason);
+    }
+
+    [Fact]
+    public async Task EnforceDueTimeoutsAsync_CalledTwiceOnStuckRun_PublishesExactlyOneRunCompletedEvent()
+    {
+        // Arrange — a stuck, lapsed run. Two sweeps (mimicking a second replica / a re-entrant tick)
+        // must complete the run exactly once, thanks to the guarded CompleteRunIfActiveAsync.
+        var notifier = new CountingNotifier();
+        var store = new InMemoryFlowRunStore();
+        var engine = CreateEngine(store, notifier);
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(flowId, "TestFlow", runId, "manual", null, null);
+        await store.ConfigureRunAsync(runId, flowId, "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        // Act
+        await engine.EnforceDueTimeoutsAsync();
+        await engine.EnforceDueTimeoutsAsync();
+
+        // Assert
+        Assert.Equal("TimedOut", await store.GetRunStatusAsync(runId));
+        Assert.Equal(1, notifier.RunCompletedCount);
     }
 }

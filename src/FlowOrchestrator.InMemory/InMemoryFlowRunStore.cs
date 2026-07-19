@@ -153,6 +153,29 @@ public sealed class InMemoryFlowRunStore :
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
+    public Task<bool> CompleteRunIfActiveAsync(Guid runId, string status)
+    {
+        // Serialise the check-then-set on the run record so two concurrent completers (graph
+        // continuation + timeout sweep) can never both observe Running and both transition it.
+        if (!_runs.TryGetValue(runId, out var run))
+        {
+            return Task.FromResult(false);
+        }
+
+        lock (run)
+        {
+            if (!string.Equals(run.Status, "Running", StringComparison.Ordinal))
+            {
+                return Task.FromResult(false);
+            }
+
+            run.Status = status;
+            run.CompletedAt = DateTimeOffset.UtcNow;
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
         IReadOnlyList<FlowRunRecord> result = ApplyRunsFilter(flowId, null, null, null, null, deepSearch: true)
