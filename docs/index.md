@@ -43,9 +43,10 @@ Step-by-step timeline, input/output capture, retry button for failed steps, coop
 
 ```bash
 dotnet add package FlowOrchestrator.Core
-dotnet add package FlowOrchestrator.Hangfire
-dotnet add package FlowOrchestrator.SqlServer      # or .PostgreSQL / .InMemory
+dotnet add package FlowOrchestrator.Hangfire       # runtime — or .InMemory / .ServiceBus
+dotnet add package FlowOrchestrator.SqlServer      # storage — or .PostgreSQL / .InMemory
 dotnet add package FlowOrchestrator.Dashboard      # optional REST API + SPA
+dotnet add package FlowOrchestrator.Testing        # optional test host, for test projects
 ```
 
 ```csharp
@@ -57,7 +58,7 @@ builder.Services.AddHangfireServer();
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseSqlServer(connectionString);
-    options.UseHangfire();
+    options.UseHangfire();                 // or .UseInMemoryRuntime() / .UseAzureServiceBusRuntime(...)
     options.AddFlow<MyFlow>();
 });
 
@@ -78,7 +79,9 @@ app.MapFlowDashboard("/flows");
 | `FlowOrchestrator.Hangfire` | Hangfire bridge and DI registration | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Hangfire)](https://www.nuget.org/packages/FlowOrchestrator.Hangfire) |
 | `FlowOrchestrator.SqlServer` | SQL Server persistence (Dapper) | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.SqlServer)](https://www.nuget.org/packages/FlowOrchestrator.SqlServer) |
 | `FlowOrchestrator.PostgreSQL` | PostgreSQL persistence (Npgsql) | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.PostgreSQL)](https://www.nuget.org/packages/FlowOrchestrator.PostgreSQL) |
-| `FlowOrchestrator.InMemory` | In-process storage (dev/testing) | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.InMemory)](https://www.nuget.org/packages/FlowOrchestrator.InMemory) |
+| `FlowOrchestrator.InMemory` | In-process runtime **and** storage (dev/testing) | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.InMemory)](https://www.nuget.org/packages/FlowOrchestrator.InMemory) |
+| `FlowOrchestrator.ServiceBus` | Azure Service Bus runtime adapter (multi-replica) | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.ServiceBus)](https://www.nuget.org/packages/FlowOrchestrator.ServiceBus) |
 | `FlowOrchestrator.Dashboard` | REST API + embedded SPA | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Dashboard)](https://www.nuget.org/packages/FlowOrchestrator.Dashboard) |
+| `FlowOrchestrator.Testing` | `FlowTestHost` — run flows in-process in tests | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Testing)](https://www.nuget.org/packages/FlowOrchestrator.Testing) |
 
 All packages target **net8.0**, **net9.0**, and **net10.0**. MIT license.

@@ -6,6 +6,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Dependencies
+
+- Hangfire 1.8.23 → 1.8.24 (`Hangfire.Core`, `Hangfire.AspNetCore`, **and**
+  `Hangfire.SqlServer` — the family carries an exact `Hangfire.Core (= x.y.z)`
+  constraint via `Hangfire.NetCore`, so these three must move together or restore
+  fails with `NU1608`); Microsoft.Extensions.DependencyInjection.Abstractions
+  10.0.9 → 10.0.10; Microsoft.AspNetCore.TestHost 8.0.28 → 8.0.29;
+  actions/setup-dotnet 5 → 6.
+
 ## [1.29.0] - 2026-07-19
 
 ### Added
@@ -43,8 +52,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   user-cancelled run as `Cancelled` (without latching the timeout), so a later retry
   still preserves the cancellation.
 - **`MarkTimedOutAsync` return-value contract aligned across backends.** SQL Server
-  and PostgreSQL now guard on `timed_out_at_utc IS NULL`, so a repeat call is a true
-  no-op returning `false`, matching the InMemory store.
+  now guards on `TimedOutAtUtc IS NULL` and PostgreSQL on `timed_out_at_utc IS
+  NULL`, so a repeat call is a true no-op returning `false`, matching the InMemory
+  store.
 
 ### Dependencies
 
@@ -53,6 +63,46 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   10.0.8 → 10.0.9; Testcontainers 4.12.0 → 4.13.0; actions/setup-node 6 → 7;
   Azure.Messaging.ServiceBus 7.20.1 → 7.20.2; Microsoft.NET.Test.Sdk 18.7.0 →
   18.8.0; NSubstitute 5.3.0 → 6.0.0 (test-suite migrated to its nullable-annotated API).
+
+## [1.28.2] - 2026-07-01
+
+### Dependencies
+
+- `Microsoft.Data.SqlClient` 7.0.1 → 7.0.2; `Microsoft.Extensions.DependencyInjection`
+  10.0.8 → 10.0.9; `Microsoft.Extensions.Hosting.Abstractions` and
+  `Microsoft.Extensions.Logging.Abstractions` 10.0.8 → 10.0.9;
+  `Microsoft.Extensions.TimeProvider.Testing` 10.6.0 → 10.7.0;
+  `Microsoft.NET.Test.Sdk` 18.6.0 → 18.7.0; `OpenTelemetry.Api` 1.15.3 → 1.16.0.
+
+## [1.28.1] - 2026-06-26
+
+### Fixed
+
+- **`ForEach` runs hung whenever the collection had at least one item.** The
+  dispatch-hint guard in `RunStepAsync` rejected any hint child that
+  `StepCollection.FindStep` resolved — but a loop child key
+  (`{loop}.{index}.{child}`) deliberately resolves to the loop's template child,
+  so every legitimate iteration tripped the "no static DAG step" guard, leaving
+  the loop step `Succeeded` while its children were never dispatched. Dynamic
+  fan-out keys are now exempted via `IsDynamicFanOutKey`. Closes the known-issue
+  waiver recorded under 1.26.1.
+- **`ForEach` loop children failed to deserialize on the Hangfire and Service Bus
+  runtimes.** `__loopItem` carried a `System.Text.Json.JsonElement`, which
+  Newtonsoft.Json cannot round-trip. Items are now materialised into a plain CLR
+  value graph (string / long / double / bool / null, `Dictionary` for objects,
+  `List` for arrays); integer items box as `long`, not `double`.
+- **Dashboard run search could not reach `Cancelled` / `TimedOut` runs**, and
+  free-text search on the visible "Blocked" label matched nothing. Both statuses
+  were added to the status filter, and `/api/runs` now resolves the display alias
+  to its canonical status token (`Blocked` → `Skipped`).
+
+### Dependencies
+
+- `Aspire.Hosting.{PostgreSQL,SqlServer,Azure.ServiceBus}` 13.4.2 → 13.4.6
+  (AppHost / sample only). The PostgreSQL 18+ data-directory caveat noted under
+  1.28.0 still applies — a fresh dev volume (or `pg_upgrade`) is required.
+- `actions/checkout` 6 → 7; `Microsoft.Extensions.DependencyInjection.Abstractions`
+  10.0.8 → 10.0.9; `Microsoft.AspNetCore.TestHost` 8.0.27 → 8.0.28.
 
 ## [1.28.0] - 2026-06-05
 
@@ -559,16 +609,21 @@ Closes all 10 alerts surfaced by the newly-added CodeQL workflow.
 
 The `e2e` skill `5.4 ForEach iteration` check fails on all four sample-app
 instances with a *pre-existing* bug (present in 1.26.0): `OrderBatchFlow`
-hangs when triggered with a non-empty `orderIds` array because
-`FlowOrchestratorEngine.Step.cs` line 210 wrongly rejects runtime child
-keys like `process_orders.0.validate_order` — `StepCollection.FindStep`
-resolves dot-notation through nested loop scopes and returns the child
-metadata, which trips the "no static DAG step" guard. The fix lives
-behind a separate spawned task. The failure is unrelated to this
+hangs when triggered with a non-empty `orderIds` array because the
+dispatch-hint guard in `FlowOrchestratorEngine.Step.cs` wrongly rejects
+runtime child keys like `process_orders.0.validate_order` —
+`StepCollection.FindStep` resolves dot-notation through nested loop scopes
+and returns the child metadata, which trips the "no static DAG step" guard.
+The fix lives behind a separate spawned task. The failure is unrelated to this
 release's manual-retry change; remaining e2e checks (5.1 dashboard,
 5.2 cron, 5.3 manual trigger, 5.5 When-skip, 5.7 WaitForSignal,
 5.8 Hangfire dashboard, 5.9 SQL-only) pass on every applicable instance.
 Waiver documented per CLAUDE.md pre-release gate.
+
+**Resolved in 1.28.1** — the dispatch-hint guard now exempts dynamic loop
+fan-out keys (`IsDynamicFanOutKey`), and `ForEach` items are materialised to
+plain CLR values so loop children survive the Hangfire / Service Bus
+serialization boundary.
 
 ## [1.26.0] - 2026-05-10
 

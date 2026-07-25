@@ -23,7 +23,7 @@ public interface IFlowDefinition
 
 ### Why the ID must be stable
 
-The `Id` is persisted in `FlowDefinitions` and referenced by `FlowRuns` and `FlowSteps`. Changing it after flows have run creates orphaned records and breaks the run history view. Use a hardcoded `new Guid("...")` literal, not `Guid.NewGuid()`.
+The `Id` is persisted in `FlowDefinitions` and referenced by `FlowRuns`; step, output and event rows hang off the `RunId` rather than the flow `Id`. Changing it after flows have run creates orphaned records and breaks the run history view. Use a hardcoded `new Guid("...")` literal, not `Guid.NewGuid()`.
 
 ---
 
@@ -57,7 +57,7 @@ new TriggerMetadata
 |---|---|---|
 | `TriggerType.Manual` | — | Dashboard button or `POST /flows/api/flows/{id}/trigger` |
 | `TriggerType.Cron` | `cronExpression` | Recurring job registered with the active runtime adapter on the given cron schedule |
-| `TriggerType.Webhook` | `webhookSlug`, optionally `webhookSecret` | `POST /flows/api/webhook/{webhookSlug}` |
+| `TriggerType.Webhook` | `webhookSlug`, optionally `webhookHmacKey` (legacy alias: `webhookSecret`) | `POST /flows/api/webhook/{webhookSlug}` — see [Webhook Hardening](webhook-hardening.md) |
 
 A flow can declare multiple triggers in the same manifest. Any of them can start a run independently.
 
@@ -127,8 +127,8 @@ RunAfter = new RunAfterCollection
     ["step_a"] = [StepStatus.Succeeded, StepStatus.Failed]
 }
 
-// Entry step — runs immediately when the flow is triggered
-RunAfter = null  // or omit entirely
+// Entry step — omit RunAfter entirely; it defaults to an empty RunAfterCollection
+// (an empty collection means "runs immediately when the flow is triggered")
 ```
 
 When multiple predecessors are listed, **all** must reach one of their declared statuses before the step becomes ready (AND-join semantics). This enables fan-in after parallel branches.
@@ -158,6 +158,7 @@ When multiple predecessors are listed, **all** must reach one of their declared 
 | `Failed` | One or more steps failed and no downstream path could complete |
 | `Cancelled` | Cooperative cancellation was requested and the in-flight steps acknowledged it |
 | `TimedOut` | The run exceeded `RunControl.DefaultRunTimeout` |
+| `Skipped` | Every leaf step of the run was skipped — all paths were blocked by unmet `runAfter` statuses or by `When` conditions evaluating to `false`. The dashboard displays this as **Blocked**. |
 
 ---
 
@@ -182,12 +183,14 @@ The execution context is available in every `IStepHandler.ExecuteAsync` call:
 ```csharp
 public interface IExecutionContext
 {
-    Guid RunId { get; }
-    string FlowId { get; }
-    string TriggerKey { get; }
-    ClaimsPrincipal? Principal { get; }
-    CancellationToken CancellationToken { get; }
+    Guid RunId { get; set; }
+    string? PrincipalId { get; set; }
+    object? TriggerData { get; set; }
+    IReadOnlyDictionary<string, string>? TriggerHeaders { get; set; }
+    string? JobId { get; set; }
 }
 ```
 
-It is also injectable from DI via `IExecutionContextAccessor.Current` for services called indirectly from a step.
+Trigger data can be read strongly typed via the `ExecutionContextTypedExtensions` helpers `ctx.GetTriggerDataAs<T>()` and `ctx.TryGetTriggerDataAs<T>(out var value)`.
+
+It is also injectable from DI via `IExecutionContextAccessor.CurrentContext` for services called indirectly from a step.

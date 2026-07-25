@@ -44,7 +44,7 @@ All three runtimes implement the same `IRecurringTriggerDispatcher` / `IRecurrin
 }
 ```
 
-**Cron expression format:** standard 5-field Quartz/Hangfire cron (`min hour day month weekday`).
+**Cron expression format:** 5-field cron (`min hour day month weekday`). A 6-field expression (`sec min hour day month weekday`) is also accepted and parsed with second precision; the InMemory runtime evaluates schedules on a 1 s tick, so sub-second granularity is not achievable.
 
 Common patterns:
 
@@ -61,7 +61,7 @@ Common patterns:
 ### Disabled flows
 
 A flow whose `IFlowStore` record has `IsEnabled = false` (toggled via the dashboard's
-disable button or `PUT /flows/api/flows/{id}/disable`) silently rejects ALL trigger paths
+disable button or `POST /flows/api/flows/{id}/disable`; re-enable with `POST /flows/api/flows/{id}/enable`) silently rejects ALL trigger paths
 — manual, cron, webhook, and re-trigger — at the engine layer (v1.22+). The engine consults
 `IFlowStore.GetByIdAsync(flowId).IsEnabled` at the top of `TriggerAsync` and returns
 `{ runId: null, disabled: true }` without dispatching, emitting EventId 1010
@@ -126,7 +126,7 @@ Activate per flow via manifest inputs. The full set of v1.25 fields:
 |-------|---------|
 | `webhookSignatureScheme` | Selects a built-in dialect: `GitHub`, `GitHubLegacy`, `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`, `Linear`, `Dropbox`, `Mailgun`, `MicrosoftTeams`, `Atlassian`, `Calendly`, `Generic`, or `Custom`. |
 | `webhookHmacKey` | Signing key used for HMAC verification. Falls back to `webhookSecret` when absent. |
-| `webhookHmacKeyPrevious` / `webhookSecretPrevious` | Optional rotated-out key. Successful matches against the previous key emit `EventId 4010` (`WebhookSecretRotationUsedPrevious`). |
+| `webhookHmacKeyPrevious` / `webhookSecretPrevious` | Optional rotated-out key. Successful matches against the previous key emit `EventId 4010` (`WebhookLog.RotationUsedPreviousKey`). |
 | `webhookSignatureHeader`, `webhookSignatureAlgorithm`, `webhookSignatureEncoding`, `webhookSignaturePrefix`, `webhookSignatureMultiValueDelimiter`, `webhookSignatureKeyValueSeparator`, `webhookSignatureValueKey`, `webhookTimestampValueKey`, `webhookTimestampHeader`, `webhookSignedPayloadStrategy`, `webhookSignedPayloadDelimiter`, `webhookSignedPayloadVersion`, `webhookHeaderValuePrefix`, `webhookCustomStrategyName` | Drive the `Custom` scheme directly from the manifest (every aspect of the wire format is controllable). |
 | `webhookReplayToleranceSeconds` | Max clock skew between publisher timestamp and server time. `0` disables replay protection. |
 | `webhookNonceHeader` | Optional explicit nonce header (e.g. `X-GitHub-Delivery`). Default: SHA-256 of `timestamp \|\| body`. |
@@ -153,7 +153,7 @@ Per-publisher cookbook example — GitHub:
 }
 ```
 
-The dashboard exposes a "Webhooks" tab that surfaces the recent-deliveries log and a 24-hour reason histogram (`GET /flows/api/webhooks/recent`, `GET /flows/api/webhooks/stats`). Rejected requests are persisted to the in-memory ring buffer (last 1 000 entries by default); a Sql / Postgres backend ships in a follow-up release for long retention.
+The dashboard exposes a "Webhooks" tab that surfaces the recent-deliveries log and a 24-hour reason histogram (`GET /flows/api/webhooks/recent`, `GET /flows/api/webhooks/stats`). Rejected requests are persisted to the in-memory ring buffer (last 1 000 entries by default). For multi-replica deployments or long retention, swap the in-memory stores for a durable backend with `options.AddSqlServerWebhookHardening(conn)` or `options.AddPostgreSqlWebhookHardening(conn)` — see [Storage](storage.md).
 
 ---
 
@@ -198,7 +198,7 @@ Idempotency-Key: batch-2026-04-19-001
 { "batchId": "BATCH-001" }
 ```
 
-If a run with the same `Idempotency-Key` value already exists for this flow, FlowOrchestrator returns the existing `runId` without creating a new run.
+If a run with the same `Idempotency-Key` value already exists for this flow **and the same trigger**, FlowOrchestrator returns the existing `runId` without creating a new run.
 
 The header name is configurable:
 
@@ -206,7 +206,20 @@ The header name is configurable:
 options.RunControl.IdempotencyHeaderName = "Idempotency-Key";  // default
 ```
 
-Idempotency keys work for both manual triggers and webhook triggers.
+Idempotency keys work for both manual triggers and webhook triggers, but they are scoped per (flow, trigger key): the same key delivered to a flow's manual trigger and to its webhook trigger creates two separate runs.
+
+### Per-run timeout override
+
+Include the reserved `runTimeoutSeconds` key in the trigger JSON body to override `options.RunControl.DefaultRunTimeout` for that run only:
+
+```http
+POST /flows/api/flows/{id}/trigger
+Content-Type: application/json
+
+{ "batchId": "BATCH-001", "runTimeoutSeconds": 900 }
+```
+
+The value must be a positive integer (a numeric string is also accepted when the payload is a dictionary); anything else is ignored and the global default applies. Once the deadline passes the run is marked `TimedOut` — lazily when a step is dispatched after the deadline, and proactively by the sweep governed by `options.RunControl.TimeoutEnforcementInterval`.
 
 ---
 

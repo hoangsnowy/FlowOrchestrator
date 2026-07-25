@@ -12,6 +12,7 @@ An expression starts with `@`. Non-expression strings are passed through as-is.
 |---|---|
 | `@triggerBody()` | The full trigger body as a `JsonElement` |
 | `@triggerBody()?.fieldName` | A top-level field from the trigger body |
+| `@triggerBody().fieldName` | Same as `@triggerBody()?.fieldName` — the plain-dot form is accepted and is equally null-safe |
 | `@triggerBody()?.nested.child` | A nested field (dot-notation path) |
 | `@triggerBody()?.items[0].name` | An array element, then a field |
 | `@triggerHeaders()` | All trigger headers as a `JsonElement` |
@@ -84,13 +85,22 @@ Any value that does **not** start with `@` is treated as a literal and passed th
 
 ## Security: Excluded Headers
 
-The following headers are **never captured** from trigger requests, regardless of what is sent:
+The following headers are **never captured** from trigger requests, regardless of what is sent.
+
+Sensitive auth/session headers:
 
 - `Authorization`
+- `Proxy-Authorization`
 - `Cookie`
 - `Set-Cookie`
-- `X-Auth-Token`
-- `X-Api-Key`
+- `X-Webhook-Key`
+
+Low-level transport headers:
+
+- `Connection`
+- `Transfer-Encoding`
+- `Upgrade`
+- `Content-Length`
 
 These exclusions prevent credentials from being persisted in the database and visible in the dashboard.
 
@@ -169,7 +179,7 @@ public sealed class SubmitHandler : IStepHandler<SubmitInput>
 
     public async ValueTask<object?> ExecuteAsync(...)
     {
-        var prev = await _outputs.GetStepOutputAsync(_ctx.Context!.RunId, "fetch_orders");
+        var prev = await _outputs.GetStepOutputAsync(_ctx.CurrentContext!.RunId, "fetch_orders");
         var orderId = ((JsonElement)prev!).GetProperty("orderId").GetString();
         // use orderId...
     }

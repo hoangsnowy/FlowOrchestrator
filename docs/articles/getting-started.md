@@ -12,13 +12,17 @@ This guide walks you from zero to a running flow in about five minutes.
 Pick the storage backend that matches your environment:
 
 ```bash
-# Core (always required)
+# Core + DI entry point (both always required)
 dotnet add package FlowOrchestrator.Core
+dotnet add package FlowOrchestrator.Hangfire   # hosts the AddFlowOrchestrator() extension method — required by every runtime
 
-# Runtime adapter — choose one
-dotnet add package FlowOrchestrator.Hangfire     # Hangfire-backed execution
-dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T>-backed execution (no Hangfire needed)
+# Additional runtime adapter — optional, pick at most one
+dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T>-backed execution (no Hangfire server needed)
 dotnet add package FlowOrchestrator.ServiceBus   # Azure Service Bus (cloud-native, multi-replica)
+
+# Required when using the Hangfire runtime (not pulled in by FlowOrchestrator.Hangfire)
+dotnet add package Hangfire.AspNetCore   # AddHangfire / AddHangfireServer / UseHangfireDashboard
+dotnet add package Hangfire.SqlServer    # UseSqlServerStorage (use Hangfire.PostgreSql for PostgreSQL)
 
 # Storage backend — choose one
 dotnet add package FlowOrchestrator.SqlServer     # SQL Server via Dapper
@@ -116,6 +120,8 @@ public sealed class LogMessageHandler : IStepHandler<LogMessageInput>
 ### SQL Server
 
 ```csharp
+using FlowOrchestrator.Hangfire;   // AddFlowOrchestrator lives here
+
 var connStr = builder.Configuration.GetConnectionString("FlowOrchestrator")!;
 
 builder.Services.AddHangfire(c => c
@@ -142,6 +148,8 @@ builder.Services.AddFlowDashboard(builder.Configuration);
 ### PostgreSQL
 
 ```csharp
+using FlowOrchestrator.Hangfire;   // AddFlowOrchestrator lives here
+
 var pgConnStr = builder.Configuration.GetConnectionString("FlowOrchestratorPg")!;
 
 builder.Services.AddHangfire(c => c
@@ -159,9 +167,11 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ### In-Memory (Dev / Testing)
 
-The in-memory runtime uses a `Channel<T>`-backed step dispatcher and a `PeriodicTimer`-driven cron scheduler — no Hangfire packages are needed.
+The in-memory runtime uses a `Channel<T>`-backed step dispatcher and a `PeriodicTimer`-driven cron scheduler — you do not register Hangfire itself (`AddHangfire` / `AddHangfireServer`) and do not need `Hangfire.AspNetCore` or a Hangfire storage package. The `FlowOrchestrator.Hangfire` package is still required, because it hosts the `AddFlowOrchestrator` extension method (and pulls in `Hangfire.Core` transitively).
 
 ```csharp
+using FlowOrchestrator.Hangfire;   // AddFlowOrchestrator lives here
+
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();

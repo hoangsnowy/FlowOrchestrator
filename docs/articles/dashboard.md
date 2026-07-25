@@ -16,7 +16,7 @@ var app = builder.Build();
 app.MapFlowDashboard("/flows");  // SPA at /flows, API at /flows/api/**
 ```
 
-`AddFlowDashboard` has three overloads:
+`AddFlowDashboard` has four overloads:
 
 ```csharp
 // From IConfiguration — reads FlowDashboard section from appsettings.json
@@ -32,6 +32,14 @@ builder.Services.AddFlowDashboard(options =>
 
 // No arguments — defaults only (no auth, default title)
 builder.Services.AddFlowDashboard();
+
+// Configuration + code: binds appsettings (e.g. Basic Auth) first, then applies the delegate.
+// Use this when you need config-driven Basic Auth AND code-only settings such as webhook security —
+// the delegate-only overload above does not read configuration.
+builder.Services.AddFlowDashboard(builder.Configuration, options =>
+{
+    options.UseWebhookSecurity(sec => sec.UseEnforcementMode(WebhookEnforcementMode.Enforce));
+});
 ```
 
 ---
@@ -72,7 +80,7 @@ builder.Services.AddFlowDashboard();
 
 ### Overview
 
-Landing page showing run statistics: total runs, active runs, succeeded today, failed today.
+Landing page showing five stat cards: registered flows, active runs, completed today, failed today, and scheduled jobs.
 
 ### Flows
 
@@ -90,7 +98,7 @@ Filterable list of all flow runs with columns for flow name, status, trigger, st
 
 Filter parameters:
 - Flow (dropdown)
-- Status (Pending / Running / Succeeded / Failed / Cancelled / TimedOut)
+- Status (Running / Succeeded / Blocked / Failed / Cancelled / Timed Out — the `Blocked` label maps to the canonical `Skipped` status)
 - Search (free text)
 
 Click a run to open the **run timeline**:
@@ -140,14 +148,17 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/flows/api/runs` | List runs — queryable: `?flowId=`, `?status=`, `?search=`, `?from=`, `?to=`, `?deep=`, `?skip=`, `?take=` |
+| `GET` | `/flows/api/runs` | List runs — queryable: `?flowId=`, `?status=`, `?search=`, `?from=`, `?to=`, `?deep=`, `?skip=`, `?take=`, `?includeTotal=`. With `includeTotal=true` the response is `{ items, total, skip, take }` instead of a bare array. |
 | `GET` | `/flows/api/runs/active` | List currently-running runs |
 | `GET` | `/flows/api/runs/stats` | Aggregate statistics for the dashboard overview |
+| `GET` | `/flows/api/runs/timeseries` | Bucketed run counts for the overview charts — `?bucket=hour\|day`, `?hours=` (default 24, max 720), `?days=` (default 30, max 365), `?since=`/`?until=`, `?flowId=` |
 | `GET` | `/flows/api/runs/{id}` | Run detail with trigger headers/body |
 | `GET` | `/flows/api/runs/{id}/steps` | All step details for a run |
 | `GET` | `/flows/api/runs/{runId}/events` | Event stream for the run (requires `EnableEventPersistence = true`) |
 | `GET` | `/flows/api/runs/{runId}/control` | Timeout, cancellation, idempotency state |
+| `GET` | `/flows/api/runs/{runId}/lineage` | Re-run lineage: the source run this one was re-run from, plus the runs re-run from it |
 | `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative cancellation |
+| `POST` | `/flows/api/runs/{runId}/rerun` | Re-run a finished run with its original trigger payload (the idempotency header is stripped); the new run records `sourceRunId` |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
 
 **Run search (`?search=`)** matches (case-insensitively) the run's id, flow
@@ -229,4 +240,4 @@ FlowOrchestrator resets the step to `Pending`, preserves all prior step outputs,
 POST /flows/api/runs/{runId}/cancel
 ```
 
-Sets a cancellation flag. The next execution of this run by the runtime adapter picks up the flag and the `CancellationToken` in `IExecutionContext` is cancelled. Step handlers that check `ctx.CancellationToken` will stop gracefully. The run is marked `Cancelled` after the in-flight step completes.
+Sets a cancellation flag on the run's control record. Before dispatching or executing the next step the engine re-reads that record and, when `cancelRequested` is set, stops the run and marks it `Cancelled`. Cancellation is honoured at step boundaries — a step already in flight runs to completion.

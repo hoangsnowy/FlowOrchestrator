@@ -4,11 +4,10 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/hoangsnowy/FlowOrchestrator/ci.yml?branch=main&label=CI)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/hoangsnowy/FlowOrchestrator/codeql.yml?branch=main&label=CodeQL)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/codeql.yml)
-[![Tests](https://img.shields.io/badge/tests-1557%20unit%20%C2%B7%20276%20integration%20%C2%B7%20162%20regression%20%C2%B7%2033%20e2e-brightgreen)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1722%20unit%20%C2%B7%201170%20integration%20%C2%B7%20168%20regression%20%C2%B7%2036%20e2e-brightgreen)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Core?label=NuGet)](https://www.nuget.org/packages/FlowOrchestrator.Core)
 [![Downloads](https://img.shields.io/nuget/dt/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
 [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4)](https://dotnet.microsoft.com/)
-[![SLSA Level 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
 [![License](https://img.shields.io/github/license/hoangsnowy/FlowOrchestrator)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/hoangsnowy/FlowOrchestrator)](https://github.com/hoangsnowy/FlowOrchestrator/commits/main)
 [![Stars](https://img.shields.io/github/stars/hoangsnowy/FlowOrchestrator?style=social)](https://github.com/hoangsnowy/FlowOrchestrator)
@@ -17,13 +16,15 @@
 
 ---
 
-![FlowOrchestrator Dashboard](docs/assets/dashboard-demo.gif)
+![FlowOrchestrator Dashboard](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-demo.gif)
 
 ---
 
-> **What's new in v1.27** — Faster dashboard RUN search. PostgreSQL deep run search now actually hits the `pg_trgm` trigram GIN indexes (de-correlated `IN` over bare columns; ~462 ms → ~151 ms on 100k runs / 500k steps), and SQL Server deep search is documented to be bounded by `?flowId` / `?from` / `?to` for an ~8× cut in scanned rows. The in-memory deep search is no longer quadratic, and the `IFlowRunStore.GetRunsPageAsync` surface (tiered + time-window parameters) was restored as an additive, non-breaking overload. Full [deep-search investigation](https://hoangsnowy.github.io/FlowOrchestrator/benchmarks/sql-deep-search-investigation-2026-05-24.html).
+> **What's new in v1.29** — Stuck runs now recover. Dashboard **Retry** used to be a permanent no-op once a run's timeout deadline had lapsed; `RetryStepAsync` now refreshes the run's execution window via the new `IFlowRunControlStore.ExtendDeadlineAsync` (un-latching a timeout while preserving a genuine user cancel). A new `FlowTimeoutEnforcementHostedService` (`FlowRunControlOptions.TimeoutEnforcementInterval`, default 30 s) proactively finalizes runs that are past their deadline with no in-flight work, so a step that threw and left nothing scheduled no longer leaves the run `Running` forever. Run completion is now idempotent through `IFlowRunStore.CompleteRunIfActiveAsync`, an atomic guarded `Running → terminal` transition, so lifecycle events fire exactly once even when the graph continuation and the timeout sweep race. Both new store members ship as default interface methods — custom store implementations compile unchanged.
 >
-> **v1.25** — Enterprise webhook hardening pipeline: opt-in HMAC signature verifier covering 17 partner dialects, replay protection, token-bucket rate limiting, IP allow/deny lists, body-size cap, DLQ + recent-deliveries log, and a "Webhooks" dashboard tab. Full [hardening cookbook](https://hoangsnowy.github.io/FlowOrchestrator/articles/webhook-hardening.html). **v1.24** — Realtime SSE push for the dashboard (replaces 5-second polling with `EventSource`). **v1.22** — Third runtime adapter [`FlowOrchestrator.ServiceBus`](https://www.nuget.org/packages/FlowOrchestrator.ServiceBus); engine rejects triggers for disabled flows across all runtimes. v1.21 shipped server-side timeseries; v1.19 added health checks; v1.18 shipped [`WaitForSignal`](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html); v1.17 shipped [`When` conditions](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html). Full [CHANGELOG](CHANGELOG.md).
+> **v1.28** — `AddFlowDashboard(IConfiguration, Action<FlowDashboardOptions>)` overload (config-bound *then* delegate, closing a footgun that silently dropped Basic Auth); large correctness pass across Service Bus cron, signal delivery, `ForEach` run termination, and concurrent SQL/PostgreSQL writes; webhook `X-Forwarded-For` spoofing fix. **v1.27** — Faster dashboard RUN search: PostgreSQL deep search now actually hits the `pg_trgm` trigram GIN indexes (~462 ms → ~151 ms on 100k runs / 500k steps) and in-memory deep search is no longer quadratic. Full [deep-search investigation](https://hoangsnowy.github.io/FlowOrchestrator/benchmarks/sql-deep-search-investigation-2026-05-24.html).
+>
+> **v1.25** — Enterprise webhook hardening pipeline: opt-in HMAC signature verifier covering 17 partner dialects, replay protection, token-bucket rate limiting, IP allow/deny lists, body-size cap, DLQ + recent-deliveries log, and a "Webhooks" dashboard tab. Full [hardening cookbook](https://hoangsnowy.github.io/FlowOrchestrator/articles/webhook-hardening.html). **v1.24** — Realtime SSE push for the dashboard (replaces 5-second polling with `EventSource`). **v1.22** — Third runtime adapter [`FlowOrchestrator.ServiceBus`](https://www.nuget.org/packages/FlowOrchestrator.ServiceBus); engine rejects triggers for disabled flows across all runtimes. v1.21 shipped server-side timeseries; v1.19 added health checks; v1.18 shipped [`WaitForSignal`](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html); v1.17 shipped [`When` conditions](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html). Full [CHANGELOG](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/CHANGELOG.md).
 
 ---
 
@@ -87,6 +88,7 @@ RecurringJob.AddOrUpdate<NightlyOrdersJob>("nightly-orders",
 public sealed class NightlyOrdersFlow : IFlowDefinition
 {
     public Guid Id { get; } = new("a1b2c3d4-0000-0000-0000-000000000001");
+    public string Version => "1.0";
     public FlowManifest Manifest { get; set; } = new()
     {
         Triggers = { ["cron"] = new() { Type = TriggerType.Cron,
@@ -103,7 +105,7 @@ public sealed class NightlyOrdersFlow : IFlowDefinition
 // Dashboard, per-step retry, full run history, DAG view — included.
 ```
 
-And yes — your flows are testable. See [`FlowOrchestrator.Testing`](docs/articles/testing.md) for a one-liner test host that runs flows in-process without Hangfire or ASP.NET.
+And yes — your flows are testable. See [`FlowOrchestrator.Testing`](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/docs/articles/testing.md) for a one-liner test host that runs flows in-process without Hangfire or ASP.NET.
 
 ## Coming from Temporal or Dapr?
 
@@ -131,6 +133,7 @@ public class OrderWorkflow
 public sealed class OrderFlow : IFlowDefinition
 {
     public Guid Id { get; } = new("a1b2c3d4-0000-0000-0000-000000000002");
+    public string Version => "1.0";
     public FlowManifest Manifest { get; set; } = new()
     {
         Triggers = { ["manual"] = new() { Type = TriggerType.Manual } },
@@ -168,7 +171,7 @@ FlowOrchestrator separates **storage** (where flow definitions and run history l
 | Extra infrastructure | Hangfire + SQL Server / PostgreSQL | None | Azure Service Bus namespace (or local emulator) |
 | Best for | Production workloads on .NET infra | Local dev, integration tests, single-node side projects | Cloud-native deployments, multi-region scale-out |
 
-Storage is independent — InMemory storage works only for dev / tests, while SQL Server and PostgreSQL are production-ready under either runtime.
+Storage is independent — InMemory storage works only for dev / tests, while SQL Server and PostgreSQL are production-ready under any of the three runtimes.
 
 ---
 
@@ -176,9 +179,10 @@ Storage is independent — InMemory storage works only for dev / tests, while SQ
 
 ```bash
 dotnet add package FlowOrchestrator.Core
+dotnet add package FlowOrchestrator.Hangfire     # always required — see note below
 
 # Runtime adapter — pick one
-dotnet add package FlowOrchestrator.Hangfire     # Hangfire-backed (production default)
+#   Hangfire   → already installed above; call options.UseHangfire()
 dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T> (dev / testing / single-node)
 dotnet add package FlowOrchestrator.ServiceBus   # Azure Service Bus (cloud-native multi-instance)
 
@@ -190,6 +194,13 @@ dotnet add package FlowOrchestrator.SqlServer    # or FlowOrchestrator.PostgreSQ
 dotnet add package FlowOrchestrator.Dashboard    # REST API + SPA dashboard
 dotnet add package FlowOrchestrator.Testing      # FlowTestHost — in-process integration test helper
 ```
+
+> **`FlowOrchestrator.Hangfire` is required for every runtime.** The
+> `AddFlowOrchestrator(...)` DI entry point ships in that package, so you reference it even
+> for the InMemory and Service Bus runtimes. What is *optional* is Hangfire itself — unless
+> you call `options.UseHangfire()`, you never call `AddHangfire` / `AddHangfireServer`, and
+> no Hangfire server, storage, or dashboard runs. The "zero infrastructure" claim is about
+> deployed infrastructure, not about the package graph.
 
 ---
 
@@ -225,7 +236,8 @@ Define a flow:
 public sealed class OrderFulfillmentFlow : IFlowDefinition
 {
     // Always use a fixed GUID literal — never Guid.NewGuid()
-    public Guid Id { get; } = new("a1b2c3d4-0000-0000-0000-000000000002");
+    public Guid Id { get; } = new("a1b2c3d4-0000-0000-0000-000000000003");
+    public string Version => "1.0";
     public FlowManifest Manifest { get; set; } = new()
     {
         Triggers = {
@@ -246,10 +258,11 @@ Open `http://localhost:5000/flows` — trigger the flow, watch steps execute in 
 
 ## Quick Start — InMemory (zero infrastructure)
 
-For local development, prototypes, and single-node side projects — no Hangfire, no database:
+For local development, prototypes, and single-node side projects — no Hangfire server, no database:
 
 ```csharp
-// Program.cs
+// Program.cs — needs the FlowOrchestrator.Hangfire package for AddFlowOrchestrator,
+// but no AddHangfire / AddHangfireServer call and no Hangfire storage.
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();           // storage in-process
@@ -295,7 +308,7 @@ app.MapFlowDashboard("/flows");
 
 Topology — one topic (`flow-steps`) with one subscription per registered flow (SQL filter on `FlowId`); plus one queue (`flow-cron-triggers`) for self-perpetuating cron schedules. The engine's *Dispatch many, Execute once* invariant (dispatch ledger + claim guard) handles Service Bus's at-least-once delivery model — duplicate messages cannot run a step twice.
 
-Local development uses the official Microsoft Service Bus emulator. The included [Aspire AppHost](FlowOrchestrator.AppHost/Program.cs) wires it via `AddAzureServiceBus("servicebus").RunAsEmulator()`; run with `dotnet run --project ./FlowOrchestrator.AppHost` and the `flow-servicebus` instance comes up on port 5104.
+Local development uses the official Microsoft Service Bus emulator. The included [Aspire AppHost](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/FlowOrchestrator.AppHost/Program.cs) wires it via `AddAzureServiceBus("servicebus").RunAsEmulator()`; run with `dotnet run --project ./FlowOrchestrator.AppHost` and the `flow-servicebus` instance comes up on port 5104.
 
 ---
 
@@ -307,6 +320,7 @@ Local development uses the official Microsoft Service Bus emulator. The included
 | Core concepts — Flow, Step, RunId | [core-concepts](https://hoangsnowy.github.io/FlowOrchestrator/articles/core-concepts.html) |
 | Step handlers | [step-handlers](https://hoangsnowy.github.io/FlowOrchestrator/articles/step-handlers.html) |
 | Trigger types | [triggers](https://hoangsnowy.github.io/FlowOrchestrator/articles/triggers.html) |
+| Webhook hardening (HMAC, replay, rate limit, IP lists) | [webhook-hardening](https://hoangsnowy.github.io/FlowOrchestrator/articles/webhook-hardening.html) |
 | Expression reference (`@triggerBody()`) | [expressions](https://hoangsnowy.github.io/FlowOrchestrator/articles/expressions.html) |
 | Polling pattern | [polling](https://hoangsnowy.github.io/FlowOrchestrator/articles/polling.html) |
 | ForEach / fan-out | [foreach](https://hoangsnowy.github.io/FlowOrchestrator/articles/foreach.html) |
@@ -368,6 +382,7 @@ sample app exposes `--export-mermaid <flowId>` for CI integrations.
 | `FlowOrchestrator.Core` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.Hangfire` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.InMemory` | `net8.0` · `net9.0` · `net10.0` |
+| `FlowOrchestrator.ServiceBus` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.SqlServer` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.PostgreSQL` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.Dashboard` | `net8.0` · `net9.0` · `net10.0` |
@@ -381,4 +396,4 @@ sample app exposes `--export-mermaid <flowId>` for CI integrations.
 
 ## License
 
-MIT — see the [LICENSE](LICENSE) file.
+MIT — see the [LICENSE](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/LICENSE) file.
