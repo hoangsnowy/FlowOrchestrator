@@ -232,7 +232,7 @@ To swap storage, implement `IFlowStore`, `IFlowRunStore`, and `IOutputsRepositor
 
 **Read `DESIGN.md` BEFORE touching `src/FlowOrchestrator.Dashboard/Assets/` (CSS, HTML, JS).** Every change to a dashboard surface — new tab, new component, new button, new chip, new icon — MUST land using the existing `--fo-*` tokens defined in `dashboard.css :root`. No hard-coded HEX values. No `rgba(...)` literals. No new font families. No inline `style="color:..."` outside the tokens.
 
-### Tokens you MUST use (defined in `dashboard.css :root`, lines 12–116)
+### Tokens you MUST use (defined in the `:root{}` block of `src/FlowOrchestrator.Dashboard/Assets/dashboard.css`)
 
 | Need | Token (do this) | Anti-pattern (don't do this) |
 |------|-----------------|------------------------------|

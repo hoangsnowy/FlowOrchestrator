@@ -318,29 +318,35 @@ This document is the prose spec. The machine-readable token palette is the
 
 | Surface | File | Notes |
 |---|---|---|
-| Dashboard SPA | `src/FlowOrchestrator.Dashboard/DashboardHtml.cs` (`:root{}` block) | Inlined token palette + back-compat aliases. New rules use `--fo-*`. |
-| Docs site (DocFX) | `docs/styles/main.css` | Same `--fo-*` palette, plus a warm `[data-bs-theme="dark"]` block (`#1c1b18` near-black). |
-| Skill bundle | `.claude/designs/FlowOrchestrator Design System/colors_and_type.css` | Canonical token file used by the `flow-orchestrator-design` Claude Skill. |
+| Dashboard SPA | `src/FlowOrchestrator.Dashboard/Assets/dashboard.css` (`:root{}` block) | **Canonical.** Token palette + back-compat aliases, plus a dark-mode override block. New rules use `--fo-*`. `DashboardHtml.cs` only loads and pre-compresses these assets — it holds no tokens. |
+| Docs site (DocFX) | `docs/styles/main.css` | A **subset** of the same `--fo-*` palette — the brand, surface, text, and border tokens it actually renders (14 of 45), plus a warm `[data-bs-theme="dark"]` block (`#1c1b18` near-black). Status-chip tokens (`--fo-success-*`, `--fo-warn-*`, `--fo-danger-*`, `--fo-skip-*`, `--fo-info-*`) are dashboard-only by design. Values that *are* shared must match the dashboard exactly. |
 
 ### Token naming convention
 
 All design-system tokens are prefixed `--fo-*`:
 
 - `--fo-terracotta`, `--fo-terracotta-hover`, `--fo-coral`, `--fo-accent-tint`
-- `--fo-parchment`, `--fo-ivory`, `--fo-warm-sand`, `--fo-pure-white`, `--fo-dark-surface`, `--fo-deep-dark`
+- `--fo-parchment`, `--fo-ivory`, `--fo-warm-sand`, `--fo-pure-white`, `--fo-dark-surface`, `--fo-deep-dark`, `--fo-dark-warm`
 - `--fo-near-black`, `--fo-charcoal`, `--fo-olive`, `--fo-stone`, `--fo-warm-silver`
-- `--fo-border-cream`, `--fo-border-warm`, `--fo-ring-warm`, `--fo-ring-deep`
+- `--fo-border-cream`, `--fo-border-warm`, `--fo-border-dark`, `--fo-ring-warm`, `--fo-ring-deep`
 - `--fo-success`, `--fo-warn`, `--fo-danger`, `--fo-skip` (each with `-bg`, `-border`, `-text` siblings)
+- `--fo-info` + `--fo-info-bg` / `--fo-info-border` / `--fo-info-text` — webhook / informational badge
+- `--fo-focus` — accessibility focus ring
 - `--fo-serif`, `--fo-sans`, `--fo-mono`
 - `--r-sharp` `4px`, `--r-subtle` `6px`, `--r-comfy` `8px`, `--r-generous` `12px`, `--r-very` `16px`
 - `--shadow-ring`, `--shadow-ring-deep`, `--shadow-ring-accent`, `--shadow-whisper`
 
+`--fo-info` and `--fo-focus` are the **only** sanctioned cool colours in the system;
+both stay in the focus-blue family. Everything else must be warm-toned.
+
 ### Adding a new token
 
-1. Add it to `.claude/designs/FlowOrchestrator Design System/colors_and_type.css` first.
-2. Mirror the addition into `src/FlowOrchestrator.Dashboard/DashboardHtml.cs`
-   (`:root{}` block) and `docs/styles/main.css`.
-3. Document the semantic meaning in a one-line CSS comment alongside the value.
+1. Add it to the `:root{}` block in `src/FlowOrchestrator.Dashboard/Assets/dashboard.css`,
+   with a one-line comment stating its semantic meaning. If it needs to change under dark
+   mode, add the override to the dark block in the same file.
+2. Mirror the addition into `docs/styles/main.css` so the docs site matches.
+3. Add it to the naming-convention list above — a token that is not listed here is
+   invisible to anyone reading the spec instead of the CSS.
 
 Legacy tokens (`--bg`, `--accent`, `--surface`, ...) are kept as aliases of the
 `--fo-*` palette for back-compat. Do **not** add new legacy-style tokens.
