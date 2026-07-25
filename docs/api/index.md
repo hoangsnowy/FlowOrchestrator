@@ -8,10 +8,12 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 |---|---|---|
 | `FlowOrchestrator.Core` | `FlowOrchestrator.Core.*` | Abstractions, execution engine, storage contracts |
 | `FlowOrchestrator.Hangfire` | `FlowOrchestrator.Hangfire.*` | Hangfire bridge, DI extensions, built-in step handlers |
-| `FlowOrchestrator.InMemory` | `FlowOrchestrator.InMemory.*` | In-process storage backend (dev/testing) |
+| `FlowOrchestrator.InMemory` | `FlowOrchestrator.InMemory.*` | In-process runtime adapter **and** storage backend (dev/testing) |
+| `FlowOrchestrator.ServiceBus` | `FlowOrchestrator.ServiceBus.*` | Azure Service Bus runtime adapter (multi-replica) |
 | `FlowOrchestrator.SqlServer` | `FlowOrchestrator.SqlServer.*` | SQL Server persistence (Dapper) |
 | `FlowOrchestrator.PostgreSQL` | `FlowOrchestrator.PostgreSQL.*` | PostgreSQL persistence (Npgsql) |
 | `FlowOrchestrator.Dashboard` | `FlowOrchestrator.Dashboard.*` | REST API and embedded SPA |
+| `FlowOrchestrator.Testing` | `FlowOrchestrator.Testing.*` | `FlowTestHost` — runs flows in-process inside a test |
 
 ## Key Types
 
@@ -31,7 +33,8 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 
 | Type | Description |
 |---|---|
-| [`IStepHandler<TInput>`](FlowOrchestrator.Core.Execution.IStepHandler-1.yml) | Main interface for custom step logic |
+| [`IStepHandler<TInput>`](FlowOrchestrator.Core.Execution.IStepHandler-1.yml) | Main interface for custom step logic — receives a strongly-typed, expression-resolved input |
+| [`IStepHandler`](FlowOrchestrator.Core.Execution.IStepHandler.yml) | Non-generic base the engine dispatches through; implement the generic form unless you need the raw payload |
 | [`PollableStepHandler<TInput>`](FlowOrchestrator.Core.Execution.PollableStepHandler-1.yml) | Base class for steps that poll an external system |
 | [`IPollableInput`](FlowOrchestrator.Core.Execution.IPollableInput.yml) | Input contract for pollable steps |
 | [`IExecutionContext`](FlowOrchestrator.Core.Execution.IExecutionContext.yml) | Run-scoped context passed to every handler |
@@ -43,13 +46,15 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 |---|---|
 | [`IFlowStore`](FlowOrchestrator.Core.Storage.IFlowStore.yml) | Persists flow definitions |
 | [`IFlowRunStore`](FlowOrchestrator.Core.Storage.IFlowRunStore.yml) | Persists run state and step records |
+| [`IFlowRunRuntimeStore`](FlowOrchestrator.Core.Storage.IFlowRunRuntimeStore.yml) | Dispatch ledger + claim guard — the "dispatch many, execute once" primitives |
+| [`IFlowRunControlStore`](FlowOrchestrator.Core.Storage.IFlowRunControlStore.yml) | Per-run cancel latch, timeout deadline, and `ExtendDeadlineAsync` |
 | [`IOutputsRepository`](FlowOrchestrator.Core.Storage.IOutputsRepository.yml) | Stores and retrieves per-step outputs keyed by `RunId` |
 
 ### DI Registration
 
 | Type | Description |
 |---|---|
-| [`FlowOrchestratorBuilder`](FlowOrchestrator.Hangfire.FlowOrchestratorBuilder.yml) | Returned by `AddFlowOrchestrator()` — configure storage, Hangfire, and flows |
+| [`FlowOrchestratorBuilder`](FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.yml) | Returned by `AddFlowOrchestrator()` — configure storage, the runtime adapter, and flows |
 
 ## See Also
 

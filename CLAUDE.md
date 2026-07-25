@@ -124,9 +124,17 @@ FlowOrchestrator.Core          Runtime-agnostic orchestration engine + all abstr
   Storage/                     IFlowStore, IFlowRunStore, IFlowRunRuntimeStore
                                IFlowRunControlStore, IOutputsRepository
   Hosting/                     FlowRunRecoveryHostedService  ← re-enqueues stuck runs on startup
-  Configuration/               FlowOrchestratorBuilder, AddFlowOrchestrator() DI extension
+  Configuration/               FlowOrchestratorBuilder (the builder type only — the
+                               AddFlowOrchestrator() entry point lives in .Hangfire, see below)
 
 FlowOrchestrator.Hangfire      Thin adapter — wires Hangfire as the IStepDispatcher runtime
+  FlowOrchestratorServiceCollectionExtensions
+                               AddFlowOrchestrator() — ⚠️ the single DI entry point for EVERY
+                               runtime, including InMemory and ServiceBus. It ships in this
+                               package, so `FlowOrchestrator.Hangfire` is a required reference
+                               even for the "no Hangfire" setups. Registering Hangfire itself
+                               (AddHangfire/AddHangfireServer) is still only needed when you
+                               actually call options.UseHangfire().
   HangfireStepDispatcher       IStepDispatcher → IBackgroundJobClient.Enqueue/Schedule
   HangfireFlowOrchestrator     Shim: extracts JobId from PerformContext, calls FlowOrchestratorEngine
   HangfireRecurringTriggerDispatcher / Inspector  ← IRecurringJobManager adapter
@@ -330,9 +338,13 @@ public string? CronOverride { get; set; }
 
 ## Roadmap
 
-The library has a 12-week roadmap split into 3 phases. Implementation plans
-live in `.claude/plans/`. See `.claude/plans/README.md` for the full index
-and status tracker.
+The original 12-week / 3-phase roadmap is complete and its plan files are no longer
+in the repository — `.claude/plans/` does not exist. Do not look for it.
 
-When working on a roadmap item, read the corresponding plan file first
-and follow its `Done criteria` checklist.
+The authoritative record of what shipped, and when, is `CHANGELOG.md` (Keep a Changelog
+format, newest release first). Anything not yet released sits under `## [Unreleased]`.
+For work that is proposed but not started, use the GitHub issue tracker and milestones:
+<https://github.com/hoangsnowy/FlowOrchestrator/issues>.
+
+When starting a non-trivial feature, add its entry to `## [Unreleased]` in `CHANGELOG.md`
+as part of the same PR — that is the status tracker.

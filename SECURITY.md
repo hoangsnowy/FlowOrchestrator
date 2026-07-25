@@ -10,9 +10,9 @@ We provide security fixes for the **latest minor release** on the `1.x` line. Ol
 
 | Version    | Status              | Security fixes |
 | ---------- | ------------------- | -------------- |
-| `1.24.x`   | Current             | ✅ Yes         |
-| `1.23.x`   | Previous            | ⚠️ Critical only |
-| `< 1.22`   | End of life         | ❌ No          |
+| `1.29.x`   | Current             | ✅ Yes         |
+| `1.28.x`   | Previous            | ⚠️ Critical only |
+| `< 1.28`   | End of life         | ❌ No          |
 | `2.x`      | Planned (in design) | ✅ Pre-release |
 
 If you depend on a version no longer supported, the recommended action is to upgrade to the current minor — patch releases are non-breaking by SemVer.
@@ -83,7 +83,7 @@ If we do not respond within the window above, please escalate by replying to you
 - The sample apps under `samples/` — they exist to demonstrate usage and intentionally use weak local credentials. Vulnerabilities there are acceptable unless they leak into a published library API.
 - Integration test fixtures (`tests/integration/**`) — likewise intentionally permissive.
 - Findings that require physical access to the host or a compromised process credential.
-- Denial of service via resource exhaustion when the operator has not configured `FlowRunControlOptions` rate limits — this is a configuration concern.
+- Denial of service via resource exhaustion when the operator has not enabled the webhook rate limiter (`WebhookSecurityOptions.RateLimit`, or the per-trigger `webhookRateLimitPermitsPerSecond` / `webhookRateLimitBurstSize` / `webhookRateLimitPerIp` inputs) and has not set a run timeout (`FlowRunControlOptions.DefaultRunTimeout`) — this is a configuration concern.
 - Vulnerabilities in transitive dependencies that already have a published advisory and a fix the operator can apply by version-pinning. Please report these to the upstream project; we will follow up with a release that bumps the floor version.
 
 ---
@@ -93,7 +93,7 @@ If we do not respond within the window above, please escalate by replying to you
 These are **deployment** concerns, not library bugs, but they materially affect your production posture:
 
 - Put the dashboard behind your existing auth proxy (OIDC, mTLS, internal-only ingress). The built-in Basic Auth is a defence-in-depth control, not a primary perimeter.
-- Set a strong `webhookSecret` and rotate it via `IFlowRunControlStore` — do not commit it to source.
+- Set a strong `webhookHmacKey` on every webhook trigger's manifest `Inputs` and supply it from configuration or a secret store — do not commit it to source. Rotate without downtime by moving the outgoing key to `webhookHmacKeyPrevious` before replacing `webhookHmacKey`; both are accepted during the overlap. The v1.24 names `webhookSecret` / `webhookSecretPrevious` still work as a fallback but are legacy — setting both raises a startup warning and `webhookHmacKey` wins.
 - Use the SQL Server / PostgreSQL persistence with **least-privilege** credentials — the engine only needs `SELECT/INSERT/UPDATE/DELETE` on the `Flow*` tables, plus `CREATE TABLE` once during migrator startup.
 - Enable TLS on every database connection string and Service Bus namespace.
 - Pin the Hangfire dashboard behind separate auth — `app.UseHangfireDashboard("/hangfire", new DashboardOptions { Authorization = ... })`.

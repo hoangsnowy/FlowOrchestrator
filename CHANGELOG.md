@@ -6,6 +6,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Dependencies
+
+- Hangfire 1.8.23 → 1.8.24 (`Hangfire.Core`, `Hangfire.AspNetCore`, **and**
+  `Hangfire.SqlServer` — the family carries an exact `Hangfire.Core (= x.y.z)`
+  constraint via `Hangfire.NetCore`, so these three must move together or restore
+  fails with `NU1608`); Microsoft.Extensions.DependencyInjection.Abstractions
+  10.0.9 → 10.0.10; Microsoft.AspNetCore.TestHost 8.0.28 → 8.0.29;
+  actions/setup-dotnet 5 → 6.
+
 ## [1.29.0] - 2026-07-19
 
 ### Added

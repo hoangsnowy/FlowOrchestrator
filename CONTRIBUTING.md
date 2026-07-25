@@ -40,7 +40,7 @@ src/
   FlowOrchestrator.SqlServer    # Dapper-based SQL Server persistence
   FlowOrchestrator.PostgreSQL   # Dapper-based PostgreSQL persistence
   FlowOrchestrator.Dashboard    # built-in /flows HTML+JS dashboard
-  FlowOrchestrator.Testing      # test helpers shared across test projects
+  FlowOrchestrator.Testing      # published test-host package (FlowTestHost) for consumers
 samples/                        # working sample apps
 FlowOrchestrator.AppHost/       # .NET Aspire host for local development
 tests/
@@ -56,11 +56,14 @@ docs/                           # DocFX site published to GitHub Pages
 
 ### `.editorconfig` + `dotnet format`
 
-The repo ships an [`.editorconfig`](.editorconfig) that codifies indentation, brace style, `using` ordering, and naming conventions. Run `dotnet format` before pushing — CI will reject diffs that don't match.
+The repo ships an [`.editorconfig`](.editorconfig) that codifies indentation, brace style, `using` ordering, and naming conventions.
+
+`Directory.Build.props` sets `EnforceCodeStyleInBuild=true` **and** `TreatWarningsAsErrors=true`, so any `.editorconfig` rule raised at warning severity or above fails `dotnet build` — locally and in CI. There is no separate `dotnet format` job; a clean build *is* the style gate.
 
 ```bash
-dotnet format --verify-no-changes   # CI parity check
-dotnet format                       # auto-fix
+dotnet build                        # the real gate — must be 0 errors, 0 warnings
+dotnet format                       # auto-fix before you get there
+dotnet format --verify-no-changes   # optional: report without writing
 ```
 
 ### XML doc comments are mandatory
@@ -109,7 +112,9 @@ instead of taking `FlowRunControlOptions opts` directly as a handler parameter. 
 
 ### Dashboard UI
 
-All changes to `src/FlowOrchestrator.Dashboard/DashboardHtml.cs` (CSS, HTML, JS) must follow [`DESIGN.md`](DESIGN.md). The repo uses a warm-toned palette — no cool blue-grays, no gradients.
+The dashboard's CSS, HTML, and JS live as embedded resources under `src/FlowOrchestrator.Dashboard/Assets/` — `dashboard.css`, `index.html`, and `dashboard.js`. (`DashboardHtml.cs` is only the loader: it stitches the assets together and pre-compresses the result to Brotli + Gzip once at startup.)
+
+All changes to those assets must follow [`DESIGN.md`](DESIGN.md). The repo uses a warm-toned palette — no cool blue-grays, no gradients. Every colour, radius, and font value must be a `--fo-*` / `--r-*` token declared in `dashboard.css :root`; a new token also has to be listed in `DESIGN.md §10`.
 
 ---
 
@@ -133,8 +138,7 @@ For a large plugin, open an issue **before** starting so we can align on naming,
 1. Branch from `main`. Use a short topical name: `feat/parallel-foreach`, `fix/recovery-race`, `docs/postgres-quickstart`.
 2. Keep one PR = one logical change. Refactor + feature in the same PR makes review painful.
 3. Before pushing:
-   - `dotnet format --verify-no-changes` shows no diff.
-   - `dotnet build` shows **0 errors, 0 warnings**.
+   - `dotnet build` shows **0 errors, 0 warnings** (this also enforces `.editorconfig`).
    - `dotnet test FlowOrchestrator.UnitTests.slnx` passes.
    - If you touched scheduling, polling, or concurrency primitives, also run `dotnet test FlowOrchestrator.RegressionTests.slnx`.
 4. PR title follows **Conventional Commits** — `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`. The PR title becomes the squash-merge commit message, so make it scannable.

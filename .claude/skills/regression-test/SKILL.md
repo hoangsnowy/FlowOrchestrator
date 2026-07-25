@@ -36,22 +36,29 @@ These cover existing contracts that must NOT regress:
 ### Step 1 — Baseline
 ```bash
 dotnet build --configuration Release
-dotnet test --configuration Release
+dotnet test FlowOrchestrator.UnitTests.slnx --configuration Release
 ```
 Record baseline: total test count, pass/fail split, any existing skips.
 
 ### Step 2 — Tier 1 regression
-Run existing test projects and confirm they still pass:
+Run the three suites in order — fastest first, so a broken contract surfaces before
+you spend Docker time on it. The `.slnx` solution filters are the supported entry
+points; `dotnet test` on a bare project path is not (projects live under
+`tests/unit/`, `tests/integration/`, and `tests/regression/`).
+
 ```bash
-dotnet test ./tests/FlowOrchestrator.Core.Tests/
-dotnet test ./tests/FlowOrchestrator.Hangfire.Tests/
-dotnet test ./tests/FlowOrchestrator.InMemory.Tests/
-dotnet test ./tests/FlowOrchestrator.SqlServer.Tests/
-dotnet test ./tests/FlowOrchestrator.PostgreSQL.Tests/
-dotnet test ./tests/FlowOrchestrator.Dashboard.Tests/
+dotnet test FlowOrchestrator.UnitTests.slnx           # ~30 s, no Docker
+dotnet test FlowOrchestrator.IntegrationTests.slnx    # needs Docker Desktop
+dotnet test FlowOrchestrator.RegressionTests.slnx     # timing + concurrency
 ```
 
+To narrow to a single component, use the full project path, e.g.
+`dotnet test ./tests/unit/FlowOrchestrator.Core.UnitTests/FlowOrchestrator.Core.UnitTests.csproj`.
+
 For each failure: read the failing test, trace the code path, fix root cause, rerun.
+Per `CLAUDE.md`, do **not** reflexively assume flake — inspect the assertion message
+first; historically the split in this repo is about 1:1 between real regression and
+genuine flake.
 
 ### Step 3 — Tier 2 (M1) gap analysis
 Check which M1 test items (7–15 above) have test coverage:
@@ -69,13 +76,16 @@ For each item with no test: write tests.
 
 ### Step 5 — Full suite
 ```bash
-dotnet test --configuration Release
+dotnet build --configuration Release
+dotnet test FlowOrchestrator.UnitTests.slnx --configuration Release
+dotnet test FlowOrchestrator.IntegrationTests.slnx --configuration Release
+dotnet test FlowOrchestrator.RegressionTests.slnx --configuration Release
 ```
 All tests must pass. Zero failures allowed.
 
 ### Step 6 — Report
 Output structured summary:
-- Total tests: before → after
+- Total tests: before → after, broken out per suite (unit / integration / regression)
 - New tests added: count by tier
 - Failures fixed: list with root cause one-liner
 - Features without coverage (if any): list with reason
@@ -83,14 +93,17 @@ Output structured summary:
 
 ## Test placement rules
 
-| Code changed in | Tests go in |
-|---|---|
-| `FlowOrchestrator.Core` | `tests/FlowOrchestrator.Core.Tests/` |
-| `FlowOrchestrator.Hangfire` | `tests/FlowOrchestrator.Hangfire.Tests/` |
-| `FlowOrchestrator.SqlServer` | `tests/FlowOrchestrator.SqlServer.Tests/` |
-| `FlowOrchestrator.PostgreSQL` | `tests/FlowOrchestrator.PostgreSQL.Tests/` |
-| `FlowOrchestrator.InMemory` | `tests/FlowOrchestrator.InMemory.Tests/` |
-| `FlowOrchestrator.Dashboard` | `tests/FlowOrchestrator.Dashboard.Tests/` |
+Pick the **category** first (unit / integration / regression — see `tests/README.md`),
+then the component project inside it.
+
+| Category | Goes in | Rule of thumb |
+|---|---|---|
+| Unit | `tests/unit/FlowOrchestrator.{Component}.UnitTests/` | NSubstitute mocks only; no I/O, no containers, no `Task.Delay > 50 ms` |
+| Integration | `tests/integration/FlowOrchestrator.{Component}.IntegrationTests/` | Real DB via Testcontainers, `WebApplicationFactory`, Hangfire in-memory |
+| Regression | `tests/regression/FlowOrchestrator.RegressionTests/` | Timing-sensitive (cron / polling / timeout) or concurrency stress |
+
+`{Component}` is one of `Core`, `Hangfire`, `InMemory`, `ServiceBus`, `SqlServer`,
+`Dashboard` (unit), plus `PostgreSQL` and `Testing` (integration only).
 
 ## Writing new tests — patterns
 
