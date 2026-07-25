@@ -43,7 +43,7 @@ FlowOrchestrator writes to fourteen tables. The auto-migrator
 
 ### PostgreSQL
 
-- Tune `max_connections` against the Hangfire worker count (default 20) plus dashboard / API traffic.
+- Tune `max_connections` against the Hangfire worker count (see [§5 Hangfire worker tuning](#hangfire-worker-tuning) for the default) plus dashboard / API traffic.
 - Leave autovacuum on. The dispatch ledger is hot under high throughput; bloat shows up as `EXPLAIN` plans falling off index scans.
 - Logical replication or `pg_basebackup` for backups — both work, just have a tested restore drill.
 
@@ -110,15 +110,17 @@ Enable via `options.Observability.EnableOpenTelemetry = true` and wire up via
 
 | Metric | Type | Tags |
 |---|---|---|
-| `floworch.runs.started` | counter | `flow_id`, `trigger_type` |
-| `floworch.runs.completed` | counter | `flow_id`, `status` |
-| `floworch.steps.duration` | histogram (ms) | `flow_id`, `step_type` |
-| `floworch.steps.poll_attempts` | histogram | `flow_id`, `step_key` |
+| `flow_runs_started` | counter | `flow_id`, `trigger_key` |
+| `flow_runs_completed` | counter | `status` |
+| `flow_step_duration_ms` | histogram (ms) | `flow_id`, `step_key`, `status` |
+| `flow_step_poll_attempts` | counter | `flow_id`, `step_key` |
+
+The full instrument list lives in [Observability — What is emitted](observability.md#what-is-emitted).
 
 ### Suggested alerts
 
 - **Stuck runs.** `count(active_runs WHERE status='Running' AND age > 1h) > 0` — usually a missing handler or external dependency timeout.
-- **Failed-run rate.** `rate(floworch.runs.completed{status="failed"}[5m]) > 1` — tune to your volume.
+- **Failed-run rate.** `rate(flow_runs_completed{status="failed"}[5m]) > 1` — tune to your volume.
 - **Cron lag.** `now() - last_recurring_fire > 2 × schedule_interval` — Hangfire server unhealthy or paused inadvertently.
 - **Queue depth.** Hangfire's own `enqueued` counter; FlowOrchestrator inherits it.
 
@@ -169,7 +171,7 @@ flow store throws or the probe budget elapses — point your load balancer at it
 - **Connection strings.** Never in source. Use environment variables, `appsettings.{Environment}.json` outside of `main`, or a managed secret store.
 - **Webhook secrets.** Each webhook trigger carries a `webhookSecret` input. Rotate it like any shared secret; supply a new value in the manifest and pause-resume the trigger so the routing table refreshes.
 - **Webhook hardening pipeline (v1.25).** Treat the dashboard webhook endpoint as a public attack surface. Recommended rollout:
-  1. Set `WebhookSecurityOptions.EnforcementMode = Audit` for one release. The pipeline fires every gate (HMAC signature, replay, rate-limit, IP allow/deny, body cap), logs `EventId 4001-4006` for failures, and writes the DLQ — but the endpoint still returns 202. Use the dashboard "Webhooks" tab to confirm legitimate traffic still validates.
+  1. Set `WebhookSecurityOptions.EnforcementMode = Audit` for one release. The pipeline fires the IP allow/deny, rate-limit, HMAC signature and replay gates, logs `EventId 4001` / `4002` / `4003` / `4005` for failures, and writes the DLQ — but the endpoint still returns 200. Note the body-size cap is enforced ahead of the pipeline and returns 413 in every mode, including `Audit`. Use the dashboard "Webhooks" tab to confirm legitimate traffic still validates.
   2. Flip to `Enforce` once `webhook_rejected_total` is dominated by traffic you actually want to reject.
   3. Set `webhookHmacKey` on every webhook trigger; `webhookHmacKeyPrevious` is your zero-downtime rotation slot. Successful matches against the previous key emit `EventId 4010` so you know when to revoke it.
   4. Lock down source IPs. The matcher accepts CIDR (`10.0.0.0/8`), inclusive ranges (`10.0.0.10-10.0.0.42`), wildcards (`10.0.*.*`), single addresses, and curated presets — mix-and-match in `webhookIpAllowList` (array OR comma-delimited string). Bundled presets: `github`, `stripe`, `shopify`, `twilio`, `square`, `atlassian` / `bitbucket`, `slack`, `mailgun`, `zoom`, plus `local` for RFC 1918 + loopback. Combine multiple presets via `webhookIpAllowListPresets` (plural). Set `WebhookSecurityOptions.ForwardedHeaderDepth` to your actual reverse-proxy depth — never higher.

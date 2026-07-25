@@ -19,7 +19,7 @@ Assert.Equal(StepStatus.Succeeded, result.Steps["my_step"].Status);
 dotnet add package FlowOrchestrator.Testing
 ```
 
-The package depends on `FlowOrchestrator.Core` and `FlowOrchestrator.InMemory`, so you don't need to add those separately. It's framework-agnostic — use it from xUnit, NUnit, MSTest, or anything else.
+The package depends on `FlowOrchestrator.Core`, `FlowOrchestrator.InMemory` and `FlowOrchestrator.Hangfire` (the `AddFlowOrchestrator` DI entry point lives in the Hangfire package), so you don't need to add those separately. No Hangfire server is ever started — the test host runs entirely on the in-memory runtime. It's framework-agnostic — use it from xUnit, NUnit, MSTest, or anything else.
 
 ## Builder API
 

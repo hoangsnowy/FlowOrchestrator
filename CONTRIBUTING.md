@@ -122,7 +122,7 @@ All changes to those assets must follow [`DESIGN.md`](DESIGN.md). The repo uses 
 
 FlowOrchestrator's storage and runtime are pluggable by design.
 
-- **Storage backend** — implement `IFlowStore`, `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore`, and `IOutputsRepository`. Use `FlowOrchestrator.SqlServer` or `FlowOrchestrator.PostgreSQL` as a reference.
+- **Storage backend** — implement `IFlowStore`, `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore`, `IOutputsRepository`, `IFlowEventReader`, `IFlowSignalStore`, and `IFlowRetentionStore`. `IFlowScheduleStateStore` is optional — `AddFlowOrchestrator` falls back to a non-persistent in-process store when it is unregistered. Note that `IFlowSignalStore` has **no** fallback: `WaitForSignalHandler` is registered unconditionally and takes it as a required constructor dependency, so omitting it throws at DI resolution time. Use `FlowOrchestrator.SqlServer` or `FlowOrchestrator.PostgreSQL` as a reference.
 - **Runtime adapter** — implement `IStepDispatcher` and (optionally) `IRecurringTriggerDispatcher` / `IRecurringTriggerInspector` / `IRecurringTriggerSync`. References, simplest first:
   - `FlowOrchestrator.InMemory` — `Channel<T>` + `PeriodicTimer`, no infra.
   - `FlowOrchestrator.Hangfire` — `IBackgroundJobClient` + `IRecurringJobManager`.

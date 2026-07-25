@@ -49,26 +49,34 @@ ForEach = new[] { "ORD-001", "ORD-002", "ORD-003" }
 ForEach = "@triggerBody()?.orderIds"
 ```
 
-When the expression resolves to `null` or an empty array, the loop completes as `Succeeded` with zero iterations. Downstream steps (those with `RunAfter = ["process_orders"]`) still run.
+`@triggerHeaders()` and `@triggerHeaders()['X-Batch-Ids']` are also accepted as sources.
+
+> [!WARNING]
+> `@steps('key').output…` is **not** supported as a `ForEach` source — only trigger-body and trigger-header expressions are resolved. A step-output source is passed through as a literal string and the loop completes with zero iterations.
+
+When the expression resolves to `null` or an empty array, the loop completes as `Succeeded` with zero iterations. Downstream steps (those declaring `RunAfter = new RunAfterCollection { ["process_orders"] = [StepStatus.Succeeded] }`) still run.
 
 ## ConcurrencyLimit
 
 | Value | Behaviour |
 |---|---|
-| `1` | Iterations run one at a time (sequential) |
-| `N > 1` | Up to N iterations run simultaneously; remaining items wait for a slot |
-| `0` (or omit) | Defaults to `1` (sequential) |
+| `1` | Iterations are staggered 100 ms apart (index 0 immediately, index 1 at +100 ms, index 2 at +200 ms, …) |
+| `N > 1` | Iterations are grouped into buckets of N; bucket *k* is dispatched with a `k × 100 ms` start delay |
+| `0` (or omit) | Defaults to `1` |
+
+> [!NOTE]
+> `ConcurrencyLimit` is a dispatch-time stagger, not a running-slot semaphore. All iterations are enqueued in a single pass when the loop step executes; a slow iteration does not hold back later buckets.
 
 With `ConcurrencyLimit = 2` and 4 items:
 
 ```
-Iteration 0  ──► validate_order  (slot 1)
-Iteration 1  ──► validate_order  (slot 2)
-Iteration 2  ──► (waits for slot)
-Iteration 3  ──► (waits for slot)
+Iteration 0  ──► validate_order  (dispatched immediately)
+Iteration 1  ──► validate_order  (dispatched immediately)
+Iteration 2  ──► validate_order  (dispatched with a +100 ms start delay)
+Iteration 3  ──► validate_order  (dispatched with a +100 ms start delay)
 ```
 
-When iteration 0 completes, iteration 2 starts. When iteration 1 completes, iteration 3 starts.
+All iterations are enqueued when the loop step runs. Later buckets carry a scheduled start delay of `100 ms × bucketIndex`; they do not wait for earlier iterations to finish.
 
 ## Child Step Key Format
 
@@ -85,8 +93,11 @@ These keys appear in the dashboard run timeline and can be used with `IOutputsRe
 ```csharp
 for (int i = 0; i < itemCount; i++)
 {
+    // Untyped overload — returns object? (typically a JsonElement at runtime)
     var output = await outputs.GetStepOutputAsync(runId, $"process_orders.{i}.validate_order");
-    // output is JsonElement?
+
+    // Typed overload — deserialises straight to your output contract
+    var typed = await outputs.GetStepOutputAsync<ProcessOrderItemOutput>(runId, $"process_orders.{i}.validate_order");
 }
 ```
 
@@ -103,7 +114,7 @@ for (int i = 0; i < itemCount; i++)
 | `__loopItem` | The current item from the collection | The item value (`"ORD-001"`, a number, or a JSON object) |
 | `__loopIndex` | Zero-based position | `0`, `1`, `2`, ... |
 
-These are merged with the static `Inputs` defined in the manifest. Declare them as properties in your input class:
+These are merged with the static `Inputs` defined in the manifest. Bind them with an explicit `[JsonPropertyName]` attribute — the double-underscore keys do **not** bind by naming convention, so a plain `LoopItem` property silently stays `null`:
 
 ```csharp
 public sealed class ValidateOrderInput
@@ -111,9 +122,12 @@ public sealed class ValidateOrderInput
     // Static manifest input
     public decimal MaxValue { get; set; }
 
-    // Injected per iteration
+    // Injected per iteration — the JsonPropertyName attribute is REQUIRED
+    [JsonPropertyName("__loopItem")]
     public object? LoopItem { get; set; }
-    public int? LoopIndex { get; set; }
+
+    [JsonPropertyName("__loopIndex")]
+    public int LoopIndex { get; set; }
 }
 ```
 

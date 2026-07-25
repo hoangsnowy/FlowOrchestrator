@@ -58,7 +58,7 @@ builder.Services.AddHangfireServer();
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseSqlServer(connectionString);
-    options.UseHangfire();
+    options.UseHangfire();                 // or .UseInMemoryRuntime() / .UseAzureServiceBusRuntime(...)
     options.AddFlow<MyFlow>();
 });
 

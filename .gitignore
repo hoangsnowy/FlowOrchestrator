@@ -62,3 +62,8 @@ nunit-*.xml
 # Claude Code — runtime/session-local artifacts (never shared)
 .claude/scheduled_tasks.lock
 .claude/worktrees/BenchmarkDotNet.Artifacts/
+
+# DocFX — generated site + API metadata (produced by `dotnet tool run docfx docfx.json`)
+docs/_site/
+docs/api/*.yml
+docs/api/.manifest

@@ -49,6 +49,10 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 | [`IFlowRunRuntimeStore`](FlowOrchestrator.Core.Storage.IFlowRunRuntimeStore.yml) | Dispatch ledger + claim guard — the "dispatch many, execute once" primitives |
 | [`IFlowRunControlStore`](FlowOrchestrator.Core.Storage.IFlowRunControlStore.yml) | Per-run cancel latch, timeout deadline, and `ExtendDeadlineAsync` |
 | [`IOutputsRepository`](FlowOrchestrator.Core.Storage.IOutputsRepository.yml) | Stores and retrieves per-step outputs keyed by `RunId` |
+| [`IFlowEventReader`](FlowOrchestrator.Core.Storage.IFlowEventReader.yml) | Reads the per-run event stream for the dashboard timeline |
+| [`IFlowSignalStore`](FlowOrchestrator.Core.Storage.IFlowSignalStore.yml) | Signal waiters and delivery for `WaitForSignal` steps |
+| [`IFlowRetentionStore`](FlowOrchestrator.Core.Storage.IFlowRetentionStore.yml) | Backs the background retention sweep |
+| [`IFlowScheduleStateStore`](FlowOrchestrator.Core.Storage.IFlowScheduleStateStore.yml) | Persists cron overrides and enable/disable state across restarts (optional) |
 
 ### DI Registration
 

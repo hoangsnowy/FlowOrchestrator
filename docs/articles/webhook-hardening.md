@@ -3,11 +3,16 @@
 The dashboard webhook receive endpoint
 (`POST /flows/api/webhook/{idOrSlug}`) ships an opt-in security pipeline
 that turns it from a developer convenience into a production-grade public
-ingestion surface. The pipeline runs four gates in order:
+ingestion surface. The endpoint caps the request body before anything else,
+then the pipeline runs four gates in order:
 
 ```
-IpAllowlist → BodySizeCap → SignatureVerify → ReplayCheck → RateLimit → IdempotencyDedup → Dispatch
+BodySizeCap (endpoint) → IpAllowlist → RateLimit → SignatureVerify → ReplayCheck → Dispatch
 ```
+
+Idempotency dedupe is not a pipeline gate — it runs later, inside
+`FlowOrchestratorEngine.TriggerAsync`, after the pipeline has accepted the
+delivery.
 
 Each gate is opt-in via manifest fields and is a no-op when not configured.
 With the default `WebhookEnforcementMode = Off` the endpoint behaves exactly
@@ -18,7 +23,7 @@ as in v1.24 — every gate is skipped.
 | Mode | Gate behaviour | HTTP response | When to use |
 |------|----------------|---------------|-------------|
 | `Off` | Skipped | Same as v1.24 | Greenfield + flows that haven't migrated |
-| `Audit` | Run + log + metrics + DLQ | Always 202 (accept) | One release before flipping to `Enforce` to confirm legitimate traffic still validates |
+| `Audit` | Run + log + metrics + DLQ | Always 200 (accept) — except an oversized body, which is capped before the pipeline and still returns 413 | One release before flipping to `Enforce` to confirm legitimate traffic still validates |
 | `Enforce` | Run + log + metrics + DLQ + reject | 4xx on failure | Production lock-down |
 
 Configure globally:
@@ -36,7 +41,8 @@ builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 
 ## Just pick a preset
 
-For the 17 publishers that ship in `PartnerSchemeRegistry`, you only need
+For the 16 built-in schemes in `PartnerSchemeRegistry` (14 publishers plus the
+`Generic` catch-all and `GitHubLegacy`), you only need
 three manifest fields. Pick a scheme and the verifier fills in the wire
 format (header name, algorithm, encoding, prefix) automatically:
 
@@ -50,7 +56,7 @@ Inputs = new Dictionary<string, object?>
 ```
 
 Browse the [Per-publisher cookbook](#per-publisher-cookbook) for the
-other 16 schemes. If your publisher isn't on the list, see
+other 15 schemes. If your publisher isn't on the list, see
 [Custom scheme reference](#custom-scheme-reference) for full manifest
 control or [Bring your own scheme](#bring-your-own-scheme) to plug a
 custom verifier through DI.
@@ -139,8 +145,8 @@ Inputs = new Dictionary<string, object?>
 
 SHA-1 base64 over `{absoluteUrl}{sortedFormParams}`. Twilio sends
 `application/x-www-form-urlencoded`, not JSON — make sure your reverse
-proxy preserves the form body verbatim. Twilio is the one built-in scheme
-that requires `AllowLegacySha1 = true`.
+proxy preserves the form body verbatim. Twilio and `GitHubLegacy` are the two
+built-in schemes that require `AllowLegacySha1 = true` (both sign with HMAC-SHA1).
 
 ```csharp
 Inputs = new Dictionary<string, object?>
@@ -151,10 +157,13 @@ Inputs = new Dictionary<string, object?>
 }
 ```
 
-### Square, Zoom, Linear, Dropbox, Calendly, Bitbucket, Atlassian, Microsoft Teams
+### Square, Zoom, Linear, Dropbox, Calendly, Bitbucket, Atlassian, MicrosoftTeams
 
-Same shape — set `webhookSignatureScheme` to the publisher name. See
-`PartnerSchemeRegistry` for the exact spec each one resolves to.
+Same shape — set `webhookSignatureScheme` to the exact enum name
+(`"MicrosoftTeams"`, no space). Names are matched case-insensitively but must
+otherwise be exact: an unrecognised name resolves to no spec and the signature
+gate is skipped silently, with no error. See `PartnerSchemeRegistry` for the
+exact spec each one resolves to.
 
 ### Mailgun (body-resident signature)
 
@@ -241,8 +250,9 @@ Inputs["webhookRateLimitBurstSize"] = 20;
 Inputs["webhookRateLimitPerIp"] = true;
 ```
 
-429 responses include a `Retry-After` header and emit
-`EventId 4003 WebhookRateLimited`.
+429 responses emit `EventId 4003 WebhookRateLimited`; the retry-after hint is
+not sent as a `Retry-After` header — it is exposed on the
+`flow.webhook.rate_limit.retry_after_ms` span tag.
 
 ## IP allow / deny list
 
@@ -353,8 +363,10 @@ opts.UseWebhookSecurity(sec => sec.UseForwardedHeaders(depth: 1));
 ## Body size cap
 
 `WebhookSecurityOptions.MaxBodyBytes` (default 1 MiB) is enforced via
-`WebhookRequestBuffer.ReadAsync` before JSON parsing. Oversized requests
-return `413 Payload Too Large` and emit `EventId 4004`.
+`WebhookRequestBuffer.ReadAsync` before JSON parsing and before the security
+pipeline runs, so the cap applies in every enforcement mode including `Audit`.
+Oversized requests return `413 Payload Too Large`. (EventId 4004 is reserved for
+this case but is not currently emitted.)
 
 ## DLQ + dashboard surface
 
@@ -371,15 +383,16 @@ or Sql/Postgres for long retention). The dashboard exposes:
 
 ## Observability
 
-Counters and histograms (see [Observability](observability.md#metrics)):
+Counters and histograms (see [Observability](observability.md#what-is-emitted)):
 
 - `webhook_received_total{flow,result,scheme}`
 - `webhook_rejected_total{flow,reason}`
 - `webhook_body_bytes`
 - `webhook_processing_ms{flow,result}`
 
-EventIds 4000–4099 reserved; 4000–4010 in use today (full list in
-[Observability — EventIds](observability.md#logger-scopes-and-eventids)).
+EventIds 4000–4099 reserved; 4000–4011 allocated today (4000, 4004, 4006 and
+4009 are reserved but not currently emitted). Full list in
+[Observability — EventIds](observability.md#logger-scopes-and-eventids).
 
 The existing `flow.webhook.receive` activity gains tags
 `flow.webhook.scheme`, `flow.webhook.client_ip`,
@@ -457,6 +470,32 @@ Inputs["webhookSignedPayloadStrategy"] = "Custom";
 Inputs["webhookCustomStrategyName"] = "myapp-canonical";
 ```
 
+## Register a named scheme without writing a verifier
+
+When the wire format fits the built-in HMAC verifier but the publisher isn't in
+`PartnerSchemeRegistry`, register a named spec once at startup instead of
+repeating the `Custom` field set on every flow:
+
+```csharp
+builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
+    sec.RegisterScheme("AcmePartner", new WebhookSignatureSpec
+    {
+        HeaderName = "X-Acme-Signature",
+        Algorithm = HmacAlgorithm.Sha256,
+        Encoding = SignatureEncoding.HexLower,
+        Prefix = "sha256=",
+        SignedPayloadStrategy = SignedPayloadStrategy.RawBody,
+    })));
+```
+
+```csharp
+Inputs["webhookSignatureScheme"] = "AcmePartner";
+```
+
+Registered names are matched case-insensitively and are checked *before* the
+built-in enum, so registering a name that matches a built-in scheme shadows it.
+The specs live on `WebhookSecurityOptions.CustomSchemes`.
+
 ## Bring your own scheme
 
 When the wire format doesn't fit any built-in scheme nor the `Custom`
@@ -482,10 +521,11 @@ builder.Services.AddWebhookSignatureVerifier<AcmeCorpVerifier>("AcmeCorp");
 Inputs["webhookSignatureScheme"] = "AcmeCorp";
 ```
 
-The pipeline resolves verifiers in this order: built-in `WebhookSignatureScheme`
-enum match → DI-registered verifier with matching scheme name →
-`Custom` manifest shape. Scheme names are case-insensitive; collisions
-with built-in scheme names (or the literal `"Custom"`) throw
+The pipeline resolves in this order: DI-registered verifier
+(`AddWebhookSignatureVerifier<T>`) → operator-registered spec (`RegisterScheme`)
+→ built-in `WebhookSignatureScheme` enum match → `Custom` manifest shape. Scheme
+names are case-insensitive; DI names can never shadow a built-in because
+collisions with a built-in scheme name (or the literal `"Custom"`) throw
 `ArgumentException` at registration time.
 
 ## Recommended rollout

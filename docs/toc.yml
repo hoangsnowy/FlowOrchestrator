@@ -6,5 +6,9 @@
   href: api/
   topicHref: api/index.md
 
+- name: Benchmarks
+  href: benchmarks/
+  topicHref: benchmarks/sql-deep-search-investigation-2026-05-24.md
+
 - name: GitHub
   href: https://github.com/hoangsnowy/FlowOrchestrator

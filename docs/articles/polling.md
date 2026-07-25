@@ -46,6 +46,7 @@ The base class manages:
 - Condition evaluation against the response
 - Timeout enforcement
 - Returning `StepStatus.Pending` with `DelayNextStep` — the engine calls `ReleaseDispatchAsync` then `IStepDispatcher.ScheduleStepAsync(delay)` to reschedule via the active runtime adapter
+- Guarding `pollConditionPath` against non-JSON responses — return `IsJson: false` from `FetchAsync` when the body could not be parsed as JSON. If a `pollConditionPath` is configured the step fails immediately with `Polling with 'pollConditionPath' requires a JSON response body.` instead of polling to timeout; with no condition path the raw result is used as-is.
 
 ## Input Class
 
@@ -74,7 +75,7 @@ public sealed class CheckJobStatusInput : IPollableInput
     public string? PollConditionPath { get; set; }
 
     [JsonPropertyName("pollConditionEquals")]
-    public string? PollConditionEquals { get; set; }
+    public object? PollConditionEquals { get; set; }
 
     // Internal state — managed by PollableStepHandler, persisted between attempts
     [JsonPropertyName("pollStartedAtUtc")]
@@ -86,7 +87,7 @@ public sealed class CheckJobStatusInput : IPollableInput
 ```
 
 > [!NOTE]
-> The `[JsonPropertyName]` attributes are required because step inputs are serialized and deserialized by `System.Text.Json` between execution attempts (across rescheduled jobs or channel messages). Without them the state properties will not survive the round-trip.
+> Step inputs are round-tripped through `System.Text.Json` between execution attempts (across rescheduled jobs or channel messages) using Web defaults — camelCase on write, case-insensitive matching on read — so `[JsonPropertyName]` is **optional**: `PollStartedAtUtc` survives as `pollStartedAtUtc` without it. Add the attribute only when you want an explicit wire name; the bundled `CallExternalApiStepInput` uses `__pollStartedAtUtc` / `__pollAttempt` to keep internal poll state visually distinct from user inputs.
 
 ## Polling Configuration (Manifest Inputs)
 
@@ -96,10 +97,10 @@ Configure polling behaviour in `StepMetadata.Inputs`:
 |---|---|---|---|
 | `pollEnabled` | `bool` | `true` | When `false`, `FetchAsync` runs once and the result is returned directly |
 | `pollIntervalSeconds` | `int` | `10` | Seconds between poll attempts |
-| `pollTimeoutSeconds` | `int` | `120` | Total time before the step fails as `TimedOut` |
+| `pollTimeoutSeconds` | `int` | `120` | Total time before the step fails with `StepStatus.Failed` and reason `Polling timed out after {n} seconds.` |
 | `pollMinAttempts` | `int` | `1` | Minimum number of attempts before a positive condition is accepted |
 | `pollConditionPath` | `string?` | — | Dot-notation JSON path evaluated against the response |
-| `pollConditionEquals` | `string?` | — | Expected string value. If omitted, any non-null/non-false value at the path succeeds. |
+| `pollConditionEquals` | `object?` | — | Expected value at the path. Compared by case-insensitive string equality after normalisation, so `"accepted"`, `42` and `true` all work. If omitted, any non-empty value at the path succeeds. |
 
 ```csharp
 ["check_job"] = new StepMetadata
@@ -123,8 +124,8 @@ Configure polling behaviour in `StepMetadata.Inputs`:
 Given a response `{ "id": 1, "status": "accepted" }`:
 
 - `pollConditionPath = "status"`, `pollConditionEquals = "accepted"` → **matches** when `status == "accepted"`
-- `pollConditionPath = "id"` (no `pollConditionEquals`) → **matches** when `id` is truthy (non-null, non-zero, non-false)
-- No `pollConditionPath` → condition is considered always met; the step completes after `pollMinAttempts`
+- `pollConditionPath = "id"` (no `pollConditionEquals`) → **matches** when the value at the path is present and non-empty. Any number (including `0`) and any boolean (including `false`) count as a match; only `null`, blank strings, empty arrays and empty objects do not. Use `pollConditionEquals` when you need to exclude `0` / `false`.
+- No `pollConditionPath` → the whole response payload is tested for non-empty content; a `null`, `{}`, `[]` or blank-string body does **not** satisfy the condition and polling continues until the timeout.
 
 Nested paths work: `pollConditionPath = "result.state"` evaluates `response.result.state`.
 
@@ -136,6 +137,8 @@ If the elapsed time since the first poll attempt exceeds `pollTimeoutSeconds`, t
 StepStatus.Failed
 FailedReason: "Polling timed out after 120 seconds."
 ```
+
+Values are clamped before use: `pollIntervalSeconds` has a floor of 1 s, `pollMinAttempts` a floor of 1, and `pollTimeoutSeconds` is raised to at least `pollIntervalSeconds` — a timeout shorter than one interval is silently promoted to one interval, and the failure message reports the clamped value.
 
 From the dashboard you can retry the step, which resets the poll clock and starts fresh.
 
@@ -170,9 +173,9 @@ Set `pollEnabled = false` to make a one-shot call:
         ["pollEnabled"]         = true,
         ["pollIntervalSeconds"] = 10,
         ["pollTimeoutSeconds"]  = 120,
-        ["pollConditionPath"]   = "id"   // succeeds when response.id is truthy
+        ["pollConditionPath"]   = "id"   // succeeds when response.id is non-empty
     }
 }
 ```
 
-`CallExternalApiStep` extends `PollableStepHandler<CallExternalApiInput>` and calls the configured HTTP endpoint on each attempt. When `response.id` is non-null/non-zero, polling completes and the next step runs.
+`CallExternalApiStep` extends `PollableStepHandler<CallExternalApiStepInput>` and calls the configured HTTP endpoint on each attempt. Polling completes as soon as `response.id` resolves to a non-empty value, and the next step runs.

@@ -1,6 +1,6 @@
 # Storage Backends
 
-FlowOrchestrator's persistence layer is built on three core interfaces. The package you install provides an implementation; you can also swap in your own.
+FlowOrchestrator's persistence layer is built on four core interfaces. The package you install provides an implementation; you can also swap in your own.
 
 ## Core Interfaces
 
@@ -9,8 +9,9 @@ FlowOrchestrator's persistence layer is built on three core interfaces. The pack
 | `IFlowStore` | Flow definitions and enabled/disabled state |
 | `IFlowRunStore` | Run records and step status tracking |
 | `IOutputsRepository` | Step input/output blobs keyed by `(RunId, StepKey)` |
+| `IFlowRepository` | In-process registry of the code-defined `IFlowDefinition` classes; validated by `AddFlowOrchestrator` at startup |
 
-These three interfaces are the **minimum required** to replace the built-in backends.
+These four interfaces are the **minimum required** to replace the built-in backends — `AddFlowOrchestrator` throws at startup if either `IFlowStore` or `IFlowRepository` is missing.
 
 ## SQL Server
 
@@ -73,7 +74,7 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-`FlowOrchestratorPgMigrator` creates the same table set in PostgreSQL on startup. Uses `Npgsql` — no EF Core dependency. PostgreSQL table names are snake_case (`flow_runs`, `webhook_replay_nonces`, `webhook_rejections`, …).
+`PostgreSqlFlowOrchestratorMigrator` creates the same table set in PostgreSQL on startup. Uses `Npgsql` — no EF Core dependency. PostgreSQL table names are snake_case (`flow_runs`, `webhook_replay_nonces`, `webhook_rejections`, …).
 
 The migrator also makes a **best-effort** attempt to enable the `pg_trgm`
 extension and create GIN trigram indexes that accelerate the dashboard run
@@ -151,12 +152,13 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ## Custom Backend
 
-Implement the three core interfaces:
+Implement the four core interfaces:
 
 ```csharp
 public sealed class RedisFlowStore : IFlowStore { ... }
 public sealed class RedisFlowRunStore : IFlowRunStore { ... }
 public sealed class RedisOutputsRepository : IOutputsRepository { ... }
+public sealed class RedisFlowRepository : IFlowRepository { ... }
 ```
 
 Register them directly on `options.Services`:
@@ -167,6 +169,7 @@ builder.Services.AddFlowOrchestrator(options =>
     options.Services.AddSingleton<IFlowStore, RedisFlowStore>();
     options.Services.AddSingleton<IFlowRunStore, RedisFlowRunStore>();
     options.Services.AddSingleton<IOutputsRepository, RedisOutputsRepository>();
+    options.Services.AddSingleton<IFlowRepository, RedisFlowRepository>();
     options.UseHangfire();
 });
 ```

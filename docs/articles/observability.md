@@ -4,7 +4,7 @@ FlowOrchestrator exposes run events, OpenTelemetry traces/metrics, and a retenti
 
 ## Run Events
 
-When event persistence is enabled, FlowOrchestrator writes structured `FlowEvent` records for every state transition: run started, step queued, step started, step completed/failed, run completed. Built-in step types — including `WaitForSignal` (`step.pending` while waiting, `step.completed` once the signal lands) and `ForEach` (per child-iteration events) — emit through the same channel as user-written handlers.
+When event persistence is enabled, FlowOrchestrator writes structured `FlowEvent` records for every state transition: `run.started`, `step.started`, `step.completed` / `step.failed`, `step.pending` (poll reschedule), `step.skipped`, and `run.completed`. Built-in step types — including `WaitForSignal` (`step.pending` while waiting, `step.completed` once the signal lands) and `ForEach` (per child-iteration events) — emit through the same channel as user-written handlers.
 
 ```csharp
 options.Observability.EnableEventPersistence = true;
@@ -26,7 +26,7 @@ The dashboard can still show step status and I/O from `FlowSteps` and `FlowOutpu
 
 ## OpenTelemetry
 
-When enabled, FlowOrchestrator registers an `ActivitySource` and an `IMeterFactory`-backed `Meter` that emit spans and metrics compatible with any OTLP-compatible backend (Jaeger, Grafana Tempo, Azure Monitor, Aspire Dashboard).
+When enabled, FlowOrchestrator registers an `ActivitySource` and a `Meter`, both named `FlowOrchestrator`, on the singleton `FlowOrchestratorTelemetry` — emitting spans and metrics compatible with any OTLP-compatible backend (Jaeger, Grafana Tempo, Azure Monitor, Aspire Dashboard).
 
 ```csharp
 options.Observability.EnableOpenTelemetry = true;
@@ -49,7 +49,7 @@ builder.Services.AddOpenTelemetry()
         .AddOtlpExporter());
 ```
 
-`AddFlowOrchestratorInstrumentation()` is an extension method on both `TracerProviderBuilder` and `MeterProviderBuilder`. It subscribes to the `FlowOrchestrator` activity source and meter, and now lives in `FlowOrchestrator.Core.Observability` (moved from `FlowOrchestrator.Hangfire` in v1.19). The Hangfire namespace still exposes `[Obsolete]` shims for one release so existing code keeps compiling.
+`AddFlowOrchestratorInstrumentation()` is an extension method on both `TracerProviderBuilder` and `MeterProviderBuilder`. It subscribes to the `FlowOrchestrator` activity source and meter, and lives in `FlowOrchestrator.Core.Observability` (moved from `FlowOrchestrator.Hangfire` in v1.19). The deprecated `FlowOrchestrator.Hangfire` forwarder was removed in v1.23.0 — use `using FlowOrchestrator.Core.Observability;`.
 
 ### What is emitted
 
@@ -62,7 +62,7 @@ builder.Services.AddOpenTelemetry()
 | `flow.step.retry` | Internal | One per `RetryStepAsync` call | `flow.id`, `run.id`, `step.key` |
 | `flow.step.when` | Internal | When a step's `When` clause is evaluated | `flow.id`, `run.id`, `step.key`, `flow.when.expression`, `flow.when.resolved`, `flow.when.result` |
 | `flow.step.poll` | Internal | One per polling iteration in `PollableStepHandler` | `flow.id`, `run.id`, `step.key`, `flow.poll.attempt`, `flow.poll.condition_met` |
-| `flow.runtime.execute` | Consumer | Wraps each Hangfire job. Restores the parent `traceparent` captured at enqueue, so step spans become children of the original caller. | `messaging.system=hangfire`, `messaging.message.id` |
+| `flow.runtime.execute` | Consumer | One per runtime work item (Hangfire job or InMemory channel envelope). Restores the parent `traceparent` captured at enqueue, so step spans become children of the original caller. | `messaging.system` (`hangfire` / `in_memory_channel`), `messaging.operation=process`, `messaging.message.id` |
 | `flow.webhook.receive` | Server | One per inbound webhook hit, parented onto the caller's `traceparent` header | `flow.webhook.slug_or_id` |
 | `flow.signal.deliver` | Server | One per inbound signal HTTP call, parented onto the caller's `traceparent` | `flow.run_id`, `flow.signal_name` |
 
@@ -83,7 +83,7 @@ red without any extra configuration.
 | `flow_step_skipped` | counter | steps | `flow_id`, `step_key`, `reason` (`when_false` / `prerequisites_unmet`) |
 | `flow_step_poll_attempts` | counter | attempts | `flow_id`, `step_key` |
 | `flow_signal_wait_ms` | histogram | ms | `flow_id`, `step_key`, `signal_name` — recorded by `FlowSignalDispatcher` on delivery |
-| `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory` / `service_bus`) — gap between scheduled fire and actual dispatch |
+| `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory`) — gap between scheduled fire and actual dispatch. The Service Bus runtime does not currently emit cron-lag samples. |
 | `webhook_received_total` | counter | webhooks | `flow`, `result` (`accepted` / `rejected` / `off`), `scheme` — emitted on every webhook receive (v1.25) |
 | `webhook_rejected_total` | counter | webhooks | `flow`, `reason` (`signature_invalid` / `replay` / `rate_limited` / `payload_too_large` / `ip_denied` / `secret_invalid`) (v1.25) |
 | `webhook_body_bytes` | histogram | bytes | `flow` — body size of every webhook receive (v1.25) |
@@ -102,7 +102,7 @@ caller traceparent
                            └── flow.step.poll  (handler, per poll attempt)
 ```
 
-The `flow.runtime.execute` wrapper is opened by `TraceContextHangfireFilter` (registered automatically when `options.UseHangfire()` is set). It captures `Activity.Current.Context` on enqueue, persists the W3C identifiers as Hangfire job parameters, and restores them as the parent context when the worker picks the job up. Inbound webhook and signal endpoints in the Dashboard read the `traceparent` / `tracestate` headers via `InboundTraceContext` and start their entry-point activity as a child of the parsed context.
+The `flow.runtime.execute` wrapper is opened by `TraceContextHangfireFilter` (registered automatically when `options.UseHangfire()` is set). It captures `Activity.Current.Context` on enqueue, persists the W3C identifiers as Hangfire job parameters, and restores them as the parent context when the worker picks the job up. Inbound webhook and signal endpoints in the Dashboard read the `traceparent` / `tracestate` headers via `InboundTraceContext` and start their entry-point activity as a child of the parsed context. The InMemory runtime opens the same wrapper in `InMemoryStepRunnerHostedService` when `options.UseInMemoryRuntime()` is set, restoring the parent context captured on the channel envelope.
 
 Without this plumbing, a Hangfire-backed run would appear as a forest of disconnected root spans — one per step. With it, an APM shows a single connected tree from the original caller down to every step.
 
@@ -128,7 +128,8 @@ Stable `EventId` constants are defined in `FlowOrchestrator.Core.Observability.L
 ```csharp
 LogEvents.RunStarted                 = 1000
 LogEvents.RunCompleted               = 1001
-LogEvents.TriggerRejectedDisabledFlow = 1010   // v1.22+: TriggerAsync skipped because IFlowStore.IsEnabled = false
+// 1010 = TriggerRejectedDisabledFlow — TriggerAsync skipped because IFlowStore.IsEnabled = false (v1.22+).
+//        Emitted by the internal source-generated EngineLog; there is no LogEvents constant — filter on EventId.Id.
 LogEvents.StepStarted                = 2000
 LogEvents.StepCompleted              = 2001
 LogEvents.StepFailed                 = 2002
@@ -136,19 +137,21 @@ LogEvents.StepSkipped                = 2003
 LogEvents.WhenEvaluationFailed       = 2005
 LogEvents.DispatchEnqueued           = 3000
 
-// Webhook hardening pipeline (4000–4099 reserved, v1.25+)
-WebhookLog.WebhookReceived               = 4000   // every receive — info
-WebhookLog.SignatureRejected             = 4001   // HMAC mismatch / malformed header — warning
-WebhookLog.ReplayRejected                = 4002   // skew or nonce reused — warning
-WebhookLog.RateLimited                   = 4003   // token bucket empty — warning
-WebhookLog.PayloadTooLarge               = 4004   // body cap exceeded — warning
-WebhookLog.IpDenied                      = 4005   // CIDR allow/deny miss — warning
-WebhookLog.SecretInvalid                 = 4006   // bearer-secret mismatch — warning
-WebhookLog.DeliveryAccepted              = 4007   // run dispatched — info
-WebhookLog.RejectionStoreFailed          = 4008   // DLQ write failed — warning
-WebhookLog.ReplayStoreFailed             = 4009   // replay store error — warning
-WebhookLog.RotationUsedPreviousKey       = 4010   // accepted with rotated-out key — info
-// …see the source for the full list.
+// Webhook hardening pipeline EventIds (4000–4099 reserved, v1.25+). These are emitted by the internal
+// FlowOrchestrator.Dashboard.Webhooks.Logging.WebhookLog — there is no public constant class, so filter
+// on EventId.Id. Names below are descriptive only.
+WebhookReceived               = 4000   // every receive — info
+SignatureRejected             = 4001   // HMAC mismatch / malformed header — warning
+ReplayRejected                = 4002   // skew or nonce reused — warning
+RateLimited                   = 4003   // token bucket empty — warning
+PayloadTooLarge               = 4004   // body cap exceeded — warning
+IpDenied                      = 4005   // CIDR allow/deny miss — warning
+SecretInvalid                 = 4006   // bearer-secret mismatch — warning
+DeliveryAccepted              = 4007   // run dispatched — info
+RejectionStoreFailed          = 4008   // DLQ write failed — warning
+ReplayStoreFailed             = 4009   // replay store error — warning
+RotationUsedPreviousKey       = 4010   // accepted with rotated-out key — info
+ConflictingKeyFields          = 4011   // both webhookHmacKey and webhookSecret configured — warning
 ```
 
 The `flow.trigger` activity also receives a `flow.disabled = true` tag when the engine
@@ -276,11 +279,16 @@ Returns the current control record for a run:
 
 ```json
 {
-  "runId": "...",
-  "cancellationRequested": false,
-  "timedOutAt": null,
+  "runId": "9a1c...",
+  "flowId": "3f7d...",
+  "triggerKey": "manual",
   "idempotencyKey": "batch-2026-04-20-001",
-  "timeoutAt": "2026-04-20T12:10:00Z"
+  "createdAtUtc": "2026-04-20T12:00:00Z",
+  "timeoutAtUtc": "2026-04-20T12:10:00Z",
+  "cancelRequested": false,
+  "cancelReason": null,
+  "cancelRequestedAtUtc": null,
+  "timedOutAtUtc": null
 }
 ```
 
@@ -308,9 +316,8 @@ GET /flows/api/runs/stats
 {
   "totalFlows": 6,
   "activeRuns": 2,
-  "succeededToday": 47,
-  "failedToday": 1,
-  "cancelledToday": 0
+  "completedToday": 47,
+  "failedToday": 1
 }
 ```
 
@@ -326,7 +333,7 @@ options.Retention.DataTtl = TimeSpan.FromDays(30);     // delete runs older than
 options.Retention.SweepInterval = TimeSpan.FromHours(1); // run the sweep every hour
 ```
 
-When enabled, `FlowRetentionHostedService` runs on the configured interval and calls `IFlowRetentionStore.DeleteOldRunsAsync(cutoff)`. The SQL Server and PostgreSQL backends cascade-delete all related records (steps, outputs, events, control) when a run is deleted.
+When enabled, `FlowRetentionHostedService` runs on the configured interval and calls `IFlowRetentionStore.CleanupAsync(cutoffUtc, cancellationToken)`. The SQL Server and PostgreSQL backends cascade-delete all related records (steps, outputs, events, control) when a run is deleted.
 
 > [!TIP]
 > `SweepInterval` defaults to 1 hour and `DataTtl` defaults to 30 days. Retention is disabled by default — opt in explicitly.

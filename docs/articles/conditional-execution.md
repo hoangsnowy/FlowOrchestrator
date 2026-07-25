@@ -15,15 +15,14 @@ and the dashboard surfaces the evaluation trace so you can see exactly why.
 | `==` | Equality | `@steps('x').output.status == 'approved'` |
 | `!=` | Inequality | `@triggerBody()?.region != 'EU'` |
 | `>` `<` `>=` `<=` | Numeric / ordinal compare | `@steps('x').output.amount >= 1000` |
-| `&&` | Logical AND (short-circuits) | `a > 5 && b == 'foo'` |
-| `\|\|` | Logical OR (short-circuits) | `a > 5 \|\| b == 'foo'` |
+| `&&` | Logical AND (short-circuits) | `@steps('x').output.score > 5 && @triggerBody().region == 'EU'` |
+| `\|\|` | Logical OR (short-circuits) | `@steps('x').output.score > 5 \|\| @triggerBody().priority == 'high'` |
 | `!` | Negation | `!@steps('x').output.flag` |
-| `( )` | Grouping | `(a > 5 \|\| b > 10) && c == 'ok'` |
+| `( )` | Grouping | `(@steps('x').output.score > 5 \|\| @steps('x').output.age > 10) && @triggerBody().region == 'EU'` |
 
-Right-hand side literals: numbers, strings (single or double quoted), `true`, `false`, `null`.
+Either side of a comparison may be a literal (number, single- or double-quoted string, `true`, `false`, `null`), a parenthesised sub-expression, or an `@steps('key').output.path` / `@steps('key').status` / `@steps('key').error` / `@triggerBody()` / `@triggerHeaders()['Header-Name']` expression — e.g. `@steps('a').output.total == @steps('b').output.expected` is valid.
 
-Left-hand side: any `@steps('key').output.path`, `@steps('key').status`, `@steps('key').error`,
-`@triggerBody()`, or `@triggerHeaders()['Header-Name']` expression.
+Bare identifiers are **not** allowed: any word other than `true`, `false` and `null` raises a `FlowExpressionException`, and the step is recorded as `Skipped` with the parse error in the trace.
 
 ## Type Coercion
 

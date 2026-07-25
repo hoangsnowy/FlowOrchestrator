@@ -30,7 +30,7 @@ Rule of thumb: if you'd hit a rate limit polling once a minute, `WaitForSignal` 
 
 Fields:
 
-- `signalName` (required) — the logical name addressed by the signal endpoint. Must be unique among the parked `WaitForSignal` steps in the same run.
+- `signalName` (optional, defaults to `"default"`) — the logical name addressed by the signal endpoint. Must be unique among the parked `WaitForSignal` steps in the same run, so always set it explicitly when a run has more than one waiter. Supplying an explicitly empty or whitespace value fails the step with `WaitForSignal step requires a non-empty 'signalName' input.`
 - `timeoutSeconds` (optional) — absolute deadline. When elapsed without delivery, the step transitions to `Failed` with a descriptive reason. `null` or non-positive values mean "wait forever".
 
 ## End-to-End Example
@@ -51,13 +51,13 @@ public sealed class ApprovalFlow : IFlowDefinition
             ["submit"] = new StepMetadata
             {
                 Type = "LogMessage",
-                Inputs = new() { ["message"] = "Awaiting manager approval" }
+                Inputs = new Dictionary<string, object?> { ["message"] = "Awaiting manager approval" }
             },
             ["wait_for_approval"] = new StepMetadata
             {
                 Type = "WaitForSignal",
                 RunAfter = new() { ["submit"] = [StepStatus.Succeeded] },
-                Inputs = new()
+                Inputs = new Dictionary<string, object?>
                 {
                     ["signalName"]     = "approval",
                     ["timeoutSeconds"] = 86400
@@ -67,7 +67,7 @@ public sealed class ApprovalFlow : IFlowDefinition
             {
                 Type = "LogMessage",
                 RunAfter = new() { ["wait_for_approval"] = [StepStatus.Succeeded] },
-                Inputs = new()
+                Inputs = new Dictionary<string, object?>
                 {
                     ["message"] = "@steps('wait_for_approval').output.approver"
                 }
@@ -77,7 +77,7 @@ public sealed class ApprovalFlow : IFlowDefinition
 }
 ```
 
-Wake the parked step from `curl`:
+From the dashboard, open the run detail page and click **Send Signal** on the parked `WaitForSignal` step — the dashboard reads `signalName` from the step inputs and prompts for the JSON payload. Or POST directly with `curl`:
 
 ```bash
 curl -X POST http://localhost:5000/flows/api/runs/<runId>/signals/approval \
@@ -101,6 +101,27 @@ Downstream steps consume the payload via the same expression syntax used for any
 ["message"] = "@steps('wait_for_approval').output.approver"
 ```
 
+## Delivering a Signal In-Process
+
+HTTP is not the only path. `IFlowSignalDispatcher` is registered by `AddFlowOrchestrator` and is exactly what the dashboard endpoint calls — inject it when your application (or a test) already has the `runId` in hand:
+
+```csharp
+public sealed class ApprovalService(IFlowSignalDispatcher signals)
+{
+    public async Task ApproveAsync(Guid runId, string approver)
+    {
+        var result = await signals.DispatchAsync(
+            runId,
+            "approval",
+            $$"""{"approver":"{{approver}}","approved":true}""");
+        // result.Status is Delivered / NotFound / AlreadyDelivered;
+        // result.StepKey and result.DeliveredAt are populated on success.
+    }
+}
+```
+
+The returned `SignalDeliveryResult` carries the same outcomes the HTTP endpoint maps to 200 / 404 / 409.
+
 ## Endpoint Status Codes
 
 | Status | Meaning |
@@ -119,7 +140,7 @@ Set `timeoutSeconds` to fail the step (and therefore the run, unless you wire a 
 {
     Type = "WaitForSignal",
     RunAfter = new() { ["submit"] = [StepStatus.Succeeded] },
-    Inputs = new()
+    Inputs = new Dictionary<string, object?>
     {
         ["signalName"]     = "approval",
         ["timeoutSeconds"] = 3600   // 1 hour
@@ -144,12 +165,12 @@ A run may have multiple `WaitForSignal` steps, each with its own `signalName`. T
 ["wait_manager"] = new StepMetadata
 {
     Type = "WaitForSignal",
-    Inputs = new() { ["signalName"] = "manager-approval" }
+    Inputs = new Dictionary<string, object?> { ["signalName"] = "manager-approval" }
 },
 ["wait_finance"] = new StepMetadata
 {
     Type = "WaitForSignal",
-    Inputs = new() { ["signalName"] = "finance-approval" }
+    Inputs = new Dictionary<string, object?> { ["signalName"] = "finance-approval" }
 },
 ["finalize"] = new StepMetadata
 {

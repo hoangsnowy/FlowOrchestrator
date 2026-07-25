@@ -18,7 +18,7 @@ The method receives:
 
 | Parameter | Type | Description |
 |---|---|---|
-| `ctx` | `IExecutionContext` | Run-scoped context: `RunId`, cancellation token, principal |
+| `ctx` | `IExecutionContext` | Run-scoped context: `RunId`, `PrincipalId`, `TriggerData`, `TriggerHeaders`, `JobId` |
 | `flow` | `IFlowDefinition` | The flow definition being executed |
 | `step` | `IStepInstance<TInput>` | The deserialized step inputs and metadata |
 
@@ -122,21 +122,20 @@ public sealed class SaveResultHandler : IStepHandler<SaveResultInput>
         IFlowDefinition flow,
         IStepInstance<SaveResultInput> step)
     {
-        // Read the output of a previous step by its step key
-        var fetchResult = await _outputs.GetStepOutputAsync(
+        // Read the output of a previous step by its step key, deserialised to a CLR type
+        var orders = await _outputs.GetStepOutputAsync<List<Order>>(
             ctx.RunId, step.Inputs.FetchStepKey);
 
-        if (fetchResult is null)
+        if (orders is null)
             throw new InvalidOperationException("Upstream step output not found.");
-
-        // fetchResult is JsonElement — deserialize as needed
-        var orders = fetchResult.Value.Deserialize<List<Order>>();
 
         // ... save logic
         return new { Saved = orders?.Count ?? 0 };
     }
 }
 ```
+
+(The non-generic `GetStepOutputAsync(runId, stepKey)` returns `object?` holding a boxed `JsonElement`; the generic extension in `OutputsRepositoryTypedExtensions` does the conversion for you.)
 
 ## Accessing Execution Context from DI
 
@@ -151,27 +150,19 @@ public sealed class AuditLogger
 
     public void Log(string action)
     {
-        var runId = _accessor.Current?.RunId;
+        var runId = _accessor.CurrentContext?.RunId;
         // ...
     }
 }
 ```
 
-## Cooperative Cancellation
+## Cancellation Semantics
 
-Check `ctx.CancellationToken` before expensive operations. When a user cancels a run from the dashboard, the token is cancelled at the next step execution boundary (regardless of which runtime adapter is in use):
+Cancellation is a **run-level latch checked by the engine at step boundaries**, not a token handed to your handler. `IExecutionContext` carries no `CancellationToken`, and `IStepHandler.ExecuteAsync` receives no token parameter.
 
-```csharp
-public async ValueTask<object?> ExecuteAsync(
-    IExecutionContext ctx, IFlowDefinition flow, IStepInstance<MyInput> step)
-{
-    ctx.CancellationToken.ThrowIfCancellationRequested();
+When a run is cancelled (or times out), `RunStepAsync` resolves the run-control state *before* invoking the handler. If the run is `Cancelled` or `TimedOut`, the engine records that step as `Skipped`, completes the run with the terminal status, and returns without calling the handler at all.
 
-    await DoExpensiveWorkAsync(ctx.CancellationToken);
-
-    return new { Done = true };
-}
-```
+The consequence: **a handler that is already executing runs to completion.** Cancellation takes effect at the *next* step boundary. If a handler performs long-running work that must be interruptible, give it its own timeout (e.g. an `HttpClient.Timeout` or a `CancellationTokenSource` you create inside the handler) rather than relying on the engine.
 
 ## Polling Handlers
 

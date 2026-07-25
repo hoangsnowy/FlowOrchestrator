@@ -24,7 +24,7 @@ Registers a flow class. `TFlow` must implement `IFlowDefinition` and have a publ
 
 ### Runtime Adapter
 
-Choose exactly one runtime adapter and register it **before** calling `AddFlowOrchestrator()`:
+Choose exactly one runtime adapter and select it **inside** the `AddFlowOrchestrator()` callback (`options.UseHangfire()`, `options.UseInMemoryRuntime()`, or `options.UseAzureServiceBusRuntime(...)`). Only when using the Hangfire runtime must Hangfire's own services (`AddHangfire` / `AddHangfireServer`) be registered **before** `AddFlowOrchestrator()`:
 
 **Hangfire runtime** (SQL Server or PostgreSQL persistence, distributed workers):
 
@@ -40,7 +40,7 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-**InMemory runtime** (no Hangfire packages required — `Channel<T>` step dispatcher + `PeriodicTimer` cron):
+**InMemory runtime** (no Hangfire server required — `Channel<T>` step dispatcher + `PeriodicTimer` cron):
 
 ```csharp
 builder.Services.AddFlowOrchestrator(options =>
@@ -52,7 +52,7 @@ builder.Services.AddFlowOrchestrator(options =>
 ```
 
 > [!NOTE]
-> When using the InMemory runtime, Hangfire packages (`Hangfire.Core`, `Hangfire.InMemory`, etc.) are not needed and should not be added. Cron parsing is handled by [Cronos](https://github.com/HangfireIO/Cronos).
+> When using the InMemory runtime you do not call `AddHangfire()` / `AddHangfireServer()` and do not need a Hangfire storage package (`Hangfire.SqlServer`, `Hangfire.InMemory`). The `FlowOrchestrator.Hangfire` package itself is still required — it hosts the `AddFlowOrchestrator` extension method — and pulls in `Hangfire.Core` transitively. Cron parsing is handled by [Cronos](https://github.com/HangfireIO/Cronos).
 
 > [!TIP]
 > Storage and runtime are independent. `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but durable run state.
@@ -87,6 +87,19 @@ the at-least-once delivery model of Service Bus correct.
 string. Set to `false` when topology is provisioned via IaC (Bicep / Terraform) and the
 deploy identity has only Send / Listen rights.
 
+### ServiceBusRuntimeOptions
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `ConnectionString` | `string` | — | Service Bus namespace connection string. Required; `UseAzureServiceBusRuntime` throws when empty. |
+| `StepTopicName` | `string` | `"flow-steps"` | Topic that step-dispatch messages are published to; shared by all registered flows. |
+| `CronQueueName` | `string` | `"flow-cron-triggers"` | Queue carrying self-perpetuating scheduled cron-trigger messages. |
+| `SubscriptionPrefix` | `string` | `"flow-"` | Prefix for per-flow subscription names — the subscription becomes `flow-{flowId}`. |
+| `MaxConcurrentCallsPerSubscription` | `int` | `8` | Messages a single per-flow subscription processor handles concurrently. |
+| `AutoCreateTopology` | `bool` | `true` | Create topic / queue / subscriptions at startup via `ServiceBusAdministrationClient`. Requires Manage rights. |
+| `DuplicateDetectionWindow` | `TimeSpan` | 10 minutes | Duplicate-detection history window applied to the topic and cron queue when `AutoCreateTopology` is enabled. |
+| `MaxDeliveryCount` | `int` | `10` | Delivery attempts before a message is dead-lettered. |
+
 For local development, the included Aspire AppHost wires the official Microsoft Service Bus
 emulator via `AddAzureServiceBus("servicebus").RunAsEmulator()` — see
 [`FlowOrchestrator.AppHost/Program.cs`](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/FlowOrchestrator.AppHost/Program.cs)
@@ -107,7 +120,7 @@ options.Scheduler.PersistOverrides = true;
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `PersistOverrides` | `bool` | `false` | Persist cron overrides written via dashboard or API to `IFlowScheduleStateStore`. When `true`, overrides survive process restarts; when `false`, the manifest cron expression is restored on each restart. |
+| `PersistOverrides` | `bool` | `true` | Persist cron overrides written via dashboard or API to `IFlowScheduleStateStore`. When `true`, overrides survive process restarts; when `false`, the ephemeral in-memory store is used and the manifest cron expression is restored on each restart. |
 
 ---
 
@@ -120,7 +133,8 @@ options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `DefaultRunTimeout` | `TimeSpan?` | `null` | Global timeout for all runs. Runs exceeding this are marked `TimedOut`. Set per-flow via `IFlowRunControlStore.SetTimeoutAsync` for finer control. `null` = no timeout. |
+| `DefaultRunTimeout` | `TimeSpan?` | `null` | Global timeout for all runs. Runs exceeding this are marked `TimedOut`. Override per run by including `runTimeoutSeconds` in the trigger payload. `null` = no timeout. |
+| `TimeoutEnforcementInterval` | `TimeSpan?` | 30 seconds | How often the periodic sweep proactively marks runs past `TimeoutAtUtc` as `TimedOut`, so a run whose step threw and left nothing scheduled does not sit `Running` forever. `null` or a non-positive value disables the sweep. |
 | `IdempotencyHeaderName` | `string` | `"Idempotency-Key"` | Header name checked on trigger requests. If present, the value is used as a deduplication key — a second trigger with the same key returns the existing run instead of creating a new one. |
 
 ---
@@ -134,8 +148,8 @@ options.Observability.EnableOpenTelemetry = true;
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EnableEventPersistence` | `bool` | `false` | Write `FlowEvent` records to `IOutputsRepository` (requires the storage backend to implement `IFlowEventReader`). Powers the step timeline in the dashboard. |
-| `EnableOpenTelemetry` | `bool` | `false` | Register `FlowOrchestratorTelemetry` `ActivitySource` and `Meter`. Use `AddFlowOrchestratorInstrumentation()` on your OTel pipeline to consume them. |
+| `EnableEventPersistence` | `bool` | `true` | Write `FlowEvent` records to `IOutputsRepository` (requires the storage backend to implement `IFlowEventReader`). Powers the step timeline in the dashboard. Set to `false` to skip event writes. |
+| `EnableOpenTelemetry` | `bool` | `true` | Emit `FlowOrchestratorTelemetry` trace spans and metrics from the engine. The `ActivitySource` and `Meter` are always registered by `AddFlowOrchestrator`; this flag controls whether spans/counters are emitted. Use `AddFlowOrchestratorInstrumentation()` on your OTel pipeline to consume them. |
 
 ---
 
@@ -206,7 +220,10 @@ gates for the dashboard webhook receive endpoint. The default
 `EnforcementMode = Off` keeps the endpoint behaving exactly as in v1.24.
 
 ```csharp
-builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
+// Use the (IConfiguration, Action<FlowDashboardOptions>) overload so appsettings-bound
+// Branding/BasicAuth are still applied — the delegate-only overload does NOT read
+// configuration and therefore silently disables config-driven Basic Auth.
+builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhookSecurity(sec =>
 {
     sec.UseEnforcementMode(WebhookEnforcementMode.Audit) // dry-run first
        .UseMaxBodyBytes(1_048_576)
@@ -223,6 +240,9 @@ builder.Services.AddFlowOrchestrator(options =>
     options.AddSqlServerWebhookHardening(sqlConn);
 });
 ```
+
+> [!WARNING]
+> `AddFlowDashboard` has four overloads: `()`, `(IConfiguration, sectionName)`, `(Action<FlowDashboardOptions>)`, and `(IConfiguration, Action<FlowDashboardOptions>, sectionName)`. The delegate-only overload does **not** bind configuration, so combining it with `appsettings.json` Basic Auth silently leaves the dashboard unauthenticated. Use the `(IConfiguration, Action<FlowDashboardOptions>)` overload whenever you need both bound settings and code-only configuration such as `UseWebhookSecurity`.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -296,7 +316,7 @@ app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");
 ```
 
-### InMemory Runtime (Dev / Testing — no Hangfire required)
+### InMemory Runtime (Dev / Testing — no Hangfire server required)
 
 ```csharp
 builder.Services.AddFlowOrchestrator(options =>

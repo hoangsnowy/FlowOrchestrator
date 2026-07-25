@@ -9,14 +9,14 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 │  Your Application Code                                   │
 │  IFlowDefinition  ·  IStepHandler<T>                    │
 └────────────────────────┬────────────────────────────────┘
-                         │ AddFlowOrchestrator()
+                         │ AddFlowOrchestrator()  — ships in FlowOrchestrator.Hangfire
 ┌────────────────────────▼────────────────────────────────┐
 │  FlowOrchestrator.Core   (engine layer)                  │
 │                                                          │
 │  FlowOrchestratorEngine — TriggerAsync / RunStepAsync    │
 │  DefaultStepExecutor    — input resolution + dispatch    │
 │  FlowGraphPlanner       — DAG evaluation                 │
-│  FlowSyncHostedService  — startup sync + cron wiring     │
+│  FlowTimeoutEnforcementHostedService — timeout sweep     │
 │  FlowRunRecoveryHostedService — re-dispatch on startup   │
 │  ForEachStepHandler     — built-in loop execution        │
 └──────┬────────────────────────────────┬─────────────────┘
@@ -40,19 +40,22 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 
 | Package | Responsibility |
 |---|---|
-| `FlowOrchestrator.Core` | Engine, abstractions, DAG planning, `FlowOrchestratorEngine`, `IStepDispatcher`, `DefaultStepExecutor`, `PollableStepHandler<T>`, in-memory storage |
-| `FlowOrchestrator.Hangfire` | Hangfire adapter: `HangfireStepDispatcher`, `RecurringTriggerSync`, cron job management |
+| `FlowOrchestrator.Core` | Engine, abstractions, DAG planning, `FlowOrchestratorEngine`, `IStepDispatcher`, `DefaultStepExecutor`, `PollableStepHandler<T>`, storage *interfaces* (`IFlowStore` / `IFlowRunStore` / `IOutputsRepository`) — no storage implementations |
+| `FlowOrchestrator.Hangfire` | Hangfire adapter: `HangfireStepDispatcher`, `RecurringTriggerSync`, cron job management, `FlowSyncHostedService` (startup flow validate + upsert + cron wiring) |
 | `FlowOrchestrator.InMemory` | Channel-based in-process runtime + storage: `InMemoryStepDispatcher`, `InMemoryStepRunnerHostedService`, `PeriodicTimerRecurringTriggerDispatcher` (Cronos cron parser), full `InMemoryFlowStore` / `InMemoryFlowRunStore` / `InMemoryOutputsRepository` |
 | `FlowOrchestrator.ServiceBus` | Azure Service Bus adapter (v1.22+): `ServiceBusStepDispatcher` (topic + per-flow subscription), `ServiceBusFlowProcessorHostedService` (one processor per enabled flow), `ServiceBusRecurringTriggerHub` + `ServiceBusCronProcessorHostedService` (self-perpetuating scheduled cron messages), `ServiceBusTopologyManager` (admin-client topology auto-create) |
-| `FlowOrchestrator.SqlServer` | Dapper + SQL Server persistence, auto-migration of 9 tables |
+| `FlowOrchestrator.SqlServer` | Dapper + SQL Server persistence, auto-migration of the full schema on startup (flow definitions, runs, steps, attempts, outputs, claims, dispatches, run controls, idempotency keys, events, signal waiters, schedule states, webhook replay nonces and rejections) |
 | `FlowOrchestrator.PostgreSQL` | Dapper + Npgsql PostgreSQL persistence, auto-migration |
 | `FlowOrchestrator.Dashboard` | REST API endpoints + embedded SPA (HTML/JS/CSS) served at a configurable base path |
+
+> [!NOTE]
+> `AddFlowOrchestrator()` currently ships in the `FlowOrchestrator.Hangfire` package, so that package must be referenced for DI bootstrap regardless of which runtime adapter you select. Selecting `UseInMemoryRuntime()` or the Service Bus adapter still replaces the Hangfire `IStepDispatcher` — no Hangfire server is started unless you call `AddHangfireServer()` yourself.
 
 ## Execution Flow
 
 The sequence from trigger to completion:
 
-1. **Trigger** — A call to `FlowOrchestratorEngine.TriggerAsync()` first consults `IFlowStore.GetByIdAsync(flowId).IsEnabled`; when `false`, the call silent-skips and returns `{ runId: null, disabled: true }` without dispatching (EventId 1010 `TriggerRejectedDisabledFlow` warning). Otherwise it checks the idempotency key, generates a `RunId`, persists trigger headers/body, and calls `IFlowExecutor.TriggerFlow()` to find the first ready steps. Each entry step is dispatched via `IStepDispatcher.EnqueueStepAsync()`, guarded by `TryRecordDispatchAsync` to prevent duplicate dispatch.
+1. **Trigger** — A call to `FlowOrchestratorEngine.TriggerAsync()` first consults `IFlowStore.GetByIdAsync(flowId).IsEnabled`; when `false`, the call silent-skips and returns `{ runId: null, disabled: true }` without dispatching (EventId 1010 `TriggerRejectedDisabledFlow` warning). Otherwise it checks the idempotency key, generates a `RunId`, persists trigger headers/body, and calls `IFlowGraphPlanner.CreateEntrySteps()` to build every entry-step instance. Each entry step is dispatched via `IStepDispatcher.EnqueueStepAsync()`, guarded by `TryRecordDispatchAsync` to prevent duplicate dispatch.
 
 2. **Claim** — The runtime adapter (Hangfire job, InMemory channel consumer, or Service Bus message processor) calls `FlowOrchestratorEngine.RunStepAsync`. The engine calls `TryClaimStepAsync` first — if another worker has already claimed this step, the current call exits silently (the "Execute once" half of the **Dispatch many, Execute once** invariant).
 
@@ -70,7 +73,7 @@ The sequence from trigger to completion:
 
 `FlowSyncHostedService` runs on `IHostedService.StartAsync`:
 
-1. Calls `IFlowStore.UpsertAsync` for every registered `IFlowDefinition` — creates or updates the flow record in the database.
+1. Validates each registered `IFlowDefinition` via `IFlowGraphPlanner.Validate` — an invalid manifest throws `InvalidOperationException` and fails startup — then calls `IFlowStore.SaveAsync` to upsert the flow record in the database.
 2. Delegates cron-trigger registration to `IRecurringTriggerSync.SyncTriggers(flowId, isEnabled)` — runtime-agnostic. The Hangfire impl writes to `IRecurringJobManager`; the InMemory impl writes to an in-process `PeriodicTimer` registry. Both apply persisted cron overrides from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true` and remove jobs for disabled flows.
 
 `FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart.
@@ -100,7 +103,7 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-The `IFlowStore` / `IFlowRunStore` / `IOutputsRepository` interfaces are the only contracts FlowOrchestrator depends on for core storage. Implementing these three interfaces is all that is required to swap in a custom backend (Redis, DynamoDB, CosmosDB, etc.).
+Swapping in a custom backend (Redis, DynamoDB, CosmosDB, etc.) requires four contracts at minimum: `IFlowStore`, `IFlowRunStore`, `IOutputsRepository`, and `IFlowRepository` — `AddFlowOrchestrator()` throws an `InvalidOperationException` on startup when either `IFlowStore` or `IFlowRepository` is missing. For full functionality also implement `IFlowRunRuntimeStore` (without it the claim guard is disabled and the engine falls back to legacy sequential mode, EventId 9000), `IFlowRunControlStore`, `IFlowRetentionStore`, `IFlowEventReader`, `IFlowSignalStore`, and `IFlowScheduleStateStore` (an ephemeral in-process default is registered when absent).
 
 ## Key Design Decisions
 
