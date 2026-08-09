@@ -6,6 +6,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.29.1] - 2026-08-09
+
 ### Dependencies
 
 - Hangfire 1.8.23 → 1.8.24 (`Hangfire.Core`, `Hangfire.AspNetCore`, **and**
@@ -14,6 +16,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fails with `NU1608`); Microsoft.Extensions.DependencyInjection.Abstractions
   10.0.9 → 10.0.10; Microsoft.AspNetCore.TestHost 8.0.28 → 8.0.29;
   actions/setup-dotnet 5 → 6.
+- Microsoft.Extensions.DependencyInjection, Microsoft.Extensions.Hosting.Abstractions
+  and Microsoft.Extensions.Logging.Abstractions 10.0.9 → 10.0.10.
+- OpenTelemetry 1.15.3/1.16.0 → **1.17.0 across the whole family**
+  (`OpenTelemetry`, `.Api`, `.Exporter.Console`, `.Exporter.OpenTelemetryProtocol`,
+  `.Extensions.Hosting`, `.Instrumentation.AspNetCore`). Dependabot bumps `.Api`
+  alone; the rest are moved with it because these packages ship as one release line
+  and mixing lines risks `TracerProvider`/`MeterProvider` binding mismatches.
+- Test infrastructure: Microsoft.NET.Test.Sdk 18.8.0 → 18.8.1;
+  Microsoft.Extensions.TimeProvider.Testing 10.7.0 → 10.8.0.
+- CI: github/codeql-action pinned `v4` → `v4.37.4`.
 
 ## [1.29.0] - 2026-07-19
 
