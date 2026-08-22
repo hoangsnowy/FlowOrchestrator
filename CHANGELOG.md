@@ -6,6 +6,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.29.2] - 2026-08-22
+
+### Security
+
+- **SSH.NET pinned to 2026.0.0** to clear GHSA-q939-rpr3-3284 (high severity —
+  `ScpClient` recursive download allows arbitrary file write via server-controlled
+  SCP filenames; affects all versions `<= 2025.1.0`). SSH.NET is a transitive
+  dependency of Testcontainers, so it is pinned centrally in `Directory.Packages.props`
+  (relying on `CentralPackageTransitivePinningEnabled`); the fix reaches the
+  SqlServer / PostgreSQL / ServiceBus integration-test projects and closes all three
+  Dependabot alerts.
+
+### Dependencies
+
+- Runtime: Microsoft.Extensions.Logging 10.0.9 → 10.0.10;
+  Microsoft.Extensions.DependencyInjection.Abstractions and
+  Microsoft.Extensions.Logging.Abstractions 10.0.10 → 10.0.11;
+  System.Text.Json 10.0.9 → 10.0.11.
+- Test infrastructure: Testcontainers 4.13.0 → 4.14.0; Testcontainers.MsSql and
+  Testcontainers.PostgreSql 4.12.0 → 4.13.0; NSubstitute 6.0.0 → 6.2.0;
+  Microsoft.NET.Test.Sdk 18.8.1 → 18.9.0;
+  Microsoft.Extensions.TimeProvider.Testing 10.8.0 → 10.9.0;
+  Microsoft.AspNetCore.TestHost 8.0.29 → 8.0.30.
+- CI: github/codeql-action 4.37.4 → 4.37.7.
+
 ## [1.29.1] - 2026-08-09
 
 ### Dependencies
