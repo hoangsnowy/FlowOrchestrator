@@ -101,6 +101,54 @@ for (int i = 0; i < itemCount; i++)
 }
 ```
 
+## Referencing a Sibling Step's Output
+
+A child step can read the output of another child in the **same iteration** using a
+plain `@steps('siblingKey')` expression — the bare key, exactly as it is written in the
+manifest. At runtime the resolver rewrites it to the current iteration's scope, so a
+step running as `process_orders.2.archive_order` resolves `@steps('validate_order')` to
+`process_orders.2.validate_order` — never iteration 0's:
+
+```csharp
+Steps = new StepCollection
+{
+    ["validate_order"] = new StepMetadata
+    {
+        Type = "ProcessOrderItem",
+        Inputs = new Dictionary<string, object?> { ["maxOrderValue"] = 10000 }
+    },
+
+    ["archive_order"] = new StepMetadata
+    {
+        Type = "LogMessage",
+        RunAfter = new RunAfterCollection { ["validate_order"] = [StepStatus.Succeeded] },
+        Inputs = new Dictionary<string, object?>
+        {
+            // Bare sibling key — resolves to THIS iteration's validate_order output.
+            ["message"] = "@steps('validate_order').output.note"
+        }
+    }
+}
+```
+
+Resolution rules for `@steps('key')` evaluated from inside a loop:
+
+| Key written in the expression | Resolves to |
+|---|---|
+| A bare sibling key (`validate_order`) | The current iteration's scope: `{loop}.{index}.validate_order` |
+| A bare key that is a **top-level** step (`prepare_batch`) | The top-level step, unchanged — the loop scope is *not* prepended |
+| An explicitly-qualified key (`process_orders.0.validate_order`) | Used verbatim (hard-codes iteration 0) |
+
+The bare-key rewrite only applies when the key is not a top-level manifest step, so
+upstream references made from inside a loop keep working. The same rule governs
+`.status` and `.error` access, and it mirrors the sibling-key handling that `RunAfter`
+already applies within a loop scope.
+
+> [!NOTE]
+> The rewrite walks *enclosing* loop scopes nearest-first, so a deeply nested child can
+> reference a sibling declared in the same loop. It does not reach *into* a different
+> iteration — use the explicit `{loop}.{index}.{child}` key for cross-iteration reads.
+
 ## How Dispatch Works
 
 `ForEachStepHandler` does not enqueue jobs directly. Instead it returns a `StepResult` that carries a `DispatchHint` with `Spawn` entries — one per iteration. `FlowOrchestratorEngine` receives the hint, validates that the spawned step keys are not already present in the static DAG, and dispatches each one via `IStepDispatcher`. This keeps runtime dispatch logic in the engine and makes `ForEachStepHandler` portable across all runtime adapters (Hangfire, InMemory, or any future adapter).
@@ -183,6 +231,17 @@ public sealed class OrderBatchFlow : IFlowDefinition
                         Inputs = new Dictionary<string, object?>
                         {
                             ["maxOrderValue"] = 10000  // same for every iteration
+                        }
+                    },
+
+                    // Reads the sibling validate_order output for THIS iteration.
+                    ["archive_order"] = new StepMetadata
+                    {
+                        Type = "LogMessage",
+                        RunAfter = new RunAfterCollection { ["validate_order"] = [StepStatus.Succeeded] },
+                        Inputs = new Dictionary<string, object?>
+                        {
+                            ["message"] = "@steps('validate_order').output.note"
                         }
                     }
                 }

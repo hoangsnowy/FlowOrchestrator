@@ -18,8 +18,32 @@ public class StepOutputResolverTests
         ["submit"] = new StepMetadata { Type = "Submit" }
     };
 
+    // A flow whose ForEach loop "scan" wraps two sibling child steps. The child steps
+    // reference each other's output by bare key, exactly as reported in issue #166.
+    private static readonly StepCollection _loopSteps = new()
+    {
+        ["fetch_orders"] = new StepMetadata { Type = "Fetch" },
+        ["scan"] = new LoopStepMetadata
+        {
+            Type = "ForEach",
+            ForEach = "@triggerBody()?.items",
+            Steps = new StepCollection
+            {
+                ["wait_robot_goto"] = new StepMetadata { Type = "WaitForSignal" },
+                ["open_camera"] = new StepMetadata
+                {
+                    Type = "OpenCamera",
+                    RunAfter = new RunAfterCollection { { "wait_robot_goto", [StepStatus.Succeeded] } }
+                }
+            }
+        }
+    };
+
     private StepOutputResolver CreateResolver(StepCollection? steps = null) =>
         new(_outputs, _runStore, _runId, steps ?? _defaultSteps);
+
+    private StepOutputResolver CreateResolver(StepCollection steps, string currentStepKey) =>
+        new(_outputs, _runStore, _runId, steps, currentStepKey);
 
     private static JsonElement Json(string raw) =>
         JsonSerializer.Deserialize<JsonElement>(raw);
@@ -139,6 +163,115 @@ public class StepOutputResolverTests
         Assert.Equal("ghost_step", ex.StepKey);
         Assert.Contains("ghost_step", ex.Message);
         Assert.Contains("ghost_step", ex.Expression);
+    }
+
+    // ── Scope-relative sibling resolution inside a ForEach (issue #166) ─────────
+
+    [Fact]
+    public async Task ResolvesSiblingOutputByBareKeyInsideLoopScope()
+    {
+        // Arrange — open_camera (running as scan.0.open_camera) references its sibling
+        // wait_robot_goto by bare key; the output is persisted under the runtime key.
+        var output = Json("{\"Location\":\"BAY-7\"}");
+        _outputs.GetStepOutputAsync(_runId, "scan.0.wait_robot_goto")
+            .Returns(new ValueTask<object?>(output));
+        var resolver = CreateResolver(_loopSteps, "scan.0.open_camera");
+
+        // Act
+        var result = await resolver.ResolveAsync("@steps('wait_robot_goto').output.Location");
+
+        // Assert
+        var element = Assert.IsType<JsonElement>(result);
+        Assert.Equal("BAY-7", element.GetString());
+    }
+
+    [Fact]
+    public async Task ResolvesSiblingByBareKeyUsingIterationOfCurrentStep()
+    {
+        // Arrange — the current step is in iteration 3, so the sibling must resolve to
+        // scan.3.wait_robot_goto (not scan.0.*), proving the loop index is honored.
+        var output = Json("{\"Location\":\"BAY-3\"}");
+        _outputs.GetStepOutputAsync(_runId, "scan.3.wait_robot_goto")
+            .Returns(new ValueTask<object?>(output));
+        var resolver = CreateResolver(_loopSteps, "scan.3.open_camera");
+
+        // Act
+        var result = await resolver.ResolveAsync("@steps('wait_robot_goto').output.Location");
+
+        // Assert
+        var element = Assert.IsType<JsonElement>(result);
+        Assert.Equal("BAY-3", element.GetString());
+    }
+
+    [Fact]
+    public async Task TopLevelReferenceFromInsideLoopStillResolvesByBareKey()
+    {
+        // Arrange — a bare key that IS a top-level manifest step must not be rewritten
+        // into the loop scope; it resolves against the top-level runtime key.
+        var output = Json("{\"orderId\":\"ORD-9\"}");
+        _outputs.GetStepOutputAsync(_runId, "fetch_orders")
+            .Returns(new ValueTask<object?>(output));
+        var resolver = CreateResolver(_loopSteps, "scan.0.open_camera");
+
+        // Act
+        var result = await resolver.ResolveAsync("@steps('fetch_orders').output.orderId");
+
+        // Assert
+        var element = Assert.IsType<JsonElement>(result);
+        Assert.Equal("ORD-9", element.GetString());
+    }
+
+    [Fact]
+    public async Task ExplicitlyQualifiedRuntimeKeyResolvesDirectly()
+    {
+        // Arrange
+        var output = Json("{\"Location\":\"BAY-1\"}");
+        _outputs.GetStepOutputAsync(_runId, "scan.1.wait_robot_goto")
+            .Returns(new ValueTask<object?>(output));
+        var resolver = CreateResolver(_loopSteps, "scan.1.open_camera");
+
+        // Act
+        var result = await resolver.ResolveAsync("@steps('scan.1.wait_robot_goto').output.Location");
+
+        // Assert
+        var element = Assert.IsType<JsonElement>(result);
+        Assert.Equal("BAY-1", element.GetString());
+    }
+
+    [Fact]
+    public async Task SiblingStatusResolvesByBareKeyInsideLoopScope()
+    {
+        // Arrange
+        var detail = new FlowRunRecord
+        {
+            Id = _runId,
+            Status = "Running",
+            Steps =
+            [
+                new FlowStepRecord { StepKey = "scan.2.wait_robot_goto", Status = "Succeeded" }
+            ]
+        };
+        _runStore.GetRunDetailAsync(_runId).Returns(Task.FromResult<FlowRunRecord?>(detail));
+        var resolver = CreateResolver(_loopSteps, "scan.2.open_camera");
+
+        // Act
+        var result = await resolver.ResolveAsync("@steps('wait_robot_goto').status");
+
+        // Assert
+        Assert.Equal("Succeeded", result);
+    }
+
+    [Fact]
+    public async Task BareSiblingKeyStillThrowsWhenNoCurrentStepScopeIsSupplied()
+    {
+        // Arrange — without the current step key (the legacy 4-arg constructor), a bare
+        // loop-child key cannot be scope-resolved and must still throw, unchanged.
+        var resolver = CreateResolver(_loopSteps);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<FlowExpressionException>(
+            async () => await resolver.ResolveAsync("@steps('wait_robot_goto').output.Location"));
+        Assert.Equal("wait_robot_goto", ex.StepKey);
     }
 
     // ── Status and error ──────────────────────────────────────────────────────

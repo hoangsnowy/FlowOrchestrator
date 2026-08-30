@@ -151,7 +151,9 @@ runId=$(curl -fsS -u admin:admin -X POST "http://localhost:$port/flows/api/flows
         -H 'Content-Type: application/json' \
         -d '{"orderIds":[1,2,3],"items":[{"id":1},{"id":2},{"id":3}]}' | jq -r '.runId')
 # Poll-to-Succeeded as in 5.3, then assert step count >= 4 (forEach + 3 children).
-# A healthy run reports 6 steps.
+# A healthy run reports 9 steps: prepare_batch + process_orders + 3×(validate_order +
+# archive_order) + finalize_batch. archive_order reads its sibling validate_order's output
+# via "@steps('validate_order').output.note" (scope-relative resolution, issue #166).
 ```
 
 #### 5.5 Skip semantics (ConditionalSkipDemoFlow + AmountThresholdFlow)

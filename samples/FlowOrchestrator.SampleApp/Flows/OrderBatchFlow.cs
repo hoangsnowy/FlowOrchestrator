@@ -49,7 +49,9 @@ namespace FlowOrchestrator.SampleApp.Flows;
 ///
 ///   prepare_batch    → LogMessage         — Logs the incoming batch ID from trigger data
 ///   process_orders   → ForEach            — Iterates over orderIds (ConcurrencyLimit = 2)
-///     └ validate_order → ProcessOrderItem — Validates and logs each order (per iteration)
+///     ├ validate_order → ProcessOrderItem — Validates and logs each order (per iteration)
+///     └ archive_order  → LogMessage       — Reads the SIBLING validate_order output via
+///                                            "@steps('validate_order').output.note" (issue #166)
 ///   finalize_batch   → LogMessage         — Logs completion after all iterations finish
 ///
 /// ── Runtime step key layout ──────────────────────────────────────────────────
@@ -57,9 +59,11 @@ namespace FlowOrchestrator.SampleApp.Flows;
 ///   prepare_batch
 ///   process_orders
 ///     process_orders.0.validate_order    ← iteration 0 (parallel)
+///     process_orders.0.archive_order     ← iteration 0, reads process_orders.0.validate_order
 ///     process_orders.1.validate_order    ← iteration 1 (parallel, ConcurrencyLimit = 2)
+///     process_orders.1.archive_order     ← iteration 1, reads process_orders.1.validate_order
 ///     process_orders.2.validate_order    ← iteration 2 (waits for a slot)
-///     process_orders.3.validate_order    ← iteration 3 (waits for a slot)
+///     process_orders.2.archive_order     ← iteration 2, reads process_orders.2.validate_order
 ///   finalize_batch
 /// </summary>
 public sealed class OrderBatchFlow : IFlowDefinition
@@ -151,6 +155,26 @@ public sealed class OrderBatchFlow : IFlowDefinition
                             // Static manifest input — merged with __loopItem / __loopIndex
                             // before the handler receives them. Optional: omit to use defaults.
                             ["maxOrderValue"] = 10000
+                        }
+                    },
+
+                    // Second child step — demonstrates a SIBLING output reference inside a loop.
+                    // "@steps('validate_order')" is a bare key: at runtime the engine rewrites it
+                    // to the CURRENT iteration's scope (e.g. "process_orders.2.validate_order"),
+                    // so archive_order always reads its own iteration's validation note — never
+                    // iteration 0's. This is the scope-relative @steps() resolution added for
+                    // GitHub issue #166; before it, the bare key threw
+                    // "Step 'validate_order' is not defined in the flow manifest".
+                    ["archive_order"] = new StepMetadata
+                    {
+                        Type = "LogMessage",
+                        RunAfter = new RunAfterCollection
+                        {
+                            ["validate_order"] = [StepStatus.Succeeded]
+                        },
+                        Inputs = new Dictionary<string, object?>
+                        {
+                            ["message"] = "@steps('validate_order').output.note"
                         }
                     }
                 }

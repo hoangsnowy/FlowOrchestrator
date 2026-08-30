@@ -6,6 +6,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-08-30
+
+### Added
+
+- **Scope-relative `@steps()` references inside a ForEach loop** (issue #166). A nested
+  loop child step can now read a sibling child's output with the bare key it is declared
+  under — `@steps('validate_order').output.note` — and the resolver rewrites it to the
+  current iteration's runtime scope (`process_orders.{index}.validate_order`). Previously
+  a bare sibling key threw *"Step 'validate_order' is not defined in the flow manifest"*
+  because `@steps()` only resolved against the static manifest. A bare key that is a
+  top-level step is left unchanged, so upstream references from inside a loop keep working;
+  `.status` and `.error` follow the same rule. This brings `@steps()` in line with the
+  sibling-key handling `RunAfter` already applies within a loop scope. The `OrderBatchFlow`
+  sample gains an `archive_order` child that demonstrates the pattern end-to-end.
+
 ### Dependencies
 
 - Runtime: Microsoft.Extensions.DependencyInjection and
