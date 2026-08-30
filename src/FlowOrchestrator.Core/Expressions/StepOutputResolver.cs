@@ -235,7 +235,7 @@ public sealed class StepOutputResolver
         for (var i = segments.Length - 1; i >= 1; i--)
         {
             if (int.TryParse(segments[i], out _))
-                yield return string.Join('.', segments.Take(i + 1));
+                yield return string.Join('.', segments, 0, i + 1); // array-range overload — no LINQ Take iterator
         }
     }
 
