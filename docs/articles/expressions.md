@@ -34,6 +34,23 @@ Reference the output of a prior step directly in a downstream step's inputs:
 
 Both single and double quotes are accepted for the step key: `@steps('key')` and `@steps("key")` are equivalent.
 
+### Sibling references inside a ForEach
+
+When a `@steps('key')` expression is evaluated from a step running **inside a ForEach
+loop**, a bare (dot-free) key that is not a top-level step is resolved against the
+current iteration's scope. A child running as `process_orders.2.archive_order` reads
+`@steps('validate_order').output.note` from `process_orders.2.validate_order` — its own
+iteration, not iteration 0:
+
+```csharp
+["message"] = "@steps('validate_order').output.note"
+```
+
+A bare key that *is* a top-level step (e.g. `@steps('prepare_batch')`) is left unchanged,
+so upstream references from inside a loop still work. To read a specific iteration from
+outside its scope, write the fully-qualified runtime key: `@steps('process_orders.0.validate_order')`.
+See [ForEach Loops → Referencing a Sibling Step's Output](foreach.md) for the full rules.
+
 ## Null-Safe Access
 
 The `?.` operator means: if any segment in the path is `null` or missing, the whole expression evaluates to `null` rather than throwing. This matches the C# null-conditional operator semantics.

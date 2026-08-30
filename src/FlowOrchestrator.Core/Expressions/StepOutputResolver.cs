@@ -74,6 +74,7 @@ public sealed class StepOutputResolver
     private readonly IFlowRunStore _runStore;
     private readonly Guid _runId;
     private readonly StepCollection _steps;
+    private readonly string? _currentStepKey;
 
     // Per-execution output cache — avoids duplicate GetStepOutputAsync calls for the same step key.
     private readonly Dictionary<string, object?> _outputCache = new(StringComparer.Ordinal);
@@ -92,16 +93,26 @@ public sealed class StepOutputResolver
     /// <param name="steps">
     /// The flow's step collection, used to validate that any referenced step key exists in the manifest.
     /// </param>
+    /// <param name="currentStepKey">
+    /// The runtime key of the step whose inputs are being resolved (e.g. <c>"scan.0.open_camera"</c>).
+    /// When supplied and a bare <c>@steps('sibling')</c> key does not exist at the manifest's top level,
+    /// the resolver rewrites it to the enclosing loop scope (<c>"scan.0.sibling"</c>) so that a nested
+    /// ForEach child step can reference the output of a sibling child in the same iteration — mirroring
+    /// the sibling-key rewriting the DAG planner already applies to <c>RunAfter</c>. Pass
+    /// <see langword="null"/> (the default) to disable scope-relative resolution.
+    /// </param>
     public StepOutputResolver(
         IOutputsRepository outputsRepository,
         IFlowRunStore runStore,
         Guid runId,
-        StepCollection steps)
+        StepCollection steps,
+        string? currentStepKey = null)
     {
         _outputsRepository = outputsRepository;
         _runStore = runStore;
         _runId = runId;
         _steps = steps;
+        _currentStepKey = currentStepKey;
     }
 
     /// <summary>
@@ -155,13 +166,14 @@ public sealed class StepOutputResolver
         if (parsed is null)
             return expression; // passthrough — not a @steps() expression
 
-        var (stepKey, property, trail) = parsed.Value;
+        var (exprKey, property, trail) = parsed.Value;
 
-        if (_steps.FindStep(stepKey) is null)
+        var stepKey = ResolveEffectiveKey(exprKey);
+        if (stepKey is null)
             throw new FlowExpressionException(
                 expression,
-                stepKey,
-                $"Step '{stepKey}' is not defined in the flow manifest. Expression: '{expression}'");
+                exprKey,
+                $"Step '{exprKey}' is not defined in the flow manifest. Expression: '{expression}'");
 
         return property switch
         {
@@ -170,6 +182,61 @@ public sealed class StepOutputResolver
             "error" => await ResolveErrorAsync(stepKey).ConfigureAwait(false),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Maps the step key written in the expression to the effective runtime key used for
+    /// output / status / error lookup, or <see langword="null"/> when it cannot be resolved.
+    /// </summary>
+    /// <remarks>
+    /// Resolution order:
+    /// <list type="number">
+    /// <item>If the key already resolves against the manifest (a top-level step, or an
+    /// explicitly-qualified <c>"loop.0.child"</c> path), it is used verbatim — preserving
+    /// upstream references made from inside a loop.</item>
+    /// <item>Otherwise, for a bare (dot-free) key, each enclosing loop scope of
+    /// <c>_currentStepKey</c> is tried nearest-first as <c>"{scope}.{key}"</c>, so a nested
+    /// ForEach child can reference a sibling child's output in the same iteration.</item>
+    /// </list>
+    /// This fallback only fires for keys that previously threw, so it never changes the
+    /// meaning of an expression that already resolved.
+    /// </remarks>
+    private string? ResolveEffectiveKey(string exprKey)
+    {
+        if (_steps.FindStep(exprKey) is not null)
+            return exprKey;
+
+        // An explicitly-qualified key that does not exist is a genuine error — do not
+        // attempt to graft it onto the current scope.
+        if (exprKey.Contains('.', StringComparison.Ordinal))
+            return null;
+
+        // Try each enclosing loop scope, nearest-first, as "{scope}.{exprKey}" and take the
+        // first that exists in the manifest. Only reached for a bare key that is not a
+        // top-level step, i.e. the case that previously threw.
+        return EnumerateRuntimeScopes(_currentStepKey)
+            .Select(scope => $"{scope}.{exprKey}")
+            .FirstOrDefault(candidate => _steps.FindStep(candidate) is not null);
+    }
+
+    /// <summary>
+    /// Yields the enclosing loop-scope prefixes of a runtime step key, nearest (innermost) first.
+    /// For <c>"outer.0.inner.1.child"</c> this yields <c>"outer.0.inner.1"</c> then <c>"outer.0"</c>.
+    /// </summary>
+    private static IEnumerable<string> EnumerateRuntimeScopes(string? runtimeStepKey)
+    {
+        if (string.IsNullOrEmpty(runtimeStepKey))
+            yield break;
+
+        var segments = runtimeStepKey.Split(
+            '.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        // A scope prefix is any path that ends at a numeric loop-iteration segment.
+        for (var i = segments.Length - 1; i >= 1; i--)
+        {
+            if (int.TryParse(segments[i], out _))
+                yield return string.Join('.', segments, 0, i + 1); // array-range overload — no LINQ Take iterator
+        }
     }
 
     private async ValueTask<object?> ResolveOutputAsync(string stepKey, string trail)

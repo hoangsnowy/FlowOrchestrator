@@ -525,6 +525,22 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .skeleton-card{display:flex;flex-direction:column;gap:0;pointer-events:none}
 @keyframes skeleton-shine{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
+/* Indeterminate loading bar — shown while a user-initiated run search / filter fetch is
+   in flight (JS adds .is-loading for non-silent loadRuns calls only, so the 5 s auto-refresh
+   tick never flashes it). The ::before is generated content on the persistent #runs-list
+   element, so it survives the innerHTML swap that renders the rows, and position:sticky keeps
+   it pinned to the top of the scroll viewport. margin-bottom:-3px overlays it on the rows
+   instead of pushing them down, so the layout does not jump. */
+@keyframes runs-loading-slide{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.runs-list.is-loading::before{
+  content:"";position:sticky;top:0;left:0;z-index:5;display:block;height:3px;margin-bottom:-3px;
+  background:linear-gradient(90deg,transparent 0%,var(--fo-terracotta) 50%,transparent 100%);
+  background-size:50% 100%;background-repeat:no-repeat;
+  animation:runs-loading-slide 1.1s linear infinite;
+}
+/* Dim the stale rows while the fresh page loads so it reads as "refreshing", not "done". */
+.runs-list.is-loading > table{opacity:.55;transition:opacity .15s ease}
+
 /* Inline error message + retry button */
 .empty-msg--error{color:var(--fo-danger-text);background:var(--fo-danger-bg);border:1px solid var(--fo-danger-border);border-radius:var(--r-comfy);margin:14px;padding:18px;display:flex;flex-direction:column;align-items:center;gap:10px}
 

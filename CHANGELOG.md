@@ -6,6 +6,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-08-30
+
+### Added
+
+- **Scope-relative `@steps()` references inside a ForEach loop** (issue #166). A nested
+  loop child step can now read a sibling child's output with the bare key it is declared
+  under — `@steps('validate_order').output.note` — and the resolver rewrites it to the
+  current iteration's runtime scope (`process_orders.{index}.validate_order`). Previously
+  a bare sibling key threw *"Step 'validate_order' is not defined in the flow manifest"*
+  because `@steps()` only resolved against the static manifest. A bare key that is a
+  top-level step is left unchanged, so upstream references from inside a loop keep working;
+  `.status` and `.error` follow the same rule. This brings `@steps()` in line with the
+  sibling-key handling `RunAfter` already applies within a loop scope. The `OrderBatchFlow`
+  sample gains an `archive_order` child that demonstrates the pattern end-to-end.
+
+### Dependencies
+
+- Runtime: Microsoft.Extensions.DependencyInjection and
+  Microsoft.Extensions.Hosting.Abstractions 10.0.10 → 10.0.11.
+- Observability: OpenTelemetry **1.17.0 → 1.18.0 across the whole family**
+  (`OpenTelemetry`, `.Api`, `.Exporter.Console`, `.Exporter.OpenTelemetryProtocol`,
+  `.Extensions.Hosting`, `.Instrumentation.AspNetCore`). Dependabot bumps `.Api`
+  alone; the rest are moved with it because these packages ship as one release line
+  and mixing lines risks `TracerProvider`/`MeterProvider` binding mismatches.
+- Test infrastructure: Testcontainers.MsSql and Testcontainers.PostgreSql
+  4.13.0 → 4.14.0; xunit.runner.visualstudio 3.1.5 → 4.0.0.
+- CI: github/codeql-action 4.37.7 → 4.37.8.
+
 ## [1.29.2] - 2026-08-22
 
 ### Security

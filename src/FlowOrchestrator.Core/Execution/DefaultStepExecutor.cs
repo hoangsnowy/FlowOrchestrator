@@ -60,7 +60,9 @@ public sealed class DefaultStepExecutor : IStepExecutor
         step.Inputs = InputResolutionPipeline.Resolve(step.Inputs, context.TriggerData, context.TriggerHeaders);
 
         // Pass 2 (async): resolve @steps('key').output|status|error expressions.
-        var resolver = new StepOutputResolver(_outputsRepository, _runStore, context.RunId, flow.Manifest.Steps);
+        // step.Key is the runtime key, so the resolver can rewrite a bare sibling reference
+        // (e.g. @steps('wait_signal')) to the current loop scope when this step runs inside a ForEach.
+        var resolver = new StepOutputResolver(_outputsRepository, _runStore, context.RunId, flow.Manifest.Steps, step.Key);
         step.Inputs = await StepExpressionResolutionPipeline.ResolveAsync(step.Inputs, resolver).ConfigureAwait(false);
 
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);

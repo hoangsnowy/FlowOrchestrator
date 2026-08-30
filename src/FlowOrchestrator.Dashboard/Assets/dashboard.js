@@ -2184,7 +2184,12 @@ function renderRuns(preserveScroll) {
 
 async function loadRuns(preserveScroll) {
   const listEl = $('runs-list');
-  if (listEl) listEl.setAttribute('aria-busy', 'true');
+  if (listEl) {
+    listEl.setAttribute('aria-busy', 'true');
+    // Loading bar for user-initiated loads (search / filter / pagination). Silent
+    // auto-refresh passes preserveScroll=true, so its 5 s tick never flashes the bar.
+    if (!preserveScroll) listEl.classList.add('is-loading');
+  }
   // Render skeleton on first paint (empty list and not preserving scroll position).
   if (listEl && !preserveScroll && !listEl.innerHTML.trim()) {
     listEl.innerHTML = '<table class="runs-table" aria-hidden="true"><thead><tr><th>Status</th><th>Run ID</th><th>Flow</th><th>Trigger</th><th>Started</th><th>Duration</th></tr></thead><tbody>'
@@ -2221,12 +2226,13 @@ async function loadRuns(preserveScroll) {
     }
 
     renderRuns(preserveScroll);
-    if (listEl) listEl.setAttribute('aria-busy', 'false');
+    if (listEl) { listEl.setAttribute('aria-busy', 'false'); listEl.classList.remove('is-loading'); }
   } catch(e) {
     if (isAbortError(e)) return;
     console.error('Runs load error', e);
     if (listEl) {
       listEl.setAttribute('aria-busy', 'false');
+      listEl.classList.remove('is-loading');
       if (!preserveScroll) {
         listEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load runs. <button class="btn-retry" onclick="loadRuns()">Retry</button></div>';
         showError('Failed to load runs', e.message);

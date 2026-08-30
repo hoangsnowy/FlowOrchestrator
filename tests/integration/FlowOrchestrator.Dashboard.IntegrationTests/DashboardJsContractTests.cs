@@ -141,6 +141,24 @@ public sealed class DashboardJsContractTests : IDisposable
         Assert.Contains("@keyframes skeleton-shine", html);
     }
 
+    // ── Run search / filter loading indicator ─────────────────────────────────
+
+    [Fact]
+    public async Task GET_root_inlines_runs_loading_bar_for_user_initiated_loads()
+    {
+        // Arrange — a slow run search / filter fetch shows an indeterminate loading
+        // bar; the silent 5 s auto-refresh (preserveScroll=true) must not trigger it.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert — CSS bar + keyframe, and the JS gate that only arms it for
+        // user-initiated (non-preserveScroll) loadRuns calls.
+        Assert.Contains(".runs-list.is-loading::before", html, StringComparison.Ordinal);
+        Assert.Contains("@keyframes runs-loading-slide", html, StringComparison.Ordinal);
+        Assert.Contains("if (!preserveScroll) listEl.classList.add('is-loading');", html, StringComparison.Ordinal);
+    }
+
     // ── URL-persistent filter state ───────────────────────────────────────────
 
     [Fact]
