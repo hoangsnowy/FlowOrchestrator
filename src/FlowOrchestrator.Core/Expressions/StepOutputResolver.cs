@@ -211,14 +211,12 @@ public sealed class StepOutputResolver
         if (exprKey.Contains('.', StringComparison.Ordinal))
             return null;
 
-        foreach (var scope in EnumerateRuntimeScopes(_currentStepKey))
-        {
-            var candidate = $"{scope}.{exprKey}";
-            if (_steps.FindStep(candidate) is not null)
-                return candidate;
-        }
-
-        return null;
+        // Try each enclosing loop scope, nearest-first, as "{scope}.{exprKey}" and take the
+        // first that exists in the manifest. Only reached for a bare key that is not a
+        // top-level step, i.e. the case that previously threw.
+        return EnumerateRuntimeScopes(_currentStepKey)
+            .Select(scope => $"{scope}.{exprKey}")
+            .FirstOrDefault(candidate => _steps.FindStep(candidate) is not null);
     }
 
     /// <summary>
