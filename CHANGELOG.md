@@ -6,6 +6,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Dependencies
+
+- Runtime: Microsoft.Extensions.DependencyInjection and
+  Microsoft.Extensions.Hosting.Abstractions 10.0.10 → 10.0.11.
+- Observability: OpenTelemetry **1.17.0 → 1.18.0 across the whole family**
+  (`OpenTelemetry`, `.Api`, `.Exporter.Console`, `.Exporter.OpenTelemetryProtocol`,
+  `.Extensions.Hosting`, `.Instrumentation.AspNetCore`). Dependabot bumps `.Api`
+  alone; the rest are moved with it because these packages ship as one release line
+  and mixing lines risks `TracerProvider`/`MeterProvider` binding mismatches.
+- Test infrastructure: Testcontainers.MsSql and Testcontainers.PostgreSql
+  4.13.0 → 4.14.0; xunit.runner.visualstudio 3.1.5 → 4.0.0.
+- CI: github/codeql-action 4.37.7 → 4.37.8.
+
 ## [1.29.2] - 2026-08-22
 
 ### Security
