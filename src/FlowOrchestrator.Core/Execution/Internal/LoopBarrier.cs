@@ -68,6 +68,31 @@ internal static class LoopBarrier
     }
 
     /// <summary>
+    /// Returns the loop steps whose barrier the completion of <paramref name="runtimeStepKey"/>
+    /// can settle, innermost first: the step itself when it is scoped, then its enclosing loops.
+    /// </summary>
+    /// <param name="flow">Flow whose manifest classifies the step.</param>
+    /// <param name="runtimeStepKey">Runtime key of the step that just reached a terminal status.</param>
+    /// <remarks>
+    /// Including the step itself matters when a loop step re-executes over iterations that already
+    /// finished — a retried <c>ForEach</c> re-arms the barrier, but its children are suppressed by
+    /// the dispatch ledger and so can never settle it a second time. On first fan-out the children
+    /// have no status rows yet, so the self-candidate simply does not settle.
+    /// </remarks>
+    public static IReadOnlyList<string> SettleCandidatesFor(IFlowDefinition flow, string runtimeStepKey)
+    {
+        var enclosing = EnclosingLoopKeys(runtimeStepKey);
+        if (flow.Manifest.Steps.FindStep(runtimeStepKey) is not IScopedStep)
+        {
+            return enclosing;
+        }
+
+        var candidates = new List<string>(enclosing.Count + 1) { runtimeStepKey };
+        candidates.AddRange(enclosing);
+        return candidates;
+    }
+
+    /// <summary>
     /// Reads the iteration count a loop step recorded in its output.
     /// </summary>
     /// <param name="loopOutput">

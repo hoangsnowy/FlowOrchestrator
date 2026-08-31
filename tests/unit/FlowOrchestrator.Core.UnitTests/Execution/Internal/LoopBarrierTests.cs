@@ -84,6 +84,72 @@ public class LoopBarrierTests
         Assert.Equal(["outer.1.inner", "outer"], keys);
     }
 
+    [Fact]
+    public void SettleCandidatesFor_ScopedStep_ReturnsItselfFirst()
+    {
+        // Arrange — a retried loop step must be able to settle its own re-armed barrier.
+        var flow = SingleLoopFlow();
+
+        // Act
+        var candidates = LoopBarrier.SettleCandidatesFor(flow, "loop");
+
+        // Assert
+        Assert.Equal(["loop"], candidates);
+    }
+
+    [Fact]
+    public void SettleCandidatesFor_PlainChild_ReturnsOnlyEnclosingLoops()
+    {
+        // Arrange
+        var flow = SingleLoopFlow();
+
+        // Act
+        var candidates = LoopBarrier.SettleCandidatesFor(flow, "loop.1.consume");
+
+        // Assert
+        Assert.Equal(["loop"], candidates);
+    }
+
+    [Fact]
+    public void SettleCandidatesFor_NestedLoopChildThatIsItselfALoop_ReturnsSelfThenOuter()
+    {
+        // Arrange
+        var flow = FlowWith(new StepCollection
+        {
+            ["outer"] = new LoopStepMetadata
+            {
+                Type = "ForEach",
+                Steps = new StepCollection
+                {
+                    ["inner"] = new LoopStepMetadata
+                    {
+                        Type = "ForEach",
+                        Steps = new StepCollection { ["child"] = new StepMetadata { Type = "Echo" } }
+                    }
+                }
+            }
+        });
+
+        // Act
+        var candidates = LoopBarrier.SettleCandidatesFor(flow, "outer.0.inner");
+
+        // Assert — the inner loop settles itself first, which can then settle the outer one.
+        Assert.Equal(["outer.0.inner", "outer"], candidates);
+    }
+
+    [Fact]
+    public void SettleCandidatesFor_TopLevelPlainStep_ReturnsEmpty()
+    {
+        // Arrange
+        var flow = SingleLoopFlow();
+
+        // Act
+        var candidates = LoopBarrier.SettleCandidatesFor(flow, "after");
+
+        // Assert
+        Assert.Empty(candidates);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(7)]

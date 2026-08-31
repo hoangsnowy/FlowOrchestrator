@@ -8,6 +8,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [1.30.1] - 2026-08-31
 
+### Added
+
+- **`WarehouseRobotFlow` sample (…0013)** — the issue #169 manifest as a realistic,
+  self-playing demo: a webhook/manual-triggered warehouse scan whose ForEach parks each
+  iteration on a `robot_goto` signal, reads the arriving robot's payload via a
+  scope-relative `@steps()` expression, and fires `robot_callback_success` only after the
+  last location — with `RobotSimulatorHostedService` playing the robot end-to-end through
+  the same public surfaces (`IFlowRunStore`, `IFlowSignalDispatcher`) a real controller
+  integration would use (disable with `ROBOT_SIMULATOR=false`). `samples/README.md` now
+  maps every sample flow to the core surface it demonstrates.
+
 ### Fixed
 
 - **A step declaring `RunAfter` on a ForEach loop now runs after the loop body, not
@@ -22,6 +33,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   immediately. A failing iteration still settles the loop as `Succeeded`, preserving the
   existing "downstream runs even when an iteration failed" semantics; only the timing
   changed. Nested loops settle innermost-first in a single pass.
+- **A `When`-skip that finishes a loop's last iteration now settles the barrier in the same
+  continuation pass.** The skip is recorded after the barrier check, with no later step
+  completion to re-trigger it — without the second settle pass the loop (and the run)
+  parked forever on an already-finished body.
+- **Re-running a settled loop step (dashboard retry) no longer strands the run.** Retry
+  clears the dispatch ledger for the retried key only, so the re-executed ForEach re-armed
+  its barrier while every child was suppressed as already-dispatched; the loop step is now
+  its own settle candidate and completes immediately from its own continuation.
+- **A loop step no longer carries a `CompletedAt` timestamp while it is `Running`.** The
+  fan-out result is no longer written through `RecordStepCompleteAsync`; the row keeps the
+  `Running` stamp from step start and receives its completion (status, output, timestamp)
+  only when the barrier settles — so the dashboard shows a live loop, not a finished one.
 - **Run recovery no longer dispatches steps whose dependencies are unsatisfied.** On
   startup, `FlowRunRecoveryHostedService` re-scheduled every step the planner classified as
   *waiting* — i.e. every step still blocked on a `RunAfter` dependency — which executed it

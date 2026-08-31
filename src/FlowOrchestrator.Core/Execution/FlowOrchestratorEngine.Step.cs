@@ -119,15 +119,24 @@ public sealed partial class FlowOrchestratorEngine
                 }
             }
 
-            try
+            // A Running result under the graph runtime is a scoped step parked on its LoopBarrier —
+            // not a completion. RecordStepStartAsync already stamped the row Running, so skipping the
+            // completion write keeps CompletedAt null until the barrier settles the step for real
+            // (the settle pass writes Succeeded + the loop output). The barrier reads the iteration
+            // count from IOutputsRepository (SaveStepOutputAsync above), not from this row.
+            var isBarrierParked = result.Status == StepStatus.Running && _runtimeStore is not null;
+            if (!isBarrierParked)
             {
-                var outputJson = SafeSerialize(result.Result);
-                await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                EngineLog.StepCompletionTrackingFailed(_logger, ex);
+                try
+                {
+                    var outputJson = SafeSerialize(result.Result);
+                    await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    EngineLog.StepCompletionTrackingFailed(_logger, ex);
+                }
             }
 
             var stepExecutionMs = Stopwatch.GetElapsedTime(stepExecutionStart).TotalMilliseconds;

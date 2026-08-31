@@ -128,6 +128,16 @@ public sealed partial class FlowOrchestratorEngine
                 if (++safetyCounter > flow.Manifest.Steps.Count + 4) break;
 
                 statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+
+                // A When-skip recorded just above may have been the LAST outstanding child of an
+                // enclosing loop — and it happened after the settle pass at the top of this method,
+                // with no later step completion to re-trigger it. Settle here so the loop's
+                // downstream steps become ready in the next sweep instead of parking the run.
+                if (await SettleEnclosingLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false))
+                {
+                    statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+                }
+
                 evaluation = _graphPlanner.Evaluate(flow, statuses);
             }
         }
@@ -172,9 +182,18 @@ public sealed partial class FlowOrchestratorEngine
     /// <param name="statuses">Status map read after the blocked-step pass.</param>
     /// <returns><see langword="true"/> when at least one loop step was settled.</returns>
     /// <remarks>
+    /// <para>
     /// A loop step is the only step whose completion is decided outside its own handler, so its
     /// <c>step.completed</c> event and <see cref="StepCompletedEvent"/> are published here rather
     /// than in <c>RunStepAsync</c> — at the point the loop is actually finished, not at fan-out.
+    /// </para>
+    /// <para>
+    /// The completed step itself is a candidate when it is scoped, which covers re-running a loop
+    /// step whose iterations already finished: <see cref="RetryStepAsync"/> clears the dispatch
+    /// ledger for the retried key only, so the re-executed <c>ForEach</c> re-arms the barrier while
+    /// its children are suppressed as already-dispatched and can never settle it again. On the
+    /// ordinary fan-out path this candidate is a no-op — the children have no status rows yet.
+    /// </para>
     /// </remarks>
     private async Task<bool> SettleEnclosingLoopsAsync(
         IExecutionContext ctx,
@@ -182,7 +201,7 @@ public sealed partial class FlowOrchestratorEngine
         IStepInstance step,
         IReadOnlyDictionary<string, StepStatus> statuses)
     {
-        var candidates = LoopBarrier.EnclosingLoopKeys(step.Key);
+        var candidates = LoopBarrier.SettleCandidatesFor(flow, step.Key);
         if (candidates.Count == 0)
         {
             return false;
