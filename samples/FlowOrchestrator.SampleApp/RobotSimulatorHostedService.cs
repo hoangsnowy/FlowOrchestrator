@@ -166,7 +166,7 @@ public sealed class RobotSimulatorHostedService : BackgroundService
     /// Reads the trigger body's <c>Locations</c> array and picks the entry matching the parked
     /// iteration's index, falling back to a synthetic aisle code when absent.
     /// </summary>
-    private static async Task<string> ResolveLocationAsync(IOutputsRepository outputs, Guid runId, string stepKey)
+    private async Task<string> ResolveLocationAsync(IOutputsRepository outputs, Guid runId, string stepKey)
     {
         // "scan_process.{index}.wait_robot_goto" → {index}
         var segments = stepKey.Split('.');
@@ -191,6 +191,8 @@ public sealed class RobotSimulatorHostedService : BackgroundService
         // Best-effort by design; the tautological `when` filter satisfies CodeQL's CWE-396 rule.
         catch (Exception ex) when (ex is not null)
         {
+            _logger.LogDebug(ex,
+                "[RobotSimulator] could not read trigger locations for run {RunId} — using a synthetic aisle code.", runId);
         }
 
         return $"AISLE-{index + 1:00}";
