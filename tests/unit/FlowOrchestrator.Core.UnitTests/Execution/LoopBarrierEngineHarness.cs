@@ -1,6 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.InMemory;
@@ -35,7 +36,13 @@ internal sealed class LoopBarrierEngineHarness
     /// <param name="resultForStep">
     /// Maps a runtime step key to the result the substituted <see cref="IStepExecutor"/> returns.
     /// </param>
-    public LoopBarrierEngineHarness(IFlowDefinition flow, Func<string, IStepResult> resultForStep)
+    /// <param name="runControlOptions">Run-control options; defaults to no run timeout.</param>
+    /// <param name="eventNotifier">Optional lifecycle-event sink, for exactly-once completion assertions.</param>
+    public LoopBarrierEngineHarness(
+        IFlowDefinition flow,
+        Func<string, IStepResult> resultForStep,
+        FlowRunControlOptions? runControlOptions = null,
+        IFlowEventNotifier? eventNotifier = null)
     {
         _flow = flow;
         Store = new InMemoryFlowRunStore();
@@ -84,10 +91,11 @@ internal sealed class LoopBarrierEngineHarness
             flowRepo,
             [Store],
             [Store],
-            new FlowRunControlOptions(),
+            runControlOptions ?? new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            Substitute.For<ILogger<FlowOrchestratorEngine>>());
+            Substitute.For<ILogger<FlowOrchestratorEngine>>(),
+            eventNotifier);
     }
 
     /// <summary>Engine under test.</summary>
@@ -221,10 +229,18 @@ internal sealed class LoopBarrierEngineHarness
         (await Store.GetRunDetailAsync(runId))!.Status;
 
     /// <summary>Current persisted status of a step, or <see langword="null"/> when it has no row yet.</summary>
-    public async Task<string?> StepStatusAsync(Guid runId, string stepKey)
+    public async Task<string?> StepStatusAsync(Guid runId, string stepKey) =>
+        (await StepRecordAsync(runId, stepKey))?.Status;
+
+    /// <summary>Error/reason text persisted on a step row, or <see langword="null"/> when it has no row yet.</summary>
+    public async Task<string?> StepReasonAsync(Guid runId, string stepKey) =>
+        (await StepRecordAsync(runId, stepKey))?.ErrorMessage;
+
+    /// <summary>The persisted step row, or <see langword="null"/> when the step has not started.</summary>
+    public async Task<FlowStepRecord?> StepRecordAsync(Guid runId, string stepKey)
     {
         var detail = await Store.GetRunDetailAsync(runId);
-        return detail?.Steps?.FirstOrDefault(s => s.StepKey == stepKey)?.Status;
+        return detail?.Steps?.FirstOrDefault(s => s.StepKey == stepKey);
     }
 
     private async Task RunAtAsync(int index)

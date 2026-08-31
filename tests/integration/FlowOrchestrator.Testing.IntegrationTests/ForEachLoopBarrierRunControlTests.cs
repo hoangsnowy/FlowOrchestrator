@@ -61,6 +61,65 @@ public sealed class ForEachLoopBarrierRunControlTests
         Assert.False(result.Steps.ContainsKey("robot_callback_success"));
     }
 
+    [Fact]
+    public async Task Sweep_cancelledRunParkedOnAnIndefiniteSignalInsideAForEach_ClosesItWithoutWaitingForTheWakeUp()
+    {
+        // Arrange — no fast polling here on purpose: WaitForSignal without a timeoutSeconds parks for
+        // the handler's real 24-hour interval, so nothing in the runtime will look at this run again
+        // today. Only the periodic timeout sweep can close it.
+        await using var host = await FlowTestHost.For<ForEachLoopBarrierFlow>()
+            .WithHandler<EchoStepHandler>("Echo")
+            .WithHandler<ForEachStepHandler>("ForEach")
+            .BuildAsync();
+
+        var runId = await StartRunAsync(host, new Dictionary<string, object?>
+        {
+            ["Steps"] = new[] { "loc-a" }
+        });
+
+        await WaitForWaiterAsync(host, runId, "scan_process.0.wait_robot_goto");
+        await WaitForStepStatusAsync(host, runId, "scan_process.0.wait_robot_goto", StepStatus.Pending);
+        Assert.Equal(StepStatus.Running.ToString(), (await FindStepAsync(host, runId, "scan_process"))?.Status);
+
+        var control = host.Services.GetRequiredService<IFlowRunControlStore>();
+        await control.RequestCancelAsync(runId, "cancelled by operator");
+
+        // Act — one sweep tick, invoked directly so the test never waits on the periodic timer.
+        using var scope = host.Services.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<IRunTimeoutEnforcer>().EnforceDueTimeoutsAsync();
+
+        // Assert — the parked iteration and the loop step it is parked under are both resolved, and
+        // the run is closed, without anything having waited 24 hours.
+        var runStore = host.Services.GetRequiredService<IFlowRunStore>();
+        var detail = await runStore.GetRunDetailAsync(runId);
+        Assert.Equal("Cancelled", detail!.Status);
+        Assert.Equal(
+            StepStatus.Skipped.ToString(),
+            detail.Steps!.Single(s => s.StepKey == "scan_process.0.wait_robot_goto").Status);
+        Assert.Equal(
+            StepStatus.Skipped.ToString(),
+            detail.Steps!.Single(s => s.StepKey == "scan_process").Status);
+        Assert.DoesNotContain(detail.Steps!, s => s.StepKey == "robot_callback_success");
+    }
+
+    private static async Task WaitForStepStatusAsync<TFlow>(
+        FlowTestHost<TFlow> host, Guid runId, string stepKey, StepStatus expected)
+        where TFlow : class, IFlowDefinition, new()
+    {
+        // Waits on a logical event (the persisted status) with a generous budget; never asserts an
+        // upper bound on elapsed time.
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < StepPollTimeout)
+        {
+            var step = await FindStepAsync(host, runId, stepKey);
+            if (step is not null && string.Equals(step.Status, expected.ToString(), StringComparison.Ordinal)) return;
+            await Task.Delay(25);
+        }
+
+        throw new InvalidOperationException(
+            $"Timed out waiting for step '{stepKey}' to reach {expected} (run={runId}). {await DumpStepsAsync(host, runId)}");
+    }
+
     private static async Task<Guid> StartRunAsync<TFlow>(FlowTestHost<TFlow> host, object body)
         where TFlow : class, IFlowDefinition, new()
     {

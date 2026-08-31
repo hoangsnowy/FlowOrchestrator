@@ -377,6 +377,23 @@ public sealed partial class FlowOrchestratorEngine
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
             ?? throw new InvalidOperationException($"Step '{stepKey}' not found in flow manifest.");
 
+        var ctx = new ExecutionContext { RunId = runId };
+        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
+        ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(runId).ConfigureAwait(false);
+
+        // Give the run a fresh execution window BEFORE anything else observes it as active again.
+        // Without this, a step retried after the run's timeout deadline lapsed (or after the run was
+        // latched TimedOut) would be immediately skipped by the termination gate in RunStepAsync — the
+        // handler would never run. The refreshed deadline reuses trigger-time resolution so it still
+        // honours the runaway-loop bound. Refreshing first also closes a window against the periodic
+        // timeout sweep: RetryStepAsync below puts the run back into Running, and a sweep landing
+        // between that write and this refresh would still see a latched terminal verdict.
+        if (_runControlStore is not null)
+        {
+            var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
+            await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
+        }
+
         await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
 
         // When the original failure of this step caused the DAG continuation to eagerly
@@ -402,20 +419,6 @@ public sealed partial class FlowOrchestratorEngine
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?>(stepMeta.Inputs)
         };
-
-        var ctx = new ExecutionContext { RunId = runId };
-        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
-        ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(runId).ConfigureAwait(false);
-
-        // Give the run a fresh execution window before re-dispatch. Without this, a step retried after
-        // the run's timeout deadline lapsed (or after the run was latched TimedOut) would be immediately
-        // skipped by the termination gate in RunStepAsync — the handler would never run. The refreshed
-        // deadline reuses trigger-time resolution so it still honours the runaway-loop bound.
-        if (_runControlStore is not null)
-        {
-            var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
-            await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
-        }
 
         return await RunStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
     }

@@ -52,6 +52,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   restart. The gate now abandons every still-parked enclosing loop as `Skipped`
   (`"Run is Cancelled/TimedOut."`); settling instead would deadlock, because a multi-step
   loop body only ever fans out its entry child on this path.
+- **The timeout sweep now closes a cancelled or timed-out run whose only remaining work is
+  parked.** A `WaitForSignal` without `timeoutSeconds` parks for 24 h and a long-interval
+  poll for its whole interval; the termination verdict was only observed on the next wake-up,
+  and the sweep skipped such runs entirely (it ignored cancelled runs with no deadline and
+  runs already latched `TimedOut`). The sweep resolves the same verdict precedence as the
+  dispatch-time gate and force-closes the run — recording every provably-parked step
+  `Skipped` — while refusing whenever anything can still progress (a live `Running` step, a
+  claimed or dispatched key with no status row, a `ForEach` still mid-fan-out). A parked step
+  that wakes after the close is a harmless skip; the run completes exactly once.
+- **`RetryStepAsync` refreshes the run deadline before re-activating the run**, not after —
+  the old order exposed a window where the sweep saw an active run still carrying its stale
+  `TimedOut` latch and could close it again immediately.
 - **A step cancelled mid-poll is no longer stranded `Pending`** (pre-existing, not
   loop-specific). When run control latched between the entry gate and a handler returning
   `Pending` — for `WaitForSignal`/polling steps, the whole fetch duration — the step kept a
