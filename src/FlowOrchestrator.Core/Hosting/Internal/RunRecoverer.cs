@@ -13,7 +13,7 @@ namespace FlowOrchestrator.Core.Hosting.Internal;
 /// </summary>
 /// <remarks>
 /// Pulled out of <see cref="FlowRunRecoveryHostedService"/> so the host stays a thin
-/// orchestration loop while the per-run state machine (re-dispatch ready / waiting
+/// orchestration loop while the per-run state machine (settle loop barriers, re-dispatch ready
 /// steps, then zombie-detect and close) lives in one focused type.
 /// </remarks>
 internal sealed class RunRecoverer
@@ -43,7 +43,7 @@ internal sealed class RunRecoverer
     }
 
     /// <summary>
-    /// Re-dispatches orphaned ready / waiting steps for one run; if nothing is left to
+    /// Settles finished loop barriers and re-dispatches orphaned ready steps for one run; if nothing is left to
     /// dispatch and no step is in-flight, closes the run with the canonical terminal
     /// status from <see cref="RunTerminationClassifier.ComputeTerminalStatus"/>.
     /// </summary>
@@ -53,6 +53,26 @@ internal sealed class RunRecoverer
     public async Task RecoverRunAsync(FlowRunRecord run, IFlowDefinition flow, CancellationToken ct)
     {
         var statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
+
+        // Loop barriers first: the host can have died between the last iteration completing and
+        // the continuation settling its loop step, which would leave the loop Running forever and
+        // its downstream steps unreachable. Settling here makes them Ready for the pass below.
+        var settledLoops = await LoopBarrier.SettleAsync(
+            flow,
+            run.Id,
+            LoopBarrier.RunningLoopKeys(flow, statuses),
+            statuses,
+            _outputsRepository,
+            _runStore).ConfigureAwait(false);
+
+        if (settledLoops.Count > 0)
+        {
+            _logger.LogInformation(
+                "FlowRunRecoveryHostedService: settled {Count} completed loop step(s) for run {RunId}: {Keys}.",
+                settledLoops.Count, run.Id, string.Join(", ", settledLoops));
+            statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
+        }
+
         var dispatched = await _runStore.GetDispatchedStepKeysAsync(run.Id).ConfigureAwait(false);
         var evaluation = _graphPlanner.Evaluate(flow, statuses);
 
@@ -89,38 +109,12 @@ internal sealed class RunRecoverer
             }
         }
 
-        // 2. Waiting (pending/polling) steps — re-schedule if no dispatch record.
-        foreach (var stepKey in evaluation.WaitingStepKeys)
-        {
-            if (dispatched.Contains(stepKey))
-            {
-                continue;  // poll already scheduled; it will fire at its scheduled time
-            }
-
-            var metadata = flow.Manifest.Steps.FindStep(stepKey);
-            if (metadata is null)
-            {
-                continue;
-            }
-
-            // Use a short fixed delay on recovery rather than trying to reconstruct the original poll interval.
-            var recoveryDelay = TimeSpan.FromSeconds(10);
-
-            var step = new StepInstance(stepKey, metadata.Type)
-            {
-                RunId = run.Id,
-                ScheduledTime = DateTimeOffset.UtcNow + recoveryDelay,
-                Inputs = new Dictionary<string, object?>(metadata.Inputs)
-            };
-
-            if (await TryDispatchAsync(ctx, flow, step, recoveryDelay, ct).ConfigureAwait(false))
-            {
-                recovered++;
-                _logger.LogInformation(
-                    "FlowRunRecoveryHostedService: re-scheduled waiting step '{StepKey}' for run {RunId} with {Delay}s delay.",
-                    stepKey, run.Id, recoveryDelay.TotalSeconds);
-            }
-        }
+        // NOTE: WaitingStepKeys are deliberately NOT dispatched here. "Waiting" means at least one
+        // RunAfter dependency is still non-terminal (a Running step, a parked poll, a loop whose
+        // barrier has not settled) — running such a step would execute it out of order, which is
+        // the very failure mode issue #169 reported. A step whose dependencies ARE satisfied is
+        // classified Ready and is recovered by the pass above; a polling step keeps its own status
+        // row, so it is never classified Waiting in the first place.
 
         if (recovered > 0)
         {

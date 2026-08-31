@@ -145,17 +145,20 @@ public sealed partial class FlowOrchestratorEngine
                     new KeyValuePair<string, object?>("status", result.Status.ToString()));
             }
 
-            await RecordEventAsync(
-                ctx,
-                flow,
-                step,
-                result.Status == StepStatus.Failed ? "step.failed" : "step.completed",
-                result.Status == StepStatus.Failed
-                    ? result.FailedReason ?? $"Step '{step.Key}' failed."
-                    : $"Step '{step.Key}' completed with status {result.Status}.").ConfigureAwait(false);
+            // Running is non-terminal too: a scoped step that fanned out is parked on its
+            // LoopBarrier until every iteration finishes, so it gets the waiting event, and the
+            // step.completed pair below is emitted later by the continuation that settles it.
+            var (stepEventType, stepEventMessage) = result.Status switch
+            {
+                StepStatus.Failed => ("step.failed", result.FailedReason ?? $"Step '{step.Key}' failed."),
+                StepStatus.Running => ("step.pending", $"Step '{step.Key}' is waiting for its child steps to complete."),
+                _ => ("step.completed", $"Step '{step.Key}' completed with status {result.Status}.")
+            };
 
-            // Pending is non-terminal — only publish step.completed for terminal statuses.
-            if (result.Status != StepStatus.Pending)
+            await RecordEventAsync(ctx, flow, step, stepEventType, stepEventMessage).ConfigureAwait(false);
+
+            // Pending / Running are non-terminal — only publish step.completed for terminal statuses.
+            if (result.Status is not (StepStatus.Pending or StepStatus.Running))
             {
                 await PublishEventSafelyAsync(new StepCompletedEvent
                 {

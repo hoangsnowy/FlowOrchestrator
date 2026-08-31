@@ -95,7 +95,8 @@ public class ForEachStepHandlerTests
 
         // Assert
         var sr = Assert.IsType<StepResult>(raw);
-        Assert.Equal(StepStatus.Succeeded, sr.Status);
+        // Running arms the loop barrier — the loop settles only when every iteration is terminal.
+        Assert.Equal(StepStatus.Running, sr.Status);
         Assert.NotNull(sr.DispatchHint);
         var spawn = sr.DispatchHint!.Spawn;
         Assert.Equal(3, spawn.Count);

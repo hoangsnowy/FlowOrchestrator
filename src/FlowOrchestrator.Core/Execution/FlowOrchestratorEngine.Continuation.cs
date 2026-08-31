@@ -3,6 +3,7 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Expressions;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 
@@ -71,6 +72,16 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+
+        // Loop barrier: the step that just finished may have been the last outstanding child of
+        // an enclosing loop. Settle those loops BEFORE evaluating the graph so the downstream
+        // steps they gate become ready in this same pass. Runs after the blocked-step pass above,
+        // because a child skipped there is exactly what can complete the last iteration.
+        if (await SettleEnclosingLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false))
+        {
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+        }
+
         evaluation = _graphPlanner.Evaluate(flow, statuses);
 
         var termination = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
@@ -148,6 +159,58 @@ public sealed partial class FlowOrchestratorEngine
             step,
             "run.completed",
             $"Run completed with status {termination}.").ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Settles the loop steps enclosing <paramref name="step"/> whose iterations have all reached
+    /// a terminal status, moving them from <see cref="StepStatus.Running"/> to
+    /// <see cref="StepStatus.Succeeded"/> and emitting their deferred completion events.
+    /// </summary>
+    /// <param name="ctx">Execution context of the child step whose completion triggered this pass.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="step">The child step that just reached a terminal status.</param>
+    /// <param name="statuses">Status map read after the blocked-step pass.</param>
+    /// <returns><see langword="true"/> when at least one loop step was settled.</returns>
+    /// <remarks>
+    /// A loop step is the only step whose completion is decided outside its own handler, so its
+    /// <c>step.completed</c> event and <see cref="StepCompletedEvent"/> are published here rather
+    /// than in <c>RunStepAsync</c> — at the point the loop is actually finished, not at fan-out.
+    /// </remarks>
+    private async Task<bool> SettleEnclosingLoopsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        IStepInstance step,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        var candidates = LoopBarrier.EnclosingLoopKeys(step.Key);
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var settled = await LoopBarrier
+            .SettleAsync(flow, ctx.RunId, candidates, statuses, _outputsRepository, _runStore)
+            .ConfigureAwait(false);
+
+        foreach (var loopKey in settled)
+        {
+            await PublishEventSafelyAsync(new StepCompletedEvent
+            {
+                RunId = ctx.RunId,
+                StepKey = loopKey,
+                Status = StepStatus.Succeeded.ToString()
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            await RecordEventAsync(
+                ctx,
+                flow,
+                step,
+                "step.completed",
+                $"Loop step '{loopKey}' completed: all iterations reached a terminal status.",
+                loopKey).ConfigureAwait(false);
+        }
+
+        return settled.Count > 0;
     }
 
     /// <summary>

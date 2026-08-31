@@ -9,10 +9,21 @@ namespace FlowOrchestrator.Core.Execution;
 /// <see cref="StepDispatchHint"/> instructing the engine to enqueue each child step.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Concurrency is controlled by <see cref="LoopStepMetadata.ConcurrencyLimit"/>:
 /// items are bucketed and successive buckets receive a small scheduling delay (100 ms per bucket)
 /// to throttle parallel execution.
 /// Child steps receive <c>__loopItem</c> and <c>__loopIndex</c> injected into their inputs.
+/// </para>
+/// <para>
+/// A loop that fans out returns <see cref="StepStatus.Running"/>, not
+/// <see cref="StepStatus.Succeeded"/>: the loop step is settled — by <see cref="LoopBarrier"/>,
+/// from the continuation of its last child — only once every iteration reached a terminal
+/// status. That is what makes a step declaring <c>RunAfter = { loop: [Succeeded] }</c> run
+/// <b>after</b> the loop body instead of racing it. A loop with nothing to run (zero items, or
+/// an empty body) still returns <see cref="StepStatus.Succeeded"/> immediately — there is no
+/// barrier to wait on.
+/// </para>
 /// </remarks>
 public sealed class ForEachStepHandler : IStepHandler
 {
@@ -26,7 +37,10 @@ public sealed class ForEachStepHandler : IStepHandler
 
         var source = ForEachSourceResolver.Resolve(loopMetadata.ForEach, context.TriggerData, context.TriggerHeaders);
         var items = ForEachSourceResolver.ToItemList(source);
-        if (items.Count == 0)
+
+        // Nothing to wait for: no items, or a loop declared without a body. Settle immediately —
+        // arming the barrier here would park the loop step on children that never exist.
+        if (items.Count == 0 || loopMetadata.Steps.Count == 0)
         {
             return ValueTask.FromResult<object?>(new StepResult
             {
@@ -67,10 +81,13 @@ public sealed class ForEachStepHandler : IStepHandler
             }
         }
 
+        // Running arms the completion barrier (see the remarks on this type). The iteration count
+        // is persisted with this result and is what LoopBarrier reads back to know how many
+        // iterations it must account for before settling the loop step.
         var result = new StepResult
         {
             Key = step.Key,
-            Status = StepStatus.Succeeded,
+            Status = StepStatus.Running,
             Result = new { iterations = items.Count },
             DispatchHint = new StepDispatchHint(children)
         };

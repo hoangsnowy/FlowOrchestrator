@@ -41,7 +41,7 @@ public sealed class ForEachItemMaterializationTests
 
         // Assert
         var stepResult = Assert.IsType<StepResult>(result);
-        Assert.Equal(StepStatus.Succeeded, stepResult.Status);
+        Assert.Equal(StepStatus.Running, stepResult.Status);
         Assert.NotNull(stepResult.DispatchHint);
         var loopItems = stepResult.DispatchHint!.Spawn.Select(child => child.Inputs["__loopItem"]).ToList();
         Assert.Equal(3, loopItems.Count);

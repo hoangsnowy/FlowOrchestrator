@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Hosting;
@@ -151,5 +152,108 @@ public class FlowRunRecoveryHostedServiceTests
 
         // Assert
         Assert.Empty(_dispatcher.ReceivedCalls());
+    }
+
+    [Fact]
+    public async Task StartAsync_StepWithUnsatisfiedDependency_IsNotDispatched()
+    {
+        // Arrange — step1 is still Running (its worker died mid-execution); step2 depends on it.
+        // Recovery must not run step2 out of order, which is the issue #169 failure mode.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(flowId);
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection
+            {
+                ["step1"] = new StepMetadata { Type = "DoWork" },
+                ["step2"] = new StepMetadata
+                {
+                    Type = "DoWork",
+                    RunAfter = new RunAfterCollection { ["step1"] = [StepStatus.Succeeded] }
+                }
+            }
+        });
+
+        _runStore.GetActiveRunsAsync()
+            .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
+        _flowRepo.GetAllFlowsAsync()
+            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        _runtimeStore.GetStepStatusesAsync(runId)
+            .Returns(Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(
+                new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Running }));
+        _runStore.GetDispatchedStepKeysAsync(runId)
+            .Returns(Task.FromResult(EmptyDispatched()));
+
+        // Act
+        await CreateSut().StartAsync(default);
+
+        // Assert
+        Assert.Empty(_dispatcher.ReceivedCalls());
+        await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
+    }
+
+    [Fact]
+    public async Task StartAsync_LoopBarrierCompletedWhileHostWasDown_SettlesLoopAndDispatchesDownstream()
+    {
+        // Arrange — the host crashed after the last iteration finished but before the
+        // continuation settled the loop step, leaving it parked on its barrier forever.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(flowId);
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection
+            {
+                ["loop"] = new LoopStepMetadata
+                {
+                    Type = "ForEach",
+                    Steps = new StepCollection { ["child"] = new StepMetadata { Type = "DoWork" } }
+                },
+                ["after"] = new StepMetadata
+                {
+                    Type = "DoWork",
+                    RunAfter = new RunAfterCollection { ["loop"] = [StepStatus.Succeeded] }
+                }
+            }
+        });
+
+        var parked = new Dictionary<string, StepStatus>
+        {
+            ["loop"] = StepStatus.Running,
+            ["loop.0.child"] = StepStatus.Succeeded,
+            ["loop.1.child"] = StepStatus.Succeeded
+        };
+        var settledView = new Dictionary<string, StepStatus>(parked) { ["loop"] = StepStatus.Succeeded };
+
+        _runStore.GetActiveRunsAsync()
+            .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
+        _flowRepo.GetAllFlowsAsync()
+            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        // First read sees the parked loop; the read after settling sees it Succeeded.
+        _runtimeStore.GetStepStatusesAsync(runId).Returns(
+            _ => Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(parked),
+            _ => Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(settledView));
+        _outputsRepo.GetStepOutputAsync(runId, "loop")
+            .Returns(ValueTask.FromResult<object?>(
+                JsonSerializer.SerializeToElement(new { iterations = 2 }, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
+        _runStore.GetDispatchedStepKeysAsync(runId)
+            .Returns(Task.FromResult(EmptyDispatched()));
+        _runStore.TryRecordDispatchAsync(runId, "after", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+
+        // Act
+        await CreateSut().StartAsync(default);
+
+        // Assert
+        await _runStore.Received(1).RecordStepCompleteAsync(
+            runId, "loop", nameof(StepStatus.Succeeded), """{"iterations":2}""", null);
+        await _dispatcher.Received(1).EnqueueStepAsync(
+            Arg.Is<IExecutionContext>(c => c!.RunId == runId),
+            flow,
+            Arg.Is<IStepInstance>(s => s!.Key == "after"),
+            Arg.Any<CancellationToken>());
     }
 }

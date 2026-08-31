@@ -6,6 +6,39 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.30.1] - 2026-08-31
+
+### Fixed
+
+- **A step declaring `RunAfter` on a ForEach loop now runs after the loop body, not
+  alongside it** (issue #169). The loop step reported `Succeeded` the instant it enqueued
+  its iterations, so the downstream step became ready before a single child had run. With
+  fast children this was an invisible race; with a parked child (`WaitForSignal`, a polling
+  step) the reported order was `scan_start → scan_process → robot_callback_success →
+  [wait_robot_goto → open_camera]`. A ForEach that fans out now reports `Running` and is
+  settled as `Succeeded` by a completion barrier only once every step of every iteration
+  reached a terminal status (`Succeeded` / `Failed` / `Skipped`), so the DAG gate works as
+  documented. A loop with zero items — or a loop body with no steps — still completes
+  immediately. A failing iteration still settles the loop as `Succeeded`, preserving the
+  existing "downstream runs even when an iteration failed" semantics; only the timing
+  changed. Nested loops settle innermost-first in a single pass.
+- **Run recovery no longer dispatches steps whose dependencies are unsatisfied.** On
+  startup, `FlowRunRecoveryHostedService` re-scheduled every step the planner classified as
+  *waiting* — i.e. every step still blocked on a `RunAfter` dependency — which executed it
+  out of order after any host restart (the same failure class as above; a polling step keeps
+  its own status row and was never in that set, so nothing legitimate depended on it).
+  Recovery now re-dispatches only *ready* steps, and additionally settles any loop barrier
+  whose last iteration finished while the host was down, so such runs resume instead of
+  hanging.
+
+### Changed
+
+- A ForEach step is `Running` for the duration of its iterations, where it was previously
+  `Succeeded` from fan-out onwards. This is visible on the dashboard, in `IFlowRunStore`
+  step rows, and to `StepCompletedEvent` subscribers — the event for a loop step is now
+  published when the loop actually finishes. Custom handlers returning `StepStatus.Running`
+  for a **scoped** step are subject to the same barrier.
+
 ## [1.30.0] - 2026-08-30
 
 ### Added
