@@ -135,21 +135,22 @@ internal static class LoopBarrier
             return true;
         }
 
-        // Scanned highest-index-first, and with a plain foreach rather than a LINQ predicate.
-        // The result is a conjunction over every (iteration, child) pair, so the visit order cannot
-        // change it — only where the scan exits. Under the default sequential ConcurrencyLimit the
-        // body completes in index order, so the outstanding iteration is the last one and the scan
-        // stops on its first probe instead of re-walking every finished iteration on every child
-        // completion (which made the barrier check O(iterations²) over the life of a loop run).
+        // Scanned highest-index-first. The result is a conjunction over every (iteration, child)
+        // pair, so the visit order cannot change it — only where the scan exits. Under the default
+        // sequential ConcurrencyLimit the body completes in index order, so the outstanding
+        // iteration is the last one and the scan stops on its first probe instead of re-walking
+        // every finished iteration on every child completion (which made the barrier check
+        // O(iterations²) over the life of a loop run). The Any() predicate is the CodeQL-preferred
+        // shape (cs/linq/missed-where); its closure is negligible next to the ordering win because
+        // the common path allocates exactly one before exiting.
         for (var index = iterations - 1; index >= 0; index--)
         {
             var iterationPrefix = $"{runtimeLoopKey}.{index}.";
-            foreach (var childKey in scoped.Steps.Keys)
+            if (scoped.Steps.Keys.Any(childKey =>
+                    !statuses.TryGetValue(iterationPrefix + childKey, out var status)
+                    || !IsTerminal(status)))
             {
-                if (!statuses.TryGetValue(iterationPrefix + childKey, out var status) || !IsTerminal(status))
-                {
-                    return false;
-                }
+                return false;
             }
         }
 
