@@ -162,13 +162,12 @@ internal static class LoopBarrier
 
         for (var index = 0; index < iterations; index++)
         {
-            foreach (var childKey in scoped.Steps.Keys)
+            var iterationPrefix = $"{runtimeLoopKey}.{index}.";
+            if (scoped.Steps.Keys.Any(childKey =>
+                    !statuses.TryGetValue($"{iterationPrefix}{childKey}", out var status)
+                    || !IsTerminal(status)))
             {
-                if (!statuses.TryGetValue($"{runtimeLoopKey}.{index}.{childKey}", out var status)
-                    || !IsTerminal(status))
-                {
-                    return false;
-                }
+                return false;
             }
         }
 
@@ -309,17 +308,5 @@ internal static class LoopBarrier
         return false;
     }
 
-    private static int CountSegments(string key)
-    {
-        var count = 0;
-        foreach (var character in key)
-        {
-            if (character == '.')
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
+    private static int CountSegments(string key) => key.AsSpan().Count('.');
 }
