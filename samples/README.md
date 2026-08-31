@@ -65,6 +65,16 @@ curl -u admin:admin -X POST "http://localhost:5101/flows/api/flows/00000000-0000
   -d '{"OrderNo":"WH-1042","Locations":["A-01-03","A-02-07","B-11-01"]}'
 ```
 
+Or through the secured webhook (the trigger declares a `webhookSecret`, so the key header is
+required — a 401 without it):
+
+```bash
+curl -X POST "http://localhost:5101/flows/api/webhook/warehouse-scan" \
+  -H 'Content-Type: application/json' \
+  -H 'X-Webhook-Key: warehouse-scan-secret' \
+  -d '{"OrderNo":"WH-1042","Locations":["A-01-03","A-02-07","B-11-01"]}'
+```
+
 Then open the run in the dashboard and watch:
 
 - `scan_process` stays **Running** while the robot works — before v1.30.1 it reported

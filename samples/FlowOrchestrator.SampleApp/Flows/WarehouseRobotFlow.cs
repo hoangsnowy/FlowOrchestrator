@@ -39,6 +39,7 @@ namespace FlowOrchestrator.SampleApp.Flows;
 ///   Webhook —
 ///     POST /flows/api/webhook/warehouse-scan
 ///     Content-Type: application/json
+///     X-Webhook-Key: warehouse-scan-secret
 ///     { "OrderNo": "WH-1042", "Locations": ["A-01-03", "A-02-07", "B-11-01"] }
 ///
 /// To drive the robot yourself instead, set ROBOT_SIMULATOR=false and POST the signals:
@@ -63,7 +64,12 @@ public sealed class WarehouseRobotFlow : IFlowDefinition
                 Type = TriggerType.Webhook,
                 Inputs = new Dictionary<string, object?>
                 {
-                    ["webhookSlug"] = "warehouse-scan"
+                    ["webhookSlug"] = "warehouse-scan",
+                    // Enforced independently of the webhook-hardening pipeline's Audit mode:
+                    // callers must send "X-Webhook-Key: warehouse-scan-secret" (or a Bearer
+                    // token with the same value) or the endpoint returns 401. Sample-only
+                    // value — production secrets belong in configuration, not source.
+                    ["webhookSecret"] = "warehouse-scan-secret"
                 }
             }
         },
