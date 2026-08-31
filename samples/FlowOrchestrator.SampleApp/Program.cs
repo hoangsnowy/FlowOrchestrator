@@ -202,6 +202,12 @@ builder.Services.AddFlowOrchestrator(options =>
     // /flows/api/runs/{runId}/signals/approval with a JSON body like {"approver":"manager"}.
     options.AddFlow<ApprovalWorkflowFlow>();
 
+    // Issue #169 / v1.30.1 loop-completion-barrier demo — a robot-driven warehouse scan whose
+    // ForEach parks mid-iteration on WaitForSignal and whose callback step may only run after
+    // the LAST location is scanned. RobotSimulatorHostedService plays the robot, so a single
+    // trigger plays the whole job out on the dashboard with no manual signalling.
+    options.AddFlow<WarehouseRobotFlow>();
+
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();
 });
@@ -217,6 +223,19 @@ builder.Services.AddStepHandler<SimulatedFailureStep>("SimulatedFailure");
 // Reads __loopItem (order ID) and __loopIndex injected by ForEachStepHandler at runtime.
 // Used by OrderBatchFlow → process_orders scope → validate_order step.
 builder.Services.AddStepHandler<ProcessOrderItemStep>("ProcessOrderItem");
+
+// WarehouseRobotFlow handlers — camera capture inside the ForEach scope, robot-controller
+// callback after the loop's completion barrier settles.
+builder.Services.AddStepHandler<OpenCameraStep>("OpenCamera");
+builder.Services.AddStepHandler<RobotCallbackStep>("RobotCallback");
+
+// The simulated robot that drives WarehouseRobotFlow end-to-end. Reads only public storage
+// abstractions and signals via IFlowSignalDispatcher — the same surface a real robot-controller
+// integration would use. Set ROBOT_SIMULATOR=false to drive signals manually instead.
+if (builder.Configuration.GetValue("ROBOT_SIMULATOR", true))
+{
+    builder.Services.AddHostedService<RobotSimulatorHostedService>();
+}
 
 // QueryDatabaseStep / SaveResultStep / SampleDataMigrator depend on the Orders
 // business table which only exists in the SQL Server instance.

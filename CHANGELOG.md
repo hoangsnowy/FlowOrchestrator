@@ -6,6 +6,105 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.30.1] - 2026-08-31
+
+### Added
+
+- **`WarehouseRobotFlow` sample (…0013)** — the issue #169 manifest as a realistic,
+  self-playing demo: a webhook/manual-triggered warehouse scan whose ForEach parks each
+  iteration on a `robot_goto` signal, reads the arriving robot's payload via a
+  scope-relative `@steps()` expression, and fires `robot_callback_success` only after the
+  last location — with `RobotSimulatorHostedService` playing the robot end-to-end through
+  the same public surfaces (`IFlowRunStore`, `IFlowSignalDispatcher`) a real controller
+  integration would use (disable with `ROBOT_SIMULATOR=false`). `samples/README.md` now
+  maps every sample flow to the core surface it demonstrates.
+
+### Fixed
+
+- **A step declaring `RunAfter` on a ForEach loop now runs after the loop body, not
+  alongside it** (issue #169). The loop step reported `Succeeded` the instant it enqueued
+  its iterations, so the downstream step became ready before a single child had run. With
+  fast children this was an invisible race; with a parked child (`WaitForSignal`, a polling
+  step) the reported order was `scan_start → scan_process → robot_callback_success →
+  [wait_robot_goto → open_camera]`. A ForEach that fans out now reports `Running` and is
+  settled as `Succeeded` by a completion barrier only once every step of every iteration
+  reached a terminal status (`Succeeded` / `Failed` / `Skipped`), so the DAG gate works as
+  documented. A loop with zero items — or a loop body with no steps — still completes
+  immediately. A failing iteration still settles the loop as `Succeeded`, preserving the
+  existing "downstream runs even when an iteration failed" semantics; only the timing
+  changed. Nested loops settle innermost-first in a single pass.
+- **A `When`-skip that finishes a loop's last iteration now settles the barrier in the same
+  continuation pass.** The skip is recorded after the barrier check, with no later step
+  completion to re-trigger it — without the second settle pass the loop (and the run)
+  parked forever on an already-finished body.
+- **Re-running a settled loop step (dashboard retry) no longer strands the run.** Retry
+  clears the dispatch ledger for the retried key only, so the re-executed ForEach re-armed
+  its barrier while every child was suppressed as already-dispatched; the loop step is now
+  its own settle candidate and completes immediately from its own continuation.
+- **A loop step no longer carries a `CompletedAt` timestamp while it is `Running`.** The
+  fan-out result is no longer written through `RecordStepCompleteAsync`; the row keeps the
+  `Running` stamp from step start and receives its completion (status, output, timestamp)
+  only when the barrier settles — so the dashboard shows a live loop, not a finished one.
+- **Cancelling or timing out a run whose ForEach is parked no longer strands it in `Running`
+  forever.** The run-control termination gate returns before the graph continuation, so the
+  barrier never settled and `HasInFlightWorkAsync` kept reporting in-flight work — the run
+  was unclosable by both the continuation and the periodic timeout sweep until a host
+  restart. The gate now abandons every still-parked enclosing loop as `Skipped`
+  (`"Run is Cancelled/TimedOut."`); settling instead would deadlock, because a multi-step
+  loop body only ever fans out its entry child on this path.
+- **The timeout sweep now closes a cancelled or timed-out run whose only remaining work is
+  parked.** A `WaitForSignal` without `timeoutSeconds` parks for 24 h and a long-interval
+  poll for its whole interval; the termination verdict was only observed on the next wake-up,
+  and the sweep skipped such runs entirely (it ignored cancelled runs with no deadline and
+  runs already latched `TimedOut`). The sweep resolves the same verdict precedence as the
+  dispatch-time gate and force-closes the run — recording every provably-parked step
+  `Skipped` — while refusing whenever anything can still progress (a live `Running` step, a
+  claimed or dispatched key with no status row, a `ForEach` still mid-fan-out). A parked step
+  that wakes after the close is a harmless skip; the run completes exactly once.
+- **`RetryStepAsync` refreshes the run deadline before re-activating the run**, not after —
+  the old order exposed a window where the sweep saw an active run still carrying its stale
+  `TimedOut` latch and could close it again immediately.
+- **A step cancelled mid-poll is no longer stranded `Pending`** (pre-existing, not
+  loop-specific). When run control latched between the entry gate and a handler returning
+  `Pending` — for `WaitForSignal`/polling steps, the whole fetch duration — the step kept a
+  live dispatch row with nothing queued and the run could never close. The post-Pending
+  control check now records the same `Skipped` outcome the entry gate produces.
+- **A cascade-skip that finishes a *sibling* loop's last iteration now settles that loop.**
+  The settle candidates were only the loops enclosing the completed step; a blocked-step or
+  `When`-skip can land anywhere in the graph, leaving a sibling loop `Running` with no later
+  completion to settle it. Candidates are now every parked scoped step in the run.
+- **`WaitForSignal` timeout messages no longer mix the store clock with the injected
+  `TimeProvider`** — the reported wait window came out skewed, or negative under a frozen
+  test clock. The configured `timeoutSeconds` is reported instead.
+- **Run recovery no longer dispatches steps whose dependencies are unsatisfied.** On
+  startup, `FlowRunRecoveryHostedService` re-scheduled every step the planner classified as
+  *waiting* — i.e. every step still blocked on a `RunAfter` dependency — which executed it
+  out of order after any host restart (the same failure class as above; a polling step keeps
+  its own status row and was never in that set, so nothing legitimate depended on it).
+  Recovery now re-dispatches only *ready* steps, and additionally settles any loop barrier
+  whose last iteration finished while the host was down, so such runs resume instead of
+  hanging.
+
+### Performance
+
+- **Graph evaluation on loop runs: −47% CPU, −39% allocations** at 100 iterations × 3
+  children (69.7 µs → 37.1 µs, 100.5 KB → 61.6 KB per `Evaluate`). The planner's runtime-key
+  expansion now dedupes scope prefixes, uses the array-range `string.Join` overload, and
+  skips the split/rejoin in `RemoveNumericSegments` for keys that need no rewrite. Linear
+  flows are unchanged against the published baseline.
+- **Loop-barrier completion check is O(1) amortised instead of O(iterations²)** over a run:
+  the scan walks highest-index-first with a plain `foreach` (16.3 µs / 34.4 KB → 136 ns /
+  208 B per check in the sequential-completion shape). New BenchmarkDotNet coverage:
+  `LoopBarrierBenchmarks`, `FlowGraphPlannerLoopBenchmarks`.
+
+### Changed
+
+- A ForEach step is `Running` for the duration of its iterations, where it was previously
+  `Succeeded` from fan-out onwards. This is visible on the dashboard, in `IFlowRunStore`
+  step rows, and to `StepCompletedEvent` subscribers — the event for a loop step is now
+  published when the loop actually finishes. Custom handlers returning `StepStatus.Running`
+  for a **scoped** step are subject to the same barrier.
+
 ## [1.30.0] - 2026-08-30
 
 ### Added

@@ -108,6 +108,7 @@ internal static class SampleFlowIds
         new("00000000-0000-0000-0000-000000000010"), // DeadEndSkipDemoFlow
         new("00000000-0000-0000-0000-000000000011"), // FinalStepSkipDemoFlow
         new("00000000-0000-0000-0000-000000000012"), // AmountThresholdFlow
+        new("00000000-0000-0000-0000-000000000013"), // WarehouseRobotFlow (issue #169 barrier demo)
         new("d1f8a000-0000-0000-0000-000000000125"), // WebhookEnterpriseSampleFlow (v1.25)
     ];
 }

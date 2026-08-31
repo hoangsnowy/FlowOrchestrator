@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
@@ -62,6 +63,7 @@ public sealed partial class FlowOrchestratorEngine
             if (controlStatus is not null)
             {
                 await RecordSkippedCurrentStepAsync(ctx, flow, step, controlStatus).ConfigureAwait(false);
+                await AbandonEnclosingLoopsAsync(ctx, flow, step, controlStatus).ConfigureAwait(false);
                 await TryCompleteRunAsync(ctx.RunId, controlStatus).ConfigureAwait(false);
                 return null;
             }
@@ -119,15 +121,24 @@ public sealed partial class FlowOrchestratorEngine
                 }
             }
 
-            try
+            // A Running result under the graph runtime is a scoped step parked on its LoopBarrier —
+            // not a completion. RecordStepStartAsync already stamped the row Running, so skipping the
+            // completion write keeps CompletedAt null until the barrier settles the step for real
+            // (the settle pass writes Succeeded + the loop output). The barrier reads the iteration
+            // count from IOutputsRepository (SaveStepOutputAsync above), not from this row.
+            var isBarrierParked = result.Status == StepStatus.Running && _runtimeStore is not null;
+            if (!isBarrierParked)
             {
-                var outputJson = SafeSerialize(result.Result);
-                await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                EngineLog.StepCompletionTrackingFailed(_logger, ex);
+                try
+                {
+                    var outputJson = SafeSerialize(result.Result);
+                    await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    EngineLog.StepCompletionTrackingFailed(_logger, ex);
+                }
             }
 
             var stepExecutionMs = Stopwatch.GetElapsedTime(stepExecutionStart).TotalMilliseconds;
@@ -145,17 +156,20 @@ public sealed partial class FlowOrchestratorEngine
                     new KeyValuePair<string, object?>("status", result.Status.ToString()));
             }
 
-            await RecordEventAsync(
-                ctx,
-                flow,
-                step,
-                result.Status == StepStatus.Failed ? "step.failed" : "step.completed",
-                result.Status == StepStatus.Failed
-                    ? result.FailedReason ?? $"Step '{step.Key}' failed."
-                    : $"Step '{step.Key}' completed with status {result.Status}.").ConfigureAwait(false);
+            // Running is non-terminal too: a scoped step that fanned out is parked on its
+            // LoopBarrier until every iteration finishes, so it gets the waiting event, and the
+            // step.completed pair below is emitted later by the continuation that settles it.
+            var (stepEventType, stepEventMessage) = result.Status switch
+            {
+                StepStatus.Failed => ("step.failed", result.FailedReason ?? $"Step '{step.Key}' failed."),
+                StepStatus.Running => ("step.pending", $"Step '{step.Key}' is waiting for its child steps to complete."),
+                _ => ("step.completed", $"Step '{step.Key}' completed with status {result.Status}.")
+            };
 
-            // Pending is non-terminal — only publish step.completed for terminal statuses.
-            if (result.Status != StepStatus.Pending)
+            await RecordEventAsync(ctx, flow, step, stepEventType, stepEventMessage).ConfigureAwait(false);
+
+            // Pending / Running are non-terminal — only publish step.completed for terminal statuses.
+            if (result.Status is not (StepStatus.Pending or StepStatus.Running))
             {
                 await PublishEventSafelyAsync(new StepCompletedEvent
                 {
@@ -181,6 +195,30 @@ public sealed partial class FlowOrchestratorEngine
                 var controlAfterPending = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
                 if (controlAfterPending is not null)
                 {
+                    // The run was terminated while this poll iteration was executing — i.e. the
+                    // cancel/timeout landed after the entry gate but before the handler returned,
+                    // which for a WaitForSignal or a polling step is the whole fetch duration.
+                    // Returning here without a reschedule strands the step in Pending with a live
+                    // dispatch row and nothing queued, and a Pending step keeps HasInFlightWorkAsync
+                    // true forever, so neither TryCompleteRunAsync below nor the periodic timeout
+                    // sweep could ever close the run again (only a host restart would). Record the
+                    // same Skipped outcome the entry gate produces — the step row already exists, so
+                    // this is a completion write rather than a start+complete pair.
+                    try
+                    {
+                        await _runStore.RecordStepCompleteAsync(
+                            ctx.RunId,
+                            step.Key,
+                            StepStatus.Skipped.ToString(),
+                            null,
+                            $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        EngineLog.StepSkipTrackingFailed(_logger, ex, step.Key);
+                    }
+
+                    await AbandonEnclosingLoopsAsync(ctx, flow, step, controlAfterPending).ConfigureAwait(false);
                     await TryCompleteRunAsync(ctx.RunId, controlAfterPending).ConfigureAwait(false);
                     return result.Result;
                 }
@@ -339,6 +377,23 @@ public sealed partial class FlowOrchestratorEngine
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
             ?? throw new InvalidOperationException($"Step '{stepKey}' not found in flow manifest.");
 
+        var ctx = new ExecutionContext { RunId = runId };
+        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
+        ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(runId).ConfigureAwait(false);
+
+        // Give the run a fresh execution window BEFORE anything else observes it as active again.
+        // Without this, a step retried after the run's timeout deadline lapsed (or after the run was
+        // latched TimedOut) would be immediately skipped by the termination gate in RunStepAsync — the
+        // handler would never run. The refreshed deadline reuses trigger-time resolution so it still
+        // honours the runaway-loop bound. Refreshing first also closes a window against the periodic
+        // timeout sweep: RetryStepAsync below puts the run back into Running, and a sweep landing
+        // between that write and this refresh would still see a latched terminal verdict.
+        if (_runControlStore is not null)
+        {
+            var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
+            await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
+        }
+
         await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
 
         // When the original failure of this step caused the DAG continuation to eagerly
@@ -364,20 +419,6 @@ public sealed partial class FlowOrchestratorEngine
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?>(stepMeta.Inputs)
         };
-
-        var ctx = new ExecutionContext { RunId = runId };
-        ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
-        ctx.TriggerHeaders = await _outputsRepository.GetTriggerHeadersAsync(runId).ConfigureAwait(false);
-
-        // Give the run a fresh execution window before re-dispatch. Without this, a step retried after
-        // the run's timeout deadline lapsed (or after the run was latched TimedOut) would be immediately
-        // skipped by the termination gate in RunStepAsync — the handler would never run. The refreshed
-        // deadline reuses trigger-time resolution so it still honours the runaway-loop bound.
-        if (_runControlStore is not null)
-        {
-            var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
-            await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
-        }
 
         return await RunStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
     }
@@ -446,6 +487,94 @@ public sealed partial class FlowOrchestratorEngine
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             EngineLog.DispatchReassertFailed(_logger, ex, stepKey);
+        }
+    }
+
+    /// <summary>
+    /// Marks every loop step enclosing <paramref name="step"/> that is still parked on its
+    /// completion barrier as <see cref="StepStatus.Skipped"/>, because the run is being terminated
+    /// by run control and its iterations will never finish.
+    /// </summary>
+    /// <param name="ctx">Execution context of the step the termination gate just skipped.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="step">The step the termination gate just skipped.</param>
+    /// <param name="terminalStatus">The run-control status forcing termination (Cancelled / TimedOut).</param>
+    /// <remarks>
+    /// <para>
+    /// The termination gate returns before the graph continuation runs, so neither the loop barrier
+    /// settle pass nor the blocked-step cascade executes on this path. A parked loop step therefore
+    /// stays <see cref="StepStatus.Running"/> forever; <c>HasInFlightWorkAsync</c> keeps reporting
+    /// in-flight work, and the run can be closed by neither <c>TryCompleteRunAsync</c> nor the
+    /// periodic timeout sweep — only by a host restart, via <c>FlowRunRecoveryHostedService</c>.
+    /// </para>
+    /// <para>
+    /// Settling the barrier instead of abandoning it is not sufficient: a loop body with more than
+    /// one step (the shape in issue #169 — <c>wait</c> then <c>consume</c>) only ever fans out its
+    /// entry child, so the dependent children never get a status row on this path and "all
+    /// iterations terminal" can never become true. <see cref="StepStatus.Skipped"/> also matches
+    /// what the gate records for the step itself, and leaves steps downstream of the loop with no
+    /// row at all — the same shape a cancelled linear flow already produces.
+    /// </para>
+    /// </remarks>
+    private async Task AbandonEnclosingLoopsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        IStepInstance step,
+        string terminalStatus)
+    {
+        if (_runtimeStore is null)
+        {
+            return;
+        }
+
+        var enclosing = LoopBarrier.EnclosingLoopKeys(step.Key);
+        if (enclosing.Count == 0)
+        {
+            return;
+        }
+
+        IReadOnlyDictionary<string, StepStatus> statuses;
+        try
+        {
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.StepSkipTrackingFailed(_logger, ex, step.Key);
+            return;
+        }
+
+        foreach (var loopKey in enclosing)
+        {
+            if (!statuses.TryGetValue(loopKey, out var loopStatus)
+                || loopStatus != StepStatus.Running
+                || flow.Manifest.Steps.FindStep(loopKey) is not IScopedStep)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _runStore.RecordStepCompleteAsync(
+                    ctx.RunId,
+                    loopKey,
+                    StepStatus.Skipped.ToString(),
+                    null,
+                    $"Run is {terminalStatus}.").ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                EngineLog.StepSkipTrackingFailed(_logger, ex, loopKey);
+                continue;
+            }
+
+            await RecordEventAsync(
+                ctx,
+                flow,
+                step,
+                "step.skipped",
+                $"Loop step '{loopKey}' abandoned: run is {terminalStatus}.",
+                loopKey).ConfigureAwait(false);
         }
     }
 

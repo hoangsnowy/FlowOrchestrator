@@ -3,6 +3,7 @@ using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Expressions;
+using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 
@@ -71,6 +72,16 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+
+        // Loop barrier: the step that just finished may have been the last outstanding child of
+        // an enclosing loop. Settle those loops BEFORE evaluating the graph so the downstream
+        // steps they gate become ready in this same pass. Runs after the blocked-step pass above,
+        // because a child skipped there is exactly what can complete the last iteration.
+        if (await SettleEnclosingLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false))
+        {
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+        }
+
         evaluation = _graphPlanner.Evaluate(flow, statuses);
 
         var termination = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
@@ -117,6 +128,16 @@ public sealed partial class FlowOrchestratorEngine
                 if (++safetyCounter > flow.Manifest.Steps.Count + 4) break;
 
                 statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+
+                // A When-skip recorded just above may have been the LAST outstanding child of an
+                // enclosing loop — and it happened after the settle pass at the top of this method,
+                // with no later step completion to re-trigger it. Settle here so the loop's
+                // downstream steps become ready in the next sweep instead of parking the run.
+                if (await SettleEnclosingLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false))
+                {
+                    statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+                }
+
                 evaluation = _graphPlanner.Evaluate(flow, statuses);
             }
         }
@@ -148,6 +169,76 @@ public sealed partial class FlowOrchestratorEngine
             step,
             "run.completed",
             $"Run completed with status {termination}.").ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Settles every loop step currently parked on its barrier whose iterations have all reached
+    /// a terminal status, moving it from <see cref="StepStatus.Running"/> to
+    /// <see cref="StepStatus.Succeeded"/> and emitting its deferred completion events.
+    /// </summary>
+    /// <param name="ctx">Execution context of the child step whose completion triggered this pass.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="step">The step that just reached a terminal status; used only for event attribution.</param>
+    /// <param name="statuses">Status map read after the blocked-step pass.</param>
+    /// <returns><see langword="true"/> when at least one loop step was settled.</returns>
+    /// <remarks>
+    /// <para>
+    /// A loop step is the only step whose completion is decided outside its own handler, so its
+    /// <c>step.completed</c> event and <see cref="StepCompletedEvent"/> are published here rather
+    /// than in <c>RunStepAsync</c> — at the point the loop is actually finished, not at fan-out.
+    /// </para>
+    /// <para>
+    /// The candidate set is every <see cref="StepStatus.Running"/> scoped step in the run, not just
+    /// the loops enclosing <paramref name="step"/>. The blocked-step and <c>When</c>-skip passes can
+    /// cascade-skip a step anywhere in the graph, including the last outstanding iteration of a
+    /// <i>sibling</i> loop; that loop then has no later completion left to settle it and would stay
+    /// Running forever, keeping <c>HasInFlightWorkAsync</c> true and stranding the run. Scanning all
+    /// parked loops is a strict superset of the enclosing set — <see cref="LoopBarrier.SettleAsync"/>
+    /// already ignores any candidate that is not Running — and costs one output read per parked loop.
+    /// </para>
+    /// <para>
+    /// The completed step itself is included when it is scoped and still Running, which covers
+    /// re-running a loop step whose iterations already finished: <see cref="RetryStepAsync"/> clears
+    /// the dispatch ledger for the retried key only, so the re-executed <c>ForEach</c> re-arms the
+    /// barrier while its children are suppressed as already-dispatched and can never settle it again.
+    /// On the ordinary fan-out path this candidate is a no-op — the children have no status rows yet.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> SettleEnclosingLoopsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        IStepInstance step,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        var candidates = LoopBarrier.RunningLoopKeys(flow, statuses);
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var settled = await LoopBarrier
+            .SettleAsync(flow, ctx.RunId, candidates, statuses, _outputsRepository, _runStore)
+            .ConfigureAwait(false);
+
+        foreach (var loopKey in settled)
+        {
+            await PublishEventSafelyAsync(new StepCompletedEvent
+            {
+                RunId = ctx.RunId,
+                StepKey = loopKey,
+                Status = StepStatus.Succeeded.ToString()
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            await RecordEventAsync(
+                ctx,
+                flow,
+                step,
+                "step.completed",
+                $"Loop step '{loopKey}' completed: all iterations reached a terminal status.",
+                loopKey).ConfigureAwait(false);
+        }
+
+        return settled.Count > 0;
     }
 
     /// <summary>

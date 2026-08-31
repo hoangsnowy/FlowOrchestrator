@@ -76,7 +76,7 @@ Iteration 2  ──► validate_order  (dispatched with a +100 ms start delay)
 Iteration 3  ──► validate_order  (dispatched with a +100 ms start delay)
 ```
 
-All iterations are enqueued when the loop step runs. Later buckets carry a scheduled start delay of `100 ms × bucketIndex`; they do not wait for earlier iterations to finish.
+All iterations are enqueued when the loop step runs. Later buckets carry a scheduled start delay of `100 ms × bucketIndex`; they do not wait for earlier iterations to finish. Steps *downstream of the loop* do wait — see [Loop Completion and Downstream Ordering](#loop-completion-and-downstream-ordering).
 
 ## Child Step Key Format
 
@@ -152,6 +152,34 @@ already applies within a loop scope.
 ## How Dispatch Works
 
 `ForEachStepHandler` does not enqueue jobs directly. Instead it returns a `StepResult` that carries a `DispatchHint` with `Spawn` entries — one per iteration. `FlowOrchestratorEngine` receives the hint, validates that the spawned step keys are not already present in the static DAG, and dispatches each one via `IStepDispatcher`. This keeps runtime dispatch logic in the engine and makes `ForEachStepHandler` portable across all runtime adapters (Hangfire, InMemory, or any future adapter).
+
+## Loop Completion and Downstream Ordering
+
+A loop step that fanned out reports `Running`, **not** `Succeeded`. It is settled as `Succeeded` only once every step of every iteration has reached a terminal status (`Succeeded`, `Failed`, or `Skipped`) — the *loop barrier*. A step declaring `RunAfter = { <loop>: [Succeeded] }` therefore runs strictly after the whole loop body:
+
+```
+scan_start ─► scan_process ─┬─► [0] wait_robot_goto ─► open_camera ─┐
+                            └─► [1] wait_robot_goto ─► open_camera ─┴─► robot_callback_success
+```
+
+| Loop state | Loop step status | Downstream step |
+|---|---|---|
+| Fanned out, iterations in flight | `Running` | Waiting |
+| Every iteration terminal | `Succeeded` | Ready — dispatched now |
+| Zero items, or a loop body with no steps | `Succeeded` immediately | Ready immediately |
+
+> [!NOTE]
+> A failing iteration does not fail the loop: a child that failed and a child skipped because
+> its `RunAfter` could not be satisfied both count as terminal, so the barrier settles as
+> `Succeeded` and the downstream step still runs. Gate on the individual iteration outputs
+> when a downstream step must react to a partial failure.
+
+> [!IMPORTANT]
+> Before v1.30.1 the loop step reported `Succeeded` the moment it enqueued its children, so
+> the downstream step ran *in parallel with* the iterations. With fast children this was an
+> invisible race; with a parked child (`WaitForSignal`, a polling step) the downstream step ran
+> first — [issue #169](https://github.com/hoangsnowy/FlowOrchestrator/issues/169). If a flow
+> relied on the old fire-and-forget timing, move that work into the loop body.
 
 ## Per-Iteration Injected Inputs
 
