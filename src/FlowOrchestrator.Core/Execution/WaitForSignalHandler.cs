@@ -89,7 +89,16 @@ public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
         // returns Failed again rather than registering a brand-new waiter.
         if (waiter is { ExpiresAt: { } expiresAt } && now >= expiresAt)
         {
-            var elapsed = (int)Math.Round((expiresAt - waiter.CreatedAt).TotalSeconds, MidpointRounding.AwayFromZero);
+            // FlowSignalWaiter.CreatedAt is stamped by the STORE's clock (DateTimeOffset.UtcNow
+            // in memory, SYSDATETIMEOFFSET() / NOW() in the SQL backends) while ExpiresAt was
+            // computed from the injected TimeProvider. Subtracting the two mixes clocks: under
+            // ordinary app/database skew the reported window is off by the skew, and under an
+            // injected or frozen TimeProvider it can even come out negative. Report the configured
+            // timeout instead, falling back to the stored window (clamped at zero) only when the
+            // step no longer declares one.
+            var elapsed = input.TimeoutSeconds is { } configuredSeconds && configuredSeconds > 0
+                ? configuredSeconds
+                : Math.Max(0, (int)Math.Round((expiresAt - waiter.CreatedAt).TotalSeconds, MidpointRounding.AwayFromZero));
             return new StepResult
             {
                 Key = step.Key,

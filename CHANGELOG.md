@@ -45,6 +45,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fan-out result is no longer written through `RecordStepCompleteAsync`; the row keeps the
   `Running` stamp from step start and receives its completion (status, output, timestamp)
   only when the barrier settles — so the dashboard shows a live loop, not a finished one.
+- **Cancelling or timing out a run whose ForEach is parked no longer strands it in `Running`
+  forever.** The run-control termination gate returns before the graph continuation, so the
+  barrier never settled and `HasInFlightWorkAsync` kept reporting in-flight work — the run
+  was unclosable by both the continuation and the periodic timeout sweep until a host
+  restart. The gate now abandons every still-parked enclosing loop as `Skipped`
+  (`"Run is Cancelled/TimedOut."`); settling instead would deadlock, because a multi-step
+  loop body only ever fans out its entry child on this path.
+- **A step cancelled mid-poll is no longer stranded `Pending`** (pre-existing, not
+  loop-specific). When run control latched between the entry gate and a handler returning
+  `Pending` — for `WaitForSignal`/polling steps, the whole fetch duration — the step kept a
+  live dispatch row with nothing queued and the run could never close. The post-Pending
+  control check now records the same `Skipped` outcome the entry gate produces.
+- **A cascade-skip that finishes a *sibling* loop's last iteration now settles that loop.**
+  The settle candidates were only the loops enclosing the completed step; a blocked-step or
+  `When`-skip can land anywhere in the graph, leaving a sibling loop `Running` with no later
+  completion to settle it. Candidates are now every parked scoped step in the run.
+- **`WaitForSignal` timeout messages no longer mix the store clock with the injected
+  `TimeProvider`** — the reported wait window came out skewed, or negative under a frozen
+  test clock. The configured `timeoutSeconds` is reported instead.
 - **Run recovery no longer dispatches steps whose dependencies are unsatisfied.** On
   startup, `FlowRunRecoveryHostedService` re-scheduled every step the planner classified as
   *waiting* — i.e. every step still blocked on a `RunAfter` dependency — which executed it
@@ -53,6 +72,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Recovery now re-dispatches only *ready* steps, and additionally settles any loop barrier
   whose last iteration finished while the host was down, so such runs resume instead of
   hanging.
+
+### Performance
+
+- **Graph evaluation on loop runs: −47% CPU, −39% allocations** at 100 iterations × 3
+  children (69.7 µs → 37.1 µs, 100.5 KB → 61.6 KB per `Evaluate`). The planner's runtime-key
+  expansion now dedupes scope prefixes, uses the array-range `string.Join` overload, and
+  skips the split/rejoin in `RemoveNumericSegments` for keys that need no rewrite. Linear
+  flows are unchanged against the published baseline.
+- **Loop-barrier completion check is O(1) amortised instead of O(iterations²)** over a run:
+  the scan walks highest-index-first with a plain `foreach` (16.3 µs / 34.4 KB → 136 ns /
+  208 B per check in the sequential-completion shape). New BenchmarkDotNet coverage:
+  `LoopBarrierBenchmarks`, `FlowGraphPlannerLoopBenchmarks`.
 
 ### Changed
 

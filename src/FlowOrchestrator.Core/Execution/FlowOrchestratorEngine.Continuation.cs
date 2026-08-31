@@ -172,13 +172,13 @@ public sealed partial class FlowOrchestratorEngine
     }
 
     /// <summary>
-    /// Settles the loop steps enclosing <paramref name="step"/> whose iterations have all reached
-    /// a terminal status, moving them from <see cref="StepStatus.Running"/> to
-    /// <see cref="StepStatus.Succeeded"/> and emitting their deferred completion events.
+    /// Settles every loop step currently parked on its barrier whose iterations have all reached
+    /// a terminal status, moving it from <see cref="StepStatus.Running"/> to
+    /// <see cref="StepStatus.Succeeded"/> and emitting its deferred completion events.
     /// </summary>
     /// <param name="ctx">Execution context of the child step whose completion triggered this pass.</param>
     /// <param name="flow">The flow being executed.</param>
-    /// <param name="step">The child step that just reached a terminal status.</param>
+    /// <param name="step">The step that just reached a terminal status; used only for event attribution.</param>
     /// <param name="statuses">Status map read after the blocked-step pass.</param>
     /// <returns><see langword="true"/> when at least one loop step was settled.</returns>
     /// <remarks>
@@ -188,11 +188,20 @@ public sealed partial class FlowOrchestratorEngine
     /// than in <c>RunStepAsync</c> — at the point the loop is actually finished, not at fan-out.
     /// </para>
     /// <para>
-    /// The completed step itself is a candidate when it is scoped, which covers re-running a loop
-    /// step whose iterations already finished: <see cref="RetryStepAsync"/> clears the dispatch
-    /// ledger for the retried key only, so the re-executed <c>ForEach</c> re-arms the barrier while
-    /// its children are suppressed as already-dispatched and can never settle it again. On the
-    /// ordinary fan-out path this candidate is a no-op — the children have no status rows yet.
+    /// The candidate set is every <see cref="StepStatus.Running"/> scoped step in the run, not just
+    /// the loops enclosing <paramref name="step"/>. The blocked-step and <c>When</c>-skip passes can
+    /// cascade-skip a step anywhere in the graph, including the last outstanding iteration of a
+    /// <i>sibling</i> loop; that loop then has no later completion left to settle it and would stay
+    /// Running forever, keeping <c>HasInFlightWorkAsync</c> true and stranding the run. Scanning all
+    /// parked loops is a strict superset of the enclosing set — <see cref="LoopBarrier.SettleAsync"/>
+    /// already ignores any candidate that is not Running — and costs one output read per parked loop.
+    /// </para>
+    /// <para>
+    /// The completed step itself is included when it is scoped and still Running, which covers
+    /// re-running a loop step whose iterations already finished: <see cref="RetryStepAsync"/> clears
+    /// the dispatch ledger for the retried key only, so the re-executed <c>ForEach</c> re-arms the
+    /// barrier while its children are suppressed as already-dispatched and can never settle it again.
+    /// On the ordinary fan-out path this candidate is a no-op — the children have no status rows yet.
     /// </para>
     /// </remarks>
     private async Task<bool> SettleEnclosingLoopsAsync(
@@ -201,7 +210,7 @@ public sealed partial class FlowOrchestratorEngine
         IStepInstance step,
         IReadOnlyDictionary<string, StepStatus> statuses)
     {
-        var candidates = LoopBarrier.SettleCandidatesFor(flow, step.Key);
+        var candidates = LoopBarrier.RunningLoopKeys(flow, statuses);
         if (candidates.Count == 0)
         {
             return false;

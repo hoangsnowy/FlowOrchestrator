@@ -68,31 +68,6 @@ internal static class LoopBarrier
     }
 
     /// <summary>
-    /// Returns the loop steps whose barrier the completion of <paramref name="runtimeStepKey"/>
-    /// can settle, innermost first: the step itself when it is scoped, then its enclosing loops.
-    /// </summary>
-    /// <param name="flow">Flow whose manifest classifies the step.</param>
-    /// <param name="runtimeStepKey">Runtime key of the step that just reached a terminal status.</param>
-    /// <remarks>
-    /// Including the step itself matters when a loop step re-executes over iterations that already
-    /// finished — a retried <c>ForEach</c> re-arms the barrier, but its children are suppressed by
-    /// the dispatch ledger and so can never settle it a second time. On first fan-out the children
-    /// have no status rows yet, so the self-candidate simply does not settle.
-    /// </remarks>
-    public static IReadOnlyList<string> SettleCandidatesFor(IFlowDefinition flow, string runtimeStepKey)
-    {
-        var enclosing = EnclosingLoopKeys(runtimeStepKey);
-        if (flow.Manifest.Steps.FindStep(runtimeStepKey) is not IScopedStep)
-        {
-            return enclosing;
-        }
-
-        var candidates = new List<string>(enclosing.Count + 1) { runtimeStepKey };
-        candidates.AddRange(enclosing);
-        return candidates;
-    }
-
-    /// <summary>
     /// Reads the iteration count a loop step recorded in its output.
     /// </summary>
     /// <param name="loopOutput">
@@ -160,14 +135,21 @@ internal static class LoopBarrier
             return true;
         }
 
-        for (var index = 0; index < iterations; index++)
+        // Scanned highest-index-first, and with a plain foreach rather than a LINQ predicate.
+        // The result is a conjunction over every (iteration, child) pair, so the visit order cannot
+        // change it — only where the scan exits. Under the default sequential ConcurrencyLimit the
+        // body completes in index order, so the outstanding iteration is the last one and the scan
+        // stops on its first probe instead of re-walking every finished iteration on every child
+        // completion (which made the barrier check O(iterations²) over the life of a loop run).
+        for (var index = iterations - 1; index >= 0; index--)
         {
             var iterationPrefix = $"{runtimeLoopKey}.{index}.";
-            if (scoped.Steps.Keys.Any(childKey =>
-                    !statuses.TryGetValue($"{iterationPrefix}{childKey}", out var status)
-                    || !IsTerminal(status)))
+            foreach (var childKey in scoped.Steps.Keys)
             {
-                return false;
+                if (!statuses.TryGetValue(iterationPrefix + childKey, out var status) || !IsTerminal(status))
+                {
+                    return false;
+                }
             }
         }
 
