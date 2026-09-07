@@ -199,5 +199,41 @@ public class DefaultStepExecutorLoopScopeTests
         Assert.NotNull(observed);
         Assert.False(observed!.ContainsKey("__loopItem"));
         Assert.False(observed.ContainsKey("__loopIndex"));
+        Assert.Equal(0, step.Index);
+    }
+
+    [Theory]
+    [InlineData("scan_process.0.wait_robot_goto", "WaitForSignal", 0)]
+    [InlineData("scan_process.1.open_camera", "OpenCamera", 1)]
+    public async Task LoopChild_GetsItsIterationOnStepInstanceIndex(
+        string runtimeStepKey, string stepType, int expectedIndex)
+    {
+        // Arrange — IStepInstance.Index documents itself as the enclosing loop's iteration index,
+        // but no dispatch site assigned it, so every iteration reported 0.
+        var flow = CreateFlow(BuildSteps());
+        var runId = Guid.NewGuid();
+        var trigger = JsonSerializer.Deserialize<JsonElement>(
+            "{\"OrderNo\":\"ORD-1\",\"Steps\":[{\"code\":\"A\"},{\"code\":\"B\"}]}");
+        var ctx = new Core.Execution.ExecutionContext { RunId = runId, TriggerData = trigger };
+
+        var observedIndex = -99;
+        var handler = Substitute.For<IStepHandlerMetadata>();
+        handler.Type.Returns(stepType);
+        handler
+            .ExecuteAsync(
+                Arg.Any<IServiceProvider>(),
+                Arg.Any<IExecutionContext>(),
+                Arg.Any<IFlowDefinition>(),
+                Arg.Do<IStepInstance>(instance => observedIndex = instance.Index))
+            .Returns(new ValueTask<IStepResult>(new StepResult { Key = "captured", Status = StepStatus.Succeeded }));
+
+        var executor = new DefaultStepExecutor([handler], _serviceProvider, _outputs, _runStore);
+        var step = new StepInstance(runtimeStepKey, stepType) { RunId = runId, TriggerData = trigger };
+
+        // Act
+        await executor.ExecuteAsync(ctx, flow, step);
+
+        // Assert
+        Assert.Equal(expectedIndex, observedIndex);
     }
 }

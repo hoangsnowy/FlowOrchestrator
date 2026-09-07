@@ -88,6 +88,28 @@ internal static class LoopScopeInputs
     }
 
     /// <summary>
+    /// Returns the innermost enclosing loop's zero-based iteration index for
+    /// <paramref name="runtimeStepKey"/>, or <c>-1</c> when the key is not a loop child.
+    /// </summary>
+    /// <param name="runtimeStepKey">The step's runtime key, e.g. <c>"scan_process.2.open_camera"</c>.</param>
+    /// <param name="steps">The flow manifest's step collection, used to confirm the scope is a real loop.</param>
+    /// <remarks>
+    /// Backs <see cref="IStepInstance{TInput}.Index"/>, whose contract is the iteration index of the
+    /// enclosing <see cref="LoopStepMetadata"/> scope. No dispatch site ever assigned it, so it
+    /// read <c>0</c> for every iteration; it is now set from the same runtime key that drives
+    /// <see cref="Apply"/>, keeping it a true mirror of <c>__loopIndex</c>.
+    /// </remarks>
+    public static int GetIterationIndex(string runtimeStepKey, StepCollection steps)
+    {
+        if (!TryParseInnermostScope(runtimeStepKey, out var loopKey, out var index))
+        {
+            return -1;
+        }
+
+        return steps.FindStep(loopKey) is LoopStepMetadata ? index : -1;
+    }
+
+    /// <summary>
     /// Splits a runtime step key into its innermost enclosing loop scope and iteration index.
     /// For <c>"outer.0.inner.1.child"</c> this yields <c>("outer.0.inner", 1)</c>.
     /// </summary>

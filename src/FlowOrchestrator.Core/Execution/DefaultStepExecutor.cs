@@ -79,6 +79,15 @@ public sealed class DefaultStepExecutor : IStepExecutor
             context.TriggerData,
             context.TriggerHeaders);
 
+        // IStepInstance.Index documents itself as the iteration index of the enclosing loop scope,
+        // but no dispatch site ever assigned it — every iteration read 0. Set it from the same
+        // runtime key so it stays a true mirror of __loopIndex.
+        var iterationIndex = LoopScopeInputs.GetIterationIndex(step.Key, flow.Manifest.Steps);
+        if (iterationIndex >= 0)
+        {
+            step.Index = iterationIndex;
+        }
+
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
 
         var handler = _handlerMetadata.FirstOrDefault(h => string.Equals(h.Type, metadata.Type, StringComparison.OrdinalIgnoreCase));

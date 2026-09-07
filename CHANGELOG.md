@@ -19,6 +19,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   dispatch paths at once — and is persisted with the step input, so the dashboard shows it too.
   Nested loops resolve the innermost scope, matching what the fan-out injects. Inputs that
   already carry both keys are left untouched.
+- **`IStepInstance.Index` now carries the iteration it documents.** Its contract is "zero-based
+  iteration index when this step is executing inside a `LoopStepMetadata` scope", but no dispatch
+  site ever assigned it, so every iteration of every loop read `0` — visible in the
+  `OrderBatchFlow` sample, where all three iterations logged `index 0`. It is now set from the
+  same runtime key that drives `__loopIndex`, of which it is the documented mirror.
 - **A `@steps()` / `@triggerBody()` path written in PascalCase now resolves against a
   camelCase-persisted payload** (issue #177). Step outputs and trigger data are stored with
   `JsonSerializerDefaults.Web`, so a handler returning `ScanVisionOutput { Location = … }` is

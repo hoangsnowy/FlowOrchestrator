@@ -211,6 +211,23 @@ public class LoopScopeInputsTests
         Assert.Equal("blue", result["__loopItem"]);
     }
 
+    [Theory]
+    [InlineData("scan_process.0.open_camera", 0)]
+    [InlineData("scan_process.2.wait_robot_goto", 2)]
+    [InlineData("scan_start", -1)]
+    [InlineData("scan_start.0.child", -1)]
+    [InlineData("", -1)]
+    public void GetIterationIndex_ReturnsTheInnermostIterationOrMinusOne(string runtimeStepKey, int expected)
+    {
+        // Arrange
+
+        // Act
+        var index = LoopScopeInputs.GetIterationIndex(runtimeStepKey, _steps);
+
+        // Assert
+        Assert.Equal(expected, index);
+    }
+
     [Fact]
     public void LoopItemThatLooksLikeAnExpression_IsNotEvaluated()
     {
