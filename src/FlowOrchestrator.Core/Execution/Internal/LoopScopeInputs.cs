@@ -69,11 +69,16 @@ internal static class LoopScopeInputs
     {
         foreach (var candidate in RuntimeStepKey.EnumerateScopes(runtimeStepKey))
         {
-            if (steps.FindStep(candidate.ScopeKey) is IScopedStep scoped)
+            // Guard-and-continue rather than a filtering if-body: the enumeration is lazy and must
+            // stop at the first hit, so a Where(...) would allocate iterators on a path that runs
+            // once per step execution.
+            if (steps.FindStep(candidate.ScopeKey) is not IScopedStep scoped)
             {
-                scope = new LoopScope(scoped, candidate.ScopeKey, candidate.Index);
-                return true;
+                continue;
             }
+
+            scope = new LoopScope(scoped, candidate.ScopeKey, candidate.Index);
+            return true;
         }
 
         scope = default;

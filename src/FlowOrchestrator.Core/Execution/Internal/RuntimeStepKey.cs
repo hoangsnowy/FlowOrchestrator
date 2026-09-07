@@ -72,6 +72,14 @@ internal static class RuntimeStepKey
         {
             (keys ??= []).Add(scope.ScopeKey);
         }
-        return keys ?? (IReadOnlyList<string>)[];
+
+        // Top-level keys are the common case; returning the shared empty array avoids allocating
+        // a List for them at all.
+        if (keys is null)
+        {
+            return [];
+        }
+
+        return keys;
     }
 }
