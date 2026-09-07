@@ -40,7 +40,17 @@ internal static class InputResolutionPipeline
 
         var resolved = new Dictionary<string, object?>(inputs.Count);
         foreach (var (key, value) in inputs)
-            resolved[key] = ResolveValue(value, triggerData, triggerHeaders);
+        {
+            // __loopItem / __loopIndex carry iteration DATA the engine injected, not manifest
+            // expressions. Resolving them would rewrite an item that merely happens to be a string
+            // beginning with '@', and would reshape a list item into object[] — and only for the
+            // children ForEachStepHandler fans out, since the children rebuilt from the loop's
+            // template get their context injected after this pass. Two children of the same
+            // iteration would then see different values. Pass them through untouched.
+            resolved[key] = LoopScopeInputs.IsReservedKey(key)
+                ? value
+                : ResolveValue(value, triggerData, triggerHeaders);
+        }
 
         return resolved;
     }
@@ -54,8 +64,15 @@ internal static class InputResolutionPipeline
     /// </summary>
     private static bool ContainsResolvableValue(IDictionary<string, object?> inputs)
     {
-        foreach (var value in inputs.Values)
+        foreach (var (key, value) in inputs)
         {
+            // Reserved loop-context keys are never resolved, so they must not drag the whole
+            // dictionary off the zero-allocation fast path either.
+            if (LoopScopeInputs.IsReservedKey(key))
+            {
+                continue;
+            }
+
             switch (value)
             {
                 case string s when StartsWithAt(s):

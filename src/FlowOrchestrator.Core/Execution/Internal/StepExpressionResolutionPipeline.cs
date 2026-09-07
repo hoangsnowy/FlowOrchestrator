@@ -25,7 +25,13 @@ internal static class StepExpressionResolutionPipeline
 
         var resolved = new Dictionary<string, object?>(inputs.Count);
         foreach (var (key, value) in inputs)
-            resolved[key] = await ResolveValueAsync(value, resolver).ConfigureAwait(false);
+        {
+            // Same reservation as the first pass: __loopItem / __loopIndex are iteration data, so
+            // an item that happens to read like an @steps() expression stays verbatim.
+            resolved[key] = LoopScopeInputs.IsReservedKey(key)
+                ? value
+                : await ResolveValueAsync(value, resolver).ConfigureAwait(false);
+        }
 
         return resolved;
     }

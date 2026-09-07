@@ -6,6 +6,60 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.31.3] - 2026-09-07
+
+### Fixed
+
+- **A polling step's completion condition now resolves a PascalCase `conditionPath` against a
+  camelCase response.** `PollConditionEvaluator` carried a third private copy of the path walker
+  that 1.31.2 left case-sensitive, so `conditionPath = "Status.Code"` never matched a response
+  shaped `{"status":{"code":…}}` — the condition silently stayed false and the step polled until
+  its timeout instead of completing. This is the same failure mode 1.31.2 fixed for `@steps()`
+  and `@triggerBody()`; poll conditions were missed. The evaluator now delegates to the shared
+  walker, which also gives it bracket array indexing (`events[1].state`) for free.
+- **`__loopItem` no longer means two different things depending on which dispatch path enqueued
+  the step.** `ForEachStepHandler` writes the item into the child's inputs *before* expression
+  resolution, so an item whose text began with `@` was rewritten as an expression, and a list item
+  was reshaped into `object[]`. The 1.31.2 recompute deliberately runs *after* resolution and did
+  neither — so an entry child and a dependent child of the *same* iteration could observe
+  different values and different types. Both resolution passes now treat `__loopItem` /
+  `__loopIndex` as reserved iteration data and pass them through untouched.
+- **A loop child that kept `__loopItem` but lost `__loopIndex` no longer has its item destroyed.**
+  The guard was all-or-nothing, so a partially-populated input dictionary triggered a full
+  recompute that overwrote a perfectly good item with `null` whenever the iteration source was no
+  longer materialisable. Each key is now guarded independently, and a non-null item is never
+  replaced.
+- **Loop-scope injection preserves the input dictionary's comparer.** The copy hard-coded
+  `StringComparer.Ordinal`, so a dispatcher supplying case-insensitive inputs had that silently
+  downgraded on loop children only — a `KeyNotFoundException` reproducing on exactly one step type.
+- **A `ForEach` source typed `List<string>` (or any non-generic `IList`) is indexed directly.**
+  The fast path tested `IList<object?>`, which generic invariance makes false for `List<string>`,
+  so such a source fell back to materialising every item on each of the loop's own iterations —
+  the O(N²) the fast path exists to avoid.
+- **A step key of the form `"{loop}.{index}"` now resolves its scope.** The parser assumed a
+  trailing child segment and started scanning one segment too early, and it gave up if the
+  innermost numeric segment did not name a scope instead of trying the next scope out.
+
+### Changed
+
+- **Runtime loop-key parsing is now a single implementation.** `RuntimeStepKey` replaces four
+  copies that had already drifted (`LoopBarrier.EnclosingLoopKeys`,
+  `StepOutputResolver.EnumerateRuntimeScopes`, `FlowGraphPlanner.ExtractRuntimeScopePrefixes`, and
+  the one added in 1.31.2) — the drift was the root of the `"{loop}.{index}"` gap above.
+- **Scope resolution matches on `IScopedStep`, not the concrete `LoopStepMetadata`**, consistent
+  with the barrier, skip tracking and key resolution, so a future scope kind inherits iteration
+  context instead of silently opting out.
+- **The case-insensitive property fallback no longer allocates.** It is the common path for a
+  C#-authored manifest, not the rare one, and the LINQ shape cost two iterators plus a boxed
+  nullable per segment per expression per step execution.
+
+### Documentation
+
+- Corrected the release heading for the 2026-08-31 release: it was published as **v1.31.1**
+  (tag `v1.31.1` → `98909c1`) but the section was labelled `[1.30.1]`, a version that was never
+  tagged. No `v1.31.0` was ever released, so the history now reads 1.30.0 → 1.31.1 → 1.31.2,
+  matching the tags.
+
 ## [1.31.2] - 2026-09-07
 
 ### Fixed
@@ -45,7 +99,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (all three move together: `Hangfire.SqlServer` pins `Hangfire.Core` to an exact version),
   Microsoft.Extensions.Logging 10.0.10 → 10.0.11, `github/codeql-action` 4.37.8 → 4.37.9.
 
-## [1.30.1] - 2026-08-31
+## [1.31.1] - 2026-08-31
 
 ### Added
 

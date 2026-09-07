@@ -50,8 +50,16 @@ public class LoopScopeInputsTests
         IDictionary<string, object?> inputs,
         string runtimeStepKey,
         StepCollection? steps = null,
-        object? triggerData = null) =>
-        LoopScopeInputs.Apply(inputs, runtimeStepKey, steps ?? _steps, triggerData ?? TriggerData, null);
+        object? triggerData = null)
+    {
+        var collection = steps ?? _steps;
+        return LoopScopeInputs.TryResolveScope(runtimeStepKey, collection, out var scope)
+            ? LoopScopeInputs.Apply(inputs, scope, triggerData ?? TriggerData, null)
+            : inputs;
+    }
+
+    private static int IndexOf(string runtimeStepKey, StepCollection? steps = null)
+        => LoopScopeInputs.TryResolveScope(runtimeStepKey, steps ?? _steps, out var scope) ? scope.Index : -1;
 
     [Fact]
     public void DependentLoopChild_ReceivesLoopItemAndIndex()
@@ -204,7 +212,7 @@ public class LoopScopeInputsTests
         };
 
         // Act
-        var result = LoopScopeInputs.Apply(Inputs(), "loop.2.follow", steps, triggerData: null, triggerHeaders: null);
+        var result = Apply(Inputs(), "loop.2.follow", steps, triggerData: null);
 
         // Assert
         Assert.Equal(2, result["__loopIndex"]);
@@ -216,13 +224,14 @@ public class LoopScopeInputsTests
     [InlineData("scan_process.2.wait_robot_goto", 2)]
     [InlineData("scan_start", -1)]
     [InlineData("scan_start.0.child", -1)]
+    [InlineData("scan_process.3", 3)]
     [InlineData("", -1)]
-    public void GetIterationIndex_ReturnsTheInnermostIterationOrMinusOne(string runtimeStepKey, int expected)
+    public void TryResolveScope_ReturnsTheInnermostIterationOrMinusOne(string runtimeStepKey, int expected)
     {
         // Arrange
 
         // Act
-        var index = LoopScopeInputs.GetIterationIndex(runtimeStepKey, _steps);
+        var index = IndexOf(runtimeStepKey);
 
         // Assert
         Assert.Equal(expected, index);

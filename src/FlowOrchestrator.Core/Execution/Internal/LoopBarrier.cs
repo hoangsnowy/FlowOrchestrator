@@ -46,26 +46,7 @@ internal static class LoopBarrier
     /// </summary>
     /// <param name="runtimeStepKey">A runtime step key, possibly carrying iteration indices.</param>
     public static IReadOnlyList<string> EnclosingLoopKeys(string runtimeStepKey)
-    {
-        if (string.IsNullOrEmpty(runtimeStepKey) || !runtimeStepKey.Contains('.', StringComparison.Ordinal))
-        {
-            return [];
-        }
-
-        var segments = runtimeStepKey.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var loopKeys = new List<string>();
-
-        // A numeric segment is an iteration index; everything before it is the loop's runtime key.
-        for (var i = segments.Length - 1; i >= 1; i--)
-        {
-            if (int.TryParse(segments[i], out _))
-            {
-                loopKeys.Add(string.Join('.', segments, 0, i));
-            }
-        }
-
-        return loopKeys;
-    }
+        => RuntimeStepKey.EnclosingScopeKeys(runtimeStepKey);
 
     /// <summary>
     /// Reads the iteration count a loop step recorded in its output.

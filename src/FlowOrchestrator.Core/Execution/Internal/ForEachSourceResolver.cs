@@ -11,11 +11,12 @@ namespace FlowOrchestrator.Core.Execution.Internal;
 /// </list>
 /// </summary>
 /// <remarks>
-/// Carries a local copy of the trigger-expression parser rather than delegating to
+/// Carries a local copy of the trigger-expression <i>parser</i> rather than delegating to
 /// <see cref="Expressions.TriggerExpressionResolver"/>. Both parsers apply the same
 /// <c>Length &gt;= 4</c> guard for header-key brackets (so malformed accessors such as
 /// <c>@triggerHeaders()[']</c> resolve to a clean unrecognised result instead of throwing);
-/// unifying the two into a single shared parser is a follow-up PR.
+/// unifying the two into a single shared parser is a follow-up PR. Path <i>navigation</i> is
+/// already shared — it goes through <see cref="Expressions.ExpressionPathHelper"/>.
 /// </remarks>
 internal static class ForEachSourceResolver
 {
@@ -30,15 +31,21 @@ internal static class ForEachSourceResolver
             return value;
         }
 
-        var resolvedFromBody = TryResolveTriggerBodyExpression(expression, triggerData, out var resolvedBody);
-        var resolvedFromHeaders = TryResolveTriggerHeadersExpression(expression, triggerHeaders, out var resolvedHeaders);
-
-        if (!resolvedFromBody && !resolvedFromHeaders)
+        // Short-circuit: the body parser serialises the whole trigger payload when it is not
+        // already a JsonElement, so running it after the headers parser has already matched — or
+        // running the headers parser once the body has matched — is pure waste on a path called
+        // once per loop-child execution.
+        if (TryResolveTriggerBodyExpression(expression, triggerData, out var resolvedBody))
         {
-            return value;
+            return resolvedBody;
         }
 
-        return resolvedBody ?? resolvedHeaders;
+        if (TryResolveTriggerHeadersExpression(expression, triggerHeaders, out var resolvedHeaders))
+        {
+            return resolvedHeaders;
+        }
+
+        return value;
     }
 
     /// <summary>
@@ -121,7 +128,11 @@ internal static class ForEachSourceResolver
             return true;
         }
 
-        if (source is IList<object?> list)
+        // The NON-generic IList is the right test: generic interfaces are invariant, so a
+        // List<string> is not an IList<object?> and would otherwise fall through to ToItemList and
+        // materialise all N items on every one of the loop's own N iterations — the exact O(N^2)
+        // this method exists to avoid. List<T> and T[] both implement the non-generic IList.
+        if (source is System.Collections.IList list)
         {
             if (index >= list.Count)
             {
@@ -237,7 +248,7 @@ internal static class ForEachSourceResolver
             ? jsonElement
             : JsonSerializer.SerializeToElement(triggerData);
 
-        if (TryResolvePath(payload, remainder, out var target))
+        if (Expressions.ExpressionPathHelper.TryResolvePath(payload, remainder, out var target))
         {
             resolved = target;
             return true;
@@ -284,11 +295,4 @@ internal static class ForEachSourceResolver
         return false;
     }
 
-    /// <summary>
-    /// Delegates to the canonical <see cref="Expressions.ExpressionPathHelper.TryResolvePath"/>
-    /// so a <c>ForEach</c> source path resolves with exactly the same segment semantics — including
-    /// the case-insensitive property fallback — as every other trigger-body expression in a manifest.
-    /// </summary>
-    private static bool TryResolvePath(JsonElement payload, string path, out JsonElement target)
-        => Expressions.ExpressionPathHelper.TryResolvePath(payload, path, out target);
 }

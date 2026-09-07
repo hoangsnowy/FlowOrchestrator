@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Storage;
 
 namespace FlowOrchestrator.Core.Expressions;
@@ -225,17 +226,12 @@ public sealed class StepOutputResolver
     /// </summary>
     private static IEnumerable<string> EnumerateRuntimeScopes(string? runtimeStepKey)
     {
-        if (string.IsNullOrEmpty(runtimeStepKey))
-            yield break;
-
-        var segments = runtimeStepKey.Split(
-            '.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        // A scope prefix is any path that ends at a numeric loop-iteration segment.
-        for (var i = segments.Length - 1; i >= 1; i--)
+        // The shared parser yields the scope key WITHOUT its iteration segment ("outer" for
+        // "outer.1.child"); a sibling reference needs the full iteration path ("outer.1"), so the
+        // index is appended back on.
+        foreach (var scope in RuntimeStepKey.EnumerateScopes(runtimeStepKey))
         {
-            if (int.TryParse(segments[i], out _))
-                yield return string.Join('.', segments, 0, i + 1); // array-range overload — no LINQ Take iterator
+            yield return $"{scope.ScopeKey}.{scope.Index}";
         }
     }
 

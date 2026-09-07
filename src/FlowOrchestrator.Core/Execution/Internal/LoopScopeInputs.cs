@@ -3,6 +3,15 @@ using FlowOrchestrator.Core.Abstractions;
 namespace FlowOrchestrator.Core.Execution.Internal;
 
 /// <summary>
+/// The enclosing scope a runtime step key resolves to: the scope's metadata, its runtime key,
+/// and the iteration index selected within it.
+/// </summary>
+/// <param name="Metadata">The scope's manifest metadata.</param>
+/// <param name="ScopeKey">The scope's runtime key, e.g. <c>"scan_process"</c> or <c>"outer.1.inner"</c>.</param>
+/// <param name="Index">The zero-based iteration index this step belongs to.</param>
+internal readonly record struct LoopScope(IScopedStep Metadata, string ScopeKey, int Index);
+
+/// <summary>
 /// Derives the <c>__loopItem</c> / <c>__loopIndex</c> iteration context of a <c>ForEach</c>
 /// child from its runtime step key and injects it into the step's inputs.
 /// </summary>
@@ -33,116 +42,115 @@ internal static class LoopScopeInputs
     internal const string LoopIndexKey = "__loopIndex";
 
     /// <summary>
-    /// Returns <paramref name="inputs"/> augmented with the enclosing loop's
-    /// <c>__loopItem</c> and <c>__loopIndex</c>, or the original dictionary unchanged when
-    /// <paramref name="runtimeStepKey"/> is not a loop child or already carries both keys.
+    /// Returns <see langword="true"/> when <paramref name="key"/> is one of the engine-injected
+    /// loop-context keys, whose values are iteration <i>data</i> and must never be treated as
+    /// manifest expressions.
+    /// </summary>
+    internal static bool IsReservedKey(string key)
+        => string.Equals(key, LoopItemKey, StringComparison.Ordinal)
+        || string.Equals(key, LoopIndexKey, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Resolves the innermost enclosing scope of <paramref name="runtimeStepKey"/> that exists in
+    /// the manifest, or returns <see langword="false"/> when the key is not a scoped step's child.
+    /// </summary>
+    /// <param name="runtimeStepKey">The step's runtime key, e.g. <c>"scan_process.2.open_camera"</c>.</param>
+    /// <param name="steps">The flow manifest's step collection.</param>
+    /// <param name="scope">The resolved scope on success.</param>
+    /// <remarks>
+    /// Scopes are tried innermost-first and the first one that resolves to an
+    /// <see cref="IScopedStep"/> wins, so a key whose innermost numeric segment does not name a
+    /// scope degrades to the next scope out rather than losing its iteration context entirely.
+    /// Matching on <see cref="IScopedStep"/> — not on <see cref="LoopStepMetadata"/> — keeps this
+    /// consistent with every other scope-aware site in the engine (the barrier, skip tracking, key
+    /// resolution), so a second scope kind inherits the behaviour instead of silently opting out.
+    /// </remarks>
+    public static bool TryResolveScope(string runtimeStepKey, StepCollection steps, out LoopScope scope)
+    {
+        foreach (var candidate in RuntimeStepKey.EnumerateScopes(runtimeStepKey))
+        {
+            if (steps.FindStep(candidate.ScopeKey) is IScopedStep scoped)
+            {
+                scope = new LoopScope(scoped, candidate.ScopeKey, candidate.Index);
+                return true;
+            }
+        }
+
+        scope = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="inputs"/> augmented with the enclosing loop's <c>__loopItem</c> and
+    /// <c>__loopIndex</c>, or the original dictionary unchanged when both are already present.
     /// </summary>
     /// <param name="inputs">The step's inputs, already passed through expression resolution.</param>
-    /// <param name="runtimeStepKey">The step's runtime key, e.g. <c>"scan_process.2.open_camera"</c>.</param>
-    /// <param name="steps">The flow manifest's step collection, used to locate the enclosing loop.</param>
+    /// <param name="scope">The scope resolved by <see cref="TryResolveScope"/>.</param>
     /// <param name="triggerData">The run's trigger payload, used to re-resolve the iteration source.</param>
     /// <param name="triggerHeaders">The run's trigger headers, used to re-resolve the iteration source.</param>
-    /// <returns>
-    /// The augmented dictionary, or <paramref name="inputs"/> itself when nothing had to be added —
-    /// keeping the non-loop path (the overwhelming majority of steps) allocation-free.
-    /// </returns>
     /// <remarks>
-    /// Inputs that already carry <b>both</b> keys are left untouched, so the value the fan-out
-    /// computed always wins over the recomputed one.
+    /// <para>
+    /// Each key is guarded independently. An all-or-nothing guard would recompute a
+    /// <c>__loopItem</c> that is already present whenever <c>__loopIndex</c> alone went missing,
+    /// and overwrite a perfectly good item with <see langword="null"/> if the source could no
+    /// longer be materialised — turning a partial loss into a total one.
+    /// </para>
+    /// <para>
+    /// The copy preserves the source dictionary's comparer. A dispatcher or storage adapter that
+    /// hands the engine case-insensitive inputs would otherwise have that silently downgraded to
+    /// ordinal on loop children only, producing a <see cref="KeyNotFoundException"/> that
+    /// reproduces on exactly one step type.
+    /// </para>
     /// </remarks>
     public static IDictionary<string, object?> Apply(
         IDictionary<string, object?> inputs,
-        string runtimeStepKey,
-        StepCollection steps,
+        in LoopScope scope,
         object? triggerData,
         IReadOnlyDictionary<string, string>? triggerHeaders)
     {
-        if (inputs.ContainsKey(LoopItemKey) && inputs.ContainsKey(LoopIndexKey))
+        var needsIndex = !inputs.ContainsKey(LoopIndexKey);
+
+        // Only a MISSING item is recomputed. An item already present — whatever supplied it — is
+        // authoritative, because the recompute can legitimately fail (a source that is no longer
+        // materialisable) and must never downgrade a real value to null.
+        var needsItem = !inputs.TryGetValue(LoopItemKey, out var existingItem) || existingItem is null;
+
+        if (!needsIndex && !needsItem)
         {
             return inputs;
         }
 
-        if (!TryParseInnermostScope(runtimeStepKey, out var loopKey, out var index))
+        var result = new Dictionary<string, object?>(inputs, ComparerOf(inputs));
+
+        if (needsIndex)
         {
-            return inputs;
+            result[LoopIndexKey] = scope.Index;
         }
 
-        if (steps.FindStep(loopKey) is not LoopStepMetadata loopMetadata)
+        if (needsItem && scope.Metadata is LoopStepMetadata loop)
         {
-            return inputs;
+            var source = ForEachSourceResolver.Resolve(loop.ForEach, triggerData, triggerHeaders);
+
+            // An unresolvable item still leaves __loopIndex set: a handler that only needs the
+            // index (a positional lookup into its own store) keeps working even when the iteration
+            // source is no longer materialisable.
+            if (ForEachSourceResolver.TryGetItemAt(source, scope.Index, out var item))
+            {
+                result[LoopItemKey] = item;
+            }
+            else
+            {
+                result.TryAdd(LoopItemKey, null);
+            }
         }
-
-        var source = ForEachSourceResolver.Resolve(loopMetadata.ForEach, triggerData, triggerHeaders);
-
-        var result = new Dictionary<string, object?>(inputs, StringComparer.Ordinal)
-        {
-            [LoopIndexKey] = index
-        };
-
-        // An unresolvable item still leaves __loopIndex set: a handler that only needs the index
-        // (a positional lookup into its own store) keeps working even if the iteration source is
-        // no longer materialisable.
-        result[LoopItemKey] = ForEachSourceResolver.TryGetItemAt(source, index, out var item) ? item : null;
 
         return result;
     }
 
     /// <summary>
-    /// Returns the innermost enclosing loop's zero-based iteration index for
-    /// <paramref name="runtimeStepKey"/>, or <c>-1</c> when the key is not a loop child.
+    /// Returns the comparer <paramref name="inputs"/> was built with, defaulting to
+    /// <see cref="StringComparer.Ordinal"/> for implementations that do not expose one.
     /// </summary>
-    /// <param name="runtimeStepKey">The step's runtime key, e.g. <c>"scan_process.2.open_camera"</c>.</param>
-    /// <param name="steps">The flow manifest's step collection, used to confirm the scope is a real loop.</param>
-    /// <remarks>
-    /// Backs <see cref="IStepInstance{TInput}.Index"/>, whose contract is the iteration index of the
-    /// enclosing <see cref="LoopStepMetadata"/> scope. No dispatch site ever assigned it, so it
-    /// read <c>0</c> for every iteration; it is now set from the same runtime key that drives
-    /// <see cref="Apply"/>, keeping it a true mirror of <c>__loopIndex</c>.
-    /// </remarks>
-    public static int GetIterationIndex(string runtimeStepKey, StepCollection steps)
-    {
-        if (!TryParseInnermostScope(runtimeStepKey, out var loopKey, out var index))
-        {
-            return -1;
-        }
-
-        return steps.FindStep(loopKey) is LoopStepMetadata ? index : -1;
-    }
-
-    /// <summary>
-    /// Splits a runtime step key into its innermost enclosing loop scope and iteration index.
-    /// For <c>"outer.0.inner.1.child"</c> this yields <c>("outer.0.inner", 1)</c>.
-    /// </summary>
-    /// <returns>
-    /// <see langword="false"/> when the key carries no iteration segment — i.e. it is a plain
-    /// top-level step, not a loop child.
-    /// </returns>
-    private static bool TryParseInnermostScope(string runtimeStepKey, out string loopKey, out int index)
-    {
-        loopKey = string.Empty;
-        index = -1;
-
-        if (string.IsNullOrEmpty(runtimeStepKey) || !runtimeStepKey.Contains('.', StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var segments = runtimeStepKey.Split(
-            '.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        // Start at Length - 2: the last segment is the child's own name, never an iteration index.
-        for (var i = segments.Length - 2; i >= 1; i--)
-        {
-            if (!int.TryParse(segments[i], out var parsed) || parsed < 0)
-            {
-                continue;
-            }
-
-            loopKey = string.Join('.', segments, 0, i); // array-range overload — no LINQ Take iterator
-            index = parsed;
-            return true;
-        }
-
-        return false;
-    }
+    private static IEqualityComparer<string> ComparerOf(IDictionary<string, object?> inputs)
+        => inputs is Dictionary<string, object?> dictionary ? dictionary.Comparer : StringComparer.Ordinal;
 }

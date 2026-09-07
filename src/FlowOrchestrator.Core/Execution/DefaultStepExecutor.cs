@@ -72,20 +72,18 @@ public sealed class DefaultStepExecutor : IStepExecutor
         // recovery, and would otherwise see both keys missing. Deliberately runs AFTER the two
         // resolution passes so a loop item that happens to be a string starting with '@' is never
         // mistaken for an expression.
-        step.Inputs = LoopScopeInputs.Apply(
-            step.Inputs,
-            step.Key,
-            flow.Manifest.Steps,
-            context.TriggerData,
-            context.TriggerHeaders);
-
-        // IStepInstance.Index documents itself as the iteration index of the enclosing loop scope,
-        // but no dispatch site ever assigned it — every iteration read 0. Set it from the same
-        // runtime key so it stays a true mirror of __loopIndex.
-        var iterationIndex = LoopScopeInputs.GetIterationIndex(step.Key, flow.Manifest.Steps);
-        if (iterationIndex >= 0)
+        // The key is parsed once and the resolved scope drives both the input injection and
+        // IStepInstance.Index, which documents itself as the iteration index of the enclosing
+        // scope but which no dispatch site ever assigned — every iteration read 0.
+        if (LoopScopeInputs.TryResolveScope(step.Key, flow.Manifest.Steps, out var scope))
         {
-            step.Index = iterationIndex;
+            step.Inputs = LoopScopeInputs.Apply(
+                step.Inputs,
+                scope,
+                context.TriggerData,
+                context.TriggerHeaders);
+
+            step.Index = scope.Index;
         }
 
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
