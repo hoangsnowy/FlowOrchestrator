@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using FlowOrchestrator.Core.Expressions;
 
 namespace FlowOrchestrator.Core.Execution;
 
@@ -37,6 +38,18 @@ internal static class PollConditionEvaluator
         return string.Equals(Normalize(target), Normalize(expectedValue), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Walks <paramref name="path"/> into <paramref name="payload"/>, treating an empty path as
+    /// "the payload itself".
+    /// </summary>
+    /// <remarks>
+    /// Navigation is delegated to <see cref="ExpressionPathHelper"/> so a poll condition resolves
+    /// with the same semantics as every other expression path in a manifest. This carried a third
+    /// private copy of the walker, which was still matching property names case-sensitively: a
+    /// C#-authored <c>conditionPath</c> of <c>"Status.Code"</c> never matched a response persisted
+    /// as <c>{"status":{"code":…}}</c>, so the condition silently stayed false and the step polled
+    /// until its timeout instead of completing — the same failure mode as issue #177.
+    /// </remarks>
     private static bool TryResolvePath(JsonElement payload, string? path, out JsonElement target)
     {
         target = payload;
@@ -45,24 +58,7 @@ internal static class PollConditionEvaluator
             return true;
         }
 
-        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (target.ValueKind == JsonValueKind.Object && target.TryGetProperty(segment, out var objectValue))
-            {
-                target = objectValue;
-                continue;
-            }
-
-            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index) && index >= 0 && index < target.GetArrayLength())
-            {
-                target = target[index];
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
+        return ExpressionPathHelper.TryResolvePath(payload, path, out target);
     }
 
     private static bool HasData(JsonElement target) => target.ValueKind switch

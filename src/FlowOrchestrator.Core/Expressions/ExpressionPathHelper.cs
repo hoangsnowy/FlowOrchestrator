@@ -57,9 +57,19 @@ internal static class ExpressionPathHelper
     /// falling back to the first ordinal case-insensitive match.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The exact-match attempt runs first so a payload that genuinely carries both
     /// <c>"location"</c> and <c>"Location"</c> still resolves to the spelling the
     /// expression asked for.
+    /// </para>
+    /// <para>
+    /// The fallback drives the enumerator directly rather than through
+    /// <c>Where(...).FirstOrDefault()</c>. A C#-authored manifest spells paths in PascalCase while
+    /// payloads are persisted camelCase, so the fallback is the <i>common</i> path, not the rare
+    /// one — and the LINQ shape allocated two iterators plus a boxed nullable per segment, per
+    /// expression, per step execution. <see cref="JsonElement.ObjectEnumerator"/> is a struct, so
+    /// this loop allocates nothing and short-circuits identically.
+    /// </para>
     /// </remarks>
     private static bool TryGetPropertyRelaxed(JsonElement target, string name, out JsonElement value)
     {
@@ -68,19 +78,20 @@ internal static class ExpressionPathHelper
             return true;
         }
 
-        var match = target.EnumerateObject()
-            .Where(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-            .Select(property => (JsonElement?)property.Value)
-            .FirstOrDefault();
-
-        if (match is null)
+        var enumerator = target.EnumerateObject();
+        while (enumerator.MoveNext())
         {
-            value = default;
-            return false;
+            if (!string.Equals(enumerator.Current.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            value = enumerator.Current.Value;
+            return true;
         }
 
-        value = match.Value;
-        return true;
+        value = default;
+        return false;
     }
 
     /// <summary>
