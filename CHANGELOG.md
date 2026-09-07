@@ -6,6 +6,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.31.2] - 2026-09-07
+
 ### Fixed
 
 - **Every `ForEach` child now receives `__loopItem` / `__loopIndex`, not just the loop's entry
