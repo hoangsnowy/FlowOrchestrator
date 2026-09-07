@@ -68,17 +68,19 @@ internal static class ExpressionPathHelper
             return true;
         }
 
-        foreach (var property in target.EnumerateObject())
+        var match = target.EnumerateObject()
+            .Where(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Select(property => (JsonElement?)property.Value)
+            .FirstOrDefault();
+
+        if (match is null)
         {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-            {
-                value = property.Value;
-                return true;
-            }
+            value = default;
+            return false;
         }
 
-        value = default;
-        return false;
+        value = match.Value;
+        return true;
     }
 
     /// <summary>
