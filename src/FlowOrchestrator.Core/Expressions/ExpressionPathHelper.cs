@@ -13,6 +13,17 @@ internal static class ExpressionPathHelper
     /// (<c>items[0]</c> normalised to <c>items.0</c> internally).
     /// Returns <see langword="false"/> when any segment is not found.
     /// </summary>
+    /// <remarks>
+    /// Property matching is case-sensitive first, then falls back to an ordinal
+    /// case-insensitive scan. The fallback exists because step outputs and trigger payloads
+    /// are persisted with <see cref="JsonSerializerDefaults.Web"/> (camelCase), while
+    /// manifests are authored in C# and naturally spell the path in the CLR's PascalCase —
+    /// so <c>@steps('scan_vision').output.Location</c> has to find the stored
+    /// <c>"location"</c> property. This mirrors
+    /// <see cref="JsonSerializerOptions.PropertyNameCaseInsensitive"/> on the
+    /// deserialisation side and never changes the meaning of a path that already matched
+    /// exactly.
+    /// </remarks>
     internal static bool TryResolvePath(JsonElement payload, string path, out JsonElement target)
     {
         target = payload;
@@ -23,7 +34,7 @@ internal static class ExpressionPathHelper
 
         foreach (var segment in normalizedPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (target.ValueKind == JsonValueKind.Object && target.TryGetProperty(segment, out var prop))
+            if (target.ValueKind == JsonValueKind.Object && TryGetPropertyRelaxed(target, segment, out var prop))
             {
                 target = prop;
                 continue;
@@ -39,6 +50,35 @@ internal static class ExpressionPathHelper
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Looks up <paramref name="name"/> on a JSON object, preferring an exact match and
+    /// falling back to the first ordinal case-insensitive match.
+    /// </summary>
+    /// <remarks>
+    /// The exact-match attempt runs first so a payload that genuinely carries both
+    /// <c>"location"</c> and <c>"Location"</c> still resolves to the spelling the
+    /// expression asked for.
+    /// </remarks>
+    private static bool TryGetPropertyRelaxed(JsonElement target, string name, out JsonElement value)
+    {
+        if (target.TryGetProperty(name, out value))
+        {
+            return true;
+        }
+
+        foreach (var property in target.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     /// <summary>

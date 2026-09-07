@@ -6,6 +6,38 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every `ForEach` child now receives `__loopItem` / `__loopIndex`, not just the loop's entry
+  steps** (issue #176). `ForEachStepHandler` bakes the iteration context into the children it
+  fans out — but it only fans out the loop body's entry steps. Any child declaring a `RunAfter`
+  inside the body is dispatched later by the DAG continuation from the loop's *template*
+  metadata, which carries no iteration context, so `__loopItem` and `__loopIndex` arrived
+  unbound (`null` / `0`). The same held for an entry child re-dispatched after a signal resume,
+  a `Pending` poll, an explicit retry, or crash recovery. The context is now recomputed at
+  execution time from the runtime step key (`"{loop}.{index}.{child}"`) — covering all five
+  dispatch paths at once — and is persisted with the step input, so the dashboard shows it too.
+  Nested loops resolve the innermost scope, matching what the fan-out injects. Inputs that
+  already carry both keys are left untouched.
+- **A `@steps()` / `@triggerBody()` path written in PascalCase now resolves against a
+  camelCase-persisted payload** (issue #177). Step outputs and trigger data are stored with
+  `JsonSerializerDefaults.Web`, so a handler returning `ScanVisionOutput { Location = … }` is
+  persisted as `{"location":…}` — while the manifest, authored in C#, naturally spells the path
+  `@steps('scan_vision').output.Location`. The path walker matched property names
+  case-sensitively and silently resolved the whole expression to `null`, which surfaced as an
+  unbound input the handler had to work around with a manual `GetStepOutputAsync` call. Property
+  lookup now tries the exact name first and falls back to an ordinal case-insensitive match,
+  mirroring `JsonSerializerOptions.PropertyNameCaseInsensitive` on the deserialisation side. A
+  payload carrying both spellings still resolves to the one the expression asked for, and a
+  genuinely absent property still yields `null`. `ForEachSourceResolver` now shares the same
+  walker instead of carrying its own copy.
+
+### Changed
+
+- **Dependencies** — Hangfire.Core, Hangfire.AspNetCore and Hangfire.SqlServer 1.8.24 → 1.8.25
+  (all three move together: `Hangfire.SqlServer` pins `Hangfire.Core` to an exact version),
+  Microsoft.Extensions.Logging 10.0.10 → 10.0.11, `github/codeql-action` 4.37.8 → 4.37.9.
+
 ## [1.30.1] - 2026-08-31
 
 ### Added

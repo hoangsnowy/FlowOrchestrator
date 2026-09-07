@@ -15,14 +15,15 @@ namespace FlowOrchestrator.Core.Tests.Storage;
 /// <c>JsonSerializerDefaults.Web</c> → camelCase) and the engine's internal
 /// <c>SafeSerialize</c> path (which uses default settings → PascalCase).
 /// <para>
-/// These tests document the *current* behaviour. They lock in two facts:
+/// They lock in two facts:
 /// <list type="number">
-///   <item>The outputs repository writes property names in camelCase regardless of POCO casing.</item>
-///   <item>The <see cref="StepOutputResolver"/> uses the camelCase form when resolving
-///   <c>@steps('key').output.fieldName</c>, which means PascalCase access does not
-///   match (and returns <see langword="null"/>) — this is the divergence.</item>
+///   <item>The outputs repository still writes property names in camelCase regardless of POCO
+///   casing — the storage format is unchanged.</item>
+///   <item>The <see cref="StepOutputResolver"/> nevertheless resolves
+///   <c>@steps('key').output.FieldName</c> against that camelCase record, because the path
+///   walker falls back to a case-insensitive property match (issue #177). PascalCase access no
+///   longer silently returns <see langword="null"/>.</item>
 /// </list>
-/// If a future fix unifies the two pipelines, the asserts below should be revised.
 /// </para>
 /// </summary>
 public sealed class JsonCasingDivergenceTests
@@ -56,7 +57,7 @@ public sealed class JsonCasingDivergenceTests
     }
 
     [Fact]
-    public async Task StepOutputResolver_AgainstCamelCaseSavedOutput_ResolvesByCamelCasePath()
+    public async Task StepOutputResolver_AgainstCamelCaseSavedOutput_ResolvesByEitherCasing()
     {
         // Arrange — save POCO with PascalCase, then attempt to resolve via @steps().
         var repo = new InMemoryOutputsRepository();
@@ -77,13 +78,14 @@ public sealed class JsonCasingDivergenceTests
 
         // Act
         var camelHit = await resolver.ResolveAsync("@steps('fetch').output.orderId");
-        var pascalMiss = await resolver.ResolveAsync("@steps('fetch').output.OrderId");
+        var pascalHit = await resolver.ResolveAsync("@steps('fetch').output.OrderId");
 
-        // Assert — current behaviour: camelCase access works; PascalCase returns null.
+        // Assert — both casings reach the same camelCase record (issue #177): the manifest is
+        // written in C# and naturally spells the path the way the POCO does.
         Assert.NotNull(camelHit);
-        var hitElement = Assert.IsType<JsonElement>(camelHit);
-        Assert.Equal(42, hitElement.GetInt32());
-        Assert.Null(pascalMiss);
+        Assert.Equal(42, Assert.IsType<JsonElement>(camelHit).GetInt32());
+        Assert.NotNull(pascalHit);
+        Assert.Equal(42, Assert.IsType<JsonElement>(pascalHit).GetInt32());
     }
 
     [Fact]

@@ -89,6 +89,60 @@ internal static class ForEachSourceResolver
     }
 
     /// <summary>
+    /// Materialises the single item at <paramref name="index"/> without building the whole list.
+    /// </summary>
+    /// <param name="source">The resolved iteration source (a <see cref="JsonElement"/> array, a list, or any enumerable).</param>
+    /// <param name="index">The zero-based iteration index.</param>
+    /// <param name="item">The materialised item on success; <see langword="null"/> otherwise.</param>
+    /// <returns><see langword="false"/> when the source is not a collection or the index is out of range.</returns>
+    /// <remarks>
+    /// <see cref="LoopScopeInputs"/> calls this once per loop-child execution, so materialising the
+    /// entire source each time would make a loop of N items cost O(N²) across its own iterations.
+    /// The two shapes that actually reach it — a <see cref="JsonElement"/> array from the trigger
+    /// payload and an <see cref="IList{T}"/> from a manifest literal — both index in O(1); anything
+    /// else falls back to <see cref="ToItemList"/>.
+    /// </remarks>
+    public static bool TryGetItemAt(object? source, int index, out object? item)
+    {
+        item = null;
+        if (source is null || index < 0)
+        {
+            return false;
+        }
+
+        if (source is JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Array || index >= element.GetArrayLength())
+            {
+                return false;
+            }
+
+            item = MaterializeJsonValue(element[index]);
+            return true;
+        }
+
+        if (source is IList<object?> list)
+        {
+            if (index >= list.Count)
+            {
+                return false;
+            }
+
+            item = list[index];
+            return true;
+        }
+
+        var items = ToItemList(source);
+        if (index >= items.Count)
+        {
+            return false;
+        }
+
+        item = items[index];
+        return true;
+    }
+
+    /// <summary>
     /// Converts a <see cref="JsonElement"/> into a plain CLR value graph
     /// (<see langword="string"/> / <see langword="long"/> / <see langword="double"/> /
     /// <see langword="bool"/> / <see langword="null"/>, nested <see cref="Dictionary{TKey,TValue}"/>
@@ -230,28 +284,11 @@ internal static class ForEachSourceResolver
         return false;
     }
 
+    /// <summary>
+    /// Delegates to the canonical <see cref="Expressions.ExpressionPathHelper.TryResolvePath"/>
+    /// so a <c>ForEach</c> source path resolves with exactly the same segment semantics — including
+    /// the case-insensitive property fallback — as every other trigger-body expression in a manifest.
+    /// </summary>
     private static bool TryResolvePath(JsonElement payload, string path, out JsonElement target)
-    {
-        target = payload;
-        var normalizedPath = path.Replace("[", ".", StringComparison.Ordinal).Replace("]", string.Empty, StringComparison.Ordinal);
-
-        foreach (var segment in normalizedPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (target.ValueKind == JsonValueKind.Object && target.TryGetProperty(segment, out var objectValue))
-            {
-                target = objectValue;
-                continue;
-            }
-
-            if (target.ValueKind == JsonValueKind.Array && int.TryParse(segment, out var index) && index >= 0 && index < target.GetArrayLength())
-            {
-                target = target[index];
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
+        => Expressions.ExpressionPathHelper.TryResolvePath(payload, path, out target);
 }
