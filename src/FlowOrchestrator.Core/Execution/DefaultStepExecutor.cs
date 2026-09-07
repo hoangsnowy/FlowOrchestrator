@@ -10,6 +10,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// <see cref="IStepHandlerMetadata"/> by type name, evaluates <c>@triggerBody()</c>,
 /// <c>@triggerHeaders()</c>, and <c>@steps()</c> input expressions via the
 /// <see cref="InputResolutionPipeline"/> + <see cref="StepExpressionResolutionPipeline"/>,
+/// injects the enclosing ForEach iteration context via <see cref="LoopScopeInputs"/>,
 /// and delegates execution to the registered handler.
 /// </summary>
 public sealed class DefaultStepExecutor : IStepExecutor
@@ -64,6 +65,28 @@ public sealed class DefaultStepExecutor : IStepExecutor
         // (e.g. @steps('wait_signal')) to the current loop scope when this step runs inside a ForEach.
         var resolver = new StepOutputResolver(_outputsRepository, _runStore, context.RunId, flow.Manifest.Steps, step.Key);
         step.Inputs = await StepExpressionResolutionPipeline.ResolveAsync(step.Inputs, resolver).ConfigureAwait(false);
+
+        // Pass 3: inject the enclosing ForEach iteration context. Only the loop's ENTRY children
+        // get __loopItem / __loopIndex baked in at fan-out; every other loop child is dispatched
+        // from the loop's template metadata by the DAG continuation, signal resume, retry, or crash
+        // recovery, and would otherwise see both keys missing. Deliberately runs AFTER the two
+        // resolution passes so a loop item that happens to be a string starting with '@' is never
+        // mistaken for an expression.
+        step.Inputs = LoopScopeInputs.Apply(
+            step.Inputs,
+            step.Key,
+            flow.Manifest.Steps,
+            context.TriggerData,
+            context.TriggerHeaders);
+
+        // IStepInstance.Index documents itself as the iteration index of the enclosing loop scope,
+        // but no dispatch site ever assigned it — every iteration read 0. Set it from the same
+        // runtime key so it stays a true mirror of __loopIndex.
+        var iterationIndex = LoopScopeInputs.GetIterationIndex(step.Key, flow.Manifest.Steps);
+        if (iterationIndex >= 0)
+        {
+            step.Index = iterationIndex;
+        }
 
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
 
