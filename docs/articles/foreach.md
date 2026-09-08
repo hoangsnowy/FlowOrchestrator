@@ -78,7 +78,7 @@ Iteration 1  ──► validate_order ──► … ──► done ─┤
 Steps *downstream of the loop* wait for every iteration — see [Loop Completion and Downstream Ordering](#loop-completion-and-downstream-ordering).
 
 > [!NOTE]
-> Before v1.32.0 `ConcurrencyLimit` was implemented as a `bucketIndex × 100 ms` dispatch delay, which bounded nothing once a body parked past that delay: a loop declaring `ConcurrencyLimit = 1` still ran every iteration concurrently ([issue #181](https://github.com/hoangsnowy/FlowOrchestrator/issues/181)). Manifests relying on the old fan-out-everything behaviour should raise the limit to the item count.
+> Before v1.31.4 `ConcurrencyLimit` was implemented as a `bucketIndex × 100 ms` dispatch delay, which bounded nothing once a body parked past that delay: a loop declaring `ConcurrencyLimit = 1` still ran every iteration concurrently ([issue #181](https://github.com/hoangsnowy/FlowOrchestrator/issues/181)). Manifests relying on the old fan-out-everything behaviour should raise the limit to the item count.
 
 ## Child Step Key Format
 
