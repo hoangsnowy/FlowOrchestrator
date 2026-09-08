@@ -44,11 +44,12 @@ public sealed class ForEachLoopBarrierRunControlTests
             ["Steps"] = new[] { "loc-a", "loc-b" }
         });
 
+        // ConcurrencyLimit = 1: iteration 1 is not admitted until iteration 0 is terminal, so the
+        // parked state to cancel from is iteration 0 alone (issue #181).
         await WaitForWaiterAsync(host, runId, "scan_process.0.wait_robot_goto");
-        await WaitForWaiterAsync(host, runId, "scan_process.1.wait_robot_goto");
         Assert.Equal(StepStatus.Running.ToString(), (await FindStepAsync(host, runId, "scan_process"))?.Status);
 
-        // Act — cancel while both iterations are parked and nothing will ever signal them.
+        // Act — cancel while the admitted iteration is parked and nothing will ever signal it.
         var control = host.Services.GetRequiredService<IFlowRunControlStore>();
         await control.RequestCancelAsync(runId, "cancelled by operator");
         var result = await host.WaitForRunAsync(runId, TerminalTimeout);

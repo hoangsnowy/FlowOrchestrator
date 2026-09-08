@@ -41,13 +41,15 @@ public sealed class ForEachSignalSiblingTests
         });
         var signals = host.Services.GetRequiredService<IFlowSignalDispatcher>();
 
+        // Act — two deliveries with distinct payloads; DispatchAsync reports which runtime waiter
+        // (scan_process.{i}.wait_robot_goto) consumed each one. ConcurrencyLimit = 1 means
+        // iteration 1 is only admitted once iteration 0 is terminal, so each delivery has to wait
+        // for its own waiter to exist first (issue #181).
         await WaitForWaiterAsync(host, runId, "scan_process.0.wait_robot_goto");
-        await WaitForWaiterAsync(host, runId, "scan_process.1.wait_robot_goto");
-
-        // Act — two deliveries with distinct payloads; DispatchAsync reports which
-        // runtime waiter (scan_process.{i}.wait_robot_goto) consumed each one.
         var first = await signals.DispatchAsync(
             runId, "robot_goto", JsonSerializer.Serialize(new { Location = "BAY-A" }));
+
+        await WaitForWaiterAsync(host, runId, "scan_process.1.wait_robot_goto");
         var second = await signals.DispatchAsync(
             runId, "robot_goto", JsonSerializer.Serialize(new { Location = "BAY-B" }));
 

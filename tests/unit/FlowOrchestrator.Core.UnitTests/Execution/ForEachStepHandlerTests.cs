@@ -82,6 +82,7 @@ public class ForEachStepHandlerTests
         var loop = new LoopStepMetadata
         {
             Type = "ForEach",
+            ConcurrencyLimit = 3,
             ForEach = new List<object?> { "a", "b", "c" },
             Steps = new StepCollection
             {
@@ -104,6 +105,64 @@ public class ForEachStepHandlerTests
         Assert.Equal("loop1.1.child", spawn[1].StepKey);
         Assert.Equal("loop1.2.child", spawn[2].StepKey);
         Assert.All(spawn, r => Assert.Equal("DoWork", r.StepType));
+        Assert.All(spawn, r => Assert.Null(r.Delay));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DefaultConcurrencyLimit_FansOutOnlyFirstIteration()
+    {
+        // Arrange — no ConcurrencyLimit set, so the default of 1 applies. Issue #181: every
+        // iteration used to be dispatched up front and merely delayed, which throttles nothing.
+        var loop = new LoopStepMetadata
+        {
+            Type = "ForEach",
+            ForEach = new List<object?> { "a", "b", "c" },
+            Steps = new StepCollection
+            {
+                ["child"] = new StepMetadata { Type = "DoWork", RunAfter = new(), Inputs = new Dictionary<string, object?>() }
+            }
+        };
+        var flow = FlowWith("loop1", loop);
+
+        // Act
+        var raw = await _sut.ExecuteAsync(MakeContext(), flow, MakeStep("loop1"));
+
+        // Assert
+        var sr = Assert.IsType<StepResult>(raw);
+        Assert.Equal(StepStatus.Running, sr.Status);
+        var spawn = sr.DispatchHint!.Spawn;
+        Assert.Equal("loop1.0.child", Assert.Single(spawn).StepKey);
+        // The barrier still accounts for all three: the loop is not finished after iteration 0.
+        Assert.Equal(3, JsonSerializer.SerializeToElement(sr.Result).GetProperty("iterations").GetInt32());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MultiStepBody_FansOutOnlyEntryStepOfTheAdmittedIteration()
+    {
+        // Arrange — the shape from issue #181: a sequential body whose middle step parks.
+        var loop = new LoopStepMetadata
+        {
+            Type = "ForEach",
+            ForEach = new List<object?> { "a", "b" },
+            Steps = new StepCollection
+            {
+                ["start"] = new StepMetadata { Type = "Start", RunAfter = new(), Inputs = new Dictionary<string, object?>() },
+                ["wait"] = new StepMetadata
+                {
+                    Type = "WaitForSignal",
+                    RunAfter = new RunAfterCollection { { "start", [StepStatus.Succeeded] } },
+                    Inputs = new Dictionary<string, object?>()
+                }
+            }
+        };
+        var flow = FlowWith("loop1", loop);
+
+        // Act
+        var raw = await _sut.ExecuteAsync(MakeContext(), flow, MakeStep("loop1"));
+
+        // Assert
+        var spawn = ((StepResult)raw!).DispatchHint!.Spawn;
+        Assert.Equal("loop1.0.start", Assert.Single(spawn).StepKey);
     }
 
     [Fact]
@@ -138,7 +197,7 @@ public class ForEachStepHandlerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ConcurrencyLimit_AddsDelayForLaterBuckets()
+    public async Task ExecuteAsync_ConcurrencyLimit_FansOutOnlyTheFirstWindowWithoutDelays()
     {
         // Arrange
         var loop = new LoopStepMetadata
@@ -157,11 +216,35 @@ public class ForEachStepHandlerTests
         var raw = await _sut.ExecuteAsync(MakeContext(), flow, MakeStep("loop1"));
         var spawn = ((StepResult)raw!).DispatchHint!.Spawn;
 
+        // Assert — iterations 2 and 3 are admitted later, as 0 and 1 settle. The old bucket delay
+        // is gone: a delay bounds nothing once a body parks past it.
+        Assert.Equal(2, spawn.Count);
+        Assert.Equal("loop1.0.child", spawn[0].StepKey);
+        Assert.Equal("loop1.1.child", spawn[1].StepKey);
+        Assert.All(spawn, r => Assert.Null(r.Delay));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ConcurrencyLimitAboveItemCount_FansOutEveryIteration()
+    {
+        // Arrange
+        var loop = new LoopStepMetadata
+        {
+            Type = "ForEach",
+            ConcurrencyLimit = 10,
+            ForEach = new List<object?> { "a", "b" },
+            Steps = new StepCollection
+            {
+                ["child"] = new StepMetadata { Type = "DoWork", RunAfter = new(), Inputs = new Dictionary<string, object?>() }
+            }
+        };
+        var flow = FlowWith("loop1", loop);
+
+        // Act
+        var raw = await _sut.ExecuteAsync(MakeContext(), flow, MakeStep("loop1"));
+
         // Assert
-        Assert.Null(spawn[0].Delay);
-        Assert.Null(spawn[1].Delay);
-        Assert.Equal(TimeSpan.FromMilliseconds(100), spawn[2].Delay);
-        Assert.Equal(TimeSpan.FromMilliseconds(100), spawn[3].Delay);
+        Assert.Equal(2, ((StepResult)raw!).DispatchHint!.Spawn.Count);
     }
 
     [Fact]
@@ -171,6 +254,7 @@ public class ForEachStepHandlerTests
         var loop = new LoopStepMetadata
         {
             Type = "ForEach",
+            ConcurrencyLimit = 3,
             ForEach = "@triggerBody()?.items",
             Steps = new StepCollection
             {

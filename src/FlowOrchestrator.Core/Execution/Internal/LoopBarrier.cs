@@ -104,6 +104,11 @@ internal static class LoopBarrier
     /// <see cref="StepStatus.Skipped"/> by the engine's blocked-step pass, which is terminal —
     /// so a failing iteration settles the barrier instead of deadlocking it. A nested loop child
     /// settles through its own barrier before it counts as terminal here.
+    /// <para>
+    /// An iteration the <see cref="LoopAdmission"/> gate has not handed out yet has no status rows
+    /// at all, so it reads as non-terminal and holds the barrier open — which is exactly right: a
+    /// throttled loop is not finished just because the iterations admitted so far are.
+    /// </para>
     /// </remarks>
     public static bool AllIterationsSettled(
         IFlowDefinition flow,
@@ -121,15 +126,12 @@ internal static class LoopBarrier
         // sequential ConcurrencyLimit the body completes in index order, so the outstanding
         // iteration is the last one and the scan stops on its first probe instead of re-walking
         // every finished iteration on every child completion (which made the barrier check
-        // O(iterations²) over the life of a loop run). The Any() predicate is the CodeQL-preferred
-        // shape (cs/linq/missed-where); its closure is negligible next to the ordering win because
-        // the common path allocates exactly one before exiting.
+        // O(iterations²) over the life of a loop run). The per-iteration test is shared with
+        // LoopAdmission so the barrier and the admission gate can never disagree on what "this
+        // iteration is finished" means.
         for (var index = iterations - 1; index >= 0; index--)
         {
-            var iterationPrefix = $"{runtimeLoopKey}.{index}.";
-            if (scoped.Steps.Keys.Any(childKey =>
-                    !statuses.TryGetValue(iterationPrefix + childKey, out var status)
-                    || !IsTerminal(status)))
+            if (!LoopAdmission.IsIterationSettled(scoped, runtimeLoopKey, index, statuses))
             {
                 return false;
             }
@@ -240,9 +242,6 @@ internal static class LoopBarrier
         running.Sort(static (left, right) => CountSegments(right).CompareTo(CountSegments(left)));
         return running;
     }
-
-    private static bool IsTerminal(StepStatus status) =>
-        status is StepStatus.Succeeded or StepStatus.Failed or StepStatus.Skipped;
 
     private static bool TryReadFromJson(JsonElement element, out int iterations)
     {

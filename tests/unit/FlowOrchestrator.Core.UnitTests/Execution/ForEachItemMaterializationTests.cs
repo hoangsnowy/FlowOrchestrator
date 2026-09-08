@@ -21,6 +21,9 @@ public sealed class ForEachItemMaterializationTests
         var loop = new LoopStepMetadata
         {
             Type = "ForEach",
+            // Every iteration is fanned out at once so the assertion below sees all three items;
+            // the default limit of 1 would gate them into separate admissions (issue #181).
+            ConcurrencyLimit = 3,
             ForEach = "@triggerBody()?.orderIds",
             Steps = new StepCollection { ["validate"] = new StepMetadata { Type = "Work" } }
         };
@@ -56,6 +59,7 @@ public sealed class ForEachItemMaterializationTests
         var loop = new LoopStepMetadata
         {
             Type = "ForEach",
+            ConcurrencyLimit = 2,
             ForEach = "@triggerBody()?.orders",
             Steps = new StepCollection { ["validate"] = new StepMetadata { Type = "Work" } }
         };

@@ -6,6 +6,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ForEach` now honours `ConcurrencyLimit` as a real bound on in-flight iterations
+  ([#181](https://github.com/hoangsnowy/FlowOrchestrator/issues/181)).** The limit was implemented
+  as a dispatch-time stagger: every iteration was enqueued when the loop step ran, and bucket *k*
+  was pushed back by `k × 100 ms`. That throttles nothing the moment the body outlives its delay —
+  with a `WaitForSignal` (or any polling step) inside the body, a loop declaring
+  `ConcurrencyLimit = 1` had every iteration parked concurrently 100 ms in, so a sequential
+  `start → wait → done` body ran fully in parallel. The loop step now fans out only the first
+  window of iterations, and the DAG continuation admits the next one as each iteration's **whole
+  body** reaches a terminal status. Admission is derived from the dispatch ledger plus the status
+  map rather than a stored cursor, so it is idempotent across concurrent workers, and it is
+  re-evaluated by `FlowRunRecoveryHostedService` — closing the crash window between an iteration
+  settling and its successor being admitted, which would otherwise strand the run.
+
+### Changed
+
+- **A loop-body iteration is no longer dispatched with a start delay.** `StepDispatchRequest.Delay`
+  is `null` for every `ForEach` child; the 100 ms-per-bucket delay it carried was the old
+  `ConcurrencyLimit` implementation and had no other purpose.
+- **Manifests that relied on `ForEach` fanning out every iteration at once must raise
+  `ConcurrencyLimit`** (to the item count, or any value ≥ the parallelism wanted). The default of
+  `1` now means what it says — strictly sequential.
+
 ## [1.31.3] - 2026-09-07
 
 ### Fixed

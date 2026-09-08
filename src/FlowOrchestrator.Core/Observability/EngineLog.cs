@@ -49,6 +49,9 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3005, Level = LogLevel.Warning, Message = "Timeout enforcement failed for run {RunId}; continuing with next run.")]
     public static partial void TimeoutEnforcementRunFailed(ILogger logger, Exception ex, Guid runId);
 
+    [LoggerMessage(EventId = 3006, Level = LogLevel.Debug, Message = "Loop {LoopKey}: admitted iteration {Index} — enqueued entry step {StepKey}.")]
+    public static partial void LoopIterationAdmitted(ILogger logger, string loopKey, int index, string stepKey);
+
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
 

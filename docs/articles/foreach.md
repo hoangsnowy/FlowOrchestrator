@@ -60,23 +60,25 @@ When the expression resolves to `null` or an empty array, the loop completes as 
 
 | Value | Behaviour |
 |---|---|
-| `1` | Iterations are staggered 100 ms apart (index 0 immediately, index 1 at +100 ms, index 2 at +200 ms, …) |
-| `N > 1` | Iterations are grouped into buckets of N; bucket *k* is dispatched with a `k × 100 ms` start delay |
+| `1` | Strictly sequential — iteration *n+1* starts only once **every step** of iteration *n* reached a terminal status |
+| `N > 1` | At most *N* iterations in flight at once; each one that finishes frees a slot for the next |
 | `0` (or omit) | Defaults to `1` |
 
-> [!NOTE]
-> `ConcurrencyLimit` is a dispatch-time stagger, not a running-slot semaphore. All iterations are enqueued in a single pass when the loop step executes; a slow iteration does not hold back later buckets.
+`ConcurrencyLimit` is a real running-slot bound, not a dispatch-time stagger. The loop step fans out only the first window of iterations; every later one is admitted from the DAG continuation as an earlier iteration settles. An iteration counts as finished only when its **whole body** is terminal — so a body that parks on a `WaitForSignal` or a polling step holds its slot for as long as it is parked.
 
 With `ConcurrencyLimit = 2` and 4 items:
 
 ```
-Iteration 0  ──► validate_order  (dispatched immediately)
-Iteration 1  ──► validate_order  (dispatched immediately)
-Iteration 2  ──► validate_order  (dispatched with a +100 ms start delay)
-Iteration 3  ──► validate_order  (dispatched with a +100 ms start delay)
+Iteration 0  ──► validate_order ──► … ──► done ─┐
+Iteration 1  ──► validate_order ──► … ──► done ─┤
+                                                ├─► Iteration 2 admitted when 0 or 1 finishes
+                                                └─► Iteration 3 admitted when the next slot frees
 ```
 
-All iterations are enqueued when the loop step runs. Later buckets carry a scheduled start delay of `100 ms × bucketIndex`; they do not wait for earlier iterations to finish. Steps *downstream of the loop* do wait — see [Loop Completion and Downstream Ordering](#loop-completion-and-downstream-ordering).
+Steps *downstream of the loop* wait for every iteration — see [Loop Completion and Downstream Ordering](#loop-completion-and-downstream-ordering).
+
+> [!NOTE]
+> Before v1.32.0 `ConcurrencyLimit` was implemented as a `bucketIndex × 100 ms` dispatch delay, which bounded nothing once a body parked past that delay: a loop declaring `ConcurrencyLimit = 1` still ran every iteration concurrently ([issue #181](https://github.com/hoangsnowy/FlowOrchestrator/issues/181)). Manifests relying on the old fan-out-everything behaviour should raise the limit to the item count.
 
 ## Child Step Key Format
 
