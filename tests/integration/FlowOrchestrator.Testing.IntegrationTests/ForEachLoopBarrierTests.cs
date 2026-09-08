@@ -40,21 +40,23 @@ public sealed class ForEachLoopBarrierTests
         });
         var signals = host.Services.GetRequiredService<IFlowSignalDispatcher>();
 
+        // ConcurrencyLimit = 1 ⇒ only iteration 0 is admitted; iteration 1 has not been dispatched
+        // at all yet, so waiting on both waiters here would deadlock (issue #181).
         await WaitForWaiterAsync(host, runId, "scan_process.0.wait_robot_goto");
-        await WaitForWaiterAsync(host, runId, "scan_process.1.wait_robot_goto");
 
-        // Both iterations parked ⇒ the loop fanned out and its children already executed once.
-        // Pre-fix, robot_callback_success was enqueued ahead of them and would have a row here.
+        // The loop fanned out and its first child already executed. Pre-#169,
+        // robot_callback_success was enqueued ahead of it and would have a row here.
         Assert.Null(await FindStepAsync(host, runId, "robot_callback_success"));
         Assert.Equal(StepStatus.Running.ToString(), (await FindStepAsync(host, runId, "scan_process"))?.Status);
 
-        // Act — release only the first iteration and let it run to completion.
+        // Act — release the first iteration and let it run to completion.
         var first = await signals.DispatchAsync(
             runId, "robot_goto", JsonSerializer.Serialize(new { Location = "BAY-A" }));
         var firstIteration = first.StepKey![..first.StepKey!.LastIndexOf('.')];
         await WaitForStepStatusAsync(host, runId, $"{firstIteration}.open_camera", StepStatus.Succeeded);
 
-        // Assert — one iteration done, the other still parked: the barrier must still hold.
+        // Assert — iteration 0 done, iteration 1 admitted in its place: the barrier must still hold.
+        await WaitForWaiterAsync(host, runId, "scan_process.1.wait_robot_goto");
         Assert.Null(await FindStepAsync(host, runId, "robot_callback_success"));
         Assert.Equal(StepStatus.Running.ToString(), (await FindStepAsync(host, runId, "scan_process"))?.Status);
 

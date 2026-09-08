@@ -79,6 +79,13 @@ internal sealed class RunRecoverer
         var ctx = await BuildContextAsync(run).ConfigureAwait(false);
         var recovered = 0;
 
+        // Throttled loops: the host can have died between an iteration settling and the
+        // continuation admitting the next one. Nothing else recovers that — the loop step is
+        // Running (so the zombie check below leaves the run alone) and the un-admitted iteration
+        // has no status row (so it is never classified Ready). Re-running the admission gate here
+        // is idempotent: it re-derives the same window from the ledger + status map.
+        recovered += await AdmitLoopIterationsAsync(ctx, flow, run, statuses, dispatched, ct).ConfigureAwait(false);
+
         // 1. Ready steps — re-enqueue if no dispatch record (crash between persist and enqueue).
         foreach (var stepKey in evaluation.ReadyStepKeys)
         {
@@ -151,6 +158,66 @@ internal sealed class RunRecoverer
             _logger.LogWarning(ex,
                 "FlowRunRecoveryHostedService: failed to close zombie run {RunId}.", run.Id);
         }
+    }
+
+    /// <summary>
+    /// Re-runs the <see cref="LoopAdmission"/> gate for every loop step still parked on its
+    /// barrier, dispatching the entry steps of any iteration the gate has room for.
+    /// </summary>
+    /// <param name="ctx">Execution context rebuilt for the run.</param>
+    /// <param name="flow">The flow definition matching the run.</param>
+    /// <param name="run">The active run record being recovered.</param>
+    /// <param name="statuses">Status map read after the barrier settle pass.</param>
+    /// <param name="dispatched">Step keys with a live dispatch-ledger row for the run.</param>
+    /// <param name="ct">Cancellation token from the host's <c>StartAsync</c>.</param>
+    /// <returns>The number of loop-body entry steps this pass enqueued.</returns>
+    private async Task<int> AdmitLoopIterationsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        FlowRunRecord run,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        IReadOnlySet<string> dispatched,
+        CancellationToken ct)
+    {
+        var admitted = 0;
+
+        foreach (var loopKey in LoopBarrier.RunningLoopKeys(flow, statuses))
+        {
+            var loopMetadata = flow.Manifest.Steps.FindStep(loopKey);
+            if (loopMetadata is not IScopedStep)
+            {
+                continue;
+            }
+
+            var output = await _outputsRepository.GetStepOutputAsync(run.Id, loopKey).ConfigureAwait(false);
+            if (!LoopBarrier.TryReadIterationCount(output, out var iterations))
+            {
+                continue;
+            }
+
+            var requests = LoopAdmission.NextAdmissions(loopMetadata, loopKey, iterations, statuses, dispatched);
+            foreach (var request in requests)
+            {
+                var step = new StepInstance(request.RuntimeStepKey, request.Metadata.Type)
+                {
+                    RunId = run.Id,
+                    ScheduledTime = DateTimeOffset.UtcNow,
+                    Inputs = new Dictionary<string, object?>(request.Metadata.Inputs)
+                };
+
+                if (!await TryDispatchAsync(ctx, flow, step, delay: null, ct).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                admitted++;
+                _logger.LogInformation(
+                    "FlowRunRecoveryHostedService: admitted loop '{LoopKey}' iteration {Index} for run {RunId} — enqueued '{StepKey}'.",
+                    loopKey, request.Index, run.Id, request.RuntimeStepKey);
+            }
+        }
+
+        return admitted;
     }
 
     /// <summary>

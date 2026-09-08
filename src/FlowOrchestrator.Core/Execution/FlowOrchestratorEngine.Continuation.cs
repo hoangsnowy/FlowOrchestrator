@@ -73,11 +73,13 @@ public sealed partial class FlowOrchestratorEngine
 
         statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
 
-        // Loop barrier: the step that just finished may have been the last outstanding child of
-        // an enclosing loop. Settle those loops BEFORE evaluating the graph so the downstream
-        // steps they gate become ready in this same pass. Runs after the blocked-step pass above,
+        // Loop advance: the step that just finished may have been the last outstanding child of an
+        // enclosing loop — which either frees a concurrency slot for the next iteration, or, when no
+        // iteration is left, settles the loop. Both run BEFORE evaluating the graph so the steps
+        // they unblock become ready in this same pass. Runs after the blocked-step pass above,
         // because a child skipped there is exactly what can complete the last iteration.
-        if (await SettleEnclosingLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false))
+        var (admitted, settledAny) = await AdvanceLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false);
+        if (admitted > 0 || settledAny)
         {
             statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
         }
@@ -85,7 +87,11 @@ public sealed partial class FlowOrchestratorEngine
         evaluation = _graphPlanner.Evaluate(flow, statuses);
 
         var termination = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
-        var enqueued = 0;
+
+        // Admitted iterations count as enqueued work: they hold a dispatch-ledger row but no status
+        // row yet, so the completion gate at the bottom of this method cannot see them and would
+        // close the run out from under them.
+        var enqueued = admitted;
         if (termination is null)
         {
             // When-evaluation may skip steps and unblock new dependents; loop until the
@@ -130,10 +136,13 @@ public sealed partial class FlowOrchestratorEngine
                 statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
 
                 // A When-skip recorded just above may have been the LAST outstanding child of an
-                // enclosing loop — and it happened after the settle pass at the top of this method,
-                // with no later step completion to re-trigger it. Settle here so the loop's
-                // downstream steps become ready in the next sweep instead of parking the run.
-                if (await SettleEnclosingLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false))
+                // enclosing loop — and it happened after the advance pass at the top of this method,
+                // with no later step completion to re-trigger it. Advance here so the next iteration
+                // is admitted (or the loop's downstream steps become ready) in the next sweep
+                // instead of parking the run.
+                var (whenAdmitted, whenSettled) = await AdvanceLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false);
+                enqueued += whenAdmitted;
+                if (whenAdmitted > 0 || whenSettled)
                 {
                     statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
                 }
@@ -169,6 +178,122 @@ public sealed partial class FlowOrchestratorEngine
             step,
             "run.completed",
             $"Run completed with status {termination}.").ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Advances every loop step currently parked on its barrier: admits the iterations its
+    /// <see cref="LoopStepMetadata.ConcurrencyLimit"/> now has room for, then settles the loops
+    /// whose iterations have all reached a terminal status.
+    /// </summary>
+    /// <param name="ctx">Execution context of the child step whose completion triggered this pass.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="step">The step that just reached a terminal status; used only for event attribution.</param>
+    /// <param name="statuses">Status map read after the blocked-step pass.</param>
+    /// <returns>
+    /// The number of loop-body entry steps this pass enqueued, and whether any loop settled.
+    /// </returns>
+    /// <remarks>
+    /// Admission runs first so a freed concurrency slot is filled in the same pass that freed it.
+    /// It cannot settle a loop early: an un-admitted iteration has no status rows, so the barrier
+    /// reads it as outstanding either way.
+    /// </remarks>
+    private async Task<(int Admitted, bool Settled)> AdvanceLoopsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        IStepInstance step,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        var admitted = await AdmitLoopIterationsAsync(ctx, flow, statuses).ConfigureAwait(false);
+
+        // Re-read only when admission changed something: the admitted steps hold dispatch rows the
+        // settle pass never looks at, but an admitted-and-already-executed step would.
+        var settleView = admitted > 0
+            ? await _runtimeStore!.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false)
+            : statuses;
+
+        var settled = await SettleEnclosingLoopsAsync(ctx, flow, step, settleView).ConfigureAwait(false);
+        return (admitted, settled);
+    }
+
+    /// <summary>
+    /// Dispatches the entry steps of every iteration that the concurrency gate can admit right now,
+    /// across every loop step still parked on its barrier.
+    /// </summary>
+    /// <param name="ctx">Execution context of the run being advanced.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="statuses">Status map as read for this pass.</param>
+    /// <returns>The number of entry steps this pass actually enqueued.</returns>
+    /// <remarks>
+    /// <para>
+    /// Every candidate loop in the run is considered, not just the ones enclosing the completed
+    /// step, for the same reason the settle pass does: a cascade-skip elsewhere in the graph can
+    /// free a slot in a sibling loop that then has no completion of its own left to advance it.
+    /// </para>
+    /// <para>
+    /// Dispatch goes through <see cref="TryScheduleStepAsync"/>, so the ledger absorbs a duplicate
+    /// admission decided concurrently on another worker and only the winner is counted. The
+    /// iteration count is read from the loop's own persisted output — the same source the barrier
+    /// uses — so a loop whose output cannot be read admits nothing rather than guessing.
+    /// </para>
+    /// </remarks>
+    private async Task<int> AdmitLoopIterationsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        if (_runtimeStore is null)
+        {
+            return 0;
+        }
+
+        var candidates = LoopBarrier.RunningLoopKeys(flow, statuses);
+        if (candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        var dispatched = await _runStore.GetDispatchedStepKeysAsync(ctx.RunId).ConfigureAwait(false);
+        var admitted = 0;
+
+        foreach (var loopKey in candidates)
+        {
+            var loopMetadata = flow.Manifest.Steps.FindStep(loopKey);
+            if (loopMetadata is not IScopedStep)
+            {
+                continue;
+            }
+
+            var output = await _outputsRepository.GetStepOutputAsync(ctx.RunId, loopKey).ConfigureAwait(false);
+            if (!LoopBarrier.TryReadIterationCount(output, out var iterations))
+            {
+                continue;
+            }
+
+            var requests = LoopAdmission.NextAdmissions(loopMetadata, loopKey, iterations, statuses, dispatched);
+            foreach (var request in requests)
+            {
+                var childStep = new StepInstance(request.RuntimeStepKey, request.Metadata.Type)
+                {
+                    RunId = ctx.RunId,
+                    PrincipalId = ctx.PrincipalId,
+                    TriggerData = ctx.TriggerData,
+                    TriggerHeaders = ctx.TriggerHeaders,
+                    ScheduledTime = DateTimeOffset.UtcNow,
+                    // Template inputs only: DefaultStepExecutor re-derives __loopItem / __loopIndex
+                    // from the runtime key via LoopScopeInputs, which is also what every other
+                    // late-dispatch path (signal resume, retry, recovery) relies on.
+                    Inputs = new Dictionary<string, object?>(request.Metadata.Inputs)
+                };
+
+                if (await TryScheduleStepAsync(ctx, flow, childStep, delay: null).ConfigureAwait(false))
+                {
+                    admitted++;
+                    EngineLog.LoopIterationAdmitted(_logger, loopKey, request.Index, request.RuntimeStepKey);
+                }
+            }
+        }
+
+        return admitted;
     }
 
     /// <summary>

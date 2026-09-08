@@ -10,9 +10,11 @@ namespace FlowOrchestrator.Core.Execution;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Concurrency is controlled by <see cref="LoopStepMetadata.ConcurrencyLimit"/>:
-/// items are bucketed and successive buckets receive a small scheduling delay (100 ms per bucket)
-/// to throttle parallel execution.
+/// Concurrency is controlled by <see cref="LoopStepMetadata.ConcurrencyLimit"/>, which this handler
+/// enforces by fanning out only the first <c>ConcurrencyLimit</c> iterations. Every later iteration
+/// is admitted by <see cref="LoopAdmission"/> from the DAG continuation, as an earlier one settles —
+/// so <c>ConcurrencyLimit = 1</c> really does run the body one iteration at a time even when it
+/// parks on a <c>WaitForSignal</c> or a polling step (issue #181).
 /// Child steps receive <c>__loopItem</c> and <c>__loopIndex</c> injected into their inputs.
 /// </para>
 /// <para>
@@ -50,25 +52,18 @@ public sealed class ForEachStepHandler : IStepHandler
             });
         }
 
-        var entryChildren = loopMetadata.Steps
-            .Where(kvp => kvp.Value.RunAfter.Count == 0)
-            .ToList();
+        var entryChildren = LoopAdmission.EntrySteps(loopMetadata);
 
-        if (entryChildren.Count == 0 && loopMetadata.Steps.Count > 0)
-        {
-            entryChildren.Add(loopMetadata.Steps.First());
-        }
+        // Only the first window of iterations is fanned out here. The rest are admitted one settled
+        // iteration at a time by the continuation's admission pass — dispatching them all now and
+        // spacing them with a delay (the pre-#181 behaviour) bounds nothing, because a body that
+        // parks stays live long after its delay elapsed.
+        var window = Math.Min(items.Count, LoopAdmission.ConcurrencyLimitOf(loopMetadata));
+        var children = new List<StepDispatchRequest>(window * entryChildren.Count);
 
-        var concurrency = Math.Max(1, loopMetadata.ConcurrencyLimit);
-        var children = new List<StepDispatchRequest>();
-
-        for (var index = 0; index < items.Count; index++)
+        for (var index = 0; index < window; index++)
         {
             var item = items[index];
-            var bucket = index / concurrency;
-            var startDelay = bucket <= 0
-                ? (TimeSpan?)null
-                : TimeSpan.FromMilliseconds(bucket * 100.0);
 
             foreach (var (childKey, childMetadata) in entryChildren)
             {
@@ -77,7 +72,7 @@ public sealed class ForEachStepHandler : IStepHandler
                     StepKey: runtimeChildKey,
                     StepType: childMetadata.Type,
                     Inputs: BuildChildInputs(childMetadata.Inputs, item, index),
-                    Delay: startDelay));
+                    Delay: null));
             }
         }
 

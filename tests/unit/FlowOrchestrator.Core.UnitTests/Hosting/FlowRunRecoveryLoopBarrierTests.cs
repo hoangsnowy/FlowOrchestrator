@@ -96,10 +96,10 @@ public sealed class FlowRunRecoveryLoopBarrierTests
     }
 
     [Fact]
-    public async Task StartAsync_LoopFannedOutButNoIterationEverStarted_DoesNotSettleAndDoesNotCloseTheRun()
+    public async Task StartAsync_LoopFannedOutButNoIterationEverStarted_ReAdmitsTheFirstIterationWithoutSettling()
     {
-        // Arrange - the host died between the loop's fan-out dispatch and the first iteration
-        // being picked up, so only the loop step has a status row.
+        // Arrange - the host died between the loop's fan-out and the dispatch actually landing:
+        // only the loop step has a status row AND the ledger is empty, so the enqueue was lost.
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var flow = LoopFlow(flowId);
@@ -111,11 +111,68 @@ public sealed class FlowRunRecoveryLoopBarrierTests
         // Act
         await CreateSut().StartAsync(default);
 
-        // Assert - the loop must stay parked (no iteration is terminal) and the run must not be
-        // classified as a zombie just because its iterations have no rows yet.
+        // Assert - the concurrency gate re-admits iteration 0 (nothing else ever would: an
+        // un-admitted iteration has no status row, so it is never classified Ready). The loop
+        // itself must stay parked, and the run must not be classified as a zombie.
+        await _dispatcher.Received(1).EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(),
+            Arg.Any<IFlowDefinition>(),
+            Arg.Is<IStepInstance>(s => s.Key == "loop.0.child"),
+            Arg.Any<CancellationToken>());
         await _runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(default, default!, default!, default, default);
         await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
+    }
+
+    [Fact]
+    public async Task StartAsync_LoopIterationAlreadyInTheLedger_DoesNotReAdmitIt()
+    {
+        // Arrange - same shape, but the fan-out dispatch DID land: iteration 0 holds a ledger row
+        // and is simply waiting for a worker. Re-admitting would double-enqueue it.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = LoopFlow(flowId);
+        ArrangeRun(flowId, runId, flow, new Dictionary<string, StepStatus>(StringComparer.Ordinal)
+        {
+            ["loop"] = StepStatus.Running
+        }, iterations: 3);
+        _runStore.GetDispatchedStepKeysAsync(runId)
+            .Returns(Task.FromResult<IReadOnlySet<string>>(
+                new HashSet<string>(StringComparer.Ordinal) { "loop.0.child" }));
+
+        // Act
+        await CreateSut().StartAsync(default);
+
+        // Assert
         await _dispatcher.DidNotReceiveWithAnyArgs().EnqueueStepAsync(default!, default!, default!, default);
+        await _runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(default, default!, default!, default, default);
+        await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
+    }
+
+    [Fact]
+    public async Task StartAsync_IterationSettledButNextNeverAdmitted_AdmitsTheNextIteration()
+    {
+        // Arrange - the crash window the admission gate opens: iteration 0 settled, and the host
+        // died before the continuation admitted iteration 1. Nothing else recovers this — the loop
+        // step is Running (so the zombie check leaves the run alone) and iteration 1 has no row.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = LoopFlow(flowId);
+        ArrangeRun(flowId, runId, flow, new Dictionary<string, StepStatus>(StringComparer.Ordinal)
+        {
+            ["loop"] = StepStatus.Running,
+            ["loop.0.child"] = StepStatus.Succeeded
+        }, iterations: 3);
+
+        // Act
+        await CreateSut().StartAsync(default);
+
+        // Assert
+        await _dispatcher.Received(1).EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(),
+            Arg.Any<IFlowDefinition>(),
+            Arg.Is<IStepInstance>(s => s.Key == "loop.1.child"),
+            Arg.Any<CancellationToken>());
+        await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
     }
 
     [Fact]
