@@ -86,15 +86,12 @@ internal static class LoopAdmission
         IReadOnlyDictionary<string, StepStatus> statuses)
     {
         var prefix = $"{runtimeLoopKey}.{index}.";
-        foreach (var childKey in scoped.Steps.Keys)
-        {
-            if (!statuses.TryGetValue(prefix + childKey, out var status) || !IsTerminal(status))
-            {
-                return false;
-            }
-        }
 
-        return true;
+        // All() rather than a foreach whose body is one guard — the CodeQL-preferred shape
+        // (cs/linq/missed-where). Short-circuits on the first non-terminal child exactly as the
+        // loop did, and this runs once per (iteration, barrier check), not per step.
+        return scoped.Steps.Keys.All(childKey =>
+            statuses.TryGetValue(prefix + childKey, out var status) && IsTerminal(status));
     }
 
     /// <summary>
@@ -189,16 +186,11 @@ internal static class LoopAdmission
         IReadOnlySet<string> dispatchedStepKeys)
     {
         var prefix = $"{runtimeLoopKey}.{index}.";
-        foreach (var (childKey, _) in entries)
-        {
-            var runtimeChildKey = prefix + childKey;
-            if (statuses.ContainsKey(runtimeChildKey) || dispatchedStepKeys.Contains(runtimeChildKey))
-            {
-                return true;
-            }
-        }
 
-        return false;
+        // Any() for the same reason IsIterationSettled uses All() — the CodeQL-preferred shape
+        // over a foreach whose body is a single guard (cs/linq/missed-where).
+        return entries.Any(entry =>
+            statuses.ContainsKey(prefix + entry.Key) || dispatchedStepKeys.Contains(prefix + entry.Key));
     }
 
     private static bool IsTerminal(StepStatus status) =>
