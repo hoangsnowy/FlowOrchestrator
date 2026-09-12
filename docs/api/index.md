@@ -17,6 +17,15 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 
 ## Key Types
 
+### Execution
+
+| Type | Description |
+|---|---|
+| [`IFlowOrchestrator`](FlowOrchestrator.Core.Execution.IFlowOrchestrator.yml) | The engine entry point — `TriggerAsync`, `RunStepAsync`, `RetryStepAsync` |
+| [`FlowTriggerResult`](FlowOrchestrator.Core.Execution.FlowTriggerResult.yml) | Outcome of `TriggerAsync`: `RunId`, `Disabled`, `Duplicate`. `Disabled` must be honoured by every caller — reporting a run id without checking it hands back an identifier no run backs |
+| [`IStepDispatcher`](FlowOrchestrator.Core.Execution.IStepDispatcher.yml) | Bridge to the runtime — `EnqueueStepAsync` (immediate) and `ScheduleStepAsync` (deferred) |
+| [`IFlowSignalDispatcher`](FlowOrchestrator.Core.Execution.IFlowSignalDispatcher.yml) | Delivers a signal to a parked `WaitForSignal` step and wakes it |
+
 ### Defining Flows
 
 | Type | Description |
@@ -45,8 +54,8 @@ Full XML-documentation reference for all public types and members in FlowOrchest
 | Type | Description |
 |---|---|
 | [`IFlowStore`](FlowOrchestrator.Core.Storage.IFlowStore.yml) | Persists flow definitions |
-| [`IFlowRunStore`](FlowOrchestrator.Core.Storage.IFlowRunStore.yml) | Persists run state and step records |
-| [`IFlowRunRuntimeStore`](FlowOrchestrator.Core.Storage.IFlowRunRuntimeStore.yml) | Dispatch ledger + claim guard — the "dispatch many, execute once" primitives |
+| [`IFlowRunStore`](FlowOrchestrator.Core.Storage.IFlowRunStore.yml) | Persists run state and step records. `GetRunAsync` returns the header only; `GetRunDetailAsync` returns the whole graph |
+| [`IFlowRunRuntimeStore`](FlowOrchestrator.Core.Storage.IFlowRunRuntimeStore.yml) | Dispatch ledger + claim guard — the "dispatch many, execute once" primitives — plus `IsStepClaimedAsync`, the point lookup the signal dispatcher uses |
 | [`IFlowRunControlStore`](FlowOrchestrator.Core.Storage.IFlowRunControlStore.yml) | Per-run cancel latch, timeout deadline, and `ExtendDeadlineAsync` |
 | [`IOutputsRepository`](FlowOrchestrator.Core.Storage.IOutputsRepository.yml) | Stores and retrieves per-step outputs keyed by `RunId` |
 | [`IFlowEventReader`](FlowOrchestrator.Core.Storage.IFlowEventReader.yml) | Reads the per-run event stream for the dashboard timeline |

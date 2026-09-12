@@ -63,15 +63,21 @@ horizontal scale safe.
 - **Cron triggers** under the Hangfire runtime use `IRecurringJobManager`, which fires each schedule on exactly one server. The ServiceBus runtime fires cron via self-perpetuating scheduled messages on a queue — Service Bus's exactly-once-per-tick delivery handles cross-replica coordination without leader election. No extra coordination needed in either case.
 
 > [!WARNING]
-> **InMemory runtime + multi-instance is not supported.** The dispatcher is a `Channel<T>` inside one process — instance B has no way to observe a job that instance A enqueued. Always combine `UseInMemoryRuntime()` with a single instance. For multi-replica deployments use `UseHangfire()` (with shared Hangfire storage) or `UseAzureServiceBusRuntime()` (with shared SB namespace).
+> **InMemory runtime + multi-instance is not supported.** The dispatcher is a `Channel<T>` inside one process — instance B has no way to observe a job that instance A enqueued. Always combine `UseInMemoryRuntime()` with a single instance. For multi-replica deployments use `UseHangfire()` (with shared Hangfire storage) or `UseAzureServiceBusRuntime()` (with shared SB namespace). Benchmark the Service Bus runtime against your own ingress rate before choosing it for a high-volume workload — see issue 192.
 
 > [!IMPORTANT]
 > **Disabled flows (v1.22+).** Toggling `IsEnabled = false` on a flow record (via dashboard
-> or API) silently rejects ALL trigger paths at the engine layer — manual, cron, webhook,
-> re-trigger. Cron jobs are additionally pulled from the scheduler. In-flight runs are not
+> or API) starts no run on ANY trigger path — manual, cron, webhook, re-trigger. Cron jobs are
+> additionally pulled from the scheduler. In-flight runs are not
 > cancelled; use the dashboard's Cancel run action for live work. Watch EventId 1010
 > `TriggerRejectedDisabledFlow` to track how often disabled-flow triggers are still being
 > attempted (a webhook producer or external cron not yet aware of the disable).
+>
+> **The refusal is now visible over HTTP.** `/trigger` and `/rerun` answer `409 Conflict`, the
+> webhook endpoint `403 Forbidden`, all with `disabled: true` and no run id. Previously every one of
+> them answered `200 OK` carrying a run id that no run backed, so a caller had no way to tell a
+> disabled flow from a started one. If you alert on non-2xx trigger responses, expect `409`s where
+> you previously saw silent successes — that is the bug being fixed, not a new failure.
 
 ### Blue-green deployment
 
@@ -191,10 +197,21 @@ A single run typically writes:
 - 1 row in `FlowRuns`
 - *N* rows in `FlowSteps` (one per step)
 - *N* rows in `FlowOutputs` (one per step that produced output)
+- *N* rows in `FlowStepDispatches` (one per dispatched step — the idempotent dispatch ledger)
+- *N* rows in `FlowStepClaims` (one per executed step; deliberately **not** released on terminal status, since the row is what makes execution exactly-once)
 - *M* rows in `FlowStepAttempts` (one per attempt — usually 1, more with retries)
 - *K* rows in `FlowEvents` (when event persistence is on; ~5 per step)
+- 1 row in `FlowSignalWaiters` per `WaitForSignal` step
+- 1 row in `FlowIdempotencyKeys` per trigger carrying an idempotency key
 
-For a 5-step flow with retries off and event persistence on, that is ~30 rows per run. At one million runs per month, expect tens of GB per year before retention.
+For a 5-step flow with retries off and event persistence on, that is ~40 rows per run. At one million runs per month, expect tens of GB per year before retention.
+
+> [!NOTE]
+> `FlowStepDispatches` and `FlowSignalWaiters` were omitted from the sweep before the fix for
+> [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/188) and grew without bound. If you
+> have been running retention, rows belonging to already-purged runs are orphaned and the sweep
+> cannot reach them — see the one-time cleanup in
+> [Observability — Retention](observability.md#retention).
 
 ### Retention
 

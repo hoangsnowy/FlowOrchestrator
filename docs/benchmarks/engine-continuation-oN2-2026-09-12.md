@@ -46,6 +46,15 @@ SQL Server looks flattest because its per-step database round-trips dominate and
 submerge the engine-side term; InMemory is the most honest reading, because
 nothing there masks it.
 
+> [!IMPORTANT]
+> **This is a ratio, not a throughput.** It deliberately divides out absolute cost so the *shape* of
+> the scaling is visible, which means a backend can look excellent here while being slow in absolute
+> terms. Service Bus is exactly that case: its 1.15× is the flattest-but-one reading on this table
+> and its measured trigger throughput in the same session was **2.5 req/s against 62.8 for InMemory**
+> — a 25× gap this table cannot show. Do not read the column as a runtime recommendation. The
+> throughput finding is tracked in
+> [#192](https://github.com/hoangsnowy/FlowOrchestrator/issues/192).
+
 ## 1. `LoopAdmission.NextAdmissions` — still O(n), and the change landed on the wrong loop
 
 `src/FlowOrchestrator.Core/Execution/Internal/LoopAdmission.cs`

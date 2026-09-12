@@ -61,11 +61,36 @@ Common patterns:
 ### Disabled flows
 
 A flow whose `IFlowStore` record has `IsEnabled = false` (toggled via the dashboard's
-disable button or `POST /flows/api/flows/{id}/disable`; re-enable with `POST /flows/api/flows/{id}/enable`) silently rejects ALL trigger paths
-— manual, cron, webhook, and re-trigger — at the engine layer (v1.22+). The engine consults
-`IFlowStore.GetByIdAsync(flowId).IsEnabled` at the top of `TriggerAsync` and returns
-`{ runId: null, disabled: true }` without dispatching, emitting EventId 1010
+disable button or `POST /flows/api/flows/{id}/disable`; re-enable with `POST /flows/api/flows/{id}/enable`)
+starts no run on ANY trigger path — manual, cron, webhook, and re-trigger.
+
+The engine consults `IFlowStore.GetByIdAsync(flowId).IsEnabled` at the top of `TriggerAsync` and
+returns `new FlowTriggerResult(RunId: null, Disabled: true)` without dispatching, emitting EventId 1010
 `TriggerRejectedDisabledFlow` and tagging the trigger activity with `flow.disabled = true`.
+
+The HTTP layer reports that outcome rather than swallowing it:
+
+| Endpoint | Status | Body |
+|---|---|---|
+| `POST /flows/api/flows/{id}/trigger` | `409 Conflict` | `{"runId":null,"disabled":true,"message":"…is disabled; no run was started."}` |
+| `POST /flows/api/runs/{runId}/rerun` | `409 Conflict` | same, plus `sourceRunId` |
+| `POST /flows/api/webhook/{slug}` | `403 Forbidden` | `{"error":"Flow is disabled."}` |
+
+The webhook endpoint checks the flow record itself before reading the body, which is why it answers
+`403` rather than `409`. If a flow is disabled in the narrow window *between* that check and the
+engine call, the endpoint answers `202 Accepted` with `{"runId":null,"disabled":true,…}` — the
+delivery is acknowledged as received while being reported as not started, because a webhook sender
+cannot act on the distinction and retrying would not help.
+
+> [!IMPORTANT]
+> Before the fix for [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/188) these paths
+> answered `200 OK` with a run id that no run backed — the endpoints generated the id before calling
+> the engine and discarded its result. Reading that id returned `404`. If you have monitoring that
+> treats a non-2xx trigger response as an incident, expect `409`s where you previously saw silent
+> successes.
+
+Cron is never affected by this at the HTTP layer: disabling a flow removes its recurring job, so no
+tick is produced in the first place (see below).
 
 Cron jobs are additionally removed from the scheduler when a flow is disabled, so cron ticks
 don't even reach the engine in normal operation; the engine-level gate catches the narrow
@@ -120,7 +145,19 @@ services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 }));
 ```
 
-Activate per flow via manifest inputs. The full set of v1.25 fields:
+**Both halves are required.** The DI call above turns enforcement on; the manifest inputs below only
+*configure* what is enforced. `WebhookSecurityOptions.EnforcementMode` defaults to `Off`, and under
+`Off` the pipeline still evaluates every gate and records violations — but accepts the request
+regardless. A flow can declare `webhookHmacKey`, `webhookReplayToleranceSeconds` and
+`webhookNonceHeader` and have a bad signature, a replayed nonce and a denied IP all sail through, with
+nothing in the response to say so. Check `/flows/api/webhooks/stats`: if violation counters are
+climbing while requests still return `200`, you are in `Audit`; if they are flat, you are in `Off`.
+
+Note the asymmetry with the legacy `webhookSecret` / `X-Webhook-Key` check, which runs *outside* the
+pipeline and therefore rejects with `401` whatever the enforcement mode is. `webhookSecret` secures an
+endpoint on its own; `webhookHmacKey` does not.
+
+Configure per flow via manifest inputs. The full set of v1.25 fields:
 
 | Field | Purpose |
 |-------|---------|

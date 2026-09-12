@@ -170,6 +170,16 @@ FlowOrchestrator separates **storage** (where flow definitions and run history l
 | Multi-instance horizontal scale | ✓ | ✗ | ✓ (workers compete on the subscription) |
 | Extra infrastructure | Hangfire + SQL Server / PostgreSQL | None | Azure Service Bus namespace (or local emulator) |
 | Best for | Production workloads on .NET infra | Local dev, integration tests, single-node side projects | Cloud-native deployments, multi-region scale-out |
+| Measured trigger throughput | 17 req/s | 63 req/s | **2.5 req/s** — see caveat |
+
+> [!NOTE]
+> The throughput row is one measurement of one dimension: HTTP trigger acceptance, 13 flows,
+> 32 concurrent, against the **Service Bus emulator** rather than a real namespace. The Service Bus
+> number also has a 470× spread between p50 (30 ms) and p95 (14 s), which looks like saturation
+> rather than uniform cost. Whether that is the emulator or the runtime is **not yet established** —
+> tracked in [#192](https://github.com/hoangsnowy/FlowOrchestrator/issues/192). Treat it as a reason
+> to benchmark your own workload before committing to a runtime for a high-volume ingress, not as a
+> verdict on Azure Service Bus. The other figures are from the same run on the same host.
 
 Storage is independent — InMemory storage works only for dev / tests, while SQL Server and PostgreSQL are production-ready under any of the three runtimes.
 
