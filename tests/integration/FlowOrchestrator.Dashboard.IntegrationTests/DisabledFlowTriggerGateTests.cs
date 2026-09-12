@@ -2,7 +2,6 @@ using System.Net;
 using System.Text;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Core.Storage;
 using NSubstitute;
 
 namespace FlowOrchestrator.Dashboard.Tests;
@@ -54,19 +53,24 @@ public sealed class DisabledFlowTriggerGateTests : IDisposable
             .Returns(new ValueTask<object?>(new FlowTriggerResult(null, Disabled: true)));
     }
 
+    /// <summary>Posts an empty JSON body and returns the status and body together.</summary>
+    private async Task<(HttpStatusCode Status, string Body)> PostEmptyJsonAsync(string path)
+    {
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+        var response = await _server.Client.PostAsync(path, content);
+        return (response.StatusCode, await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task Manual_trigger_of_a_disabled_flow_reports_no_run()
     {
         // Arrange
 
         // Act
-        var response = await _server.Client.PostAsync(
-            $"/flows/api/flows/{_flowId}/trigger",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
-        var body = await response.Content.ReadAsStringAsync();
+        var (status, body) = await PostEmptyJsonAsync($"/flows/api/flows/{_flowId}/trigger");
 
         // Assert
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, status);
         Assert.Contains("\"disabled\":true", body);
         Assert.Contains("\"runId\":null", body);
         Assert.DoesNotContain("triggered.", body);
@@ -78,14 +82,11 @@ public sealed class DisabledFlowTriggerGateTests : IDisposable
         // Arrange
 
         // Act
-        var response = await _server.Client.PostAsync(
-            "/flows/api/webhook/disabled-sample",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
-        var body = await response.Content.ReadAsStringAsync();
+        var (status, body) = await PostEmptyJsonAsync("/flows/api/webhook/disabled-sample");
 
         // Assert — 202 rather than 409: a webhook sender cannot act on the distinction and retrying
         // would not help, so the delivery is acknowledged while being reported as not started.
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, status);
         Assert.Contains("\"disabled\":true", body);
         Assert.Contains("\"runId\":null", body);
     }
@@ -105,8 +106,8 @@ public sealed class DisabledFlowTriggerGateTests : IDisposable
         var bodies = new List<string>();
         foreach (var path in paths)
         {
-            var response = await _server.Client.PostAsync(path, new StringContent("{}", Encoding.UTF8, "application/json"));
-            bodies.Add(await response.Content.ReadAsStringAsync());
+            var (_, body) = await PostEmptyJsonAsync(path);
+            bodies.Add(body);
         }
 
         // Assert

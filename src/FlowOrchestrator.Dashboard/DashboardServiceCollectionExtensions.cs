@@ -417,7 +417,7 @@ public static class DashboardServiceCollectionExtensions
             if (result is { Disabled: true })
             {
                 http.Response.StatusCode = StatusCodes.Status409Conflict;
-                await WriteJsonAsync(http.Response, new { runId = (Guid?)null, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; no run was started." });
+                await WriteJsonAsync(http.Response, new { runId = result.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; no run was started." });
                 return;
             }
 
@@ -571,7 +571,7 @@ public static class DashboardServiceCollectionExtensions
             if (webhookResult is { Disabled: true })
             {
                 http.Response.StatusCode = StatusCodes.Status202Accepted;
-                await WriteJsonAsync(http.Response, new { runId = (Guid?)null, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
+                await WriteJsonAsync(http.Response, new { runId = webhookResult.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
                 return;
             }
 
@@ -1071,7 +1071,7 @@ public static class DashboardServiceCollectionExtensions
             if (rerunResult is { Disabled: true })
             {
                 http.Response.StatusCode = StatusCodes.Status409Conflict;
-                await WriteJsonAsync(http.Response, new { runId = (Guid?)null, sourceRunId = runId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; run '{runId}' was not re-triggered." });
+                await WriteJsonAsync(http.Response, new { runId = rerunResult.RunId, sourceRunId = runId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; run '{runId}' was not re-triggered." });
                 return;
             }
 
