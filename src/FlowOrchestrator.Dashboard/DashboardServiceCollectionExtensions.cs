@@ -257,6 +257,18 @@ public static class DashboardServiceCollectionExtensions
             }
             catch (OperationCanceledException) when (ctx.HttpContext.RequestAborted.IsCancellationRequested)
             {
+                // No body can reach the caller — the socket is already gone — but the status code is
+                // still what access logs and http.server.request.duration record for this request.
+                // Leaving it at the default 200 would file an abandoned request as a success and
+                // hide disconnect rates entirely. 499 is nginx's "client closed request": not an
+                // IANA code, but the conventional one, and unambiguous in a latency histogram.
+                // Guarded because the status is immutable once the response has started, which is
+                // the normal case for the SSE stream.
+                if (!ctx.HttpContext.Response.HasStarted)
+                {
+                    ctx.HttpContext.Response.StatusCode = 499;
+                }
+
                 return Results.Empty;
             }
         });
