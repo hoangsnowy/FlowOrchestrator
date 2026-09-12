@@ -256,9 +256,12 @@ internal static class LoopAdmission
         // 544 bytes each probe used to allocate.
         var prefix = $"{runtimeLoopKey}.{index}.";
 
-        foreach (var entry in entries)
+        // Indexed loop rather than foreach-over-projection: a Select would reintroduce the closure
+        // and the per-element allocation this method exists to avoid, and it runs on the engine's
+        // per-step-completion path.
+        for (var i = 0; i < entries.Count; i++)
         {
-            var key = prefix + entry.Key;
+            var key = prefix + entries[i].Key;
             if (statuses.ContainsKey(key) || dispatchedStepKeys.Contains(key))
             {
                 return true;

@@ -45,13 +45,12 @@ public sealed class DefaultStepExecutor : IStepExecutor
         IOutputsRepository outputsRepository,
         IFlowRunStore runStore)
     {
+        // Runs once per executor at construction, so the LINQ filter costs nothing at steady state
+        // and keeps the loop body to the single thing it does.
         var byType = new Dictionary<string, IStepHandlerMetadata>(StringComparer.OrdinalIgnoreCase);
-        foreach (var handler in handlerMetadata)
+        foreach (var handler in handlerMetadata.Where(h => h.Type is not null))
         {
-            if (handler.Type is { } type && !byType.ContainsKey(type))
-            {
-                byType.Add(type, handler);
-            }
+            byType.TryAdd(handler.Type!, handler);
         }
 
         _handlersByType = byType.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);

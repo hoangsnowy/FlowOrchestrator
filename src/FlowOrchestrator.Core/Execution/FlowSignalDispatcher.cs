@@ -175,7 +175,10 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
                 await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
             }
         }
-        catch (Exception ex)
+        // Filtered rather than a bare catch-all: the nudge is dispatched with CancellationToken.None,
+        // so an OperationCanceledException here is not a caller walking away — it is a genuine fault
+        // in the runtime adapter, and swallowing it would hide the one case worth surfacing.
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Best-effort: the delivery itself succeeded, so the caller is told Delivered either way.
             // Log loudly — the blast radius of a lost nudge is a step parked until its safety net,
@@ -222,7 +225,10 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
             // the run's claim set grows with every executed step and would be O(n) per delivery.
             return await _runtimeStore.IsStepClaimedAsync(runId, stepKey).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        // Filtered for the same reason as the dispatch catch above: this read takes no cancellation
+        // token, so an OperationCanceledException would signal a fault worth propagating rather than
+        // a caller that gave up.
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Unreadable claim state is not worth racing over, so take the safe path — but say so.
             // A persistently failing claim store would otherwise silently reinstate the very latency
