@@ -28,12 +28,34 @@ internal static class ExpressionPathHelper
     {
         target = payload;
 
-        var normalizedPath = path
-            .Replace("[", ".", StringComparison.Ordinal)
-            .Replace("]", string.Empty, StringComparison.Ordinal);
-
-        foreach (var segment in normalizedPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        // Walked as spans rather than normalised into a new string and Split into an array.
+        // The old shape allocated two intermediate strings (one per Replace that actually matched),
+        // a string[] and one string per segment — on every expression, on every step input, on every
+        // step. '.', '[' and ']' are all treated as separators, which is exactly what replacing
+        // '[' with '.' and stripping ']' used to achieve, and empty segments are skipped the way
+        // RemoveEmptyEntries did.
+        var remaining = path.AsSpan();
+        while (!remaining.IsEmpty)
         {
+            var cut = remaining.IndexOfAny('.', '[', ']');
+            ReadOnlySpan<char> segment;
+            if (cut < 0)
+            {
+                segment = remaining;
+                remaining = default;
+            }
+            else
+            {
+                segment = remaining[..cut];
+                remaining = remaining[(cut + 1)..];
+            }
+
+            segment = segment.Trim();
+            if (segment.IsEmpty)
+            {
+                continue;
+            }
+
             if (target.ValueKind == JsonValueKind.Object && TryGetPropertyRelaxed(target, segment, out var prop))
             {
                 target = prop;
@@ -71,8 +93,11 @@ internal static class ExpressionPathHelper
     /// this loop allocates nothing and short-circuits identically.
     /// </para>
     /// </remarks>
-    private static bool TryGetPropertyRelaxed(JsonElement target, string name, out JsonElement value)
+    private static bool TryGetPropertyRelaxed(JsonElement target, ReadOnlySpan<char> name, out JsonElement value)
     {
+        // The span overloads of TryGetProperty and NameEquals compare against the payload's UTF-8
+        // bytes directly, so neither the exact-match attempt nor the case-insensitive sweep has to
+        // materialise the segment as a string.
         if (target.TryGetProperty(name, out value))
         {
             return true;
@@ -81,7 +106,7 @@ internal static class ExpressionPathHelper
         var enumerator = target.EnumerateObject();
         while (enumerator.MoveNext())
         {
-            if (!string.Equals(enumerator.Current.Name, name, StringComparison.OrdinalIgnoreCase))
+            if (!enumerator.Current.Name.AsSpan().Equals(name, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

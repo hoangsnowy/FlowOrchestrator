@@ -21,7 +21,7 @@ Define multi-step background workflows as plain C# classes. Connect them with `r
 Flows are C# classes — refactorable, IDE-navigable, and version-controlled alongside the code they orchestrate.
 
 ### Three runtime adapters
-Hangfire (production default — durable job execution you already trust), InMemory (`Channel<T>`-backed, zero-infra dev mode), or Azure Service Bus (cloud-native multi-replica with self-perpetuating scheduled cron messages). Same flow code on all three.
+Hangfire (production default — durable job execution you already trust), InMemory (`Channel<T>`-backed, zero-infra dev mode), or Azure Service Bus (cloud-native multi-replica with self-perpetuating scheduled cron messages). Same flow code on all three — though not the same capacity: see issue 192 before picking Service Bus for a high-volume ingress.
 
 ### Three trigger types
 Manual (dashboard/API), Cron (recurring schedule), and Webhook (external HTTP POST) — declared in the same manifest, no extra config.

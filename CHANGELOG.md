@@ -6,6 +6,127 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.32.0] - 2026-09-12
+
+### Fixed
+
+- **`WaitForSignal` resume latency on the Hangfire runtime (#188).** Delivering a signal nudged the
+  parked step with `IStepDispatcher.ScheduleStepAsync(..., 500ms)`. On Hangfire any non-zero delay
+  becomes `BackgroundJob.Schedule`, which parks the job in the Scheduled set until the next
+  `DelayedJobScheduler` tick — `SchedulePollingInterval`, 15 seconds by default — so a 500 ms intent
+  cost `0.5s + (0–15s)` in practice. `FlowSignalDispatcher` now reads the step's claim state and
+  dispatches immediately via `EnqueueStepAsync` when the parking invocation has already released its
+  execution claim (the overwhelming majority of deliveries), falling back to the short delayed nudge
+  only inside the few-millisecond window where the claim is still held, where an immediate enqueue
+  would lose `TryClaimStepAsync` and be dropped. Resume no longer depends on Hangfire tuning. The
+  InMemory and Service Bus runtimes were never affected.
+
+- **Signal resume nudges no longer inherit the caller's `CancellationToken`.** The dashboard signal
+  endpoint passes `http.RequestAborted`, which trips as soon as the caller disconnects. Because the
+  signal is durably persisted *before* the nudge, a cancelled token there failed the dispatch on
+  runtimes that honour it (`InMemoryStepDispatcher.EnqueueStepAsync` awaits `WriteAsync(item, ct)`)
+  and stranded the step until its safety-net invocation — up to 24 hours when no `timeoutSeconds` is
+  set. This is the same class of failure as the v1.26.1 regression that `ScheduleStepAsync` already
+  guarded against internally; the guarantee now lives at the call site and covers every adapter.
+
+- **A disabled flow could still report a started run.** `FlowOrchestratorEngine.TriggerAsync` refuses
+  the trigger and returns a disabled outcome, but all three dashboard trigger paths — manual trigger,
+  webhook delivery and rerun — discarded that return value and answered with the run id they had
+  generated before calling the engine, alongside the word "triggered". The caller was left holding an
+  identifier that no run backed: reading it 404s, while the caller believed a disabled flow had
+  executed. The webhook path additionally logged an accepted delivery that never happened. The three
+  endpoints now honour the outcome: manual trigger and rerun answer `409 Conflict`, webhook answers
+  `202 Accepted` (a sender cannot act on the distinction and retrying would not help), all with
+  `runId: null` and `disabled: true`.
+- **Retention never reclaimed the dispatch ledger or signal waiters.** `FlowStepDispatches` /
+  `flow_step_dispatches` and `FlowSignalWaiters` / `flow_signal_waiters` are keyed `(RunId, StepKey)`
+  with no foreign key to `FlowRuns`, so deleting a run did not cascade to them and `CleanupAsync`
+  did not delete them explicitly. Both tables accumulated one row per dispatched step and per parked
+  signal for every run ever executed, and were never reclaimed — unbounded table and index growth on
+  long-lived SQL Server and PostgreSQL deployments. `CleanupAsync` now purges both alongside the
+  other per-run tables.
+- **`InMemoryFlowRunStore.CleanupAsync` leaked on every purge.** It cleared the flat dictionaries but
+  left `_stepDispatches` and all three per-run secondary indexes (`_stepKeysByRun`, `_claimsByRun`,
+  `_dispatchesByRun`) behind. Because the hot-path readers consult the indexes rather than the flat
+  maps, a purged run kept reporting steps, claims and dispatches, and memory grew with every
+  completed run.
+
+### Changed
+
+- `FlowSignalDispatcher` takes optional `IEnumerable<IFlowRunRuntimeStore>` and
+  `ILogger<FlowSignalDispatcher>` constructor arguments. The sequence (rather than a single service)
+  matches how `FlowOrchestratorEngine` selects its own store, so a decorator registration cannot
+  leave the two reading different claim tables.
+- Storage providers that register no `IFlowRunRuntimeStore` now take the **immediate** resume path.
+  The engine guards claim acquisition with the same null check, so without a runtime store there is
+  no claim for the resume to lose and the delay bought nothing but latency.
+- Lost resume nudges and unreadable claim state are now logged (`EventId` 4001 / 4002) instead of
+  being swallowed silently.
+
+### Performance
+
+- **The engine's DAG continuation was O(n²) over a run.** It runs on every step completion, and three
+  things in it scaled with the run's step count. On the sample `ForEach` + `WaitForSignal` flow, the
+  cost of a late iteration relative to an early one fell from **3.8×** to **1.0–1.6×** depending on
+  backend after these:
+  - `LoopAdmission` walked `0..k` linearly to find the first unstarted iteration — 139 µs and 272 KB
+    **per call** at 500 started iterations. Started iterations form a prefix, so the boundary is now
+    found by galloping + binary search in O(log n) probes; the `Any(lambda)` closure and the two
+    string concatenations per entry child per probe are gone too.
+  - `claimed.Except(statuses.Keys, StringComparer.Ordinal).Any()` at five sites hashed every status
+    row in the run to test a two-element list, because `Enumerable.Except` builds its set from the
+    **second** argument. Walking the small side instead: 17,754 ns / 32,192 B → 13.5 ns / **0 B** at
+    1500 status rows (1,315×).
+  - The status map was re-read unconditionally after a pass that usually writes nothing. Now
+    conditional on that pass having actually recorded a skip.
+- **Expression path resolution no longer allocates.** `ExpressionPathHelper.TryResolvePath` walked a
+  normalised copy of the path built with two `string.Replace` calls and then `Split('.')` — two
+  intermediate strings, a `string[]` and one string per segment, per expression, per step input, per
+  step. It is now a `ReadOnlySpan<char>` walk, and `TryGetPropertyRelaxed` takes a span so neither the
+  exact-match attempt nor the case-insensitive sweep materialises the segment.
+- **Step handler lookup is O(1).** `DefaultStepExecutor` resolved the handler with a
+  `FirstOrDefault` closure over every registered handler on every step execution; the registry is
+  fixed for the executor's lifetime, so it is now indexed once into a `FrozenDictionary`.
+- **Dashboard "today" counts are sargable again.** `CompletedToday` / `FailedToday` wrapped the
+  `CompletedAt` column in `CAST(... AT TIME ZONE 'UTC' AS DATE)`, which prevented any index from being
+  used and scanned the table — on an endpoint the dashboard polls every 5 seconds, per connected
+  browser. Replaced with a half-open range whose boundaries are computed in C#, preserving the
+  deliberate UTC bucketing. Both SQL backends.
+- **PostgreSQL's `ix_flow_steps_run_id_started_at` gains the `INCLUDE` its SQL Server twin already
+  had**, so `GetStepStatusesAsync` — the engine's most frequent query — can be an index-only scan
+  instead of a heap fetch per row.
+- **Callers that need a run's header no longer fetch its entire graph.** `GetRunDetailAsync` issues
+  three queries and returns every step and attempt row *including* their unbounded JSON columns; on
+  SQL Server that read was observed to time out on a 150-iteration `ForEach` under load, taking the
+  dashboard down with it through connection-pool pressure. `FlowSignalDispatcher` (which reads only
+  `FlowId`) and five dashboard endpoints (cancel, signal, rerun, lineage, source) now use the new
+  header-only read.
+
+### Added
+
+- `FlowTriggerResult` — the typed outcome of `IFlowOrchestrator.TriggerAsync`, carrying `RunId`,
+  `Disabled` and `Duplicate`. The signature stays `ValueTask<object?>` so nothing breaks, and the JSON
+  property names are pinned to the casing the anonymous objects it replaces used, so payloads written
+  straight from the return value stay byte-identical. Callers can now read the outcome, which is what
+  the disabled-flow bug above came down to.
+- `IFlowRunStore.GetRunAsync(runId)` — returns the run's header row only, no steps and no attempt
+  history. Ships with a default interface implementation delegating to `GetRunDetailAsync` so custom
+  stores keep working; SQL Server, PostgreSQL and in-memory override it with a single-row read.
+- `IFlowRunRuntimeStore.IsStepClaimedAsync(runId, stepKey)` — a point lookup for callers that need
+  claim membership rather than enumeration. Claims are deliberately never released on terminal
+  statuses (the row is what makes execution exactly-once under at-least-once delivery), so
+  `GetClaimedStepKeysAsync` returns one key per executed step and grows with run length; answering a
+  single-key question through it was O(n) in both payload and scan on every signal delivery. Ships
+  with a default interface implementation that delegates to `GetClaimedStepKeysAsync`, so existing
+  custom stores keep compiling; SQL Server, PostgreSQL and in-memory override it with an indexed
+  lookup.
+
+### Documentation
+
+- `docs/articles/wait-for-signal.md` gains a **Resume Latency** section covering per-runtime resume
+  behaviour, the Hangfire scheduled-set poll, and the fact that the timeout safety net is only prompt
+  when the step declares `timeoutSeconds` (without one the park interval is 24 hours).
+
 ## [1.31.4] - 2026-09-08
 
 ### Fixed

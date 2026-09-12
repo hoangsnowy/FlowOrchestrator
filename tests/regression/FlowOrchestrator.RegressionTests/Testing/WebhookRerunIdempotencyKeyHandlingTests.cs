@@ -49,7 +49,9 @@ public sealed class WebhookRerunIdempotencyKeyHandlingTests
         // Assert — engine recognises the duplicate key and returns the original RunId.
         // The handler is NOT invoked again (counter stays at 1).
         Assert.NotNull(rerunResult);
-        var runIdProp = rerunResult!.GetType().GetProperty("runId")?.GetValue(rerunResult);
+        // Typed result: the engine returns FlowTriggerResult, so read RunId directly rather than
+        // reflecting on a property name that would silently yield null if the contract moved.
+        var runIdProp = Assert.IsType<FlowTriggerResult>(rerunResult).RunId;
         Assert.Equal(first.RunId, runIdProp);
         Assert.Equal(1, counter.Calls);
     }
@@ -86,7 +88,9 @@ public sealed class WebhookRerunIdempotencyKeyHandlingTests
         var rerunResult = await orchestrator.TriggerAsync(rerunCtx);
 
         // Assert — fresh run, handler invoked again, counter at 2.
-        var runIdProp = rerunResult!.GetType().GetProperty("runId")?.GetValue(rerunResult);
+        // Typed result: the engine returns FlowTriggerResult, so read RunId directly rather than
+        // reflecting on a property name that would silently yield null if the contract moved.
+        var runIdProp = Assert.IsType<FlowTriggerResult>(rerunResult).RunId;
         Assert.NotEqual(first.RunId, runIdProp);
         Assert.Equal(rerunCtx.RunId, runIdProp);
 

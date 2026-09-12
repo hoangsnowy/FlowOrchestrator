@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Expressions;
@@ -15,7 +16,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// </summary>
 public sealed class DefaultStepExecutor : IStepExecutor
 {
-    private readonly IEnumerable<IStepHandlerMetadata> _handlerMetadata;
+    private readonly FrozenDictionary<string, IStepHandlerMetadata> _handlersByType;
     private readonly IServiceProvider _serviceProvider;
     private readonly IOutputsRepository _outputsRepository;
     private readonly IFlowRunStore _runStore;
@@ -24,13 +25,35 @@ public sealed class DefaultStepExecutor : IStepExecutor
     /// Constructs the executor with the registered step handler metadata, service provider,
     /// outputs repository, and run store.
     /// </summary>
+    /// <param name="handlerMetadata">
+    /// Every registered handler. Indexed by step type once here rather than scanned per execution:
+    /// the lookup used to be a <c>FirstOrDefault</c> with a closure, i.e. O(registered handlers)
+    /// plus an allocation on every step the engine runs. The registry is fixed for the lifetime of
+    /// the executor, which is exactly the case <see cref="FrozenDictionary{TKey, TValue}"/> exists
+    /// for — build once, read forever, faster reads than <see cref="Dictionary{TKey, TValue}"/>.
+    /// </param>
+    /// <param name="serviceProvider">Used to resolve the handler instance for the matched type.</param>
+    /// <param name="outputsRepository">Persists resolved step inputs and outputs.</param>
+    /// <param name="runStore">Run/step bookkeeping.</param>
+    /// <remarks>
+    /// Duplicate registrations for the same type keep the FIRST entry, matching the previous
+    /// <c>FirstOrDefault</c> behaviour. Matching stays ordinal case-insensitive.
+    /// </remarks>
     public DefaultStepExecutor(
         IEnumerable<IStepHandlerMetadata> handlerMetadata,
         IServiceProvider serviceProvider,
         IOutputsRepository outputsRepository,
         IFlowRunStore runStore)
     {
-        _handlerMetadata = handlerMetadata;
+        // Runs once per executor at construction, so the LINQ filter costs nothing at steady state
+        // and keeps the loop body to the single thing it does.
+        var byType = new Dictionary<string, IStepHandlerMetadata>(StringComparer.OrdinalIgnoreCase);
+        foreach (var handler in handlerMetadata.Where(h => h.Type is not null))
+        {
+            byType.TryAdd(handler.Type!, handler);
+        }
+
+        _handlersByType = byType.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
         _serviceProvider = serviceProvider;
         _outputsRepository = outputsRepository;
         _runStore = runStore;
@@ -88,7 +111,7 @@ public sealed class DefaultStepExecutor : IStepExecutor
 
         await _outputsRepository.SaveStepInputAsync(context, flow, step).ConfigureAwait(false);
 
-        var handler = _handlerMetadata.FirstOrDefault(h => string.Equals(h.Type, metadata.Type, StringComparison.OrdinalIgnoreCase));
+        _handlersByType.TryGetValue(metadata.Type, out var handler);
         if (handler is null)
         {
             return new StepResult

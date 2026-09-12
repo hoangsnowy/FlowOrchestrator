@@ -45,7 +45,7 @@ public sealed partial class FlowOrchestratorEngine
             {
                 EngineLog.TriggerRejectedDisabledFlow(_logger, triggerContext.Flow.Id, triggerContext.Trigger.Key);
                 activity?.SetTag("flow.disabled", true);
-                return new { runId = default(Guid?), disabled = true };
+                return new FlowTriggerResult(null, Disabled: true);
             }
 
             var idempotencyKey = TryGetIdempotencyKey(triggerContext.TriggerHeaders);
@@ -58,7 +58,7 @@ public sealed partial class FlowOrchestratorEngine
                 {
                     triggerContext.RunId = existingRunId.Value;
                     activity?.SetTag("duplicate", true);
-                    return new { runId = existingRunId.Value, duplicate = true };
+                    return new FlowTriggerResult(existingRunId.Value, Duplicate: true);
                 }
 
                 var registered = await _runControlStore
@@ -74,7 +74,7 @@ public sealed partial class FlowOrchestratorEngine
                     {
                         triggerContext.RunId = existingRunId.Value;
                         activity?.SetTag("duplicate", true);
-                        return new { runId = existingRunId.Value, duplicate = true };
+                        return new FlowTriggerResult(existingRunId.Value, Duplicate: true);
                     }
                 }
             }
@@ -168,7 +168,7 @@ public sealed partial class FlowOrchestratorEngine
                 TriggerKey = triggerContext.Trigger.Key
             }, ct).ConfigureAwait(false);
 
-            return new { runId = triggerContext.RunId, duplicate = false };
+            return new FlowTriggerResult(triggerContext.RunId);
         }
         catch (Exception ex)
         {

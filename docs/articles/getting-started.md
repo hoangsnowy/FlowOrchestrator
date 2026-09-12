@@ -226,7 +226,16 @@ Content-Type: application/json
 The response includes the `runId`:
 
 ```json
-{ "runId": "3fa85f64-5717-4562-b3fc-2c963f66afa6" }
+{ "runId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "duplicate": false, "message": "Flow 'OrderProcessingFlow' triggered." }
+```
+
+`duplicate` is `true` when an `Idempotency-Key` header matched an earlier trigger — the `runId` is
+then the run that already exists rather than a new one.
+
+If the flow is disabled, the endpoint answers **`409 Conflict`** and starts nothing:
+
+```json
+{ "runId": null, "disabled": true, "message": "Flow 'OrderProcessingFlow' is disabled; no run was started." }
 ```
 
 Use that ID to poll the run status:

@@ -194,6 +194,39 @@ The signal endpoint accepts any JSON body and is **not** authenticated by defaul
 
 The endpoint enforces only one structural check beyond your middleware: the run must be in `Running` status. A delivered signal cannot resurrect a cancelled or completed run.
 
+## Resume Latency
+
+Delivering a signal does not execute the parked step inline. The endpoint persists the payload, then dispatches a *resume nudge* through the active runtime, and the step wakes when a worker picks that nudge up. How long that takes is a property of the runtime, not of `WaitForSignal`:
+
+| Runtime | Resume latency after a successful `POST` |
+|---|---|
+| InMemory (`UseInMemoryRuntime()`) | Channel write, picked up immediately |
+| Azure Service Bus | Message sent to the `flow-steps` topic with no `ScheduledEnqueueTime`, delivered immediately |
+| Hangfire (`UseHangfire()`) | Queue-pickup time — **provided the nudge is enqueued rather than scheduled**, see below |
+
+On the rare delayed branch described below, each runtime falls back to its deferred primitive instead: a `Task.Delay` before the channel write, a scheduled Service Bus message, and `BackgroundJob.Schedule` respectively.
+
+### Why Hangfire used to add up to 15 seconds
+
+Hangfire routes delayed work and immediate work through different paths. `BackgroundJob.Schedule(...)` places the job in the **Scheduled** set, and `DelayedJobScheduler` only promotes it to a queue on its poll tick — `BackgroundJobServerOptions.SchedulePollingInterval`, **15 seconds by default**. `BackgroundJob.Enqueue(...)` goes straight to the queue and skips that window entirely.
+
+Before the fix for [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/188) the resume nudge always took the delayed path with a 500 ms delay, to sidestep a race: the step registers its waiter — which is what makes delivery possible at all — a few milliseconds before the engine releases its execution claim on the `Pending` path. A resume that lands inside that window loses `TryClaimStepAsync` and is dropped silently. On Hangfire that 500 ms intent became **0.5 s + (0–15 s)** of real latency, which is what the issue reported.
+
+The dispatcher now reads the step's claim state and picks the path deliberately:
+
+- **claim already released** — the overwhelming majority of deliveries, where the step has been parked for seconds or longer: dispatched immediately via `EnqueueStepAsync`. No scheduled-set poll.
+- **claim still held** — only the few-millisecond window above: the short delayed nudge, which is what it was there for.
+- **no `IFlowRunRuntimeStore` registered** (custom storage predating the interface): also immediate. The engine guards its claim acquisition with the same `is not null` check, so with no runtime store there is no claim to lose and the race cannot occur.
+- **claim state unreadable** (transient storage fault): the delayed path, logged at `Warning` — a persistently failing claim store would otherwise silently reinstate the latency this fix removes.
+
+The nudge is dispatched with `CancellationToken.None`, never the caller's token. The signal is durably persisted before the nudge, so the resume has to outlive the request that delivered it — the dashboard endpoint passes `http.RequestAborted`, which trips the moment the caller disconnects.
+
+No configuration is required, and `SchedulePollingInterval` no longer gates signal resume. If you lowered it purely to speed up `WaitForSignal`, you can put it back — note that it is a global setting affecting every delayed job in your app (step retries, `ForEach` delays, every polling step) and costs one scheduled-set query per server per tick.
+
+### The safety net is not always prompt
+
+If the nudge fails to dispatch (queue outage, broker error), the signal is still durably delivered and the step wakes on the safety-net invocation scheduled when it parked. **That invocation is only prompt when the step declares `timeoutSeconds`** — without one the park interval is 24 hours. Set a timeout on any `WaitForSignal` whose recovery you care about.
+
 ## Observability
 
 When event persistence is enabled (`builder.Observability.EnableEventPersistence = true`), the engine emits these events for each `WaitForSignal` step:

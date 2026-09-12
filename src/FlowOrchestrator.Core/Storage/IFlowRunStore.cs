@@ -111,6 +111,26 @@ public interface IFlowRunStore
     /// </summary>
     Task<FlowRunRecord?> GetRunDetailAsync(Guid runId);
 
+    /// <summary>
+    /// Returns the run's header row only — no step records, no attempt history — or
+    /// <see langword="null"/> if no run with <paramref name="runId"/> exists.
+    /// </summary>
+    /// <param name="runId">The run to read.</param>
+    /// <remarks>
+    /// For callers that need a field or two off the run itself (its <c>FlowId</c>, its status) and
+    /// have no use for the step graph. <see cref="GetRunDetailAsync"/> issues three queries and
+    /// returns every step row and every attempt row <i>including</i> their unbounded JSON columns,
+    /// so its cost grows with the size of the run; on SQL Server that read has been observed to time
+    /// out on a 150-iteration <c>ForEach</c> under load. Use this instead wherever the graph is not
+    /// actually read.
+    /// <para>
+    /// The default implementation delegates to <see cref="GetRunDetailAsync"/> so existing custom
+    /// stores keep compiling and keep working — they simply do not get the saving. Providers should
+    /// override it with a single-row query.
+    /// </para>
+    /// </remarks>
+    Task<FlowRunRecord?> GetRunAsync(Guid runId) => GetRunDetailAsync(runId);
+
     /// <summary>Returns aggregate counts used by the dashboard overview panel.</summary>
     Task<DashboardStatistics> GetStatisticsAsync();
 

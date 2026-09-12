@@ -70,6 +70,22 @@ Failures set `Status = Error` on the activity and add an `exception` event with 
 OTel tags (`exception.type`, `exception.message`, `exception.stacktrace`). APMs treat the span as
 red without any extra configuration.
 
+> [!NOTE]
+> **Dashboard endpoints also feed the standard ASP.NET Core meters**, and two things there are worth
+> knowing. A client that disconnects mid-request — a load balancer timing out, a closed tab, a
+> fire-and-forget webhook — cancels `HttpContext.RequestAborted`, and every store call that honours
+> it throws. Those exceptions used to reach the diagnostics middleware and inflate
+> `aspnetcore.diagnostics.exceptions`, making a healthy app read as broken; they are now swallowed
+> when, and only when, the request was genuinely aborted.
+>
+> Such a request is recorded as **`499`** (nginx's "client closed request") in
+> `http.server.request.duration` rather than `200`. No body can reach a caller that has gone, but the
+> status is what access logs and that histogram record, and filing an abandoned request as a success
+> hid the disconnect rate entirely. A `499` rate is therefore a client-side signal, not a server
+> fault. One asymmetry to be aware of when building a disconnect dashboard: the status is immutable
+> once the response has started, which is the normal case for the SSE stream at
+> `/flows/api/events/stream` — SSE disconnects still record their original status.
+
 **Metrics (every instrument is on the `FlowOrchestrator` meter):**
 
 | Metric | Type | Unit | Tags |
@@ -333,7 +349,29 @@ options.Retention.DataTtl = TimeSpan.FromDays(30);     // delete runs older than
 options.Retention.SweepInterval = TimeSpan.FromHours(1); // run the sweep every hour
 ```
 
-When enabled, `FlowRetentionHostedService` runs on the configured interval and calls `IFlowRetentionStore.CleanupAsync(cutoffUtc, cancellationToken)`. The SQL Server and PostgreSQL backends cascade-delete all related records (steps, outputs, events, control) when a run is deleted.
+When enabled, `FlowRetentionHostedService` runs on the configured interval and calls `IFlowRetentionStore.CleanupAsync(cutoffUtc, cancellationToken)`.
+
+**Nothing cascades.** The per-run tables carry no foreign key to `FlowRuns`, so `CleanupAsync` deletes each one explicitly, inside one transaction, for every run whose `CompletedAt` is older than the cutoff:
+
+`FlowStepClaims` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowEvents` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
+(PostgreSQL: the `flow_*` snake_case equivalents.)
+
+> [!WARNING]
+> `FlowStepDispatches` / `flow_step_dispatches` and `FlowSignalWaiters` / `flow_signal_waiters` were **not** deleted before the fix for [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/188) — the sweep relied on a cascade that does not exist. Both tables grew by one row per dispatched step and per parked signal, for every run ever executed, and were never reclaimed.
+>
+> Because both new `DELETE`s join back to `FlowRuns`, rows whose run was already purged by an earlier release are now **orphaned and unreachable by the sweep**. If you have been running retention, reclaim them once by hand:
+>
+> ```sql
+> DELETE fsd FROM FlowStepDispatches fsd
+> WHERE NOT EXISTS (SELECT 1 FROM FlowRuns fr WHERE fr.Id = fsd.RunId);
+>
+> DELETE fsw FROM FlowSignalWaiters fsw
+> WHERE NOT EXISTS (SELECT 1 FROM FlowRuns fr WHERE fr.Id = fsw.RunId);
+> ```
+>
+> Run it during a quiet window: on a long-lived deployment these tables can hold far more rows than `FlowRuns` itself.
+
+Custom `IFlowRetentionStore` implementations must delete these tables explicitly for the same reason — there is no referential action to inherit.
 
 > [!TIP]
 > `SweepInterval` defaults to 1 hour and `DataTtl` defaults to 30 days. Retention is disabled by default — opt in explicitly.

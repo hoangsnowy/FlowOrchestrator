@@ -209,6 +209,11 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult((runs, totalCount));
     }
 
+    /// <inheritdoc/>
+    public Task<FlowRunRecord?> GetRunAsync(Guid runId)
+        // Header only: no step enumeration, no attempt materialisation.
+        => Task.FromResult(_runs.TryGetValue(runId, out var run) ? run : null);
+
     public Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
         if (!_runs.TryGetValue(runId, out var run))
@@ -504,6 +509,12 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(claimed);
     }
 
+    /// <inheritdoc/>
+    public Task<bool> IsStepClaimedAsync(Guid runId, string stepKey)
+        // O(1) on the flat claim dictionary. The interface default would materialise every claimed
+        // key in the run — claims are never released on terminal statuses — to test one key.
+        => Task.FromResult(_stepClaims.ContainsKey((runId, stepKey)));
+
     public Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
     {
         var claimed = _stepClaims.TryAdd((runId, stepKey), 1);
@@ -684,6 +695,15 @@ public sealed class InMemoryFlowRunStore :
         {
             _runs.TryRemove(runId, out _);
             _runControls.TryRemove(runId, out _);
+
+            // Drop the per-run secondary indexes too. They are keyed by run id, so a purged run
+            // leaves a whole nested dictionary behind if they are not cleared here — and because
+            // the hot-path readers (GetStepStatusesAsync / GetClaimedStepKeysAsync /
+            // GetDispatchedStepKeysAsync) read THESE rather than the flat dictionaries, a purged
+            // run would otherwise keep reporting steps, claims and dispatches that no longer exist.
+            _stepKeysByRun.TryRemove(runId, out _);
+            _claimsByRun.TryRemove(runId, out _);
+            _dispatchesByRun.TryRemove(runId, out _);
         }
 
         foreach (var key in _steps.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
@@ -691,6 +711,16 @@ public sealed class InMemoryFlowRunStore :
             _steps.TryRemove(key, out _);
             _stepAttemptCounters.TryRemove(key, out _);
             _stepClaims.TryRemove(key, out _);
+        }
+
+        // The dispatch ledger is keyed independently of _steps: TryRecordDispatchAsync can record a
+        // key that never produced a step row (dispatched, then the run was cancelled before the
+        // worker picked it up), so it cannot be folded into the loop above without leaking exactly
+        // those entries. In a long-lived host this is the entry that grows without bound, since
+        // every dispatched step in every completed run contributes one.
+        foreach (var key in _stepDispatches.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
+        {
+            _stepDispatches.TryRemove(key, out _);
         }
 
         foreach (var key in _stepAttempts.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())

@@ -41,9 +41,27 @@ builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 
 ## Just pick a preset
 
+> [!IMPORTANT]
+> **Manifest inputs alone enforce nothing.** `WebhookSecurityOptions.EnforcementMode` defaults to
+> `Off`, and every gate documented on this page — signature verification, replay protection, rate
+> limiting, IP allow/deny — is inert under `Off`. The pipeline still runs and still records each
+> violation to `/flows/api/webhooks/stats` and the DLQ, but the request is **accepted**. Nothing in
+> the response says so.
+>
+> Set the mode once in DI, then configure per flow:
+>
+> ```csharp
+> options.AddFlowWebhookSecurity(sec => sec.UseEnforcementMode(WebhookEnforcementMode.Enforce));
+> ```
+>
+> `Audit` is the safe rollout step: it logs and counts violations while still accepting, so you can
+> confirm a publisher's signatures verify before anything starts being rejected. The sample app runs
+> in `Audit` deliberately — which is why a duplicate nonce there returns `200` and only moves a
+> counter.
+
 For the 16 built-in schemes in `PartnerSchemeRegistry` (14 publishers plus the
-`Generic` catch-all and `GitHubLegacy`), you only need
-three manifest fields. Pick a scheme and the verifier fills in the wire
+`Generic` catch-all and `GitHubLegacy`), the manifest side needs only
+three fields. Pick a scheme and the verifier fills in the wire
 format (header name, algorithm, encoding, prefix) automatically:
 
 ```csharp
@@ -221,6 +239,7 @@ aliases for the same rotation pair — see
 [Migrating from v1.24](#migrating-from-v124).
 
 ## Replay protection
+> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under the default `Off` nothing below takes effect at all.
 
 Two complementary defences:
 
@@ -240,6 +259,7 @@ PostgreSQL backend (see [Storage](storage.md#webhook-hardening-backends-v125))
 on a second replica.
 
 ## Rate limiting
+> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under the default `Off` nothing below takes effect at all.
 
 Token-bucket limiter built on `System.Threading.RateLimiting`, keyed
 per-flow or per `flowId|clientIp` when `webhookRateLimitPerIp = true`.
@@ -255,6 +275,7 @@ not sent as a `Retry-After` header — it is exposed on the
 `flow.webhook.rate_limit.retry_after_ms` span tag.
 
 ## IP allow / deny list
+> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under the default `Off` nothing below takes effect at all.
 
 `CidrMatcher` accepts every common notation for an IP allow / deny list,
 mix-and-match in the same array:

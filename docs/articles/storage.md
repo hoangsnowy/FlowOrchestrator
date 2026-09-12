@@ -183,11 +183,23 @@ For full feature parity (schedule overrides, run control, event stream, retentio
 | `IFlowScheduleStateStore` | Persistent cron overrides (`Scheduler.PersistOverrides`) |
 | `IFlowRunControlStore` | Cancel, timeout, and idempotency key state. The engine checks this on every `TriggerAsync` to deduplicate runs and on every `RunStepAsync` to honour cancellation. |
 | `IFlowEventReader` | Run event stream (`GET /flows/api/runs/{runId}/events`) |
-| `IFlowRetentionStore` | Background retention sweep (deletes old run data) |
+| `IFlowRetentionStore` | Background retention sweep. Nothing cascades — every per-run table must be deleted explicitly, including `FlowStepDispatches` and `FlowSignalWaiters`, which carry no foreign key to `FlowRuns`. See [Observability — Retention](observability.md#retention) for the full table list. |
 | `IFlowSignalStore` | Parked `WaitForSignal` waiter state. Required if you want to use the [`WaitForSignal`](wait-for-signal.md) built-in step on a custom backend. |
 | `IFlowRunRuntimeStore` | Step claim/dispatch ledger per run. Implements `TryRecordDispatchAsync` (idempotent INSERT — prevents duplicate dispatch) and `TryClaimStepAsync` (claim exclusion — ensures a step is executed by at most one worker). Required for production use with any multi-worker runtime. |
 
 Register these the same way — directly on `options.Services`.
+
+### Members with default implementations — override them
+
+Two interface members ship with default implementations so that a store written against an earlier
+version still compiles. Both defaults are correct and both are slow, and neither will warn you:
+
+| Member | Default | Why override |
+|---|---|---|
+| `IFlowRunRuntimeStore.IsStepClaimedAsync(runId, stepKey)` | Calls `GetClaimedStepKeysAsync` and scans the result | Claims are deliberately never released on terminal status, so the claim set holds one key per executed step and grows with the run. The default therefore fetches every key to answer a single-key question — **on every signal delivery**. Override with a point lookup on the `(RunId, StepKey)` primary key. |
+| `IFlowRunStore.GetRunAsync(runId)` | Calls `GetRunDetailAsync` | `GetRunDetailAsync` issues three queries and returns every step and attempt row *including* their unbounded JSON columns. Callers that need only the run header — the signal dispatcher, several dashboard endpoints — then pay for the whole graph. On SQL Server this read has been observed to time out on a 150-iteration `ForEach` under load. Override with a single-row read. |
+
+The built-in SQL Server, PostgreSQL and in-memory stores override both.
 
 ---
 

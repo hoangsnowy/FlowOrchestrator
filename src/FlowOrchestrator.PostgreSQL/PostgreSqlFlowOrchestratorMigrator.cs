@@ -212,7 +212,12 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
         CREATE INDEX IF NOT EXISTS ix_flow_runs_status ON flow_runs (status);
         CREATE INDEX IF NOT EXISTS ix_flow_runs_started_at ON flow_runs (started_at DESC);
         CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id_status_started_at ON flow_runs (flow_id, status, started_at DESC);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_run_id_started_at ON flow_steps (run_id, started_at);
+        -- INCLUDE mirrors the SQL Server definitions. GetStepStatusesAsync is the engine's single
+        -- most frequent query — issued on every step completion and returning every step row in the
+        -- run — and without the payload columns in the index Postgres must fetch each row from the
+        -- heap. With them the scan is index-only. Postgres has supported INCLUDE since 11.
+        CREATE INDEX IF NOT EXISTS ix_flow_steps_run_id_started_at ON flow_steps (run_id, started_at)
+            INCLUDE (step_key, step_type, status, job_id, completed_at);
         CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_run_id ON flow_steps (step_key, run_id);
         CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_started_at ON flow_step_attempts (run_id, started_at);
         CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_step_key_attempt_no ON flow_step_attempts (run_id, step_key, attempt_no);

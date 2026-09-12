@@ -144,9 +144,12 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
         // Act
         var result = await CreateEngineOtelDisabled().TriggerAsync(ctx);
 
-        // Assert — silent skip with disabled = true. No NRE despite OTel being off.
-        Assert.NotNull(result);
-        var disabledProp = result!.GetType().GetProperty("disabled")?.GetValue(result);
-        Assert.Equal(true, disabledProp);
+        // Assert — silent skip with Disabled = true. No NRE despite OTel being off.
+        // Asserted through the typed FlowTriggerResult rather than by reflecting on a property name:
+        // callers have to be able to read this outcome, and a test that only inspects it reflectively
+        // would still pass if the contract stopped being reachable.
+        var triggerResult = Assert.IsType<FlowTriggerResult>(result);
+        Assert.True(triggerResult.Disabled);
+        Assert.Null(triggerResult.RunId);
     }
 }

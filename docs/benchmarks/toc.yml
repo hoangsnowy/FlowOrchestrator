@@ -1,3 +1,6 @@
+- name: Engine continuation — unwinding O(n²) over a run (2026-09-12)
+  href: engine-continuation-oN2-2026-09-12.md
+
 - name: Deep RUN search on SQL Server & PostgreSQL (2026-05-24)
   href: sql-deep-search-investigation-2026-05-24.md
 

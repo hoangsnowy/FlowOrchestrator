@@ -128,7 +128,7 @@ All endpoints are under the base path configured in `MapFlowDashboard`. Examples
 |---|---|---|
 | `GET` | `/flows/api/flows` | List all registered flows |
 | `GET` | `/flows/api/flows/{id}` | Get flow definition and manifest |
-| `POST` | `/flows/api/flows/{id}/trigger` | Manually trigger a flow |
+| `POST` | `/flows/api/flows/{id}/trigger` | Manually trigger a flow. `200` with `runId` + `duplicate`; **`409`** with `runId: null, disabled: true` when the flow is disabled |
 | `POST` | `/flows/api/flows/{id}/enable` | Enable the flow and restore cron jobs |
 | `POST` | `/flows/api/flows/{id}/disable` | Disable the flow and remove cron jobs |
 | `GET` | `/flows/api/handlers` | List registered step handler type names |
@@ -158,7 +158,7 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 | `GET` | `/flows/api/runs/{runId}/control` | Timeout, cancellation, idempotency state |
 | `GET` | `/flows/api/runs/{runId}/lineage` | Re-run lineage: the source run this one was re-run from, plus the runs re-run from it |
 | `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative cancellation |
-| `POST` | `/flows/api/runs/{runId}/rerun` | Re-run a finished run with its original trigger payload (the idempotency header is stripped); the new run records `sourceRunId` |
+| `POST` | `/flows/api/runs/{runId}/rerun` | Re-run a finished run with its original trigger payload (the idempotency header is stripped); the new run records `sourceRunId`. **`409`** with `runId: null, disabled: true` when the flow is disabled |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
 
 **Run search (`?search=`)** matches (case-insensitively) the run's id, flow

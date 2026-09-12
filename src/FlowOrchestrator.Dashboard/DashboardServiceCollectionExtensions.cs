@@ -241,6 +241,38 @@ public static class DashboardServiceCollectionExtensions
                       ?? new FlowDashboardOptions();
         var group = endpoints.MapGroup(basePath);
 
+        // A caller that goes away mid-request — a load balancer timing out, a closed browser tab, a
+        // fire-and-forget webhook — cancels HttpContext.RequestAborted, and every store call that
+        // honours it then throws. Without this filter that exception reaches the diagnostics
+        // middleware and is counted as an unhandled fault, so `aspnetcore.diagnostics.exceptions`
+        // climbs and the app reads as broken when nothing is. Swallow it only when the request was
+        // genuinely aborted: there is no response to write at that point, and a cancellation from
+        // any other source must still surface. Registered before the auth filter so it also covers
+        // a disconnect during authentication.
+        group.AddEndpointFilter(async (ctx, next) =>
+        {
+            try
+            {
+                return await next(ctx);
+            }
+            catch (OperationCanceledException) when (ctx.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                // No body can reach the caller — the socket is already gone — but the status code is
+                // still what access logs and http.server.request.duration record for this request.
+                // Leaving it at the default 200 would file an abandoned request as a success and
+                // hide disconnect rates entirely. 499 is nginx's "client closed request": not an
+                // IANA code, but the conventional one, and unambiguous in a latency histogram.
+                // Guarded because the status is immutable once the response has started, which is
+                // the normal case for the SSE stream.
+                if (!ctx.HttpContext.Response.HasStarted)
+                {
+                    ctx.HttpContext.Response.StatusCode = 499;
+                }
+
+                return Results.Empty;
+            }
+        });
+
         if (options.BasicAuth.IsEnabled)
         {
             group.AddEndpointFilter(new FlowDashboardBasicAuthFilter(options.BasicAuth));
@@ -377,8 +409,19 @@ public static class DashboardServiceCollectionExtensions
                 Flow = flow,
                 Trigger = new Trigger("manual", "Manual", body, headers)
             };
-            await engine.TriggerAsync(ctx);
-            await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered." });
+            // Honour the engine's outcome rather than reporting the caller-side run id
+            // unconditionally. A disabled flow makes the engine do nothing and return Disabled,
+            // and answering with ctx.RunId anyway hands back an identifier no run backs — a later
+            // read of it 404s while the caller believes the flow ran.
+            var result = await engine.TriggerAsync(ctx) as FlowTriggerResult;
+            if (result is { Disabled: true })
+            {
+                http.Response.StatusCode = StatusCodes.Status409Conflict;
+                await WriteJsonAsync(http.Response, new { runId = result.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; no run was started." });
+                return;
+            }
+
+            await WriteJsonAsync(http.Response,new { runId = result?.RunId ?? ctx.RunId, duplicate = result?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered." });
         });
 
         // Webhook endpoint: POST /flows/api/webhook/{idOrSlug}
@@ -518,11 +561,24 @@ public static class DashboardServiceCollectionExtensions
                 Flow = flow,
                 Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), buffered.Parsed, headers)
             };
-            await engine.TriggerAsync(ctx);
+            var webhookResult = await engine.TriggerAsync(ctx) as FlowTriggerResult;
             var webhookLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+
+            // A disabled flow must not be logged as an accepted delivery, and must not answer with a
+            // run id that no run backs. 202 rather than 409: a webhook sender cannot act on the
+            // distinction and retrying would not help, so the delivery is acknowledged as received
+            // and explicitly reported as not started.
+            if (webhookResult is { Disabled: true })
+            {
+                http.Response.StatusCode = StatusCodes.Status202Accepted;
+                await WriteJsonAsync(http.Response, new { runId = webhookResult.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
+                return;
+            }
+
+            var startedRunId = webhookResult?.RunId ?? ctx.RunId;
             if (webhookLogger is not null)
-                WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, ctx.RunId);
-            await WriteJsonAsync(http.Response,new { runId = ctx.RunId, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
+                WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
+            await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         });
 
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
@@ -783,7 +839,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapPost("/api/runs/{runId:guid}/cancel", async (HttpContext http, IFlowRunStore store, IServiceProvider services, Guid runId) =>
         {
-            var run = await store.GetRunDetailAsync(runId);
+            var run = await store.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -926,7 +982,7 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var run = await runStore.GetRunDetailAsync(runId);
+            var run = await runStore.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -971,7 +1027,7 @@ public static class DashboardServiceCollectionExtensions
             var runControlOptions = http.RequestServices.GetService<FlowOrchestrator.Core.Configuration.FlowRunControlOptions>()
                                     ?? new FlowOrchestrator.Core.Configuration.FlowRunControlOptions();
 
-            var run = await runStore.GetRunDetailAsync(runId);
+            var run = await runStore.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -1009,13 +1065,23 @@ public static class DashboardServiceCollectionExtensions
                 Trigger = new Trigger(triggerKey, triggerKey, data, rehydratedHeaders),
                 SourceRunId = runId  // lineage — links the new run back to the one being re-run
             };
-            await engine.TriggerAsync(ctx);
-            await WriteJsonAsync(http.Response, new { runId = ctx.RunId, sourceRunId = runId, message = $"Run '{runId}' re-triggered as '{ctx.RunId}'." });
+            // Same reasoning as the manual trigger: a rerun of a flow that has since been disabled
+            // must not report a new run id that nothing backs, and the lineage link would dangle.
+            var rerunResult = await engine.TriggerAsync(ctx) as FlowTriggerResult;
+            if (rerunResult is { Disabled: true })
+            {
+                http.Response.StatusCode = StatusCodes.Status409Conflict;
+                await WriteJsonAsync(http.Response, new { runId = rerunResult.RunId, sourceRunId = runId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; run '{runId}' was not re-triggered." });
+                return;
+            }
+
+            var rerunId = rerunResult?.RunId ?? ctx.RunId;
+            await WriteJsonAsync(http.Response, new { runId = rerunId, sourceRunId = runId, message = $"Run '{runId}' re-triggered as '{rerunId}'." });
         });
 
         group.MapGet("/api/runs/{runId:guid}/lineage", async (HttpContext http, IFlowRunStore store, Guid runId) =>
         {
-            var run = await store.GetRunDetailAsync(runId);
+            var run = await store.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -1027,7 +1093,7 @@ public static class DashboardServiceCollectionExtensions
             FlowRunRecord? source = null;
             if (run.SourceRunId is { } sourceId)
             {
-                source = await store.GetRunDetailAsync(sourceId);
+                source = await store.GetRunAsync(sourceId);
             }
 
             // Derived — runs that were re-run from THIS run (children).
