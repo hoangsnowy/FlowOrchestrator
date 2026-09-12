@@ -185,10 +185,21 @@ internal static class LoopAdmission
     /// galloping search — double the stride until an unstarted index is found, then binary-search
     /// the last interval — in O(log n) probes.
     /// <para>
-    /// The previous implementation walked <c>0..k</c> linearly on every call. Since this runs on
-    /// every step completion, the walk made a loop run O(n²) overall: measured at 139 µs and 272 KB
-    /// per call at 500 started iterations, and observable end-to-end as late iterations costing
-    /// ~3.8× early ones on a 150-iteration run.
+    /// The previous implementation walked <c>0..k</c> linearly on every call, which is O(n) per
+    /// admission and therefore O(n²) over a loop run.
+    /// </para>
+    /// <para>
+    /// <b>This does not, on its own, make <see cref="NextAdmissions"/> sublinear</b>, and the
+    /// measurements say so plainly: at 500 iterations with every one but the last settled,
+    /// <c>NextAdmissions</c> costs 87 µs and 174 KB whether the prefix is found by this search or by
+    /// the linear walk it replaced. The dominant term is the backwards active-count loop below,
+    /// which still visits every settled iteration because it can only stop early once it has seen
+    /// <c>ConcurrencyLimit</c> iterations that are <i>not</i> settled — and when they are all
+    /// settled it never does. Making that loop sublinear needs settled-state the engine does not
+    /// currently track, so it is deferred to
+    /// <see href="https://github.com/hoangsnowy/FlowOrchestrator/issues/189">#189</see>.
+    /// This search is kept because it is strictly cheaper than the walk it replaced and stops being
+    /// masked the moment that loop is fixed.
     /// </para>
     /// </remarks>
     private static int FindFirstPending(

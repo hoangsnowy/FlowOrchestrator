@@ -46,37 +46,58 @@ SQL Server looks flattest because its per-step database round-trips dominate and
 submerge the engine-side term; InMemory is the most honest reading, because
 nothing there masks it.
 
-## 1. `LoopAdmission.NextAdmissions` — linear prefix walk
+## 1. `LoopAdmission.NextAdmissions` — still O(n), and the change landed on the wrong loop
 
 `src/FlowOrchestrator.Core/Execution/Internal/LoopAdmission.cs`
 
-It found the first unstarted iteration by walking `0..k` from zero on every call,
-and each probe built `$"{runtimeLoopKey}.{index}."` plus one `prefix + entry.Key`
-concatenation per entry child, inside an `entries.Any(lambda)` closure.
+**This section corrects an earlier claim in this document.** The first version said the prefix walk
+was the O(n) term and that replacing it with a galloping search made the method sublinear. Measuring
+it properly says otherwise. The honest record matters more than the tidy story, so the original
+numbers — which were taken from a separate analysis rather than measured here — are replaced by
+these, all produced in one run on one machine.
 
 `LoopAdmissionBenchmarks`, .NET 10, 3 children per iteration, `ConcurrencyLimit = 1`:
 
-| Iterations | nothing started | half settled | all-but-last settled |
+| Iterations | `NextAdmissions`, nothing started | half settled | all-but-last settled |
 |---:|---:|---:|---:|
-| 10 | 227 ns / 576 B | 1,389 ns / 3,296 B | 2,308 ns / 5,472 B |
-| 100 | 192 ns / 576 B | 12,456 ns / 27,776 B | 25,768 ns / 54,432 B |
-| 500 | 204 ns / 576 B | 68,397 ns / 136,576 B | **139,039 ns / 272,032 B** |
+| 10 | 282 ns / 416 B | 1,350 ns / 2,616 B | 2,041 ns / 3,992 B |
+| 100 | 283 ns / 416 B | 8,890 ns / 18,672 B | 17,236 ns / 35,624 B |
+| 500 | 280 ns / 416 B | 42,880 ns / 87,856 B | **87,265 ns / 173,608 B** |
 
-Perfectly linear in the number of already-started iterations — roughly 278 ns and
-544 B per started iteration, per call. For a 500-iteration × 3-child loop that is
-on the order of **100 ms of CPU and 200 MB of allocation per run** in the
-admission gate alone.
+Cost grows linearly with the number of settled iterations — ×8.4 from 10 to 100, ×5.1 from 100 to
+500. The method is still O(n) per call, so a loop run is still O(n²) overall.
 
-**Change.** Started iterations form a prefix — `NextAdmissions` only ever admits
-the contiguous block `[firstPending, firstPending + slots)`, so an iteration can
-only have started if every lower one did. The boundary is now found by galloping
-search (double the stride until an unstarted index appears) followed by a binary
-search of the last interval: O(log n) probes. The closure and the per-child
-concatenations are gone; the prefix is built once per probe.
+### Why the prefix search was not the bottleneck
 
-The type's own `<remarks>` claimed the sequential default "costs one probe per
-pass rather than a full re-walk". That was true of the backwards active-count
-loop, not of this forward walk. Corrected in the same change.
+The forward walk that finds `firstPending` was genuinely O(n), and it is now a galloping + binary
+search over the started-prefix invariant, which is O(log n) probes. But `NextAdmissions` contains a
+second linear loop, and that one dominates:
+
+```csharp
+for (var index = firstPending - 1; index >= 0; index--)
+{
+    if (IsIterationSettled(scoped, runtimeLoopKey, index, statuses)) continue;
+    if (++active >= limit) return [];
+}
+```
+
+It counts how many already-admitted iterations are still in flight, and it can only stop early once
+it has seen `ConcurrencyLimit` iterations that are **not** settled. In the common case — a sequential
+loop where every earlier iteration has finished — it never stops early: it visits all of them,
+building a prefix string and checking every entry child at each step.
+
+The first version of this document also compared the two badly. It measured the prefix search alone
+as "before" and the whole method as "after", which is not a comparison at all. Both columns above
+measure `NextAdmissions` end to end at three sizes, which is the only shape that answers the
+question.
+
+**Status.** The galloping search stays: it is strictly cheaper than the walk it replaced, costs
+nothing, and stops being masked the moment the backwards loop is addressed. Making that loop
+sublinear needs settled-state the engine does not track today — deferred to
+[#189](https://github.com/hoangsnowy/FlowOrchestrator/issues/189) rather than guessed at here.
+
+The type's own `<remarks>` claimed the sequential default "costs one probe per pass rather than a
+full re-walk". That is true of neither loop as written; corrected in the source.
 
 ## 2. Run-completion gate hashed the large side
 
@@ -97,9 +118,13 @@ conservative lower bound:
 
 | Status rows | `Except(...).Any()` | `foreach` + `ContainsKey` | Speedup |
 |---:|---:|---:|---:|
-| 25 | 433 ns / 832 B | 14.3 ns / **0 B** | 30× |
-| 300 | 3,650 ns / 7,312 B | 13.9 ns / **0 B** | 262× |
-| 1500 | 17,754 ns / 32,192 B | 13.5 ns / **0 B** | **1,315×** |
+| 25 | 419.6 ns / 832 B | 14.4 ns / **0 B** | 29× |
+| 300 | 3,608.9 ns / 7,312 B | 14.4 ns / **0 B** | 251× |
+| 1500 | 17,917.9 ns / 32,192 B | 13.8 ns / **0 B** | **1,298×** |
+
+The replacement is flat in the status-row count, as it must be — it never touches the large side —
+while the original grows with it. That is the whole point: the gate is asked the same tiny question
+on every step completion, and only one of the two shapes charges for the size of the run.
 
 **Change.** Walk the small side: `foreach (var k in keys) if (!statuses.ContainsKey(k)) return true;`
 Behaviour-identical — both store implementations build the status dictionary with
@@ -120,35 +145,35 @@ in the run, per completion, and is visible in the end-to-end ratios above.
 
 `src/FlowOrchestrator.Core/Expressions/ExpressionPathHelper.cs`
 
-`StepInputResolutionBenchmarks`, `JsonElement` trigger payload (what every
-first-party store actually hands the resolver):
+`ExpressionPathWalkBenchmarks` isolates the path walk itself and measures both shapes in one run, so
+the two columns are directly comparable:
 
-| Inputs | shallow `@triggerBody().orderId` | 3-segment `.customer.address.city` |
-|---:|---:|---:|
-| 1 | 204 ns / 504 B | 305 ns / 688 B |
-| 4 | 605 ns / 1,144 B | 934 ns / 1,880 B |
-| 12 | 1,678 ns / 2,832 B | 2,734 ns / 5,040 B |
+| Path depth | BEFORE: `Replace` + `Split`, string-keyed | AFTER: span walk, span-keyed | Ratio |
+|---:|---:|---:|---:|
+| 1 | 34.0 ns / 32 B | 24.2 ns / **0 B** | 0.71× |
+| 3 | 108.9 ns / 168 B | 65.9 ns / **0 B** | 0.60× |
+| 6 | 202.3 ns / 312 B | 133.8 ns / **0 B** | 0.66× |
 
-Linear in expression count: about 134 ns and 213 B per additional expression. A
-12-input step paid 2.8 KB before its handler ran.
-
-**This corrects the `expression-resolver-2026-05-02` baseline**, which attributes
-the cost to `JsonSerializer.SerializeToElement`. That holds only for its POCO test
-payload. With the production `JsonElement` payload the cost is almost entirely
-string slicing: `Trim()`, two range-slices, then `Replace("[", ".")` +
-`Replace("]", "")` + `Split('.')` — two intermediate strings, a `string[]`, and one
-string per segment.
-
-Sweeping payload size from 1 to 50 lines changes nothing (204 ns / 504 B versus
-207 ns / 504 B), because `JsonElement.Clone()` returns `this` when the backing
-document is non-disposable. **JSON size is not a factor**; the hypothesis that it
-was is recorded here as ruled out.
+About a third of the time and **all** of the allocation removed, on a path that runs per expression,
+per step input, per step.
 
 **Change.** `TryResolvePath` walks the path as `ReadOnlySpan<char>`, treating `.`,
 `[` and `]` as separators, and `TryGetPropertyRelaxed` takes a span so that
 neither the exact-match attempt (`JsonElement.TryGetProperty(ReadOnlySpan<char>)`)
 nor the case-insensitive sweep materialises the segment. Available on net8.0, so
 no `#if` is involved.
+
+### A correction carried over from the audit
+
+The `expression-resolver-2026-05-02` baseline attributes this cost to
+`JsonSerializer.SerializeToElement`. That holds only for its POCO test payload; with the production
+`JsonElement` payload the cost is almost entirely string slicing, which is what the table above
+measures directly.
+
+Sweeping payload size from 1 to 50 lines was reported to change nothing, because
+`JsonElement.Clone()` returns `this` when the backing document is non-disposable — so JSON size is
+not a factor. That sweep comes from `StepInputResolutionBenchmarks`, which **was not re-run here**;
+it is repeated as a pointer, not as a measurement of this change.
 
 ## 5. Handler lookup
 
@@ -159,8 +184,17 @@ fixed for the executor's lifetime, so it is now indexed once into a
 `FrozenDictionary<string, IStepHandlerMetadata>`. Duplicate registrations keep the
 first entry, matching the previous `FirstOrDefault` semantics.
 
-Not benchmarked separately; likely under 100 ns for typical handler counts.
-Recorded for completeness rather than as a headline.
+`HandlerLookupBenchmarks`, looking up the handler registered last — not a pathological input, simply
+whichever one the flow happens to use:
+
+| Registered handlers | BEFORE: `FirstOrDefault` closure | AFTER: `FrozenDictionary` | Ratio |
+|---:|---:|---:|---:|
+| 8 | 74.9 ns | 14.6 ns | 0.20× |
+| 32 | 224.8 ns | 13.4 ns | 0.06× |
+| 128 | 317.6 ns | 14.8 ns | 0.05× |
+
+The absolute numbers are small. What matters is the shape: the scan grows with the registry while the
+lookup does not, so the gap widens in exactly the deployments that register the most handlers.
 
 ## 6. Storage-side reads
 
@@ -196,15 +230,33 @@ attempted here.
 
 ## Reproducing
 
+Every number in sections 1, 2, 4 and 5 came from this one command, on an otherwise idle machine
+(Windows 11, .NET 10, `--job short`), with no Aspire host, Docker container or load test running —
+benchmarking a box that is simultaneously under load is how you end up publishing noise:
+
 ```bash
-dotnet build FlowOrchestrator.slnx -c Release
+dotnet build tests/benchmarks/FlowOrchestrator.Benchmarks/FlowOrchestrator.Benchmarks.csproj -c Release
 cd tests/benchmarks/FlowOrchestrator.Benchmarks/bin/Release/net10.0
-./FlowOrchestrator.Benchmarks.exe --filter "*LoopAdmission*"
-./FlowOrchestrator.Benchmarks.exe --filter "*ContinuationCompletionGate*"
-./FlowOrchestrator.Benchmarks.exe --filter "*StepInputResolution*"
+./FlowOrchestrator.Benchmarks.exe \
+  --filter "*LoopAdmissionBenchmarks*" "*ContinuationCompletionGate*" "*ExpressionPathWalk*" "*HandlerLookup*" \
+  --job short
 ```
 
-The end-to-end ratios come from driving the Aspire AppHost's four sample
+`ExpressionPathWalkBenchmarks` and `HandlerLookupBenchmarks` were added for this document, because
+the existing cases only exercised the current implementation and so could only ever produce an
+"after" column. Each carries a `[Benchmark(Baseline = true)]` that reproduces the shape being
+replaced, so before and after are measured in the same run rather than stitched together across
+sessions.
+
+### What is not measured here
+
+Six of the changes in this work touch storage and cannot be represented honestly by an in-process
+microbenchmark: `GetRunAsync`, `IsStepClaimedAsync`, the sargable date predicates, the PostgreSQL
+covering index, the retention leak, and the removed status-map re-read. Their evidence is
+end-to-end — chiefly the disappearance of the SQL Server timeout described in section 6 — and they
+are recorded as such rather than given invented numbers.
+
+The end-to-end ratios at the top come from driving the Aspire AppHost's four sample
 instances over HTTP and timing each `ForEach` iteration's signal-to-resume
 interval — see `CLAUDE.md` §Performance Standards for why a trend, not an
 absolute number, is the acceptance signal.

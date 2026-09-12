@@ -27,6 +27,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   set. This is the same class of failure as the v1.26.1 regression that `ScheduleStepAsync` already
   guarded against internally; the guarantee now lives at the call site and covers every adapter.
 
+- **A disabled flow could still report a started run.** `FlowOrchestratorEngine.TriggerAsync` refuses
+  the trigger and returns a disabled outcome, but all three dashboard trigger paths — manual trigger,
+  webhook delivery and rerun — discarded that return value and answered with the run id they had
+  generated before calling the engine, alongside the word "triggered". The caller was left holding an
+  identifier that no run backed: reading it 404s, while the caller believed a disabled flow had
+  executed. The webhook path additionally logged an accepted delivery that never happened. The three
+  endpoints now honour the outcome: manual trigger and rerun answer `409 Conflict`, webhook answers
+  `202 Accepted` (a sender cannot act on the distinction and retrying would not help), all with
+  `runId: null` and `disabled: true`.
 - **Retention never reclaimed the dispatch ledger or signal waiters.** `FlowStepDispatches` /
   `flow_step_dispatches` and `FlowSignalWaiters` / `flow_signal_waiters` are keyed `(RunId, StepKey)`
   with no foreign key to `FlowRuns`, so deleting a run did not cascade to them and `CleanupAsync`
@@ -93,6 +102,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `FlowTriggerResult` — the typed outcome of `IFlowOrchestrator.TriggerAsync`, carrying `RunId`,
+  `Disabled` and `Duplicate`. The signature stays `ValueTask<object?>` so nothing breaks, and the JSON
+  property names are pinned to the casing the anonymous objects it replaces used, so payloads written
+  straight from the return value stay byte-identical. Callers can now read the outcome, which is what
+  the disabled-flow bug above came down to.
 - `IFlowRunStore.GetRunAsync(runId)` — returns the run's header row only, no steps and no attempt
   history. Ships with a default interface implementation delegating to `GetRunDetailAsync` so custom
   stores keep working; SQL Server, PostgreSQL and in-memory override it with a single-row read.

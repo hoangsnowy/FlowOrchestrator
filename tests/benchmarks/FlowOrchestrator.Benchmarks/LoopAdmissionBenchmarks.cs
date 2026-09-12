@@ -118,4 +118,73 @@ public class LoopAdmissionBenchmarks
     [Benchmark(Description = "NextAdmissions (all but last settled — final pass)")]
     public int AdmitLastIteration() =>
         LoopAdmission.NextAdmissions(_loopMetadata, LoopKey, Iterations, _lastIteration, _noDispatches).Count;
+
+    // ── Before/after, measured in the same run ───────────────────────────────────────────────────
+    // The three cases above exercise whatever NextAdmissions currently does, so on their own they
+    // only ever produce an "after" column. The two below reproduce the prefix search exactly as it
+    // was — a linear forward walk whose probe builds the prefix once per iteration and tests the
+    // entry children through an Any(lambda) closure — so the pair can be compared on one machine
+    // under one set of conditions instead of across two sessions.
+    //
+    // They deliberately duplicate the old implementation rather than call it: the point is to keep a
+    // runnable record of the shape that was replaced.
+
+    /// <summary>Worst case under the ORIGINAL linear forward walk. Baseline for the galloping search.</summary>
+    [Benchmark(Baseline = true, Description = "BEFORE: linear forward walk (all but last settled)")]
+    public int LinearWalkLastIteration() =>
+        LinearFirstPending(_lastIteration, _noDispatches);
+
+    /// <summary>Average case under the ORIGINAL linear forward walk.</summary>
+    [Benchmark(Description = "BEFORE: linear forward walk (half settled)")]
+    public int LinearWalkMidRun() =>
+        LinearFirstPending(_midRun, _noDispatches);
+
+    /// <summary>Worst case under the galloping + binary search that replaced it.</summary>
+    [Benchmark(Description = "AFTER: galloping search (all but last settled)")]
+    public int GallopingLastIteration() =>
+        LoopAdmission.NextAdmissions(_loopMetadata, LoopKey, Iterations, _lastIteration, _noDispatches).Count;
+
+    /// <summary>Average case under the galloping + binary search that replaced it.</summary>
+    [Benchmark(Description = "AFTER: galloping search (half settled)")]
+    public int GallopingMidRun() =>
+        LoopAdmission.NextAdmissions(_loopMetadata, LoopKey, Iterations, _midRun, _noDispatches).Count;
+
+    /// <summary>
+    /// The prefix search as it was before the galloping rewrite: walk from zero until an unstarted
+    /// iteration is found, re-probing every already-started index on every call.
+    /// </summary>
+    /// <param name="statuses">Status map for the run.</param>
+    /// <param name="dispatched">Dispatch-ledger keys for the run.</param>
+    /// <returns>The first unstarted iteration index.</returns>
+    private int LinearFirstPending(Dictionary<string, StepStatus> statuses, IReadOnlySet<string> dispatched)
+    {
+        var entries = new List<KeyValuePair<string, StepMetadata>>();
+        foreach (var kvp in _loopMetadata.Steps)
+        {
+            if (kvp.Value.RunAfter is null || kvp.Value.RunAfter.Count == 0)
+            {
+                entries.Add(kvp);
+            }
+        }
+
+        var firstPending = 0;
+        while (firstPending < Iterations && WasStarted(entries, firstPending, statuses, dispatched))
+        {
+            firstPending++;
+        }
+
+        return firstPending;
+    }
+
+    /// <summary>The original per-iteration probe: a prefix string plus an <c>Any</c> closure over the entry children.</summary>
+    private static bool WasStarted(
+        List<KeyValuePair<string, StepMetadata>> entries,
+        int index,
+        Dictionary<string, StepStatus> statuses,
+        IReadOnlySet<string> dispatched)
+    {
+        var prefix = $"{LoopKey}.{index}.";
+        return entries.Any(entry =>
+            statuses.ContainsKey(prefix + entry.Key) || dispatched.Contains(prefix + entry.Key));
+    }
 }
