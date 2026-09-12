@@ -73,6 +73,76 @@ Two recurring flake patterns have caused red CI runs that turned green on retry.
 
 When CI shows red on a PR, FIRST inspect the failure output — do not reflexively assume flake. The ratio in this repo's history is roughly 1:1 between "real regression hidden as flake" and actual flake. Look at the test names and assertion messages before retrying.
 
+## Performance Standards
+
+This is an orchestration library on somebody else's request path. Throughput and allocation are **features**, not polish — treat a complexity or allocation regression exactly like a failing test. A green unit suite proves nothing about throughput: the suite runs 3-step flows, while production runs 500-iteration `ForEach` loops.
+
+### The O(n²) trap — the single most important rule here
+
+The engine calls its continuation on **every step completion**. Any work in that path that is `O(steps in the run)` makes the whole run `O(n²)`. This has bitten the codebase repeatedly:
+
+- `LoopAdmission` walked `0..k` linearly to find the first unstarted iteration — 139 µs and 272 KB **per call** at 500 iterations. Fixed with galloping + binary search over the started-prefix invariant.
+- `claimed.Except(statuses.Keys, StringComparer.Ordinal).Any()` — `Except` builds a hash set from its **second** argument first, so this hashed every status row in the run to test a two-element list. 17.8 µs / 32 KB at 1500 steps versus 13 ns / 0 B for a `foreach` + `ContainsKey`. **Always walk the small side.**
+- `GetStepStatusesAsync` returns every step row and was re-read unconditionally after a pass that usually writes nothing. Re-read only when you actually wrote.
+
+Before adding anything to `FlowOrchestratorEngine.Continuation.cs`, `.Control.cs`, `LoopAdmission`, `LoopBarrier`, or `FlowGraphPlanner`, state its complexity **per step completion** in a code comment. If it is not O(1) or O(log n), justify it.
+
+Claims (`FlowStepClaims`) are deliberately never released on terminal statuses, so anything that enumerates them grows with run length. Ask for membership with a point lookup (`IsStepClaimedAsync`), never by fetching the set.
+
+### Allocation rules for hot paths
+
+Hot path = per step, per step-input, per expression, per dispatched message, per dashboard poll.
+
+- **Parse with `ReadOnlySpan<char>`.** No `string.Split`, no chained `string.Replace`, no `Substring`/range-slice to produce a throwaway segment. `JsonElement.TryGetProperty(ReadOnlySpan<char>)` and `JsonProperty.NameEquals(ReadOnlySpan<char>)` compare against the payload's UTF-8 bytes directly — use them.
+- **No LINQ with a closure in a loop body.** `entries.Any(e => ... prefix + e.Key ...)` allocates a closure plus a string per element per call. Write the `foreach`. (Where CodeQL's `cs/linq/missed-where` pushes the other way, the `foreach` still wins — add a comment saying why.)
+- **No `ToArray()` / `ToList()` / `ToDictionary()` to answer a boolean.**
+- Prefer `FrozenDictionary` / `FrozenSet` for lookup tables built once at startup and read forever (handler registries, step-type maps).
+- Keep `ValueTask` on the synchronous fast path — that is already the convention; do not "simplify" it to `Task`.
+
+### Use the newest runtime the TFM allows
+
+`Directory.Build.props` targets `net8.0;net9.0;net10.0`. Write the best code each runtime allows and guard the newer path:
+
+```csharp
+#if NET9_0_OR_GREATER
+    var lookup = dictionary.GetAlternateLookup<ReadOnlySpan<char>>();
+    if (lookup.ContainsKey(stackBuffer)) { … }      // zero allocation
+#else
+    if (dictionary.ContainsKey(new string(stackBuffer))) { … }
+#endif
+```
+
+Worth reaching for, by floor version:
+
+| Floor | Feature | Use it for |
+|---|---|---|
+| net8 | `ReadOnlySpan<char>` overloads across BCL + `System.Text.Json` | all path/expression parsing |
+| net8 | `FrozenDictionary` / `FrozenSet` | startup-built, read-only lookup tables |
+| net8 | `SearchValues<char>` | multi-delimiter scanning in expression parsing |
+| net8 | `[LoggerMessage]` source generation | every `ILogger` call — already mandatory here |
+| net8 | `TimeProvider` | anything clock-dependent, for testability |
+| net9 | `Dictionary`/`HashSet`.`GetAlternateLookup<ReadOnlySpan<char>>()` | keyed lookups where the key is composed (`"loop.3.child"`) — the composed string never has to exist |
+| net9 | `System.Threading.Lock` | replaces `lock(object)` monitors |
+| net9 | `OrderedDictionary<TKey,TValue>` | ordered maps built by hand today |
+| net9 | `Task.WhenEach` | fan-out that should process results as they land |
+| net10 | C# 14 `field` keyword, extension members | property backing fields, cleaner APIs |
+
+**When a TFM is dropped from `Directory.Build.props`, delete the corresponding `#if` fallbacks in the same PR.** Leaving dead legacy branches behind is how the "we still target net8" excuse outlives net8. When `net11.0` is added, re-audit this table and the `#if` sites rather than inheriting them unchanged.
+
+### Measure — do not assert
+
+- A performance claim without a number is not a finding. Write a **BenchmarkDotNet** case under `tests/benchmarks/FlowOrchestrator.Benchmarks` (`[MemoryDiagnoser]`, pinned `[SimpleJob]`) and quote ns + bytes.
+- Record before/after in `docs/benchmarks/` **in the PR that lands the change**, so both columns sit in one document.
+- **Unit tests do not catch throughput regressions and never will.** Anything touching the engine continuation, the loop primitives, expression resolution, or a storage query shape needs a run of the stress harness against a real backend, and the numbers go in the PR description.
+- The stress harness targets what unit and integration tests structurally cannot: client disconnects mid-request, concurrent signal floods, and `ForEach` at 100+ iterations where the per-iteration cost trend — not the absolute number — exposes superlinear behaviour. A flat trend is the pass condition; a rising one is a bug even when every assertion is green.
+- `aspnetcore.diagnostics.exceptions` is an **error** counter, not a performance metric. For performance read `http.server.request.duration`, `dotnet.gc.heap.total_allocated`, `dotnet.gc.collections`, and `dotnet.thread_pool.queue.length`.
+
+### Never put a request-scoped `CancellationToken` into background work
+
+`http.RequestAborted` fires the instant the caller disconnects. Any work that must outlive the request — a dispatch, a resume nudge, a fire-and-forget write — takes `CancellationToken.None`. Passing the request token there silently drops the work: it has already caused "`WaitForSignal` never resumes" twice (v1.26.1, and again in the #188 fix). Cancellation is correct **before** the durable write, never after it.
+
+Conversely, an aborted request must not surface as an unhandled exception. Catch `OperationCanceledException` when `RequestAborted` is signalled and return quietly, so a client disconnect does not pollute error telemetry.
+
 ## Commands
 
 ```bash

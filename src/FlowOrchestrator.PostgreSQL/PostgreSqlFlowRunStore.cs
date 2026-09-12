@@ -269,6 +269,16 @@ public sealed class PostgreSqlFlowRunStore :
         return (rows, totalCount);
     }
 
+    /// <inheritdoc/>
+    public async Task<FlowRunRecord?> GetRunAsync(Guid runId)
+    {
+        // One indexed single-row read. The interface default would run GetRunDetailAsync, i.e. this
+        // query plus every flow_steps and flow_step_attempts row for the run including their
+        // unbounded JSON columns.
+        await using var conn = new NpgsqlConnection(_connectionString);
+        return await GetRunCoreAsync(conn, runId);
+    }
+
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
@@ -316,11 +326,18 @@ public sealed class PostgreSqlFlowRunStore :
         stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(DISTINCT flow_id) FROM flow_runs");
         stats.ActiveRuns = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM flow_runs WHERE status = 'Running'");
         // "Today" is bucketed in UTC so the count matches the other backends regardless of the
-        // database session time zone (completed_at::date / CURRENT_DATE would otherwise use it).
+        // database session time zone. Boundaries are computed here rather than in SQL deliberately:
+        // wrapping completed_at in (… AT TIME ZONE 'UTC')::date made the predicate non-sargable, so
+        // both counts sequential-scanned flow_runs — on an endpoint the dashboard polls every
+        // 5 seconds, per connected browser. A half-open range over the bare column keeps the
+        // identical UTC bucketing and lets the index be used.
+        var todayUtc = DateTimeOffset.UtcNow.UtcDateTime.Date;
+        var bounds = new { From = new DateTimeOffset(todayUtc, TimeSpan.Zero), To = new DateTimeOffset(todayUtc.AddDays(1), TimeSpan.Zero) };
+
         stats.CompletedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Succeeded' AND (completed_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date");
+            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Succeeded' AND completed_at >= @From AND completed_at < @To", bounds);
         stats.FailedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Failed' AND (completed_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date");
+            "SELECT COUNT(*) FROM flow_runs WHERE status = 'Failed' AND completed_at >= @From AND completed_at < @To", bounds);
         return stats;
     }
 
@@ -479,6 +496,20 @@ public sealed class PostgreSqlFlowRunStore :
             new { RunId = runId });
 
         return rows.AsList();
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> IsStepClaimedAsync(Guid runId, string stepKey)
+    {
+        // Point lookup on the (run_id, step_key) primary key. The interface default would fetch every
+        // claimed key in the run — one row per executed step, since claims are never released on
+        // terminal statuses — to answer a single-key question.
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var exists = await conn.ExecuteScalarAsync<int?>(
+            "SELECT 1 FROM flow_step_claims WHERE run_id = @RunId AND step_key = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
+
+        return exists is not null;
     }
 
     public async Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
@@ -712,6 +743,22 @@ public sealed class PostgreSqlFlowRunStore :
             DELETE FROM flow_step_claims fsc
             USING flow_runs fr
             WHERE fr.id = fsc.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            -- flow_step_dispatches and flow_signal_waiters are keyed (run_id, step_key) with no
+            -- foreign key to flow_runs, so deleting the run does NOT cascade to them. Without these
+            -- two statements both tables accumulate one row per dispatched step / parked signal for
+            -- every run ever executed and are never reclaimed by retention.
+            DELETE FROM flow_step_dispatches fsd
+            USING flow_runs fr
+            WHERE fr.id = fsd.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_signal_waiters fsw
+            USING flow_runs fr
+            WHERE fr.id = fsw.run_id
               AND fr.completed_at IS NOT NULL
               AND fr.completed_at < @CutoffUtc;
 

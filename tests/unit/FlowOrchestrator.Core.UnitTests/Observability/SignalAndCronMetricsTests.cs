@@ -54,7 +54,7 @@ public sealed class SignalAndCronMetricsTests
             }));
 
         var runStore = Substitute.For<IFlowRunStore>();
-        runStore.GetRunDetailAsync(runId).Returns(Task.FromResult<FlowRunRecord?>(new FlowRunRecord
+        runStore.GetRunAsync(runId).Returns(Task.FromResult<FlowRunRecord?>(new FlowRunRecord
         {
             Id = runId,
             FlowId = Guid.NewGuid(),
@@ -108,7 +108,7 @@ public sealed class SignalAndCronMetricsTests
             .Returns(new ValueTask<SignalDeliveryResult>(new SignalDeliveryResult(SignalDeliveryStatus.Delivered, "wait", DateTimeOffset.UtcNow)));
 
         var runStore = Substitute.For<IFlowRunStore>();
-        runStore.GetRunDetailAsync(runId).Returns(Task.FromResult<FlowRunRecord?>(new FlowRunRecord
+        runStore.GetRunAsync(runId).Returns(Task.FromResult<FlowRunRecord?>(new FlowRunRecord
         {
             Id = runId,
             FlowId = Guid.NewGuid(),

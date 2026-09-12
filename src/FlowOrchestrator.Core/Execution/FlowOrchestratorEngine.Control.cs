@@ -13,6 +13,34 @@ namespace FlowOrchestrator.Core.Execution;
 /// </summary>
 public sealed partial class FlowOrchestratorEngine
 {
+    /// <summary>
+    /// Returns <see langword="true"/> when any key in <paramref name="keys"/> has no status row yet.
+    /// </summary>
+    /// <param name="keys">Claimed or dispatched step keys — the small side, typically a handful.</param>
+    /// <param name="statuses">Every status row in the run — the large side, one entry per step.</param>
+    /// <remarks>
+    /// Equivalent to <c>keys.Except(statuses.Keys, StringComparer.Ordinal).Any()</c>, which this
+    /// replaced. <see cref="Enumerable.Except{TSource}(IEnumerable{TSource}, IEnumerable{TSource}, IEqualityComparer{TSource}?)"/>
+    /// builds a hash set from its SECOND argument before yielding anything, so that form paid a
+    /// full set-build over every status row in the run on every step completion — 17.8 µs and 32 KB
+    /// at 1500 steps, against 13 ns and zero allocation for this walk. Both store implementations
+    /// build the status dictionary with <see cref="StringComparer.Ordinal"/>, so
+    /// <see cref="IReadOnlyDictionary{TKey, TValue}.ContainsKey"/> matches the comparer the old
+    /// call site passed explicitly.
+    /// </remarks>
+    private static bool AnyMissingStatus(IEnumerable<string> keys, IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        foreach (var key in keys)
+        {
+            if (!statuses.ContainsKey(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private async Task<bool> TryScheduleStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
     {
         // Guard: dispatch ledger — prevents enqueueing the same step twice (recovery, retry, at-least-once queue).
@@ -74,7 +102,7 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         var claimed = await _runtimeStore.GetClaimedStepKeysAsync(runId).ConfigureAwait(false);
-        if (claimed.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        if (AnyMissingStatus(claimed, statuses))
         {
             return true;
         }
@@ -88,7 +116,7 @@ public sealed partial class FlowOrchestratorEngine
         // dispatch and claim widens enough for this to fire. Guarding against it makes
         // termination strictly safer with no production downside.
         var dispatched = await _runStore.GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
-        if (dispatched.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        if (AnyMissingStatus(dispatched, statuses))
         {
             return true;
         }
@@ -345,13 +373,13 @@ public sealed partial class FlowOrchestratorEngine
 
         // A claimed or dispatched key with no status row is a worker that is about to record one.
         var claimed = await _runtimeStore.GetClaimedStepKeysAsync(run.Id).ConfigureAwait(false);
-        if (claimed.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        if (AnyMissingStatus(claimed, statuses))
         {
             return false;
         }
 
         var dispatched = await _runStore.GetDispatchedStepKeysAsync(run.Id).ConfigureAwait(false);
-        if (dispatched.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        if (AnyMissingStatus(dispatched, statuses))
         {
             return false;
         }

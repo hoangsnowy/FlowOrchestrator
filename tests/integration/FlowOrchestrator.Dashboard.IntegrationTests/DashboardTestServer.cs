@@ -20,7 +20,27 @@ public sealed class DashboardTestServer : IDisposable
     private readonly WebApplication _app;
 
     public IFlowStore FlowStore { get; } = Substitute.For<IFlowStore>();
-    public IFlowRunStore FlowRunStore { get; } = Substitute.For<IFlowRunStore>();
+
+    /// <summary>
+    /// Fake run store. <see cref="IFlowRunStore.GetRunAsync"/> is pre-wired to forward to
+    /// <see cref="IFlowRunStore.GetRunDetailAsync"/>, mirroring the interface's own default
+    /// implementation.
+    /// </summary>
+    /// <remarks>
+    /// NSubstitute proxies intercept default interface methods rather than running their bodies, so
+    /// without this every test that arranges <c>GetRunDetailAsync</c> would silently get
+    /// <see langword="null"/> back from an endpoint that reads the header only — surfacing as a 404
+    /// across unrelated tests. Arranging <c>GetRunAsync</c> explicitly in a test still overrides this.
+    /// </remarks>
+    public IFlowRunStore FlowRunStore { get; } = CreateRunStore();
+
+    private static IFlowRunStore CreateRunStore()
+    {
+        var store = Substitute.For<IFlowRunStore>();
+        store.GetRunAsync(Arg.Any<Guid>())
+             .Returns(call => store.GetRunDetailAsync(call.Arg<Guid>()));
+        return store;
+    }
     public IFlowRunControlStore RunControlStore { get; } = Substitute.For<IFlowRunControlStore>();
     public IFlowRunRuntimeStore RuntimeStore { get; } = Substitute.For<IFlowRunRuntimeStore>();
     public IFlowRepository FlowRepository { get; } = Substitute.For<IFlowRepository>();

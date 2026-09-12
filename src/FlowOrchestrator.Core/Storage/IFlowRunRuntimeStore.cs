@@ -18,6 +18,27 @@ public interface IFlowRunRuntimeStore
     Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId);
 
     /// <summary>
+    /// Returns whether one specific step currently holds an execution claim.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step to test.</param>
+    /// <returns><see langword="true"/> when a claim row exists for <c>(runId, stepKey)</c>.</returns>
+    /// <remarks>
+    /// A point lookup for callers that need membership rather than enumeration — notably
+    /// <c>FlowSignalDispatcher</c>, which asks about a single parked step on every signal delivery.
+    /// Claims are deliberately NOT released when a step reaches a terminal status (the row is what
+    /// makes execution exactly-once under at-least-once delivery), so <see cref="GetClaimedStepKeysAsync"/>
+    /// returns one key per executed step and grows with run length; answering a single-key question
+    /// through it is O(n) in both payload and scan. The default implementation does exactly that, so
+    /// existing stores keep compiling — override it with an indexed lookup.
+    /// </remarks>
+    async Task<bool> IsStepClaimedAsync(Guid runId, string stepKey)
+    {
+        var claimed = await GetClaimedStepKeysAsync(runId).ConfigureAwait(false);
+        return claimed.Contains(stepKey, StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Atomically claims a step for execution, returning <see langword="true"/> if this caller
     /// acquired the claim or <see langword="false"/> if another worker already claimed it.
     /// </summary>

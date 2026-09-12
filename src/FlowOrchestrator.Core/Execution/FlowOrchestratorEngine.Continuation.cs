@@ -39,12 +39,20 @@ public sealed partial class FlowOrchestratorEngine
         var statuses = await _runtimeStore!.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
         var evaluation = _graphPlanner.Evaluate(flow, statuses);
 
+        // Tracks whether this pass actually wrote a status row. The re-read below exists to observe
+        // those writes; when nothing was skipped — the common case, since most completions unblock
+        // no dependents at all — the map in hand is already current and re-fetching it costs a full
+        // round-trip returning every step row in the run, on every step completion.
+        var skippedAny = false;
+
         foreach (var blockedStepKey in evaluation.BlockedStepKeys)
         {
             if (!await _runtimeStore.TryClaimStepAsync(ctx.RunId, blockedStepKey).ConfigureAwait(false))
             {
                 continue;
             }
+
+            skippedAny = true;
 
             var metadata = flow.Manifest.Steps.FindStep(blockedStepKey);
             await _runtimeStore.RecordSkippedStepAsync(
@@ -71,7 +79,10 @@ public sealed partial class FlowOrchestratorEngine
                 blockedStepKey).ConfigureAwait(false);
         }
 
-        statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+        if (skippedAny)
+        {
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+        }
 
         // Loop advance: the step that just finished may have been the last outstanding child of an
         // enclosing loop — which either frees a concurrency slot for the next iteration, or, when no
@@ -163,7 +174,7 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         var claimed = await _runtimeStore.GetClaimedStepKeysAsync(ctx.RunId).ConfigureAwait(false);
-        if (claimed.Except(statuses.Keys, StringComparer.Ordinal).Any())
+        if (AnyMissingStatus(claimed, statuses))
         {
             return;
         }

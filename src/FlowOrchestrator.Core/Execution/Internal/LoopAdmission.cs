@@ -125,12 +125,7 @@ internal static class LoopAdmission
             return [];
         }
 
-        var firstPending = 0;
-        while (firstPending < iterations
-               && IsIterationStarted(entries, runtimeLoopKey, firstPending, statuses, dispatchedStepKeys))
-        {
-            firstPending++;
-        }
+        var firstPending = FindFirstPending(entries, runtimeLoopKey, iterations, statuses, dispatchedStepKeys);
 
         if (firstPending >= iterations)
         {
@@ -175,6 +170,77 @@ internal static class LoopAdmission
     }
 
     /// <summary>
+    /// Returns the lowest iteration index that has not been handed out yet, or
+    /// <paramref name="iterations"/> when every iteration has started.
+    /// </summary>
+    /// <param name="entries">Entry children of the scope — the steps an admission dispatches.</param>
+    /// <param name="runtimeLoopKey">Runtime key of the scope step.</param>
+    /// <param name="iterations">Iteration count the scope recorded in its output.</param>
+    /// <param name="statuses">Current runtime status map for the run.</param>
+    /// <param name="dispatchedStepKeys">Step keys with a live dispatch-ledger row.</param>
+    /// <remarks>
+    /// Started iterations form a prefix: <see cref="NextAdmissions"/> only ever admits the
+    /// contiguous block <c>[firstPending, firstPending + slots)</c>, so an iteration can only have
+    /// started if every lower one did. That monotonicity is what makes the boundary findable by
+    /// galloping search — double the stride until an unstarted index is found, then binary-search
+    /// the last interval — in O(log n) probes.
+    /// <para>
+    /// The previous implementation walked <c>0..k</c> linearly on every call. Since this runs on
+    /// every step completion, the walk made a loop run O(n²) overall: measured at 139 µs and 272 KB
+    /// per call at 500 started iterations, and observable end-to-end as late iterations costing
+    /// ~3.8× early ones on a 150-iteration run.
+    /// </para>
+    /// </remarks>
+    private static int FindFirstPending(
+        IReadOnlyList<KeyValuePair<string, StepMetadata>> entries,
+        string runtimeLoopKey,
+        int iterations,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        IReadOnlySet<string> dispatchedStepKeys)
+    {
+        if (!IsIterationStarted(entries, runtimeLoopKey, 0, statuses, dispatchedStepKeys))
+        {
+            return 0;
+        }
+
+        // Gallop: find the first unstarted index by doubling the stride from the known-started 0.
+        // `low` is always started, `high` is the first index known NOT to be started (or the end).
+        var low = 0;
+        var stride = 1;
+        var high = iterations;
+        while (low + stride < iterations)
+        {
+            var probe = low + stride;
+            if (IsIterationStarted(entries, runtimeLoopKey, probe, statuses, dispatchedStepKeys))
+            {
+                low = probe;
+                stride <<= 1;
+            }
+            else
+            {
+                high = probe;
+                break;
+            }
+        }
+
+        // Binary-search the boundary inside (low, high).
+        while (high - low > 1)
+        {
+            var mid = low + ((high - low) >> 1);
+            if (IsIterationStarted(entries, runtimeLoopKey, mid, statuses, dispatchedStepKeys))
+            {
+                low = mid;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+
+        return high;
+    }
+
+    /// <summary>
     /// Returns <see langword="true"/> when iteration <paramref name="index"/> has already been
     /// handed out — an entry child either carries a status row or holds a dispatch-ledger row.
     /// </summary>
@@ -185,12 +251,21 @@ internal static class LoopAdmission
         IReadOnlyDictionary<string, StepStatus> statuses,
         IReadOnlySet<string> dispatchedStepKeys)
     {
+        // Built once per probe rather than once per entry child, and walked with a foreach rather
+        // than an Any(lambda): the closure plus two concatenations per child were the bulk of the
+        // 544 bytes each probe used to allocate.
         var prefix = $"{runtimeLoopKey}.{index}.";
 
-        // Any() for the same reason IsIterationSettled uses All() — the CodeQL-preferred shape
-        // over a foreach whose body is a single guard (cs/linq/missed-where).
-        return entries.Any(entry =>
-            statuses.ContainsKey(prefix + entry.Key) || dispatchedStepKeys.Contains(prefix + entry.Key));
+        foreach (var entry in entries)
+        {
+            var key = prefix + entry.Key;
+            if (statuses.ContainsKey(key) || dispatchedStepKeys.Contains(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsTerminal(StepStatus status) =>

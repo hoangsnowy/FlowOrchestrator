@@ -241,6 +241,26 @@ public static class DashboardServiceCollectionExtensions
                       ?? new FlowDashboardOptions();
         var group = endpoints.MapGroup(basePath);
 
+        // A caller that goes away mid-request — a load balancer timing out, a closed browser tab, a
+        // fire-and-forget webhook — cancels HttpContext.RequestAborted, and every store call that
+        // honours it then throws. Without this filter that exception reaches the diagnostics
+        // middleware and is counted as an unhandled fault, so `aspnetcore.diagnostics.exceptions`
+        // climbs and the app reads as broken when nothing is. Swallow it only when the request was
+        // genuinely aborted: there is no response to write at that point, and a cancellation from
+        // any other source must still surface. Registered before the auth filter so it also covers
+        // a disconnect during authentication.
+        group.AddEndpointFilter(async (ctx, next) =>
+        {
+            try
+            {
+                return await next(ctx);
+            }
+            catch (OperationCanceledException) when (ctx.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                return Results.Empty;
+            }
+        });
+
         if (options.BasicAuth.IsEnabled)
         {
             group.AddEndpointFilter(new FlowDashboardBasicAuthFilter(options.BasicAuth));
@@ -783,7 +803,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapPost("/api/runs/{runId:guid}/cancel", async (HttpContext http, IFlowRunStore store, IServiceProvider services, Guid runId) =>
         {
-            var run = await store.GetRunDetailAsync(runId);
+            var run = await store.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -926,7 +946,7 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var run = await runStore.GetRunDetailAsync(runId);
+            var run = await runStore.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -971,7 +991,7 @@ public static class DashboardServiceCollectionExtensions
             var runControlOptions = http.RequestServices.GetService<FlowOrchestrator.Core.Configuration.FlowRunControlOptions>()
                                     ?? new FlowOrchestrator.Core.Configuration.FlowRunControlOptions();
 
-            var run = await runStore.GetRunDetailAsync(runId);
+            var run = await runStore.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -1015,7 +1035,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapGet("/api/runs/{runId:guid}/lineage", async (HttpContext http, IFlowRunStore store, Guid runId) =>
         {
-            var run = await store.GetRunDetailAsync(runId);
+            var run = await store.GetRunAsync(runId);
             if (run is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -1027,7 +1047,7 @@ public static class DashboardServiceCollectionExtensions
             FlowRunRecord? source = null;
             if (run.SourceRunId is { } sourceId)
             {
-                source = await store.GetRunDetailAsync(sourceId);
+                source = await store.GetRunAsync(sourceId);
             }
 
             // Derived — runs that were re-run from THIS run (children).

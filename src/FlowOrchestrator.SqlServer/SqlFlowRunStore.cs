@@ -223,6 +223,16 @@ public sealed class SqlFlowRunStore :
         return (rows, totalCount);
     }
 
+    /// <inheritdoc/>
+    public async Task<FlowRunRecord?> GetRunAsync(Guid runId)
+    {
+        // One indexed single-row read. The interface default would run GetRunDetailAsync, i.e. this
+        // query plus every FlowSteps and FlowStepAttempts row for the run including their
+        // NVARCHAR(MAX) JSON columns.
+        await using var conn = new SqlConnection(_connectionString);
+        return await GetRunCoreAsync(conn, runId);
+    }
+
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
         await using var conn = new SqlConnection(_connectionString);
@@ -251,12 +261,18 @@ public sealed class SqlFlowRunStore :
         stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(DISTINCT FlowId) FROM FlowRuns");
         stats.ActiveRuns = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Running'");
         // "Today" is bucketed in UTC so the count is identical across storage backends and
-        // independent of the SQL Server host's local time zone (SYSDATETIMEOFFSET would otherwise
-        // use the server's offset). CompletedAt is converted to UTC before truncating to a date.
+        // independent of the SQL Server host's local time zone. The boundaries are computed here
+        // rather than in SQL deliberately: wrapping CompletedAt in CAST(... AT TIME ZONE ... AS DATE)
+        // made the predicate non-sargable, so both counts scanned FlowRuns — on an endpoint the
+        // dashboard polls every 5 seconds, per connected browser. A half-open range over the bare
+        // column keeps the identical UTC bucketing and lets the index seek.
+        var todayUtc = DateTimeOffset.UtcNow.UtcDateTime.Date;
+        var bounds = new { From = new DateTimeOffset(todayUtc, TimeSpan.Zero), To = new DateTimeOffset(todayUtc.AddDays(1), TimeSpan.Zero) };
+
         stats.CompletedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Succeeded' AND CAST(CompletedAt AT TIME ZONE 'UTC' AS DATE) = CAST(SYSUTCDATETIME() AS DATE)");
+            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Succeeded' AND CompletedAt >= @From AND CompletedAt < @To", bounds);
         stats.FailedToday = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Failed' AND CAST(CompletedAt AT TIME ZONE 'UTC' AS DATE) = CAST(SYSUTCDATETIME() AS DATE)");
+            "SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Failed' AND CompletedAt >= @From AND CompletedAt < @To", bounds);
         return stats;
     }
 
@@ -398,6 +414,20 @@ public sealed class SqlFlowRunStore :
             new { RunId = runId });
 
         return rows.AsList();
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> IsStepClaimedAsync(Guid runId, string stepKey)
+    {
+        // Point lookup on the (RunId, StepKey) primary key. The interface default would fetch every
+        // claimed key in the run — one row per executed step, since claims are never released on
+        // terminal statuses — to answer a single-key question.
+        await using var conn = new SqlConnection(_connectionString);
+        var exists = await conn.ExecuteScalarAsync<int?>(
+            "SELECT 1 FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
+
+        return exists is not null;
     }
 
     public async Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
@@ -644,6 +674,22 @@ public sealed class SqlFlowRunStore :
             DELETE fsc
             FROM FlowStepClaims fsc
             INNER JOIN FlowRuns fr ON fr.Id = fsc.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            -- FlowStepDispatches and FlowSignalWaiters are keyed (RunId, StepKey) with no foreign
+            -- key to FlowRuns, so deleting the run does NOT cascade to them. Without these two
+            -- statements both tables accumulate one row per dispatched step / parked signal for
+            -- every run ever executed and are never reclaimed by retention.
+            DELETE fsd
+            FROM FlowStepDispatches fsd
+            INNER JOIN FlowRuns fr ON fr.Id = fsd.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fsw
+            FROM FlowSignalWaiters fsw
+            INNER JOIN FlowRuns fr ON fr.Id = fsw.RunId
             WHERE fr.CompletedAt IS NOT NULL
               AND fr.CompletedAt < @CutoffUtc;
 
