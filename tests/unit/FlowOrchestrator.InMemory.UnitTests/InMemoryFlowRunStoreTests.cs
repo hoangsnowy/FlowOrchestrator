@@ -791,8 +791,8 @@ public class InMemoryFlowRunStoreTests
         await _sut.CompleteRunAsync(beforeCutoffRunId, "Succeeded");
 
         // Force exact completion timestamps relative to the cutoff.
-        (await _sut.GetRunDetailAsync(atCutoffRunId))!.CompletedAt = cutoff;
-        (await _sut.GetRunDetailAsync(beforeCutoffRunId))!.CompletedAt = cutoff.AddTicks(-1);
+        _sut.TryMutateRunForTests(atCutoffRunId, r => r.CompletedAt = cutoff);
+        _sut.TryMutateRunForTests(beforeCutoffRunId, r => r.CompletedAt = cutoff.AddTicks(-1));
 
         // Act
         await _sut.CleanupAsync(cutoff, CancellationToken.None);
@@ -806,12 +806,14 @@ public class InMemoryFlowRunStoreTests
     {
         var runId = Guid.NewGuid();
         await _sut.StartRunAsync(flowId, "Flow", runId, "manual", null, null);
-        var record = (await _sut.GetRunDetailAsync(runId))!;
-        record.StartedAt = startedAt;
-        if (status != "Running" && durationMs.HasValue)
+        _sut.TryMutateRunForTests(runId, record =>
         {
-            record.CompletedAt = startedAt + TimeSpan.FromMilliseconds(durationMs.Value);
-            record.Status = status;
-        }
+            record.StartedAt = startedAt;
+            if (status != "Running" && durationMs.HasValue)
+            {
+                record.CompletedAt = startedAt + TimeSpan.FromMilliseconds(durationMs.Value);
+                record.Status = status;
+            }
+        });
     }
 }

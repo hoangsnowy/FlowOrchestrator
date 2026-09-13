@@ -6,6 +6,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **`InMemoryFlowRunStore` read paths handed back the live run record, so status and steps could be
+  read from different instants.** The store keeps one `FlowRunRecord` per run and mutates it in
+  place — `CompleteRunAsync` writes `Status` and `CompletedAt` onto the stored object — while
+  `GetRunDetailAsync` returned that same instance with a step list built inside the call. A caller
+  that read `run.Status` after the call returned (which is exactly what
+  `FlowOrchestrator.Testing.Internal.RunPoller` does when it tests a run for terminality) could
+  therefore observe a terminal run paired with the step list as it stood one instant earlier. That
+  is the CI-only `HappyPathTests.LinearFlow_runs_to_completion` failure — `Expected: 3, Actual: 2`
+  steps on a run the engine had in fact completed correctly — which blocked the v1.32.0 publish job.
+  Both reads now return a snapshot: the header is cloned *before* the steps are enumerated, so a
+  status is never newer than the step list beside it, mirroring the query order both SQL backends
+  already use. The detail read also no longer writes its step list onto the shared record, which had
+  been leaking a stale `Steps` collection into later list-view reads that document it as `null`.
+  Added `InMemoryFlowRunStoreSnapshotTests` (5 cases) pinning the contract, plus an internal
+  `TryMutateRunForTests` seam for the retention and time-series tests that used to arrange
+  timestamps by mutating the record a read returned.
+
 ## [1.32.0] - 2026-09-12
 
 ### Fixed

@@ -27,7 +27,7 @@ public class InMemoryFlowRunStoreCleanupTests
         await _sut.TryRecordDispatchAsync(runId, "a");
         await _sut.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
         await _sut.CompleteRunAsync(runId, "Succeeded");
-        (await _sut.GetRunDetailAsync(runId))!.CompletedAt = DateTimeOffset.UtcNow.AddDays(-30);
+        _sut.TryMutateRunForTests(runId, r => r.CompletedAt = DateTimeOffset.UtcNow.AddDays(-30));
 
         // Act
         await _sut.CleanupAsync(DateTimeOffset.UtcNow, CancellationToken.None);
@@ -55,7 +55,7 @@ public class InMemoryFlowRunStoreCleanupTests
             await _sut.TryRecordDispatchAsync(id, "a");
             await _sut.RecordStepCompleteAsync(id, "a", "Succeeded", null, null);
             await _sut.CompleteRunAsync(id, "Succeeded");
-            (await _sut.GetRunDetailAsync(id))!.CompletedAt = DateTimeOffset.UtcNow.AddDays(-30);
+            _sut.TryMutateRunForTests(id, r => r.CompletedAt = DateTimeOffset.UtcNow.AddDays(-30));
         }
 
         // Act
@@ -78,7 +78,7 @@ public class InMemoryFlowRunStoreCleanupTests
         await _sut.StartRunAsync(Guid.NewGuid(), "Flow", oldRun, "manual", null, null);
         await _sut.TryRecordDispatchAsync(oldRun, "a");
         await _sut.CompleteRunAsync(oldRun, "Succeeded");
-        (await _sut.GetRunDetailAsync(oldRun))!.CompletedAt = DateTimeOffset.UtcNow.AddDays(-30);
+        _sut.TryMutateRunForTests(oldRun, r => r.CompletedAt = DateTimeOffset.UtcNow.AddDays(-30));
 
         var recentRun = Guid.NewGuid();
         await _sut.StartRunAsync(Guid.NewGuid(), "Flow", recentRun, "manual", null, null);
