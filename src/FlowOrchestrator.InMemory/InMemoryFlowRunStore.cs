@@ -211,13 +211,50 @@ public sealed class InMemoryFlowRunStore :
 
     /// <inheritdoc/>
     public Task<FlowRunRecord?> GetRunAsync(Guid runId)
-        // Header only: no step enumeration, no attempt materialisation.
-        => Task.FromResult(_runs.TryGetValue(runId, out var run) ? run : null);
+        // Header only: no step enumeration, no attempt materialisation. Cloned for the same reason
+        // as GetRunDetailAsync — the write path mutates the stored record in place, so a caller
+        // holding the live instance sees Status and CompletedAt change under it.
+        => Task.FromResult(_runs.TryGetValue(runId, out var run) ? CloneRunRecord(run) : null);
+
+    /// <summary>
+    /// Test seam: applies <paramref name="mutate"/> to the stored run header in place.
+    /// </summary>
+    /// <param name="runId">The run to mutate.</param>
+    /// <param name="mutate">Mutation applied to the live record (e.g. back-dating <c>CompletedAt</c>).</param>
+    /// <returns><see langword="true"/> when the run exists and was mutated.</returns>
+    /// <remarks>
+    /// Retention and time-series tests need timestamps the public API cannot produce (a run that
+    /// completed 30 days ago). They used to arrange that by mutating the record a read returned,
+    /// which only worked while the reads leaked the live instance; they no longer do.
+    /// </remarks>
+    internal bool TryMutateRunForTests(Guid runId, Action<FlowRunRecord> mutate)
+    {
+        if (!_runs.TryGetValue(runId, out var run))
+        {
+            return false;
+        }
+
+        mutate(run);
+        return true;
+    }
 
     public Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
-        if (!_runs.TryGetValue(runId, out var run))
+        if (!_runs.TryGetValue(runId, out var live))
             return Task.FromResult<FlowRunRecord?>(null);
+
+        // Snapshot the header BEFORE enumerating steps, and hand back the copy — never the live
+        // record. Returning the live instance made this a torn read: Status/CompletedAt are mutated
+        // in place by CompleteRunAsync, so a caller that read run.Status after this method returned
+        // could observe a terminal run paired with the step list as it stood at enumeration time.
+        // That is the CI-only "Expected 3 steps, Actual 2" failure in
+        // HappyPathTests.LinearFlow_runs_to_completion: the poll captured two step rows while the
+        // run was still Running, and the engine completed the run in the window before the caller
+        // read Status off the same object. Header-first ordering mirrors the SQL backends (run row,
+        // then steps, then attempts) and makes the pairing safe in the only direction that matters —
+        // the steps are never older than the status. Cloning also stops this read path from writing
+        // Steps onto shared state, which leaked a stale step list into later list-view reads.
+        var run = CloneRunRecord(live);
 
         // Enumerate step keys for this run via the secondary index, then
         // direct-look-up each step record. O(steps_in_run) vs the prior
@@ -788,6 +825,25 @@ public sealed class InMemoryFlowRunStore :
 
     private static bool ContainsIgnoreCase(string? value, string search)
         => !string.IsNullOrEmpty(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Copies a run header so readers get an immutable point-in-time snapshot instead of the live
+    /// record the write path mutates in place.
+    /// </summary>
+    private static FlowRunRecord CloneRunRecord(FlowRunRecord run) => new()
+    {
+        Id = run.Id,
+        FlowId = run.FlowId,
+        FlowName = run.FlowName,
+        Status = run.Status,
+        TriggerKey = run.TriggerKey,
+        TriggerDataJson = run.TriggerDataJson,
+        TriggerHeaders = run.TriggerHeaders,
+        BackgroundJobId = run.BackgroundJobId,
+        StartedAt = run.StartedAt,
+        CompletedAt = run.CompletedAt,
+        SourceRunId = run.SourceRunId
+    };
 
     private static FlowStepRecord CloneStepRecord(FlowStepRecord step) => new()
     {
