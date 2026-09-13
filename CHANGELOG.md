@@ -6,6 +6,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.32.1] - 2026-09-13
+
+> **`1.32.0` was tagged but never reached NuGet.org.** Its publish job failed at `Test (Integration)`
+> on the very bug fixed below, before the pack and push steps ran, so the tag and the GitHub release
+> exist while the package does not. `1.32.1` is therefore the first stable release carrying the
+> v1.32.0 changes; the only 1.32.0 artifact on NuGet is `1.32.0-preview.182`, built from the same
+> commit the tag points at.
+
 ### Fixed
 
 - **`InMemoryFlowRunStore` read paths handed back the live run record, so status and steps could be
