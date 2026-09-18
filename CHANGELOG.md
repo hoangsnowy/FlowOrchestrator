@@ -6,6 +6,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.32.2] - 2026-09-18
+
+### Changed
+
+- **Dependency roll-up of the ten open Dependabot PRs.** No product code changed; this release exists
+  to ship the refreshed transitive surface (notably `System.Text.Json` and `Microsoft.Data.SqlClient`,
+  both on the runtime path) to consumers who pin FlowOrchestrator rather than the dependencies directly.
+  - `Aspire.Hosting.Azure.ServiceBus` 13.4.6 -> 13.5.3 (#196), `Aspire.Hosting.PostgreSQL` 13.4.6 -> 13.5.3 (#197) — AppHost only, not part of the shipped packages.
+  - `Dapper` 2.1.79 -> 2.1.86 (#198) — the SQL Server and PostgreSQL stores' query path.
+  - `Microsoft.Data.SqlClient` 7.0.2 -> 7.0.3 (#200).
+  - `Microsoft.Extensions.DependencyInjection.Abstractions` and `Microsoft.Extensions.Logging.Abstractions` 10.0.11 -> 10.0.12 (#202).
+  - `System.Text.Json` 10.0.11 -> 10.0.12 (#205) — expression resolution and every stored payload.
+  - Test-only: `Microsoft.AspNetCore.TestHost` 8.0.30 -> 8.0.31 (#199), `Microsoft.Extensions.TimeProvider.Testing` 10.9.0 -> 10.10.0 (#203), `Microsoft.NET.Test.Sdk` 18.9.0 -> 18.10.0 (#204).
+  - CI-only: `github/codeql-action` 4.37.9 -> 4.38.0 (#195).
+
 ## [1.32.1] - 2026-09-13
 
 > **`1.32.0` was tagged but never reached NuGet.org.** Its publish job failed at `Test (Integration)`
