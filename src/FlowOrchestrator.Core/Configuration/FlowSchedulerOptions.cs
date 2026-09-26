@@ -99,6 +99,16 @@ public sealed class FlowSignalOptions
     /// <summary>The default for <see cref="IndefiniteParkInterval"/>: 24 hours.</summary>
     public static readonly TimeSpan DefaultIndefiniteParkInterval = TimeSpan.FromHours(24);
 
+    /// <summary>The largest honoured <see cref="IndefiniteParkInterval"/>: 30 days.</summary>
+    /// <remarks>
+    /// The InMemory runtime waits out a schedule with <see cref="Task.Delay(TimeSpan)"/>, which rejects
+    /// anything above ~49.7 days — the safety net would then silently never fire — and a value near
+    /// <see cref="TimeSpan.MaxValue"/> overflows the <c>UtcNow + delay</c> every dispatcher computes,
+    /// turning each attempt into a poison job. Larger values are clamped rather than rejected so a
+    /// generous setting degrades to "a month" instead of breaking the step.
+    /// </remarks>
+    public static readonly TimeSpan MaxIndefiniteParkInterval = TimeSpan.FromDays(30);
+
     /// <summary>
     /// How long a <c>WaitForSignal</c> step that declares no <c>timeoutSeconds</c> parks between
     /// safety-net re-invocations. Each re-invocation re-reads the waiter and completes the step when a
@@ -110,7 +120,7 @@ public sealed class FlowSignalOptions
     /// run history of every long-parked step. The engine wakes a parked step directly on delivery, and
     /// re-checks the waiter itself after releasing the claim (#190), so the safety net is a last resort
     /// and the 24-hour default is deliberate. Values at or below <see cref="TimeSpan.Zero"/> are
-    /// ignored and the default is used.
+    /// ignored and the default is used; values above <see cref="MaxIndefiniteParkInterval"/> are clamped.
     /// </remarks>
     public TimeSpan IndefiniteParkInterval { get; set; } = DefaultIndefiniteParkInterval;
 }

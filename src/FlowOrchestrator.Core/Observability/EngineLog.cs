@@ -61,6 +61,9 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3009, Level = LogLevel.Warning, Message = "Could not re-check the signal waiter for parked step {StepKey}; a signal delivered while it held its claim will wake it at its safety-net invocation instead.")]
     public static partial void SignalRecheckFailed(ILogger logger, Exception ex, string stepKey);
 
+    [LoggerMessage(EventId = 3010, Level = LogLevel.Warning, Message = "Could not release the execution claim on step {StepKey} after its Pending hand-off failed; the step stays claimed until the run timeout sweep closes the run.")]
+    public static partial void ClaimReleaseAfterFailedHandOffFailed(ILogger logger, Exception ex, string stepKey);
+
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
 

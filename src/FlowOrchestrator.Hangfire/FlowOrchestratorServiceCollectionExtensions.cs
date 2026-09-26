@@ -115,7 +115,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         }
 
         services.AddStepHandler<ForEachStepHandler>("ForEach");
-        services.AddStepHandler<WaitForSignalHandler>("WaitForSignal");
+        services.AddStepHandler<WaitForSignalHandler>(WaitForSignalHandler.StepTypeName);
         services.TryAddSingleton<IFlowSignalDispatcher, FlowSignalDispatcher>();
 
         return builder;

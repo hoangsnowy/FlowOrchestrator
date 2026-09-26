@@ -80,6 +80,29 @@ public sealed class WaitForSignalParkIntervalTests
         Assert.Equal(FlowSignalOptions.DefaultIndefiniteParkInterval, result.DelayNextStep);
     }
 
+    public static TheoryData<TimeSpan> TooLarge() =>
+    [
+        TimeSpan.FromDays(60),   // past Task.Delay's ~49.7-day ceiling: the InMemory safety net never fired
+        TimeSpan.MaxValue,       // UtcNow + delay overflows in every dispatcher: a poison job
+    ];
+
+    [Theory]
+    [MemberData(nameof(TooLarge))]
+    public async Task Clamps_an_interval_no_runtime_can_honour_to_thirty_days(TimeSpan configured)
+    {
+        // Arrange
+        var options = new FlowSignalOptions { IndefiniteParkInterval = configured };
+        var handler = new WaitForSignalHandler(new InMemoryFlowSignalStore(), options: options);
+
+        // Act
+        var result = await ParkAsync(handler);
+
+        // Assert
+        Assert.Equal(TimeSpan.FromDays(30), result.DelayNextStep);
+        Assert.Equal(FlowSignalOptions.MaxIndefiniteParkInterval, result.DelayNextStep);
+        _ = DateTimeOffset.UtcNow + result.DelayNextStep!.Value; // must not overflow
+    }
+
     [Fact]
     public async Task A_declared_timeout_still_wins_over_the_park_interval()
     {

@@ -76,7 +76,7 @@ public static class LogEvents
     /// <summary>
     /// A <c>Pending</c> reschedule found the step's dispatch-ledger row already recorded by another
     /// party (recovery, a retry) and dispatched the next attempt anyway; the execution claim absorbs
-    /// the duplicate. Logged because a collision here used to be able to strand the step (#186).
+    /// the duplicate. Logged because a collision here used to be able to strand the step (#190, race 2).
     /// </summary>
     public static readonly EventId PendingRescheduleLedgerTaken = new(3007, nameof(PendingRescheduleLedgerTaken));
 
@@ -91,4 +91,10 @@ public static class LogEvents
     /// now waits for the safety-net invocation.
     /// </summary>
     public static readonly EventId SignalRecheckFailed = new(3009, nameof(SignalRecheckFailed));
+
+    /// <summary>
+    /// The Pending path's ledger hand-off threw while the step was still claimed, and the best-effort
+    /// claim release that follows failed too; the step stays claimed until the run timeout sweep.
+    /// </summary>
+    public static readonly EventId ClaimReleaseAfterFailedHandOffFailed = new(3010, nameof(ClaimReleaseAfterFailedHandOffFailed));
 }

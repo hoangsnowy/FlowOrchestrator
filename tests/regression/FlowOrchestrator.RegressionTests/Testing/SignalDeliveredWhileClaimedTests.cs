@@ -113,6 +113,73 @@ public sealed class SignalDeliveredWhileClaimedTests
         Assert.Equal(runs, store.Deliveries);
     }
 
+    [Fact]
+    public async Task A_ForEach_scoped_wait_whose_signal_lands_while_claimed_still_completes_the_loop()
+    {
+        // Arrange — same race on a loop child: the runtime key is "loop.0.wait", which is what the
+        // handler registers the waiter under and what the post-release re-check must read.
+        var store = new RacingSignalStore(holdUntilNudgeLosesClaim: true);
+        using var claimLost = new ClaimLostListener(LoopApprovalFlow.ChildKey);
+        store.ClaimLost = claimLost.FirstLoss;
+        await using var host = await FlowTestHost.For<LoopApprovalFlow>()
+            .WithService<IFlowSignalStore>(store)
+            .WithService<IStepDispatcher, ParallelWorkerStepDispatcher>()
+            .BuildAsync();
+        store.Dispatcher = host.Services.GetRequiredService<IFlowSignalDispatcher>();
+
+        // Act
+        var result = await host.TriggerAsync(body: new { items = new[] { "only" } }, timeout: Budget);
+
+        // Assert
+        Assert.True(claimLost.FirstLoss.Task.IsCompletedSuccessfully, "the race was not reproduced");
+        Assert.False(result.TimedOut, "run stranded: the loop child never resumed");
+        Assert.Equal(RunStatus.Succeeded, result.Status);
+        Assert.Equal(StepStatus.Succeeded, result.Steps[LoopApprovalFlow.ChildKey].Status);
+        Assert.Equal(StepStatus.Succeeded, result.Steps[LoopApprovalFlow.LoopKey].Status);
+        Assert.Single(result.Events, e => e.StepKey == LoopApprovalFlow.ChildKey && e.Type == "step.completed");
+    }
+
+    /// <summary>A one-iteration <c>ForEach</c> whose child parks on <c>WaitForSignal</c>.</summary>
+    public sealed class LoopApprovalFlow : IFlowDefinition
+    {
+        /// <summary>The loop step.</summary>
+        public const string LoopKey = "loop";
+
+        /// <summary>Runtime key of the single iteration's parked child.</summary>
+        public const string ChildKey = "loop.0.wait";
+
+        /// <inheritdoc/>
+        public Guid Id { get; } = new("cccccccc-1901-1901-1901-cccccccccccc");
+
+        /// <inheritdoc/>
+        public string Version => "1.0";
+
+        /// <inheritdoc/>
+        public FlowManifest Manifest { get; set; } = new()
+        {
+            Triggers = new FlowTriggerCollection
+            {
+                ["manual"] = new TriggerMetadata { Type = TriggerType.Manual }
+            },
+            Steps = new StepCollection
+            {
+                [LoopKey] = new LoopStepMetadata
+                {
+                    Type = "ForEach",
+                    ForEach = "@triggerBody()?.items",
+                    Steps = new StepCollection
+                    {
+                        ["wait"] = new StepMetadata
+                        {
+                            Type = "WaitForSignal",
+                            Inputs = new Dictionary<string, object?> { ["signalName"] = "approval" }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
     /// <summary>One-step flow parked on the built-in <c>WaitForSignal</c> with no timeout (24-hour safety net).</summary>
     public sealed class ApprovalFlow : IFlowDefinition
     {

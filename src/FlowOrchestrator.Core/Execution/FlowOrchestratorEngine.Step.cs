@@ -262,8 +262,25 @@ public sealed partial class FlowOrchestratorEngine
                 // step was neither claimed nor reserved. Reserving first means it never is.
                 // Releasing the claim last of all is NOT safe — a fast dispatcher can fire the scheduled
                 // attempt before the release, and then it is that attempt that loses the claim.
-                await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false);
-                var reserved = await _runStore.TryRecordDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                //
+                // Steps 1–2 now run while the claim is held, so a storage fault in either must not leave
+                // it held: the runtime's retry of this job would lose TryClaimStepAsync and exit, recovery
+                // skips a Pending step as in-flight, a signal nudge would lose the claim too — the step
+                // would never run again. On failure, release the claim, re-assert the ledger, rethrow.
+                bool reserved;
+                try
+                {
+                    await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                    reserved = await _runStore.TryRecordDispatchAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Catch-all-and-rethrow, as on the dispatch failure below: never swallowed.
+                    await ReleaseClaimAfterFailedHandOffAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                    await ReassertDispatchAfterFailedRescheduleAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                    throw;
+                }
+
                 if (!reserved)
                 {
                     // Another party (recovery, a retry) recorded the row inside the release/record gap.
@@ -533,6 +550,34 @@ public sealed partial class FlowOrchestratorEngine
     }
 
     /// <summary>
+    /// Best-effort release of the execution claim after the Pending path's ledger hand-off threw while
+    /// the claim was still held, so the runtime's retry of the job can claim the step again.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step whose hand-off failed.</param>
+    /// <remarks>
+    /// Swallows its own failure (logged): it runs on the failure path and must never mask the
+    /// original exception, which the caller rethrows. If the store is down hard enough that this fails
+    /// too, the claim stays held and the run is closed by the timeout sweep — no worse than before.
+    /// </remarks>
+    private async Task ReleaseClaimAfterFailedHandOffAsync(Guid runId, string stepKey)
+    {
+        if (_runtimeStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _runtimeStore.ReleaseStepClaimAsync(runId, stepKey).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.ClaimReleaseAfterFailedHandOffFailed(_logger, ex, stepKey);
+        }
+    }
+
+    /// <summary>
     /// After a <see cref="StepStatus.Pending"/> invocation has released its execution claim, re-reads
     /// the step's signal waiter and enqueues an immediate resume when a payload has already landed.
     /// O(1): one point read per Pending result, plus one dispatch in the rare hit case.
@@ -552,14 +597,25 @@ public sealed partial class FlowOrchestratorEngine
     /// </para>
     /// <para>
     /// A duplicate resume (both this and the dispatcher's nudge) is harmless: the claim admits one,
-    /// and <c>WaitForSignalHandler</c> returns the same result for a delivered waiter every time. A
-    /// polling step has no waiter, so for it this costs one point read that returns nothing.
-    /// Best-effort — the reschedule already succeeded, so a failure here is logged, never thrown.
+    /// and <c>WaitForSignalHandler</c> returns the same result for a delivered waiter every time.
+    /// Best-effort — the reschedule already succeeded, so a storage or dispatch fault here is logged
+    /// rather than thrown. An <see cref="OperationCanceledException"/> is the exception: the resume is
+    /// dispatched with <see cref="CancellationToken.None"/>, so one means a faulty runtime adapter, and
+    /// it propagates exactly as it does from <c>FlowSignalDispatcher</c>.
+    /// </para>
+    /// <para>
+    /// Gated to the built-in <c>WaitForSignal</c> step type with a claim guard in play. Without a
+    /// runtime store there is no claim for a nudge to lose, so a re-check would only add a duplicate
+    /// execution. And a custom handler that parks while a delivered waiter exists for its key would be
+    /// resumed on every attempt — an unbounded hot loop — whereas the built-in handler completes as soon
+    /// as it sees a delivered waiter. The gate also spares every polling step the point read.
     /// </para>
     /// </remarks>
     private async Task ResumeIfSignalLandedWhileClaimedAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
     {
-        if (_signalStore is null)
+        if (_signalStore is null
+            || _runtimeStore is null
+            || !string.Equals(step.Type, WaitForSignalHandler.StepTypeName, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -574,7 +630,11 @@ public sealed partial class FlowOrchestratorEngine
 
             // A fresh instance rather than the parked one: a runtime that holds on to the scheduled
             // safety-net attempt (the InMemory dispatcher captures it until its delay elapses) must
-            // not see its ScheduledTime rewritten underneath it.
+            // not see its ScheduledTime rewritten underneath it. Inputs come from the manifest
+            // template, as FlowSignalDispatcher and RetryStepAsync build theirs: the parked instance
+            // carries inputs DefaultStepExecutor already resolved, and resolving those a second time
+            // would turn a payload string that merely looks like an expression into a live one.
+            var template = flow.Manifest.Steps.FindStep(step.Key);
             var resume = new StepInstance(step.Key, step.Type)
             {
                 RunId = ctx.RunId,
@@ -583,7 +643,9 @@ public sealed partial class FlowOrchestratorEngine
                 TriggerHeaders = ctx.TriggerHeaders,
                 ScheduledTime = DateTimeOffset.UtcNow,
                 Index = step.Index,
-                Inputs = new Dictionary<string, object?>(step.Inputs)
+                Inputs = template is not null
+                    ? new Dictionary<string, object?>(template.Inputs)
+                    : new Dictionary<string, object?>(step.Inputs)
             };
 
             // CancellationToken.None: the resume must outlive whatever invoked this attempt.
@@ -701,9 +763,9 @@ public sealed partial class FlowOrchestratorEngine
             EngineLog.StepSkipTrackingFailed(_logger, ex, step.Key);
         }
 
-        // Same event the terminated-mid-poll path records, so every step a terminated run skips
-        // shows up in the timeline whichever gate caught it.
-        await RecordEventAsync(ctx, flow, step, "step.skipped", $"Step '{step.Key}' skipped: run is {terminalStatus}.")
-            .ConfigureAwait(false);
+        // Deliberately no step.skipped event here, unlike the terminated-mid-poll path. This gate is
+        // also reached by a parked step's safety-net attempt long after the timeout sweep already
+        // force-closed the run and marked the step Skipped — an event here would land up to a full
+        // park interval after the run closed, duplicating one the timeline may already show.
     }
 }

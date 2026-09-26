@@ -286,11 +286,31 @@ public sealed class PendingPathClaimOrderingTests
     // ── Events & telemetry ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task A_step_skipped_at_the_entry_gate_records_step_skipped()
+    public async Task A_run_terminated_mid_poll_records_step_skipped_and_nothing_else()
     {
-        // Arrange — the run was cancelled before this attempt started. The terminated-mid-poll path
-        // records step.skipped; the entry gate must record the same event so the timeline is complete
-        // whichever gate caught the step.
+        // Arrange — not cancelled at the entry gate, cancelled by the time the handler returned Pending.
+        var controlStore = Substitute.For<IFlowRunControlStore>();
+        controlStore.GetRunControlAsync(_runId).Returns(
+            Task.FromResult<FlowRunControlRecord?>(null),
+            Task.FromResult<FlowRunControlRecord?>(new FlowRunControlRecord { RunId = _runId, CancelRequested = true }));
+        var engine = CreateEngine(withSignalStore: true, runControlStore: controlStore);
+
+        // Act
+        await RunStepAsync(engine);
+
+        // Assert — skipped instead of parked: no park event, no completion, no hand-off, no re-check.
+        var events = _calls.Where(c => c.StartsWith("event:", StringComparison.Ordinal)).ToList();
+        Assert.Equal(["event:step.started", "event:step.skipped"], events);
+        Assert.DoesNotContain("release-dispatch", _calls);
+        Assert.DoesNotContain("release-claim", _calls);
+        Assert.DoesNotContain("read-waiter", _calls);
+    }
+
+    [Fact]
+    public async Task A_step_skipped_at_the_entry_gate_records_no_event()
+    {
+        // Arrange — the entry gate is also what a parked step's safety-net attempt hits long after the
+        // timeout sweep force-closed the run; an event there would land up to a park interval late.
         var controlStore = Substitute.For<IFlowRunControlStore>();
         controlStore.GetRunControlAsync(_runId)
             .Returns(Task.FromResult<FlowRunControlRecord?>(new FlowRunControlRecord { RunId = _runId, CancelRequested = true }));
@@ -300,8 +320,146 @@ public sealed class PendingPathClaimOrderingTests
         await RunStepAsync(engine);
 
         // Assert
-        Assert.Contains("event:step.skipped", _calls);
+        Assert.DoesNotContain(_calls, c => c.StartsWith("event:", StringComparison.Ordinal));
         Assert.Empty(_stepExecutor.ReceivedCalls());
+    }
+
+    // ── Failure during the hand-off (QA finding B1) ─────────────────────────────
+
+    [Theory]
+    [InlineData("release")]
+    [InlineData("record")]
+    public async Task A_storage_fault_during_the_hand_off_releases_the_claim_and_rethrows(string failingCall)
+    {
+        // Arrange — steps 1–2 of the hand-off run while the claim is held. If either throws and the
+        // claim stays held, the runtime's retry of this job loses TryClaimStepAsync and the step never
+        // runs again.
+        var fault = new InvalidOperationException("transient: deadlock victim");
+        if (failingCall == "release")
+        {
+            _runStore.ReleaseDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns<Task>(_ => throw fault);
+        }
+        else
+        {
+            var first = true;
+            _runStore.TryRecordDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    _calls.Add("record-dispatch");
+                    if (first)
+                    {
+                        first = false;
+                        throw fault;
+                    }
+
+                    return Task.FromResult(true);
+                });
+        }
+
+        var engine = CreateEngine();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => RunStepAsync(engine));
+
+        // Assert — the fault propagates (the runtime retries), the claim is released so that retry can
+        // claim, the ledger is re-asserted, and nothing is scheduled by this failed attempt.
+        Assert.Same(fault, ex);
+        Assert.Contains("release-claim", _calls);
+        Assert.Equal("record-dispatch", _calls[^1]);
+        Assert.DoesNotContain("schedule", _calls);
+    }
+
+    [Fact]
+    public async Task After_a_hand_off_fault_the_runtime_retry_can_claim_and_run_the_step()
+    {
+        // Arrange — the QA repro, with a real claim store: TryRecordDispatchAsync throws once.
+        var claims = new FlowOrchestrator.InMemory.InMemoryFlowRunStore();
+        var throwOnce = true;
+        _runStore.TryRecordDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                if (throwOnce)
+                {
+                    throwOnce = false;
+                    throw new InvalidOperationException("transient");
+                }
+
+                return Task.FromResult(true);
+            });
+        var engine = CreateEngine(runtimeStoreOverride: claims);
+
+        // Act — the failed attempt, then the runtime's retry of the same job.
+        var first = await Record.ExceptionAsync(() => RunStepAsync(engine));
+        await RunStepAsync(engine);
+
+        // Assert
+        Assert.NotNull(first);
+        Assert.Equal(2, _stepExecutor.ReceivedCalls().Count());
+    }
+
+    // ── Re-check gating and resume shape (QA findings B4, B5) ───────────────────
+
+    [Fact]
+    public async Task No_re_check_without_a_runtime_store()
+    {
+        // Arrange — no claims, so the dispatcher's nudge always enqueues immediately and a re-check
+        // would only add a duplicate execution.
+        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<FlowSignalWaiter?>(DeliveredWaiter()));
+        var engine = CreateEngine(withSignalStore: true, withRuntimeStore: false);
+
+        // Act
+        await RunStepAsync(engine);
+
+        // Assert
+        await _signalStore.DidNotReceiveWithAnyArgs().GetWaiterAsync(default, default!, default);
+        Assert.DoesNotContain("enqueue", _calls);
+    }
+
+    [Fact]
+    public async Task No_re_check_for_a_step_type_other_than_WaitForSignal()
+    {
+        // Arrange — a custom handler that parks while a delivered waiter exists for its key would be
+        // resumed on every attempt: an unbounded hot loop. Polling steps also skip the read.
+        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<FlowSignalWaiter?>(DeliveredWaiter()));
+        var engine = CreateEngine(withSignalStore: true);
+
+        // Act
+        await RunStepAsync(engine, stepType: "PollShipment");
+
+        // Assert
+        Assert.DoesNotContain("read-waiter", _calls);
+        Assert.DoesNotContain("enqueue", _calls);
+    }
+
+    [Fact]
+    public async Task The_resume_uses_the_manifest_inputs_not_the_already_resolved_ones()
+    {
+        // Arrange — the parked instance carries inputs DefaultStepExecutor already resolved. Resolving
+        // them again would turn a payload string that merely looks like an expression into a live one.
+        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<FlowSignalWaiter?>(DeliveredWaiter()));
+        IStepInstance? resumed = null;
+        _dispatcher.EnqueueStepAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Do<IStepInstance>(s => resumed = s), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<string?>("job-2"));
+        var engine = CreateEngine(withSignalStore: true);
+        var manifestInputs = new Dictionary<string, object?> { ["signalName"] = "@triggerBody().channel" };
+
+        // Act
+        await RunStepAsync(
+            engine,
+            manifestInputs: manifestInputs,
+            parkedInputs: new Dictionary<string, object?> { ["signalName"] = "@triggerHeaders()['Authorization']" },
+            index: 3);
+
+        // Assert
+        Assert.NotNull(resumed);
+        Assert.Equal("@triggerBody().channel", resumed!.Inputs["signalName"]);
+        Assert.NotSame(manifestInputs, resumed.Inputs);
+        Assert.Equal(3, resumed.Index);
     }
 
     [Fact]
@@ -353,16 +511,29 @@ public sealed class PendingPathClaimOrderingTests
         PayloadJson = "{\"approved\":true}"
     };
 
-    private async Task RunStepAsync(FlowOrchestratorEngine engine)
+    private async Task RunStepAsync(
+        FlowOrchestratorEngine engine,
+        string stepType = "WaitForSignal",
+        Dictionary<string, object?>? manifestInputs = null,
+        Dictionary<string, object?>? parkedInputs = null,
+        int index = 0)
     {
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(Guid.NewGuid());
         flow.Manifest.Returns(new FlowManifest
         {
-            Steps = new StepCollection { [StepKey] = new StepMetadata { Type = "WaitForSignal" } }
+            Steps = new StepCollection
+            {
+                [StepKey] = new StepMetadata { Type = stepType, Inputs = manifestInputs ?? new Dictionary<string, object?>() }
+            }
         });
 
-        _parkedInstance = new StepInstance(StepKey, "WaitForSignal") { RunId = _runId };
+        _parkedInstance = new StepInstance(StepKey, stepType)
+        {
+            RunId = _runId,
+            Index = index,
+            Inputs = parkedInputs ?? new Dictionary<string, object?>()
+        };
         await engine.RunStepAsync(new CoreExecutionContext { RunId = _runId }, flow, _parkedInstance);
     }
 
@@ -370,7 +541,9 @@ public sealed class PendingPathClaimOrderingTests
         bool withSignalStore = false,
         IFlowRunControlStore? runControlStore = null,
         FlowOrchestratorTelemetry? telemetry = null,
-        bool enableOpenTelemetry = false) =>
+        bool enableOpenTelemetry = false,
+        bool withRuntimeStore = true,
+        IFlowRunRuntimeStore? runtimeStoreOverride = null) =>
         new(
             _dispatcher,
             Substitute.For<IFlowExecutor>(),
@@ -381,7 +554,7 @@ public sealed class PendingPathClaimOrderingTests
             _outputsRepo,
             Substitute.For<IExecutionContextAccessor>(),
             Substitute.For<IFlowRepository>(),
-            [_runtimeStore],
+            withRuntimeStore ? [runtimeStoreOverride ?? _runtimeStore] : [],
             runControlStore is null ? [] : [runControlStore],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = true, EnableOpenTelemetry = enableOpenTelemetry },
