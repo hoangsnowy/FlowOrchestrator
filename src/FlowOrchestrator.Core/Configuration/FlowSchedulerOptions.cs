@@ -89,3 +89,45 @@ public sealed class FlowObservabilityOptions
     /// </summary>
     public bool EnableOpenTelemetry { get; set; } = true;
 }
+
+/// <summary>
+/// Configuration for the built-in <c>WaitForSignal</c> step type and the resume nudge that wakes it.
+/// Applied via <c>FlowOrchestratorBuilder.Signals</c>.
+/// </summary>
+public sealed class FlowSignalOptions
+{
+    /// <summary>
+    /// How long a <c>WaitForSignal</c> step that declares no <c>timeoutSeconds</c> parks between
+    /// safety-net re-invocations. Each re-invocation re-reads the waiter and completes the step when
+    /// a payload landed, so this value is the worst-case resume latency when a resume nudge is lost
+    /// (dispatcher fault, or the nudge losing the execution claim to the parking invocation).
+    /// </summary>
+    /// <remarks>
+    /// Bounded deliberately. Before v1.33 the interval was hard-coded to 24 hours, which made a lost
+    /// nudge indistinguishable from a hung run for a full day. Raising it lowers idle cost (each
+    /// re-invocation is one claim + a handful of storage round-trips per parked step); lowering it
+    /// shortens the blast radius of a lost nudge. Values at or below <see cref="TimeSpan.Zero"/> are
+    /// ignored and the 5-minute default is used.
+    /// </remarks>
+    public TimeSpan IndefiniteParkInterval { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Maximum time <c>FlowSignalDispatcher</c> waits for the parking invocation to release its
+    /// execution claim before giving up and falling back to a delayed resume nudge.
+    /// </summary>
+    /// <remarks>
+    /// The claim is held for the whole of <c>RunStepAsync</c> — eight or more storage round-trips —
+    /// so the pre-v1.33 fixed 500 ms delay was a guess, not a bound: on a loaded backend the nudge
+    /// landed while the claim was still held, lost <c>TryClaimStepAsync</c>, and the step was
+    /// stranded until its safety net. Waiting for the observed release instead makes the immediate
+    /// path correct by construction. Set to <see cref="TimeSpan.Zero"/> to restore the old
+    /// single-shot behaviour (check once, then delay).
+    /// </remarks>
+    public TimeSpan ResumeClaimWaitBudget { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Interval between claim-state reads while waiting out <see cref="ResumeClaimWaitBudget"/>.
+    /// Each read is a single point lookup.
+    /// </summary>
+    public TimeSpan ResumeClaimPollInterval { get; set; } = TimeSpan.FromMilliseconds(25);
+}

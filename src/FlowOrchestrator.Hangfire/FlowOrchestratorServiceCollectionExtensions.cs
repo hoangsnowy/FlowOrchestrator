@@ -66,6 +66,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.RunControl);
         services.AddSingleton(builder.Retention);
         services.AddSingleton(builder.Observability);
+        services.AddSingleton(builder.Signals);
         services.TryAddSingleton<IFlowScheduleStateStore, EphemeralFlowScheduleStateStore>();
 
         // Default no-op notifier so the engine can always resolve IFlowEventNotifier from DI.

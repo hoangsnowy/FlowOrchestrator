@@ -69,4 +69,14 @@ public static class LogEvents
     /// original reschedule exception still propagates; this log records the best-effort fallback miss.
     /// </summary>
     public static readonly EventId DispatchReassertFailed = new(3004, nameof(DispatchReassertFailed));
+
+    /// <summary>A loop iteration was admitted and its entry step enqueued.</summary>
+    public static readonly EventId LoopIterationAdmitted = new(3006, nameof(LoopIterationAdmitted));
+
+    /// <summary>
+    /// A <c>Pending</c> reschedule found the step's dispatch-ledger row already taken and did not
+    /// dispatch. Normally benign (another party owns the next attempt), but it is the one place a
+    /// reschedule can be skipped, so it is logged rather than silent (#186).
+    /// </summary>
+    public static readonly EventId PendingRescheduleLedgerTaken = new(3007, nameof(PendingRescheduleLedgerTaken));
 }

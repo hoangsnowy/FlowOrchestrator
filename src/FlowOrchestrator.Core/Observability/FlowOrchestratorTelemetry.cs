@@ -60,6 +60,18 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
     /// <summary>Incremented for each polling attempt of a <c>PollableStepHandler</c>.</summary>
     public Counter<long> StepPollAttemptsCounter { get; }
 
+    /// <summary>
+    /// Incremented every time <c>RunStepAsync</c> loses the execution claim and exits without running
+    /// the step. Tags: <c>flow_id</c>, <c>step_key</c>.
+    /// </summary>
+    /// <remarks>
+    /// A steady trickle is expected under at-least-once delivery (Service Bus redelivery, a signal
+    /// resume racing the safety-net attempt). A resume nudge that loses its claim is the one case that
+    /// can strand a parked step until its safety net (#190), and before this counter it left no trace
+    /// at all — the nudge dispatched successfully and then exited silently inside the worker.
+    /// </remarks>
+    public Counter<long> StepClaimLostCounter { get; }
+
     /// <summary>Records the wall-clock time a <c>WaitForSignal</c> step spent parked, in milliseconds.</summary>
     public Histogram<double> SignalWaitMs { get; }
 
@@ -89,6 +101,7 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
         StepRetriesCounter = Meter.CreateCounter<long>("flow_step_retries");
         StepSkippedCounter = Meter.CreateCounter<long>("flow_step_skipped");
         StepPollAttemptsCounter = Meter.CreateCounter<long>("flow_step_poll_attempts");
+        StepClaimLostCounter = Meter.CreateCounter<long>("flow_step_claim_lost");
         SignalWaitMs = Meter.CreateHistogram<double>("flow_signal_wait_ms");
         CronLagMs = Meter.CreateHistogram<double>("flow_cron_lag_ms");
         WebhookReceivedCounter = Meter.CreateCounter<long>("webhook_received_total");

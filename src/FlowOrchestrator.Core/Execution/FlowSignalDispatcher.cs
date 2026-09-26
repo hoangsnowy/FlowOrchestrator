@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,8 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     private readonly FlowOrchestratorTelemetry? _telemetry;
     private readonly IFlowRunRuntimeStore? _runtimeStore;
     private readonly ILogger<FlowSignalDispatcher>? _logger;
+    private readonly FlowSignalOptions _signalOptions;
+    private readonly TimeProvider _clock;
 
     /// <summary>Initialises the dispatcher with its dependencies.</summary>
     /// <param name="signalStore">Persistence for signal waiters and delivered payloads.</param>
@@ -66,6 +69,11 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     /// claims against.
     /// </param>
     /// <param name="logger">Optional — when omitted, lost resume nudges are not reported anywhere.</param>
+    /// <param name="signalOptions">
+    /// Optional — governs how long the resume path waits for the parking invocation's execution claim
+    /// to clear before falling back to a delayed nudge. Defaults apply when omitted.
+    /// </param>
+    /// <param name="clock">Optional clock used for the claim-wait budget; defaults to <see cref="TimeProvider.System"/>.</param>
     public FlowSignalDispatcher(
         IFlowSignalStore signalStore,
         IFlowRunStore runStore,
@@ -74,7 +82,9 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         IOutputsRepository outputsRepository,
         FlowOrchestratorTelemetry? telemetry = null,
         IEnumerable<IFlowRunRuntimeStore>? runtimeStores = null,
-        ILogger<FlowSignalDispatcher>? logger = null)
+        ILogger<FlowSignalDispatcher>? logger = null,
+        FlowSignalOptions? signalOptions = null,
+        TimeProvider? clock = null)
     {
         _signalStore = signalStore;
         _runStore = runStore;
@@ -84,6 +94,8 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         _telemetry = telemetry;
         _runtimeStore = runtimeStores?.FirstOrDefault();
         _logger = logger;
+        _signalOptions = signalOptions ?? new FlowSignalOptions();
+        _clock = clock ?? TimeProvider.System;
     }
 
     /// <inheritdoc/>
@@ -162,7 +174,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         // the moment the caller disconnects or the response flushes. InMemoryStepDispatcher drops the
         // token inside ScheduleStepAsync for exactly this reason (the v1.26.1 "WaitForSignal never
         // resumes" regression), but EnqueueStepAsync honours it — a cancelled token there fails the
-        // channel write and strands the step until its safety-net invocation, up to 24 hours away
+        // channel write and strands the step until its safety-net invocation, a full park interval away
         // when the step declares no timeout. Dropping the token here covers every dispatcher.
         try
         {
@@ -182,7 +194,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         {
             // Best-effort: the delivery itself succeeded, so the caller is told Delivered either way.
             // Log loudly — the blast radius of a lost nudge is a step parked until its safety net,
-            // which is 24 hours when no timeoutSeconds is configured.
+            // which is FlowSignalOptions.IndefiniteParkInterval when no timeoutSeconds is configured.
             SignalLog.ResumeDispatchFailed(_logger, ex, runId, result.StepKey, mustDelay);
         }
 
@@ -196,15 +208,29 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     /// <param name="stepKey">Key of the step being resumed.</param>
     /// <returns>
     /// <see langword="true"/> when the invocation that parked the step still holds its execution
-    /// claim, or when claim state cannot be read; otherwise <see langword="false"/>.
+    /// claim after <see cref="FlowSignalOptions.ResumeClaimWaitBudget"/>, or when claim state cannot
+    /// be read; otherwise <see langword="false"/>.
     /// </returns>
     /// <remarks>
-    /// The step registers its waiter — which is what makes a delivery possible at all — a few
-    /// milliseconds before the engine releases the execution claim on the Pending path. A resume
-    /// enqueued inside that window loses <see cref="IFlowRunRuntimeStore.TryClaimStepAsync"/> and is
-    /// dropped silently, stranding the step until its parked safety-net invocation fires. Detecting
-    /// the window costs one claim read and lets every other delivery — the overwhelming majority,
-    /// where the step has been parked for seconds or longer — resume immediately.
+    /// The step registers its waiter — which is what makes a delivery possible at all — well before
+    /// the engine releases the execution claim on the Pending path: the claim is held across the
+    /// output write, the completion write, the ledger bookkeeping and the safety-net schedule, eight
+    /// or more storage round-trips. A resume enqueued inside that window loses
+    /// <see cref="IFlowRunRuntimeStore.TryClaimStepAsync"/> and is dropped silently, stranding the step
+    /// until its safety-net invocation.
+    /// <para>
+    /// Before v1.33 this checked the claim once and, when held, fired a nudge a fixed 500 ms later on
+    /// the assumption that 500 ms was enough (#190, race 1). On a loaded backend it was not. The claim
+    /// is now polled — one point lookup per <see cref="FlowSignalOptions.ResumeClaimPollInterval"/> —
+    /// until it is observed released, and only then is the nudge enqueued. The common case (a step
+    /// parked for seconds or longer) still costs exactly one read.
+    /// </para>
+    /// <para>
+    /// The request is held open for the wait. That is deliberate: the signal is already durable, the
+    /// wait is bounded, and a background continuation would outlive the request with no owner to
+    /// observe its failure. The poll delay runs on <see cref="CancellationToken.None"/> for the same
+    /// reason the dispatch does — the caller disconnecting must not drop the resume.
+    /// </para>
     /// </remarks>
     private async ValueTask<bool> RequiresDelayedResumeAsync(Guid runId, string stepKey)
     {
@@ -219,22 +245,49 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
             return false;
         }
 
-        try
+        var budget = _signalOptions.ResumeClaimWaitBudget;
+        var pollInterval = _signalOptions.ResumeClaimPollInterval > TimeSpan.Zero
+            ? _signalOptions.ResumeClaimPollInterval
+            : TimeSpan.FromMilliseconds(25);
+        var started = _clock.GetTimestamp();
+
+        while (true)
         {
-            // Point lookup, not an enumeration: claims are never released on terminal statuses, so
-            // the run's claim set grows with every executed step and would be O(n) per delivery.
-            return await _runtimeStore.IsStepClaimedAsync(runId, stepKey).ConfigureAwait(false);
-        }
-        // Filtered for the same reason as the dispatch catch above: this read takes no cancellation
-        // token, so an OperationCanceledException would signal a fault worth propagating rather than
-        // a caller that gave up.
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // Unreadable claim state is not worth racing over, so take the safe path — but say so.
-            // A persistently failing claim store would otherwise silently reinstate the very latency
-            // this class exists to remove, indistinguishable from the original bug.
-            SignalLog.ClaimStateUnreadable(_logger, ex, runId, stepKey);
-            return true;
+            bool claimed;
+            try
+            {
+                // Point lookup, not an enumeration: claims are never released on terminal statuses, so
+                // the run's claim set grows with every executed step and would be O(n) per delivery.
+                claimed = await _runtimeStore.IsStepClaimedAsync(runId, stepKey).ConfigureAwait(false);
+            }
+            // Filtered for the same reason as the dispatch catch above: this read takes no cancellation
+            // token, so an OperationCanceledException would signal a fault worth propagating rather than
+            // a caller that gave up.
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Unreadable claim state is not worth racing over, so take the safe path — but say so.
+                // A persistently failing claim store would otherwise silently reinstate the very latency
+                // this class exists to remove, indistinguishable from the original bug.
+                SignalLog.ClaimStateUnreadable(_logger, ex, runId, stepKey);
+                return true;
+            }
+
+            if (!claimed)
+            {
+                return false;
+            }
+
+            if (_clock.GetElapsedTime(started) >= budget)
+            {
+                // Still held after the whole budget. Fall back to the delayed nudge — it may still
+                // win, and if it loses, the step's bounded safety-net interval recovers it — but make
+                // the outcome visible, because this is exactly the condition that used to strand
+                // steps with nothing in the logs (#190).
+                SignalLog.ResumeClaimStillHeld(_logger, runId, stepKey, budget);
+                return true;
+            }
+
+            await Task.Delay(pollInterval, _clock, CancellationToken.None).ConfigureAwait(false);
         }
     }
 }

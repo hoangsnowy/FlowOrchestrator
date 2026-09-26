@@ -52,6 +52,9 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3006, Level = LogLevel.Debug, Message = "Loop {LoopKey}: admitted iteration {Index} — enqueued entry step {StepKey}.")]
     public static partial void LoopIterationAdmitted(ILogger logger, string loopKey, int index, string stepKey);
 
+    [LoggerMessage(EventId = 3007, Level = LogLevel.Warning, Message = "Pending reschedule for step {StepKey} did not dispatch: a dispatch-ledger row for it already existed. Another party owns the next attempt; if nothing is queued for it, the step stays parked until recovery or the run timeout sweep.")]
+    public static partial void PendingRescheduleLedgerTaken(ILogger logger, string stepKey);
+
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
 

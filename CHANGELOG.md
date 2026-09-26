@@ -6,6 +6,40 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two claim races could strand a parked `WaitForSignal` step for 24 hours (#190).**
+  - *Race 1 — the resume nudge guessed.* When the parking invocation still held its execution claim,
+    `FlowSignalDispatcher` fired a nudge a fixed 500 ms later and hoped the claim was gone by then. On
+    a loaded backend it was not: the nudge lost `TryClaimStepAsync` and exited silently. The dispatcher
+    now polls the claim (point lookup, `FlowSignalOptions.ResumeClaimPollInterval`, 25 ms) until it is
+    released, then enqueues immediately; only after `FlowSignalOptions.ResumeClaimWaitBudget` (2 s)
+    does it fall back to the delayed nudge, logged at `Warning` (event 4003).
+  - *Race 2 — the claim was released before the ledger row that replaces it.* The engine's `Pending`
+    path now re-reserves the dispatch-ledger row **before** releasing the claim, and dispatches the
+    next attempt only after. A signal can no longer observe "claim released" while the ledger row is
+    missing, so a resumed step can no longer be followed by a fresh dispatch row for itself.
+  - `step.pending` is recorded while the claim is still held, so it always precedes the resume's
+    `step.completed` in the timeline.
+- **A parked step no longer logs `step.completed … with status Pending`.** `Pending` fell into the
+  default arm of the event-type switch, so every parked `WaitForSignal` and every poll iteration read
+  as finished-then-unfinished on the dashboard. A run terminated mid-poll now records `step.skipped`.
+
+### Added
+
+- `FlowSignalOptions` (`options.Signals` on the builder): `IndefiniteParkInterval`,
+  `ResumeClaimWaitBudget`, `ResumeClaimPollInterval`.
+- `flow_step_claim_lost` counter (tags `flow_id`, `step_key`) — every `RunStepAsync` that exits because
+  another worker holds the claim. Before this a lost resume nudge left no trace anywhere.
+
+### Changed
+
+- **`WaitForSignal` without `timeoutSeconds` now re-checks its waiter every 5 minutes instead of every
+  24 hours** (`FlowSignalOptions.IndefiniteParkInterval`). That interval is the worst-case resume
+  latency of a lost nudge, so it bounds the blast radius of any future race to minutes. Each re-check
+  is one claim plus a few storage round-trips per parked step; raise the interval if you park very
+  large numbers of steps for days.
+
 ## [1.32.2] - 2026-09-18
 
 ### Changed
