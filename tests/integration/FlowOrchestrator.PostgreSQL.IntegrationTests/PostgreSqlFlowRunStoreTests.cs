@@ -138,8 +138,47 @@ public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixtur
         var stats = await _store.GetStatisticsAsync();
 
         // Assert
-        Assert.True(stats.TotalFlows >= 1);
         Assert.True(stats.ActiveRuns >= 1);
+    }
+
+    [Fact]
+    public async Task GetStatisticsAsync_TotalFlows_counts_enabled_definitions_not_run_history()
+    {
+        // Arrange — #189: TotalFlows was COUNT(DISTINCT flow_id) over flow_runs, which grew with run
+        // history and ignored the documented "registered (enabled) flow definitions" contract.
+        var flows = new PostgreSqlFlowStore(_connectionString);
+        var baseline = (await _store.GetStatisticsAsync()).TotalFlows;
+        await flows.SaveAsync(new FlowDefinitionRecord { Id = Guid.NewGuid(), Name = "Enabled", IsEnabled = true });
+        await flows.SaveAsync(new FlowDefinitionRecord { Id = Guid.NewGuid(), Name = "Disabled", IsEnabled = false });
+        await _store.StartRunAsync(Guid.NewGuid(), "RunsWithoutDefinition", Guid.NewGuid(), "manual", null, null);
+
+        // Act
+        var stats = await _store.GetStatisticsAsync();
+
+        // Assert — only the enabled definition counts; a run for an unregistered flow does not.
+        Assert.Equal(baseline + 1, stats.TotalFlows);
+    }
+
+    [Fact]
+    public async Task GetStepAsync_returns_the_single_step_row()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _store.StartRunAsync(Guid.NewGuid(), "StepFlow", runId, "manual", null, null);
+        await _store.RecordStepStartAsync(runId, "a", "Work", "{\"x\":1}", "job-a");
+        await _store.RecordStepCompleteAsync(runId, "a", "Failed", null, "boom");
+        await _store.RecordStepStartAsync(runId, "b", "Work", null, "job-b");
+
+        // Act
+        var a = await _store.GetStepAsync(runId, "a");
+        var missing = await _store.GetStepAsync(runId, "nope");
+
+        // Assert
+        Assert.NotNull(a);
+        Assert.Equal("a", a!.StepKey);
+        Assert.Equal("Failed", a.Status);
+        Assert.Equal("boom", a.ErrorMessage);
+        Assert.Null(missing);
     }
 
     [Fact]

@@ -279,6 +279,24 @@ public sealed class PostgreSqlFlowRunStore :
         return await GetRunCoreAsync(conn, runId);
     }
 
+    public async Task<FlowStepRecord?> GetStepAsync(Guid runId, string stepKey)
+    {
+        // Point read on the (run_id, step_key) key. The interface default would fetch the whole run
+        // detail — every step and attempt row with their JSON columns — to return one row.
+        await using var conn = new NpgsqlConnection(_connectionString);
+        return await conn.QuerySingleOrDefaultAsync<FlowStepRecord>(
+            """
+            SELECT run_id AS "RunId", step_key AS "StepKey", step_type AS "StepType",
+                   status AS "Status", input_json AS "InputJson", output_json AS "OutputJson",
+                   error_message AS "ErrorMessage", job_id AS "JobId",
+                   started_at AS "StartedAt", completed_at AS "CompletedAt",
+                   evaluation_trace_json AS "EvaluationTraceJson"
+            FROM flow_steps
+            WHERE run_id = @RunId AND step_key = @StepKey
+            """,
+            new { RunId = runId, StepKey = stepKey });
+    }
+
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
@@ -323,7 +341,9 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var stats = new DashboardStatistics();
-        stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(DISTINCT flow_id) FROM flow_runs");
+        // Enabled definitions, as DashboardStatistics.TotalFlows documents. COUNT(DISTINCT flow_id) over
+        // flow_runs grew with run history and ran on the dashboard's 5 s poll (#189).
+        stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM flow_definitions WHERE is_enabled");
         stats.ActiveRuns = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM flow_runs WHERE status = 'Running'");
         // "Today" is bucketed in UTC so the count matches the other backends regardless of the
         // database session time zone. Boundaries are computed here rather than in SQL deliberately:

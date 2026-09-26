@@ -233,6 +233,16 @@ public sealed class SqlFlowRunStore :
         return await GetRunCoreAsync(conn, runId);
     }
 
+    public async Task<FlowStepRecord?> GetStepAsync(Guid runId, string stepKey)
+    {
+        // Point read on the (RunId, StepKey) key. The interface default would fetch the whole run
+        // detail — every step and attempt row with their NVARCHAR(MAX) columns — to return one row.
+        await using var conn = new SqlConnection(_connectionString);
+        return await conn.QuerySingleOrDefaultAsync<FlowStepRecord>(
+            "SELECT RunId, StepKey, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt, EvaluationTraceJson FROM FlowSteps WHERE RunId = @RunId AND StepKey = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
+    }
+
     public async Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
         await using var conn = new SqlConnection(_connectionString);
@@ -258,7 +268,9 @@ public sealed class SqlFlowRunStore :
     {
         await using var conn = new SqlConnection(_connectionString);
         var stats = new DashboardStatistics();
-        stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(DISTINCT FlowId) FROM FlowRuns");
+        // Enabled definitions, as DashboardStatistics.TotalFlows documents. COUNT(DISTINCT FlowId) over
+        // FlowRuns grew with run history and ran on the dashboard's 5 s poll (#189).
+        stats.TotalFlows = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM FlowDefinitions WHERE IsEnabled = 1");
         stats.ActiveRuns = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM FlowRuns WHERE Status = 'Running'");
         // "Today" is bucketed in UTC so the count is identical across storage backends and
         // independent of the SQL Server host's local time zone. The boundaries are computed here

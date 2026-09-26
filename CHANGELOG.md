@@ -6,6 +6,52 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Performance
+
+Items from the #189 backlog. The per-run incremental status cache (P0 item 1) is a design-first
+change and is not part of this set.
+
+- **`StepCollection.FindStep` walks runtime loop keys without allocating.** Keys like
+  `"loop.3.child"` used to go through `string.Split`, which allocated an array plus one string per
+  segment, once per status-map entry on every step completion. They are now walked as
+  `ReadOnlySpan<char>` segments, with `GetAlternateLookup` on .NET 9+. Semantics are unchanged and
+  pinned against the old implementation by an equivalence test. Numbers are in
+  `docs/benchmarks/step-collection-findstep-2026-09-26.md`.
+- **One step-input write per step instead of two.** The engine no longer writes the unresolved
+  inputs to `IOutputsRepository` before execution. `DefaultStepExecutor` overwrote that row with the
+  resolved inputs anyway, so each step paid one redundant `MERGE` and one redundant serialisation. The
+  unresolved form is still recorded on `FlowSteps.InputJson`.
+- **`@steps('x').status` and `.error` no longer fetch the whole run.** The expression resolver loaded
+  `GetRunDetailAsync` for these: every step and attempt row, JSON columns included. A resolver is
+  built per step execution and per `when`-clause evaluation, so this happened once per step. It now
+  uses a point read.
+- **The InMemory runtime's delayed schedules no longer retain the trigger payload.** A parked
+  `WaitForSignal` holds its safety-net schedule for up to 24 hours, and the closure used to keep the
+  resolved trigger payload and headers alive for all of it. Only a slim copy is kept now; the engine
+  reloads the payload when the step runs. This also drops a thread-pool work item that existed only
+  to call `Task.Delay`.
+- **InMemory signal waiters are reclaimed by retention.** `InMemoryFlowSignalStore` now takes part in
+  the retention sweep and drops the waiters of runs that the run store has purged. Before, nothing
+  ever removed them.
+- **`DashboardStatistics.TotalFlows` is bounded, and matches its documentation.** It was
+  `COUNT(DISTINCT FlowId)` over the whole run history, run on every 5 s dashboard poll. It now counts
+  enabled flow definitions, as the property's docs always said, on all three backends.
+
+### Added
+
+- `IFlowRunStore.GetStepAsync(runId, stepKey)`: a point read of one step row. The default interface
+  implementation falls back to `GetRunDetailAsync`, so existing custom stores keep compiling. The
+  built-in stores override it.
+
+### Changed
+
+- The dashboard "flows" count now reports **enabled flow definitions**. Before, it reported flows that
+  had at least one run. A flow with no runs now counts. A disabled flow, or history left behind by a
+  flow that is no longer registered, no longer counts.
+- A step handler now always sees `IStepInstance.TriggerData` and `TriggerHeaders`. The engine fills
+  them from the run when the runtime hands over a step without them. This was already the case for
+  the Service Bus envelope, and now also covers the InMemory runtime's delayed schedules.
+
 ## [1.32.2] - 2026-09-18
 
 ### Changed

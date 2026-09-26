@@ -15,6 +15,20 @@ public sealed class InMemoryFlowRunStore :
     IFlowRunControlStore,
     IFlowRetentionStore
 {
+    private readonly IFlowStore? _flowStore;
+
+    /// <summary>Creates a standalone store; <see cref="GetStatisticsAsync"/> derives its flow count from runs.</summary>
+    public InMemoryFlowRunStore()
+    {
+    }
+
+    /// <summary>Creates a store whose <see cref="DashboardStatistics.TotalFlows"/> counts enabled definitions in <paramref name="flowStore"/>.</summary>
+    /// <param name="flowStore">The flow definition store registered alongside this run store.</param>
+    public InMemoryFlowRunStore(IFlowStore flowStore)
+    {
+        _flowStore = flowStore;
+    }
+
     private readonly ConcurrentDictionary<Guid, FlowRunRecord> _runs = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowStepRecord> _steps = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey, int Attempt), FlowStepAttemptRecord> _stepAttempts = new();
@@ -238,6 +252,16 @@ public sealed class InMemoryFlowRunStore :
         return true;
     }
 
+    /// <summary>Returns <see langword="true"/> while the store still holds a run with <paramref name="runId"/>.</summary>
+    /// <remarks>Lets <see cref="InMemoryFlowSignalStore"/> follow this store's retention sweep.</remarks>
+    internal bool ContainsRun(Guid runId) => _runs.ContainsKey(runId);
+
+    /// <inheritdoc/>
+    public Task<FlowStepRecord?> GetStepAsync(Guid runId, string stepKey)
+        // Point lookup, cloned for the same reason as every other read: the write path mutates the
+        // stored record in place.
+        => Task.FromResult(_steps.TryGetValue((runId, stepKey), out var step) ? CloneStepRecord(step) : null);
+
     public Task<FlowRunRecord?> GetRunDetailAsync(Guid runId)
     {
         if (!_runs.TryGetValue(runId, out var live))
@@ -300,19 +324,41 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult<FlowRunRecord?>(run);
     }
 
-    public Task<DashboardStatistics> GetStatisticsAsync()
+    public async Task<DashboardStatistics> GetStatisticsAsync()
     {
         // "Today" is bucketed in UTC (via UtcDateTime) so the count matches the SQL backends
         // regardless of the offset carried on a stored CompletedAt.
         var today = DateTimeOffset.UtcNow.UtcDateTime.Date;
+
+        // TotalFlows is documented as the number of enabled flow definitions, and the SQL backends
+        // now count exactly that. Counting distinct FlowIds over every run grew with run history on
+        // a 5 s dashboard poll (#189). Without a paired flow store (a standalone test instance) the
+        // old run-derived count is the only information available.
+        int totalFlows;
+        if (_flowStore is not null)
+        {
+            totalFlows = 0;
+            foreach (var flow in await _flowStore.GetAllAsync().ConfigureAwait(false))
+            {
+                if (flow.IsEnabled)
+                {
+                    totalFlows++;
+                }
+            }
+        }
+        else
+        {
+            totalFlows = _runs.Values.Select(r => r.FlowId).Distinct().Count();
+        }
+
         var stats = new DashboardStatistics
         {
-            TotalFlows = _runs.Values.Select(r => r.FlowId).Distinct().Count(),
+            TotalFlows = totalFlows,
             ActiveRuns = _runs.Values.Count(r => r.Status == "Running"),
             CompletedToday = _runs.Values.Count(r => r.CompletedAt?.UtcDateTime.Date == today && r.Status == "Succeeded"),
             FailedToday = _runs.Values.Count(r => r.CompletedAt?.UtcDateTime.Date == today && r.Status == "Failed")
         };
-        return Task.FromResult(stats);
+        return stats;
     }
 
     public Task<IReadOnlyList<RunTimeseriesBucket>> GetRunTimeseriesAsync(

@@ -22,6 +22,14 @@ public sealed partial class FlowOrchestratorEngine
             : null;
 
         await EnsureTriggerDataAsync(ctx).ConfigureAwait(false);
+
+        // IStepInstance is itself an IExecutionContext, so a handler can read the trigger payload off
+        // the step. Runtimes that rebuild the step from a slim envelope (Service Bus, and the InMemory
+        // runtime's delayed schedules, which no longer retain the payload for the whole delay — #189)
+        // hand over a step without it; fill it from the context the engine just rehydrated so every
+        // runtime presents the same step to the handler.
+        step.TriggerData ??= ctx.TriggerData;
+        step.TriggerHeaders ??= ctx.TriggerHeaders;
         _contextAccessor.CurrentContext = ctx;
 
         using var _scope = EngineLogScope.Begin(_logger, ctx.RunId, flow.Id, step.Key);
@@ -68,10 +76,13 @@ public sealed partial class FlowOrchestratorEngine
                 return null;
             }
 
+            // No IOutputsRepository.SaveStepInputAsync here: DefaultStepExecutor writes the same
+            // "{key}:input" row after resolving expressions, so this write only ever persisted the
+            // unresolved inputs to be overwritten a moment later — one wasted MERGE and serialisation
+            // per step (#189). The unresolved form is still recorded, on FlowSteps.InputJson below.
             string? inputJson = null;
             try
             {
-                await _outputsRepository.SaveStepInputAsync(ctx, flow, step).ConfigureAwait(false);
                 inputJson = SafeSerialize(step.Inputs);
                 await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId)
                     .ConfigureAwait(false);

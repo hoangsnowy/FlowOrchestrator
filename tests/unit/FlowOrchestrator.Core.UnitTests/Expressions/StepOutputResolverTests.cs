@@ -45,6 +45,15 @@ public class StepOutputResolverTests
     private StepOutputResolver CreateResolver(StepCollection steps, string currentStepKey) =>
         new(_outputs, _runStore, _runId, steps, currentStepKey);
 
+    /// <summary>Serves each step row of <paramref name="detail"/> through the point read the resolver uses.</summary>
+    private void StubStepRows(FlowRunRecord detail)
+    {
+        foreach (var step in detail.Steps ?? [])
+        {
+            _runStore.GetStepAsync(_runId, step.StepKey).Returns(Task.FromResult<FlowStepRecord?>(step));
+        }
+    }
+
     private static JsonElement Json(string raw) =>
         JsonSerializer.Deserialize<JsonElement>(raw);
 
@@ -251,7 +260,7 @@ public class StepOutputResolverTests
                 new FlowStepRecord { StepKey = "scan.2.wait_robot_goto", Status = "Succeeded" }
             ]
         };
-        _runStore.GetRunDetailAsync(_runId).Returns(Task.FromResult<FlowRunRecord?>(detail));
+        StubStepRows(detail);
         var resolver = CreateResolver(_loopSteps, "scan.2.open_camera");
 
         // Act
@@ -289,7 +298,7 @@ public class StepOutputResolverTests
                 new FlowStepRecord { StepKey = "fetch_orders", Status = "Succeeded" }
             ]
         };
-        _runStore.GetRunDetailAsync(_runId).Returns(Task.FromResult<FlowRunRecord?>(detail));
+        StubStepRows(detail);
         var resolver = CreateResolver();
 
         // Act
@@ -312,7 +321,7 @@ public class StepOutputResolverTests
                 new FlowStepRecord { StepKey = "fetch_orders", Status = "Succeeded", ErrorMessage = null }
             ]
         };
-        _runStore.GetRunDetailAsync(_runId).Returns(Task.FromResult<FlowRunRecord?>(detail));
+        StubStepRows(detail);
         var resolver = CreateResolver();
 
         // Act
@@ -335,7 +344,7 @@ public class StepOutputResolverTests
                 new FlowStepRecord { StepKey = "submit", Status = "Failed", ErrorMessage = "Connection refused" }
             ]
         };
-        _runStore.GetRunDetailAsync(_runId).Returns(Task.FromResult<FlowRunRecord?>(detail));
+        StubStepRows(detail);
         var resolver = CreateResolver();
 
         // Act
@@ -362,6 +371,42 @@ public class StepOutputResolverTests
 
         // Assert
         await _outputs.Received(1).GetStepOutputAsync(_runId, "fetch_orders");
+    }
+
+    [Fact]
+    public async Task StatusAndErrorUseAPointReadAndNeverTheRunDetail()
+    {
+        // Arrange — #189: a `.status` in a when clause used to fetch every step and attempt row of the
+        // run, JSON columns included, on each evaluation.
+        _runStore.GetStepAsync(_runId, "submit")
+            .Returns(Task.FromResult<FlowStepRecord?>(new FlowStepRecord { StepKey = "submit", Status = "Failed", ErrorMessage = "boom" }));
+        var resolver = CreateResolver();
+
+        // Act
+        var status = await resolver.ResolveAsync("@steps('submit').status");
+        var error = await resolver.ResolveAsync("@steps('submit').error");
+
+        // Assert — one point read serves both, and the run detail is never loaded.
+        Assert.Equal("Failed", status);
+        Assert.Equal("boom", error);
+        await _runStore.Received(1).GetStepAsync(_runId, "submit");
+        await _runStore.DidNotReceive().GetRunDetailAsync(Arg.Any<Guid>());
+    }
+
+    [Fact]
+    public async Task StatusOfAStepWithNoRowYetResolvesToNullAndIsCached()
+    {
+        // Arrange — the referenced step has not started: the store returns no row.
+        var resolver = CreateResolver();
+
+        // Act
+        var first = await resolver.ResolveAsync("@steps('submit').status");
+        var second = await resolver.ResolveAsync("@steps('submit').error");
+
+        // Assert — a miss is cached too, so a resolver never re-reads the same absent row.
+        Assert.Null(first);
+        Assert.Null(second);
+        await _runStore.Received(1).GetStepAsync(_runId, "submit");
     }
 
     // ── Quote style ───────────────────────────────────────────────────────────
