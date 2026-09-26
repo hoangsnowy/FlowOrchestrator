@@ -63,7 +63,7 @@ horizontal scale safe.
 - **Cron triggers** under the Hangfire runtime use `IRecurringJobManager`, which fires each schedule on exactly one server. The ServiceBus runtime fires cron via self-perpetuating scheduled messages on a queue — Service Bus's exactly-once-per-tick delivery handles cross-replica coordination without leader election. No extra coordination needed in either case.
 
 > [!WARNING]
-> **InMemory runtime + multi-instance is not supported.** The dispatcher is a `Channel<T>` inside one process — instance B has no way to observe a job that instance A enqueued. Always combine `UseInMemoryRuntime()` with a single instance. For multi-replica deployments use `UseHangfire()` (with shared Hangfire storage) or `UseAzureServiceBusRuntime()` (with shared SB namespace). Benchmark the Service Bus runtime against your own ingress rate before choosing it for a high-volume workload — see issue 192.
+> **InMemory runtime + multi-instance is not supported.** The dispatcher is a `Channel<T>` inside one process — instance B has no way to observe a job that instance A enqueued. Always combine `UseInMemoryRuntime()` with a single instance. For multi-replica deployments use `UseHangfire()` (with shared Hangfire storage) or `UseAzureServiceBusRuntime()` (with shared SB namespace). Benchmark the Service Bus runtime against your own ingress rate before choosing it for a high-volume workload — see issue 192: against the local emulator its trigger throughput was ~20x lower than the other runtimes with a 470x p50/p95 spread, and that has not yet been measured against a real namespace. Watch `flow_step_dispatch_duration_ms{runtime="service_bus"}` while you load-test: a p95 close to your trigger-latency p95 puts the tail on the send, a small one puts it elsewhere.
 
 > [!IMPORTANT]
 > **Disabled flows (v1.22+).** Toggling `IsEnabled = false` on a flow record (via dashboard
@@ -120,6 +120,7 @@ Enable via `options.Observability.EnableOpenTelemetry = true` and wire up via
 | `flow_runs_completed` | counter | `status` |
 | `flow_step_duration_ms` | histogram (ms) | `flow_id`, `step_key`, `status` |
 | `flow_step_poll_attempts` | counter | `flow_id`, `step_key` |
+| `flow_step_dispatch_duration_ms` | histogram | `runtime`, `mode`, `outcome` |
 
 The full instrument list lives in [Observability — What is emitted](observability.md#what-is-emitted).
 

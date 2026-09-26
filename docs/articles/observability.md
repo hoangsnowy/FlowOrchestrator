@@ -98,6 +98,7 @@ red without any extra configuration.
 | `flow_step_retries` | counter | retries | `flow_id`, `step_key` |
 | `flow_step_skipped` | counter | steps | `flow_id`, `step_key`, `reason` (`when_false` / `prerequisites_unmet`) |
 | `flow_step_poll_attempts` | counter | attempts | `flow_id`, `step_key` |
+| `flow_step_dispatch_duration_ms` | histogram | ms | `runtime` (`hangfire` / `in_memory` / `service_bus`), `mode` (`enqueue` / `schedule`), `outcome` (`ok` / `error`) — how long the runtime adapter took to accept a dispatch. Compare p50 with p95 per runtime to see whether a trigger-latency tail sits on the broker / job store (#192). The InMemory runtime only times `enqueue`; its `schedule` returns before doing any work. |
 | `flow_signal_wait_ms` | histogram | ms | `flow_id`, `step_key`, `signal_name` — recorded by `FlowSignalDispatcher` on delivery |
 | `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory`) — gap between scheduled fire and actual dispatch. The Service Bus runtime does not currently emit cron-lag samples. |
 | `webhook_received_total` | counter | webhooks | `flow`, `result` (`accepted` / `rejected` / `off`), `scheme` — emitted on every webhook receive (v1.25) |

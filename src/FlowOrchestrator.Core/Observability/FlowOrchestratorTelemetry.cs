@@ -60,6 +60,20 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
     /// <summary>Incremented for each polling attempt of a <c>PollableStepHandler</c>.</summary>
     public Counter<long> StepPollAttemptsCounter { get; }
 
+    /// <summary>
+    /// Records how long the runtime adapter took to accept a step dispatch — the
+    /// <c>IStepDispatcher.EnqueueStepAsync</c> / <c>ScheduleStepAsync</c> call itself, in milliseconds.
+    /// Tags: <c>runtime</c> (<c>hangfire</c> / <c>in_memory</c> / <c>service_bus</c> / adapter type name),
+    /// <c>mode</c> (<c>enqueue</c> / <c>schedule</c>), <c>outcome</c> (<c>ok</c> / <c>error</c>).
+    /// </summary>
+    /// <remarks>
+    /// Separates "the broker or job store was slow to accept the work" from everything else on the
+    /// trigger and continuation paths, per runtime. It is the measurement #192 needs: the Service Bus
+    /// runtime showed a 470x p50/p95 trigger-latency spread against the emulator, and whether that tail
+    /// sits on the send cannot be told from request timings alone.
+    /// </remarks>
+    public Histogram<double> StepDispatchDurationMs { get; }
+
     /// <summary>Records the wall-clock time a <c>WaitForSignal</c> step spent parked, in milliseconds.</summary>
     public Histogram<double> SignalWaitMs { get; }
 
@@ -89,6 +103,7 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
         StepRetriesCounter = Meter.CreateCounter<long>("flow_step_retries");
         StepSkippedCounter = Meter.CreateCounter<long>("flow_step_skipped");
         StepPollAttemptsCounter = Meter.CreateCounter<long>("flow_step_poll_attempts");
+        StepDispatchDurationMs = Meter.CreateHistogram<double>("flow_step_dispatch_duration_ms");
         SignalWaitMs = Meter.CreateHistogram<double>("flow_signal_wait_ms");
         CronLagMs = Meter.CreateHistogram<double>("flow_cron_lag_ms");
         WebhookReceivedCounter = Meter.CreateCounter<long>("webhook_received_total");
@@ -96,6 +111,18 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
         WebhookBodyBytes = Meter.CreateHistogram<long>("webhook_body_bytes");
         WebhookProcessingMs = Meter.CreateHistogram<double>("webhook_processing_ms");
     }
+
+    /// <summary>Records one runtime dispatch on <see cref="StepDispatchDurationMs"/>.</summary>
+    /// <param name="runtime">Runtime tag: <c>hangfire</c>, <c>in_memory</c>, <c>service_bus</c>, or a custom adapter's name.</param>
+    /// <param name="scheduled"><see langword="true"/> for <c>ScheduleStepAsync</c>, <see langword="false"/> for <c>EnqueueStepAsync</c>.</param>
+    /// <param name="succeeded">Whether the adapter accepted the dispatch without throwing.</param>
+    /// <param name="startTimestamp">A <see cref="Stopwatch.GetTimestamp"/> value taken before the dispatch.</param>
+    public void RecordDispatch(string runtime, bool scheduled, bool succeeded, long startTimestamp) =>
+        StepDispatchDurationMs.Record(
+            Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+            new KeyValuePair<string, object?>("runtime", runtime),
+            new KeyValuePair<string, object?>("mode", scheduled ? "schedule" : "enqueue"),
+            new KeyValuePair<string, object?>("outcome", succeeded ? "ok" : "error"));
 
     /// <summary>Disposes the <see cref="ActivitySource"/> and <see cref="Meter"/>.</summary>
     public void Dispose()
