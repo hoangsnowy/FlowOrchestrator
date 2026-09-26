@@ -97,6 +97,47 @@ public class ServiceBusStepDispatcherEdgeCaseTests
         Assert.Equal(longKey, msg.ApplicationProperties["StepKey"]);
     }
 
+    [Theory]
+    [InlineData(57, true)]
+    [InlineData(58, true)]  // 36 (runId) + 1 + 58 + 1 + 32 (nonce) = exactly 128
+    [InlineData(59, false)] // one over: falls back to {runId}:{nonce}
+    public void BuildMessageId_keeps_the_step_key_exactly_up_to_the_128_character_limit(int keyLength, bool keyKept)
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        var key = new string('k', keyLength);
+
+        // Act
+        var id = ServiceBusStepDispatcher.BuildMessageId(runId, key);
+
+        // Assert
+        Assert.True(id.Length <= ServiceBusStepDispatcher.MaxMessageIdLength, $"{id.Length}: {id}");
+        if (keyKept)
+        {
+            Assert.StartsWith($"{runId}:{key}:", id);
+            Assert.Equal(36 + 1 + keyLength + 1 + 32, id.Length);
+        }
+        else
+        {
+            Assert.DoesNotContain(key, id);
+            Assert.Equal(36 + 1 + 32, id.Length);
+        }
+    }
+
+    [Fact]
+    public void BuildMessageId_fallback_ids_are_still_unique_per_dispatch()
+    {
+        // Arrange — the fallback drops the key, so uniqueness rests on the nonce alone.
+        var runId = Guid.NewGuid();
+        var key = new string('k', 200);
+
+        // Act
+        var ids = Enumerable.Range(0, 100).Select(_ => ServiceBusStepDispatcher.BuildMessageId(runId, key)).ToHashSet();
+
+        // Assert
+        Assert.Equal(100, ids.Count);
+    }
+
     [Fact]
     public void BuildMessage_DeliversApplicationPropertiesAsStrings()
     {
