@@ -334,22 +334,11 @@ public sealed class InMemoryFlowRunStore :
         // now count exactly that. Counting distinct FlowIds over every run grew with run history on
         // a 5 s dashboard poll (#189). Without a paired flow store (a standalone test instance) the
         // old run-derived count is the only information available.
-        int totalFlows;
-        if (_flowStore is not null)
-        {
-            totalFlows = 0;
-            foreach (var flow in await _flowStore.GetAllAsync().ConfigureAwait(false))
-            {
-                if (flow.IsEnabled)
-                {
-                    totalFlows++;
-                }
-            }
-        }
-        else
-        {
-            totalFlows = _runs.Values.Select(r => r.FlowId).Distinct().Count();
-        }
+        // Off the step hot path (one call per dashboard poll, bounded by registered flows), so the
+        // LINQ predicate is fine here.
+        var totalFlows = _flowStore is not null
+            ? (await _flowStore.GetAllAsync().ConfigureAwait(false)).Count(flow => flow.IsEnabled)
+            : _runs.Values.Select(r => r.FlowId).Distinct().Count();
 
         var stats = new DashboardStatistics
         {
