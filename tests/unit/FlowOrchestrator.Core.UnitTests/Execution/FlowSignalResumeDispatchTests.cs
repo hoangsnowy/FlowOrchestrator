@@ -1,5 +1,4 @@
 using FlowOrchestrator.Core.Abstractions;
-using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using NSubstitute;
@@ -252,62 +251,8 @@ public sealed class FlowSignalResumeDispatchTests
         Assert.InRange(dispatched!.ScheduledTime, before, DateTimeOffset.UtcNow);
     }
 
-    [Fact]
-    public async Task Resume_waits_for_the_parking_claim_to_clear_then_enqueues_immediately()
-    {
-        // Arrange — issue #190 race 1: the parking invocation holds its claim across eight or more
-        // storage round-trips, so on a loaded backend it is still held when the signal lands. The
-        // resume must wait for the observed release rather than guess a fixed delay.
-        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
-        runtimeStore.IsStepClaimedAsync(_runId, StepKey)
-            .Returns(Task.FromResult(true), Task.FromResult(true), Task.FromResult(false));
-        var dispatcher = CreateDispatcher(runtimeStore, new FlowSignalOptions
-        {
-            ResumeClaimWaitBudget = TimeSpan.FromSeconds(30),
-            ResumeClaimPollInterval = TimeSpan.FromMilliseconds(1),
-        });
-
-        // Act
-        await dispatcher.DispatchAsync(_runId, SignalName, "{}");
-
-        // Assert
-        await runtimeStore.Received(3).IsStepClaimedAsync(_runId, StepKey);
-        await _stepDispatcher.Received(1).EnqueueStepAsync(
-            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
-        await _stepDispatcher.DidNotReceive().ScheduleStepAsync(
-            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task Resume_falls_back_to_the_delayed_nudge_when_the_claim_outlives_the_wait_budget()
-    {
-        // Arrange — a claim that never clears must not hold the request open forever.
-        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
-        runtimeStore.IsStepClaimedAsync(_runId, StepKey).Returns(Task.FromResult(true));
-        var dispatcher = CreateDispatcher(runtimeStore, new FlowSignalOptions
-        {
-            ResumeClaimWaitBudget = TimeSpan.FromMilliseconds(20),
-            ResumeClaimPollInterval = TimeSpan.FromMilliseconds(1),
-        });
-
-        // Act
-        await dispatcher.DispatchAsync(_runId, SignalName, "{}");
-
-        // Assert — it polled (more than the single pre-#190 read) and then took the delayed path.
-        Assert.True(runtimeStore.ReceivedCalls().Count() >= 2);
-        await _stepDispatcher.Received(1).ScheduleStepAsync(
-            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(),
-            TimeSpan.FromMilliseconds(500), Arg.Any<CancellationToken>());
-        await _stepDispatcher.DidNotReceive().EnqueueStepAsync(
-            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
-    }
-
     /// <summary>Builds the subject under test with the shared substitutes and the supplied runtime store.</summary>
-    /// <remarks>
-    /// Defaults to a zero claim-wait budget — check the claim once, then decide — so the cases above
-    /// that pin the held-claim branch stay single-read and do not sit out the production budget.
-    /// </remarks>
-    private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore? runtimeStore, FlowSignalOptions? options = null) => new(
+    private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore? runtimeStore) => new(
         _signalStore,
         _runStore,
         _flowRepository,
@@ -315,6 +260,5 @@ public sealed class FlowSignalResumeDispatchTests
         _outputsRepository,
         telemetry: null,
         runtimeStores: runtimeStore is null ? Array.Empty<IFlowRunRuntimeStore>() : new[] { runtimeStore },
-        logger: null,
-        signalOptions: options ?? new FlowSignalOptions { ResumeClaimWaitBudget = TimeSpan.Zero });
+        logger: null);
 }

@@ -39,8 +39,6 @@ public sealed class WaitForSignalInput
 /// </remarks>
 public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
 {
-    private static readonly TimeSpan DefaultIndefiniteParkInterval = TimeSpan.FromMinutes(5);
-
     private readonly IFlowSignalStore _signalStore;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _indefiniteParkInterval;
@@ -51,21 +49,15 @@ public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
     /// <param name="options">
     /// Optional signal options. Supplies <see cref="FlowSignalOptions.IndefiniteParkInterval"/> —
     /// the safety-net re-invocation interval used when the step declares no <c>timeoutSeconds</c>.
-    /// Omitted (or non-positive) falls back to five minutes.
+    /// Omitted (or non-positive) falls back to <see cref="FlowSignalOptions.DefaultIndefiniteParkInterval"/>.
     /// </param>
-    /// <remarks>
-    /// The park interval is the worst-case resume latency when a resume nudge is lost, because every
-    /// re-invocation re-reads the waiter and completes the step if a payload landed meanwhile. It was
-    /// hard-coded to 24 hours before v1.33, which is what turned each of the two claim races in #190
-    /// into a day-long strand rather than a minutes-long one.
-    /// </remarks>
     public WaitForSignalHandler(IFlowSignalStore signalStore, TimeProvider? clock = null, FlowSignalOptions? options = null)
     {
         _signalStore = signalStore;
         _clock = clock ?? TimeProvider.System;
         _indefiniteParkInterval = options?.IndefiniteParkInterval > TimeSpan.Zero
             ? options.IndefiniteParkInterval
-            : DefaultIndefiniteParkInterval;
+            : FlowSignalOptions.DefaultIndefiniteParkInterval;
     }
 
     /// <inheritdoc/>

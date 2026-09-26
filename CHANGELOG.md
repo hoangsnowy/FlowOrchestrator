@@ -8,37 +8,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- **Two claim races could strand a parked `WaitForSignal` step for 24 hours (#190).**
-  - *Race 1 — the resume nudge guessed.* When the parking invocation still held its execution claim,
-    `FlowSignalDispatcher` fired a nudge a fixed 500 ms later and hoped the claim was gone by then. On
-    a loaded backend it was not: the nudge lost `TryClaimStepAsync` and exited silently. The dispatcher
-    now polls the claim (point lookup, `FlowSignalOptions.ResumeClaimPollInterval`, 25 ms) until it is
-    released, then enqueues immediately; only after `FlowSignalOptions.ResumeClaimWaitBudget` (2 s)
-    does it fall back to the delayed nudge, logged at `Warning` (event 4003).
-  - *Race 2 — the claim was released before the ledger row that replaces it.* The engine's `Pending`
-    path now re-reserves the dispatch-ledger row **before** releasing the claim, and dispatches the
-    next attempt only after. A signal can no longer observe "claim released" while the ledger row is
-    missing, so a resumed step can no longer be followed by a fresh dispatch row for itself.
+- **Two claim races could strand a parked `WaitForSignal` step until its 24-hour safety net (#190).**
+  Both need a multi-worker runtime (Hangfire, Service Bus); the InMemory runtime drains its channel with
+  a single consumer and cannot hit them.
+  - *Race 1 — a signal delivered while the parking invocation held its claim.* `FlowSignalDispatcher`
+    sees the claim held and sends its nudge 500 ms later, a guess at how long the claim lasts. On a
+    loaded backend the guess was wrong: the nudge lost `TryClaimStepAsync` on another worker and exited
+    silently. The engine now re-reads the step's signal waiter **after** releasing the claim and
+    enqueues the resume itself if a payload has landed. Any delivery that saw the claim held committed
+    before that read, so whichever side goes second wakes the step — the window is closed, not
+    narrowed. Costs one point read per `Pending` result.
+  - *Race 2 — the claim was released before the ledger row that replaces it.* The `Pending` path now
+    re-reserves the dispatch-ledger row **before** releasing the claim, and dispatches the next attempt
+    after, so the step is never unclaimed and unreserved at once. If another party (recovery, a retry)
+    recorded the row in between, the engine now dispatches anyway (event 3007) instead of risking a
+    step with nothing queued; the claim absorbs the duplicate.
   - `step.pending` is recorded while the claim is still held, so it always precedes the resume's
     `step.completed` in the timeline.
 - **A parked step no longer logs `step.completed … with status Pending`.** `Pending` fell into the
   default arm of the event-type switch, so every parked `WaitForSignal` and every poll iteration read
-  as finished-then-unfinished on the dashboard. A run terminated mid-poll now records `step.skipped`.
+  as finished-then-unfinished on the dashboard. Steps skipped because the run was cancelled or timed
+  out now record `step.skipped`, whether the entry gate or the mid-poll check caught them.
 
 ### Added
 
-- `FlowSignalOptions` (`options.Signals` on the builder): `IndefiniteParkInterval`,
-  `ResumeClaimWaitBudget`, `ResumeClaimPollInterval`.
-- `flow_step_claim_lost` counter (tags `flow_id`, `step_key`) — every `RunStepAsync` that exits because
-  another worker holds the claim. Before this a lost resume nudge left no trace anywhere.
-
-### Changed
-
-- **`WaitForSignal` without `timeoutSeconds` now re-checks its waiter every 5 minutes instead of every
-  24 hours** (`FlowSignalOptions.IndefiniteParkInterval`). That interval is the worst-case resume
-  latency of a lost nudge, so it bounds the blast radius of any future race to minutes. Each re-check
-  is one claim plus a few storage round-trips per parked step; raise the interval if you park very
-  large numbers of steps for days.
+- `FlowSignalOptions.IndefiniteParkInterval` (`options.Signals` on the builder): the safety-net
+  re-check interval for a `WaitForSignal` without `timeoutSeconds`. **Default unchanged at 24 hours.**
+- `flow_step_claim_lost` counter (tags `flow_id`, `step_key`). Most losses are benign (redelivery, the
+  duplicate resume a signal can produce, a resumed step's orphaned safety-net attempt); read it as a
+  rate per step key. Before it existed, a harmful loss left no trace at all.
+- Engine log events 3007 (ledger row already taken, dispatched anyway), 3008 (signal found by the
+  post-release re-check, resume enqueued), 3009 (re-check failed).
 
 ## [1.32.2] - 2026-09-18
 

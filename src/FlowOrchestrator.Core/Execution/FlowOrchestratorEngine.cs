@@ -52,6 +52,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     private readonly ILogger<FlowOrchestratorEngine> _logger;
     private readonly WhenClauseEvaluator _whenEvaluator;
     private readonly IFlowEventNotifier _eventNotifier;
+    private readonly IFlowSignalStore? _signalStore;
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     /// <remarks>
@@ -59,6 +60,13 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     /// existing positional callers (notably unit tests built before the realtime layer landed)
     /// continue to compile unchanged. When <see langword="null"/>, <see cref="NoopFlowEventNotifier.Instance"/>
     /// is substituted and lifecycle events are silently discarded.
+    /// <para>
+    /// <paramref name="signalStore"/> is optional for the same reason. When supplied, a step that parks
+    /// in <see cref="StepStatus.Pending"/> re-reads its signal waiter after releasing its execution
+    /// claim and resumes itself if a payload landed while it held the claim — the delivery whose
+    /// resume nudge could only lose that claim (#190). Without it, such a delivery waits for the
+    /// step's safety-net invocation.
+    /// </para>
     /// </remarks>
     public FlowOrchestratorEngine(
         IStepDispatcher dispatcher,
@@ -76,7 +84,8 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         FlowObservabilityOptions observabilityOptions,
         FlowOrchestratorTelemetry telemetry,
         ILogger<FlowOrchestratorEngine> logger,
-        IFlowEventNotifier? eventNotifier = null)
+        IFlowEventNotifier? eventNotifier = null,
+        IFlowSignalStore? signalStore = null)
     {
         _dispatcher = dispatcher;
         _flowExecutor = flowExecutor;
@@ -94,6 +103,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _telemetry = telemetry;
         _logger = logger;
         _eventNotifier = eventNotifier ?? NoopFlowEventNotifier.Instance;
+        _signalStore = signalStore;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
 
         if (_runtimeStore is null)

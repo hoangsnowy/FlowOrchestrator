@@ -215,7 +215,7 @@ Before the fix for [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/
 The dispatcher now reads the step's claim state and picks the path deliberately:
 
 - **claim already released** — the overwhelming majority of deliveries, where the step has been parked for seconds or longer: dispatched immediately via `EnqueueStepAsync`. No scheduled-set poll.
-- **claim still held** — the parking invocation has not finished its bookkeeping yet. The dispatcher polls the claim (one point lookup every `FlowSignalOptions.ResumeClaimPollInterval`, 25 ms by default) until it is released and then enqueues immediately. Only if the claim is still held after `FlowSignalOptions.ResumeClaimWaitBudget` (2 s by default) does it fall back to the short delayed nudge, logged at `Warning` (event 4003). Before v1.33 this branch fired a fixed 500 ms nudge without waiting, which on a loaded backend landed while the claim was still held and was dropped ([#190](https://github.com/hoangsnowy/FlowOrchestrator/issues/190)).
+- **claim still held** — the parking invocation has not finished its bookkeeping yet: the short delayed nudge. The nudge can still lose the claim on a loaded multi-worker backend (Hangfire, Service Bus), so it is not the only safety: after releasing its claim, the parking invocation re-reads its own waiter and enqueues the resume itself if a payload has landed (log event 3008). A delivery that saw the claim held committed before that read, so one of the two always wakes the step; a duplicate is absorbed by the claim ([#190](https://github.com/hoangsnowy/FlowOrchestrator/issues/190)).
 - **no `IFlowRunRuntimeStore` registered** (custom storage predating the interface): also immediate. The engine guards its claim acquisition with the same `is not null` check, so with no runtime store there is no claim to lose and the race cannot occur.
 - **claim state unreadable** (transient storage fault): the delayed path, logged at `Warning` — a persistently failing claim store would otherwise silently reinstate the latency this fix removes.
 
@@ -225,24 +225,23 @@ No configuration is required, and `SchedulePollingInterval` no longer gates sign
 
 ### The safety net is not always prompt
 
-If the nudge fails to dispatch (queue outage, broker error) or loses the execution claim, the signal is still durably delivered and the step wakes on the safety-net invocation scheduled when it parked. With `timeoutSeconds` declared, that invocation fires just after the deadline. Without one, the step re-checks its waiter every `FlowSignalOptions.IndefiniteParkInterval` — **5 minutes by default** (24 hours before v1.33):
+If the nudge fails to dispatch (queue outage, broker error), the signal is still durably delivered and the step wakes on the safety-net invocation scheduled when it parked. **That invocation is only prompt when the step declares `timeoutSeconds`** — without one the park interval is `FlowSignalOptions.IndefiniteParkInterval`, 24 hours by default. Set a timeout on any `WaitForSignal` whose recovery you care about, or shorten the interval globally:
 
 ```csharp
 builder.Services.AddFlowOrchestrator(options =>
 {
-    options.Signals.IndefiniteParkInterval = TimeSpan.FromMinutes(1); // worst-case latency of a lost nudge
-    // options.Signals.ResumeClaimWaitBudget = TimeSpan.FromSeconds(2);
+    options.Signals.IndefiniteParkInterval = TimeSpan.FromHours(1);
 });
 ```
 
-Lowering the interval shortens the blast radius of a lost nudge; raising it lowers idle cost, since each re-check is one claim plus a handful of storage round-trips per parked step. The `flow_step_claim_lost` counter (tags `flow_id`, `step_key`) counts every invocation that exited because another worker held the claim — a spike on a `WaitForSignal` step is the signature of lost resume nudges.
+Each re-check runs the full step path — a claim, an attempt row and a `step.started` / `step.pending` event pair — so a short interval multiplies the run history of every long-parked step.
 
 ## Observability
 
 When event persistence is enabled (`builder.Observability.EnableEventPersistence = true`), the engine emits these events for each `WaitForSignal` step:
 
 - `step.started` on every invocation (initial park, signal arrival, timeout fire).
-- `step.pending` every time an invocation parks the step, recorded before the execution claim is released — so it always precedes the `step.completed` of the resume that follows it. A parked invocation never emits `step.completed` (before v1.33 it logged a spurious "completed with status Pending" first).
+- `step.pending` every time an invocation parks the step, recorded before its execution claim is released — so it always precedes the `step.completed` of the resume that follows. A parked invocation never emits `step.completed`.
 - `step.completed` on successful delivery.
 - `step.failed` on timeout.
 

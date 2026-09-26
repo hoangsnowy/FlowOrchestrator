@@ -74,9 +74,21 @@ public static class LogEvents
     public static readonly EventId LoopIterationAdmitted = new(3006, nameof(LoopIterationAdmitted));
 
     /// <summary>
-    /// A <c>Pending</c> reschedule found the step's dispatch-ledger row already taken and did not
-    /// dispatch. Normally benign (another party owns the next attempt), but it is the one place a
-    /// reschedule can be skipped, so it is logged rather than silent (#186).
+    /// A <c>Pending</c> reschedule found the step's dispatch-ledger row already recorded by another
+    /// party (recovery, a retry) and dispatched the next attempt anyway; the execution claim absorbs
+    /// the duplicate. Logged because a collision here used to be able to strand the step (#186).
     /// </summary>
     public static readonly EventId PendingRescheduleLedgerTaken = new(3007, nameof(PendingRescheduleLedgerTaken));
+
+    /// <summary>
+    /// A parked step found its signal already delivered after releasing its claim and enqueued its own
+    /// resume — the delivery whose nudge could only have lost that claim (#190).
+    /// </summary>
+    public static readonly EventId ResumedSignalDeliveredWhileClaimed = new(3008, nameof(ResumedSignalDeliveredWhileClaimed));
+
+    /// <summary>
+    /// The post-release signal-waiter re-check failed; a signal delivered while the step held its claim
+    /// now waits for the safety-net invocation.
+    /// </summary>
+    public static readonly EventId SignalRecheckFailed = new(3009, nameof(SignalRecheckFailed));
 }

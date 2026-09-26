@@ -5,19 +5,20 @@ using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
 /// <summary>
-/// Pins the ordering of the engine's <see cref="StepStatus.Pending"/> path against the two claim
-/// races described in issue #190, and the event-type mapping for non-terminal results.
+/// Pins the engine's <see cref="StepStatus.Pending"/> path against the two claim races of issue #190:
+/// the order of the ledger / claim / dispatch hand-off, the post-release signal-waiter re-check, and
+/// the event-type mapping for non-terminal results.
 /// </summary>
 /// <remarks>
-/// Every storage and dispatcher call the Pending path makes is appended to one shared log, so each
-/// test asserts on the sequence rather than on individual <c>Received()</c> counts. The sequence is
-/// the contract: a signal resume observes the world between any two of these calls, and the step
-/// must never be simultaneously unclaimed and missing its dispatch-ledger row.
+/// Every storage and dispatcher call the Pending path makes is appended to one shared log, so the
+/// ordering tests assert on the sequence rather than on individual <c>Received()</c> counts. The
+/// sequence is the contract: a signal delivery observes the world between any two of these calls.
 /// </remarks>
 public sealed class PendingPathClaimOrderingTests
 {
@@ -27,10 +28,12 @@ public sealed class PendingPathClaimOrderingTests
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IFlowRunRuntimeStore _runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+    private readonly IFlowSignalStore _signalStore = Substitute.For<IFlowSignalStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
     private readonly List<string> _calls = [];
     private readonly Guid _runId = Guid.NewGuid();
+    private IStepInstance? _parkedInstance;
 
     /// <summary>Wires every substitute the Pending path touches to record into <see cref="_calls"/>.</summary>
     public PendingPathClaimOrderingTests()
@@ -66,6 +69,20 @@ public sealed class PendingPathClaimOrderingTests
                 _calls.Add("schedule");
                 return new ValueTask<string?>("job-1");
             });
+        _dispatcher.EnqueueStepAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                _calls.Add("enqueue");
+                return new ValueTask<string?>("job-2");
+            });
+
+        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                _calls.Add("read-waiter");
+                return new ValueTask<FlowSignalWaiter?>((FlowSignalWaiter?)null);
+            });
 
         _outputsRepo.RecordEventAsync(
                 Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<FlowEvent>())
@@ -80,9 +97,11 @@ public sealed class PendingPathClaimOrderingTests
             {
                 Key = StepKey,
                 Status = StepStatus.Pending,
-                DelayNextStep = TimeSpan.FromMinutes(5)
+                DelayNextStep = TimeSpan.FromHours(24)
             }));
     }
+
+    // ── Race 2: ledger / claim / dispatch hand-off ──────────────────────────────
 
     [Fact]
     public async Task Pending_reserves_the_dispatch_ledger_before_releasing_the_claim_and_dispatches_after()
@@ -93,9 +112,8 @@ public sealed class PendingPathClaimOrderingTests
         // Act
         await RunStepAsync(engine);
 
-        // Assert — the claim is released only once the next attempt's ledger row exists, and the
-        // runtime only sees the attempt after the claim is gone (a fast dispatcher firing before the
-        // release would lose the claim itself).
+        // Assert — the step is never both unclaimed and unreserved, and the runtime only sees the next
+        // attempt once the claim is gone (a fast dispatcher firing before the release would lose it).
         var pendingTail = _calls.SkipWhile(c => c != "release-dispatch").ToList();
         Assert.Equal(["release-dispatch", "record-dispatch", "release-claim", "schedule"], pendingTail);
     }
@@ -109,8 +127,8 @@ public sealed class PendingPathClaimOrderingTests
         // Act
         await RunStepAsync(engine);
 
-        // Assert — emitted before the release, so a signal resume that claims and completes the step
-        // the instant the claim clears can never appear before it in the timeline.
+        // Assert — a resume that claims and completes the step the instant the claim clears can
+        // never appear before this event in the timeline.
         var pendingIndex = _calls.IndexOf("event:step.pending");
         var releaseIndex = _calls.IndexOf("release-claim");
         Assert.NotEqual(-1, pendingIndex);
@@ -133,10 +151,11 @@ public sealed class PendingPathClaimOrderingTests
     }
 
     [Fact]
-    public async Task Pending_does_not_dispatch_when_another_party_reserved_the_ledger_row_first()
+    public async Task Pending_still_dispatches_when_another_party_recorded_the_ledger_row_first()
     {
-        // Arrange — someone recorded a dispatch row inside the release/record gap; that party owns
-        // the next attempt, so enqueuing a second one would double-dispatch the step.
+        // Arrange — recovery or a retry recorded the row inside the release/record gap and its job
+        // already ran and lost the claim this invocation holds. Skipping the reschedule would leave
+        // the step unclaimed with nothing queued, and recovery skips keys that carry a dispatch row.
         _runStore.TryRecordDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
@@ -148,10 +167,9 @@ public sealed class PendingPathClaimOrderingTests
         // Act
         await RunStepAsync(engine);
 
-        // Assert — the claim is still released so the owning attempt can claim it, and the skipped
-        // reschedule leaves a trace (#186: a re-poll that never arrived left nothing in the logs).
-        Assert.DoesNotContain("schedule", _calls);
-        Assert.Contains("release-claim", _calls);
+        // Assert — a duplicate is absorbed by the claim; a missing attempt strands the step.
+        var pendingTail = _calls.SkipWhile(c => c != "release-dispatch").ToList();
+        Assert.Equal(["release-dispatch", "record-dispatch", "release-claim", "schedule"], pendingTail);
         Assert.Contains(_logger.ReceivedCalls(), c =>
             c.GetMethodInfo().Name == nameof(ILogger.Log)
             && c.GetArguments()[1] is EventId { Id: 3007 });
@@ -165,15 +183,125 @@ public sealed class PendingPathClaimOrderingTests
                 Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(),
                 Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns<ValueTask<string?>>(_ => throw new InvalidOperationException("broker down"));
-        var engine = CreateEngine();
+        var engine = CreateEngine(withSignalStore: true);
 
         // Act
         var ex = await Record.ExceptionAsync(() => RunStepAsync(engine));
 
-        // Assert — the reschedule failure propagates (so the runtime retries the job) and the ledger
-        // is re-asserted after it, so the step is never both unclaimed and unreserved.
+        // Assert — the failure propagates (so the runtime retries the job), the ledger is re-asserted
+        // after it, and the signal re-check is not attempted on a reschedule that never happened.
         Assert.IsType<InvalidOperationException>(ex);
         Assert.Equal("record-dispatch", _calls[^1]);
+        Assert.DoesNotContain("read-waiter", _calls);
+    }
+
+    // ── Race 1: post-release signal-waiter re-check ─────────────────────────────
+
+    [Fact]
+    public async Task Pending_resumes_immediately_when_the_signal_landed_while_the_claim_was_held()
+    {
+        // Arrange — the delivery committed while this invocation held the claim, so the dispatcher's
+        // nudge could only lose it. The post-release re-check must pick the delivery up.
+        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                _calls.Add("read-waiter");
+                return new ValueTask<FlowSignalWaiter?>(DeliveredWaiter());
+            });
+        IStepInstance? resumed = null;
+        CancellationToken resumeToken = default;
+        _dispatcher.EnqueueStepAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(),
+                Arg.Do<IStepInstance>(s => resumed = s), Arg.Do<CancellationToken>(t => resumeToken = t))
+            .Returns(_ =>
+            {
+                _calls.Add("enqueue");
+                return new ValueTask<string?>("job-2");
+            });
+        var engine = CreateEngine(withSignalStore: true);
+        var before = DateTimeOffset.UtcNow;
+
+        // Act
+        await RunStepAsync(engine);
+
+        // Assert — the waiter is read only after the claim is released (so it observes any delivery
+        // that saw the claim held), and the resume is a fresh instance due now, not the parked one.
+        var tail = _calls.SkipWhile(c => c != "release-claim").ToList();
+        Assert.Equal(["release-claim", "schedule", "read-waiter", "enqueue"], tail);
+        Assert.NotNull(resumed);
+        Assert.NotSame(_parkedInstance, resumed);
+        Assert.Equal(StepKey, resumed!.Key);
+        Assert.InRange(resumed.ScheduledTime, before, DateTimeOffset.UtcNow);
+        Assert.Equal(CancellationToken.None, resumeToken);
+    }
+
+    [Fact]
+    public async Task Pending_does_not_resume_when_the_waiter_has_no_delivery()
+    {
+        // Arrange — the ordinary park: nothing delivered yet.
+        var engine = CreateEngine(withSignalStore: true);
+
+        // Act
+        await RunStepAsync(engine);
+
+        // Assert
+        Assert.Contains("read-waiter", _calls);
+        Assert.DoesNotContain("enqueue", _calls);
+    }
+
+    [Fact]
+    public async Task Pending_skips_the_re_check_when_no_signal_store_is_registered()
+    {
+        // Arrange
+        var engine = CreateEngine(withSignalStore: false);
+
+        // Act
+        await RunStepAsync(engine);
+
+        // Assert
+        Assert.DoesNotContain("read-waiter", _calls);
+        Assert.DoesNotContain("enqueue", _calls);
+    }
+
+    [Fact]
+    public async Task A_failing_waiter_re_check_is_logged_and_does_not_fail_the_step()
+    {
+        // Arrange — the reschedule already succeeded; the re-check is best-effort.
+        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("storage down"));
+        var engine = CreateEngine(withSignalStore: true);
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => RunStepAsync(engine));
+
+        // Assert
+        Assert.Null(ex);
+        Assert.Contains("schedule", _calls);
+        Assert.DoesNotContain("enqueue", _calls);
+        Assert.Contains(_logger.ReceivedCalls(), c =>
+            c.GetMethodInfo().Name == nameof(ILogger.Log)
+            && c.GetArguments()[1] is EventId { Id: 3009 });
+    }
+
+    // ── Events & telemetry ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task A_step_skipped_at_the_entry_gate_records_step_skipped()
+    {
+        // Arrange — the run was cancelled before this attempt started. The terminated-mid-poll path
+        // records step.skipped; the entry gate must record the same event so the timeline is complete
+        // whichever gate caught the step.
+        var controlStore = Substitute.For<IFlowRunControlStore>();
+        controlStore.GetRunControlAsync(_runId)
+            .Returns(Task.FromResult<FlowRunControlRecord?>(new FlowRunControlRecord { RunId = _runId, CancelRequested = true }));
+        var engine = CreateEngine(runControlStore: controlStore);
+
+        // Act
+        await RunStepAsync(engine);
+
+        // Assert
+        Assert.Contains("event:step.skipped", _calls);
+        Assert.Empty(_stepExecutor.ReceivedCalls());
     }
 
     [Fact]
@@ -206,7 +334,7 @@ public sealed class PendingPathClaimOrderingTests
             measured.Add((value, stepKey));
         });
         listener.Start();
-        var engine = CreateEngine(telemetry, enableOpenTelemetry: true);
+        var engine = CreateEngine(telemetry: telemetry, enableOpenTelemetry: true);
 
         // Act
         await RunStepAsync(engine);
@@ -215,6 +343,15 @@ public sealed class PendingPathClaimOrderingTests
         Assert.Equal([(1L, StepKey)], measured);
         Assert.Empty(_stepExecutor.ReceivedCalls());
     }
+
+    private static FlowSignalWaiter DeliveredWaiter() => new()
+    {
+        StepKey = StepKey,
+        SignalName = "approval",
+        CreatedAt = DateTimeOffset.UtcNow.AddSeconds(-1),
+        DeliveredAt = DateTimeOffset.UtcNow,
+        PayloadJson = "{\"approved\":true}"
+    };
 
     private async Task RunStepAsync(FlowOrchestratorEngine engine)
     {
@@ -225,13 +362,15 @@ public sealed class PendingPathClaimOrderingTests
             Steps = new StepCollection { [StepKey] = new StepMetadata { Type = "WaitForSignal" } }
         });
 
-        await engine.RunStepAsync(
-            new CoreExecutionContext { RunId = _runId },
-            flow,
-            new StepInstance(StepKey, "WaitForSignal") { RunId = _runId });
+        _parkedInstance = new StepInstance(StepKey, "WaitForSignal") { RunId = _runId };
+        await engine.RunStepAsync(new CoreExecutionContext { RunId = _runId }, flow, _parkedInstance);
     }
 
-    private FlowOrchestratorEngine CreateEngine(FlowOrchestratorTelemetry? telemetry = null, bool enableOpenTelemetry = false) =>
+    private FlowOrchestratorEngine CreateEngine(
+        bool withSignalStore = false,
+        IFlowRunControlStore? runControlStore = null,
+        FlowOrchestratorTelemetry? telemetry = null,
+        bool enableOpenTelemetry = false) =>
         new(
             _dispatcher,
             Substitute.For<IFlowExecutor>(),
@@ -243,9 +382,11 @@ public sealed class PendingPathClaimOrderingTests
             Substitute.For<IExecutionContextAccessor>(),
             Substitute.For<IFlowRepository>(),
             [_runtimeStore],
-            [],
+            runControlStore is null ? [] : [runControlStore],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = true, EnableOpenTelemetry = enableOpenTelemetry },
             telemetry ?? new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            eventNotifier: null,
+            signalStore: withSignalStore ? _signalStore : null);
 }

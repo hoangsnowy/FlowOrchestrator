@@ -11,9 +11,10 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// declares no <c>timeoutSeconds</c> (issue #190).
 /// </summary>
 /// <remarks>
-/// The interval is the worst-case resume latency whenever a resume nudge is lost, because each
+/// The interval is the worst-case resume latency if every other resume path fails, because each
 /// safety-net invocation re-reads the waiter and completes the step if a payload landed. It was a
-/// hard-coded 24 hours, which turned every lost nudge into a day-long strand.
+/// hard-coded 24 hours; the default is unchanged, but it is now configurable through
+/// <see cref="FlowSignalOptions.IndefiniteParkInterval"/>.
 /// </remarks>
 public sealed class WaitForSignalParkIntervalTests
 {
@@ -33,7 +34,7 @@ public sealed class WaitForSignalParkIntervalTests
     }
 
     [Fact]
-    public async Task Parks_for_five_minutes_by_default_when_no_timeout_is_declared()
+    public async Task Parks_for_the_24_hour_default_when_no_timeout_is_declared()
     {
         // Arrange
         var handler = new WaitForSignalHandler(new InMemoryFlowSignalStore());
@@ -43,7 +44,7 @@ public sealed class WaitForSignalParkIntervalTests
 
         // Assert
         Assert.Equal(StepStatus.Pending, result.Status);
-        Assert.Equal(TimeSpan.FromMinutes(5), result.DelayNextStep);
+        Assert.Equal(TimeSpan.FromHours(24), result.DelayNextStep);
     }
 
     [Fact]
@@ -76,7 +77,7 @@ public sealed class WaitForSignalParkIntervalTests
         var result = await ParkAsync(handler);
 
         // Assert
-        Assert.Equal(TimeSpan.FromMinutes(5), result.DelayNextStep);
+        Assert.Equal(FlowSignalOptions.DefaultIndefiniteParkInterval, result.DelayNextStep);
     }
 
     [Fact]

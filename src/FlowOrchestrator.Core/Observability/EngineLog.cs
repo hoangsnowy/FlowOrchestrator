@@ -52,8 +52,14 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3006, Level = LogLevel.Debug, Message = "Loop {LoopKey}: admitted iteration {Index} — enqueued entry step {StepKey}.")]
     public static partial void LoopIterationAdmitted(ILogger logger, string loopKey, int index, string stepKey);
 
-    [LoggerMessage(EventId = 3007, Level = LogLevel.Warning, Message = "Pending reschedule for step {StepKey} did not dispatch: a dispatch-ledger row for it already existed. Another party owns the next attempt; if nothing is queued for it, the step stays parked until recovery or the run timeout sweep.")]
+    [LoggerMessage(EventId = 3007, Level = LogLevel.Information, Message = "Pending reschedule for step {StepKey} found its dispatch-ledger row already recorded by another party; dispatching the next attempt anyway (the execution claim absorbs a duplicate).")]
     public static partial void PendingRescheduleLedgerTaken(ILogger logger, string stepKey);
+
+    [LoggerMessage(EventId = 3008, Level = LogLevel.Information, Message = "Step {StepKey} received its signal while this invocation held the execution claim; enqueued an immediate resume.")]
+    public static partial void ResumedSignalDeliveredWhileClaimed(ILogger logger, string stepKey);
+
+    [LoggerMessage(EventId = 3009, Level = LogLevel.Warning, Message = "Could not re-check the signal waiter for parked step {StepKey}; a signal delivered while it held its claim will wake it at its safety-net invocation instead.")]
+    public static partial void SignalRecheckFailed(ILogger logger, Exception ex, string stepKey);
 
     [LoggerMessage(EventId = 9000, Level = LogLevel.Debug, Message = "No IFlowRunRuntimeStore registered. Running in legacy sequential mode — parallel graph evaluation and step-claim deduplication are disabled.")]
     public static partial void LegacySequentialMode(ILogger logger);
