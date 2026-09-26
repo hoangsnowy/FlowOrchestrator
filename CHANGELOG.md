@@ -6,6 +6,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Service Bus runtime: a rescheduled step message could be silently dropped by the broker (#186).**
+  The `flow-steps` topic has duplicate detection on (10-minute window), and the step `MessageId` was
+  `{runId}:{stepKey}:{ScheduledTime ticks}` — so any two dispatches of one step that shared a
+  `ScheduledTime` tick inside the window lost the second one with no error and no dead-letter, leaving
+  the step with nothing queued until the run timeout sweep. The id is now
+  `{runId}:{stepKey}:{nonce}`, unique per dispatch by construction; the engine's dispatch ledger and
+  execution claim remain the idempotency layers, and broker dedup still absorbs the SDK re-sending the
+  same message. Step keys long enough to push the id past Service Bus's 128-character limit now fall
+  back to `{runId}:{nonce}` instead of failing the send.
+
 ## [1.32.2] - 2026-09-18
 
 ### Changed
