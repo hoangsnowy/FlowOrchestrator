@@ -97,7 +97,7 @@ deploy identity has only Send / Listen rights.
 | `SubscriptionPrefix` | `string` | `"flow-"` | Prefix for per-flow subscription names — the subscription becomes `flow-{flowId}`. |
 | `MaxConcurrentCallsPerSubscription` | `int` | `8` | Messages a single per-flow subscription processor handles concurrently. |
 | `AutoCreateTopology` | `bool` | `true` | Create topic / queue / subscriptions at startup via `ServiceBusAdministrationClient`. Requires Manage rights. |
-| `DuplicateDetectionWindow` | `TimeSpan` | 10 minutes | Duplicate-detection history window applied to the topic and cron queue when `AutoCreateTopology` is enabled. |
+| `DuplicateDetectionWindow` | `TimeSpan` | 10 minutes | Duplicate-detection history window applied to the topic and cron queue when `AutoCreateTopology` is enabled. On the step topic every dispatch carries a unique `MessageId` (`{runId}:{stepKey}:{nonce}`), so the window only absorbs the SDK re-sending one message after a transient failure; on the cron queue the id is deterministic per fire time, so it also collapses the same firing scheduled by several replicas. |
 | `MaxDeliveryCount` | `int` | `10` | Delivery attempts before a message is dead-lettered. |
 
 For local development, the included Aspire AppHost wires the official Microsoft Service Bus
