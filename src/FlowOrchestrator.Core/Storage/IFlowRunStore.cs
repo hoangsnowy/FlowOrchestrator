@@ -131,6 +131,41 @@ public interface IFlowRunStore
     /// </remarks>
     Task<FlowRunRecord?> GetRunAsync(Guid runId) => GetRunDetailAsync(runId);
 
+    /// <summary>
+    /// Returns a single step's row — status, error, timestamps and its own JSON columns — or
+    /// <see langword="null"/> when the run or the step has no row yet.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The runtime step key (e.g. <c>"process.3.validate"</c>).</param>
+    /// <remarks>
+    /// <see cref="FlowStepRecord.Attempts"/> is not populated. Exists for
+    /// <c>@steps('key').status</c> / <c>.error</c> expressions, which are resolved per step execution
+    /// and per <c>when</c>-clause evaluation: fetching the whole run detail for them pulled every step
+    /// and attempt row with their JSON columns on each of those calls (#189).
+    /// <para>
+    /// The default implementation delegates to <see cref="GetRunDetailAsync"/> and scans, so existing
+    /// custom stores keep working without the saving. Providers should override it with a point read.
+    /// </para>
+    /// </remarks>
+    async Task<FlowStepRecord?> GetStepAsync(Guid runId, string stepKey)
+    {
+        var run = await GetRunDetailAsync(runId).ConfigureAwait(false);
+        if (run?.Steps is not { } steps)
+        {
+            return null;
+        }
+
+        foreach (var step in steps)
+        {
+            if (string.Equals(step.StepKey, stepKey, StringComparison.Ordinal))
+            {
+                return step;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Returns aggregate counts used by the dashboard overview panel.</summary>
     Task<DashboardStatistics> GetStatisticsAsync();
 

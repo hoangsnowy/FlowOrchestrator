@@ -16,6 +16,16 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
     /// against the template definition.
     /// </param>
     /// <returns>The matching <see cref="StepMetadata"/>, or <see langword="null"/> if not found.</returns>
+    /// <remarks>
+    /// Hot path: called per status-map entry by <c>LoopBarrier.RunningLoopKeys</c> and per ready step by
+    /// the continuation, i.e. on every step completion. Nested and runtime keys are walked as
+    /// <see cref="ReadOnlySpan{T}"/> segments — no <see cref="string.Split(char, StringSplitOptions)"/>
+    /// array and, on .NET 9+, no per-segment string (the lookup goes through
+    /// <c>GetAlternateLookup&lt;ReadOnlySpan&lt;char&gt;&gt;</c>). Segment semantics are unchanged from the
+    /// earlier <c>Split(RemoveEmptyEntries | TrimEntries)</c> form: segments are trimmed, empty ones are
+    /// ignored, and a key with fewer than two segments that is not an exact top-level key resolves to
+    /// <see langword="null"/> (#189).
+    /// </remarks>
     public StepMetadata? FindStep(string key)
     {
         if (TryGetValue(key, out var step))
@@ -24,55 +34,101 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
         }
 
         // Support nested keys: "parent.child" and runtime loop keys: "parent.0.child".
-        var segments = key.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length <= 1)
+        var segmentCount = CountSegments(key);
+        if (segmentCount <= 1)
         {
             return null;
         }
 
-        return FindStepRecursive(this, segments, 0, null);
-    }
-
-    private static StepMetadata? FindStepRecursive(
-        IDictionary<string, StepMetadata> current,
-        IReadOnlyList<string> segments,
-        int index,
-        StepMetadata? parentScopedStep)
-    {
-        if (index >= segments.Count)
+        IDictionary<string, StepMetadata> current = this;
+        StepMetadata? parentScopedStep = null;
+        var rest = key.AsSpan();
+        for (var index = 0; index < segmentCount; index++)
         {
-            return null;
-        }
+            var segment = NextSegment(ref rest);
+            var isLast = index == segmentCount - 1;
 
-        // Runtime index segment for loop iterations (e.g. "parent.0.child").
-        // If the previous segment points to a scoped step, skip the numeric segment.
-        if (int.TryParse(segments[index], out _) && parentScopedStep is IScopedStep scopedParent)
-        {
-            if (index == segments.Count - 1)
+            // Runtime index segment for loop iterations (e.g. "parent.0.child").
+            // If the previous segment points to a scoped step, skip the numeric segment.
+            if (parentScopedStep is IScopedStep scopedParent && int.TryParse(segment, out _))
             {
-                // Key ends at runtime index "parent.0" -> return the loop metadata.
-                return parentScopedStep;
+                if (isLast)
+                {
+                    // Key ends at runtime index "parent.0" -> return the loop metadata.
+                    return parentScopedStep;
+                }
+
+                current = scopedParent.Steps;
+                continue;
             }
 
-            return FindStepRecursive(scopedParent.Steps, segments, index + 1, parentScopedStep);
-        }
+            if (!TryGetSegment(current, segment, out var found) || found is null)
+            {
+                return null;
+            }
 
-        if (!current.TryGetValue(segments[index], out var step) || step is null)
-        {
-            return null;
-        }
+            if (isLast)
+            {
+                return found;
+            }
 
-        if (index == segments.Count - 1)
-        {
-            return step;
-        }
+            if (found is not IScopedStep scoped || scoped.Steps is not { Count: > 0 })
+            {
+                return null;
+            }
 
-        if (step is IScopedStep scoped && scoped.Steps is { Count: > 0 })
-        {
-            return FindStepRecursive(scoped.Steps, segments, index + 1, step);
+            current = scoped.Steps;
+            parentScopedStep = found;
         }
 
         return null;
+    }
+
+    /// <summary>Counts the trimmed, non-empty dot-separated segments of <paramref name="key"/>.</summary>
+    private static int CountSegments(ReadOnlySpan<char> key)
+    {
+        var count = 0;
+        while (!key.IsEmpty)
+        {
+            if (!NextSegment(ref key).IsEmpty)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Returns the next trimmed, non-empty segment of <paramref name="rest"/> and advances past it,
+    /// or an empty span when only separators and whitespace remain.
+    /// </summary>
+    private static ReadOnlySpan<char> NextSegment(ref ReadOnlySpan<char> rest)
+    {
+        while (!rest.IsEmpty)
+        {
+            var dot = rest.IndexOf('.');
+            var segment = (dot < 0 ? rest : rest[..dot]).Trim();
+            rest = dot < 0 ? ReadOnlySpan<char>.Empty : rest[(dot + 1)..];
+            if (!segment.IsEmpty)
+            {
+                return segment;
+            }
+        }
+
+        return ReadOnlySpan<char>.Empty;
+    }
+
+    private static bool TryGetSegment(IDictionary<string, StepMetadata> steps, ReadOnlySpan<char> segment, out StepMetadata? step)
+    {
+#if NET9_0_OR_GREATER
+        if (steps is Dictionary<string, StepMetadata> dictionary
+            && dictionary.TryGetAlternateLookup<ReadOnlySpan<char>>(out var lookup))
+        {
+            return lookup.TryGetValue(segment, out step);
+        }
+#endif
+        return steps.TryGetValue(segment.ToString(), out step);
     }
 
     /// <summary>
