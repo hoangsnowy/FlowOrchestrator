@@ -55,6 +55,23 @@ public sealed partial class FlowOrchestratorEngine
             return false;
         }
 
+        await DispatchReservedStepAsync(ctx, flow, step, delay).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Hands a step whose dispatch-ledger row the caller already holds to the runtime adapter, then
+    /// annotates the row with the runtime's job/message id. O(1) per call: one dispatcher call plus one
+    /// best-effort ledger update.
+    /// </summary>
+    /// <remarks>
+    /// Split out of <see cref="TryScheduleStepAsync"/> so the Pending path can reserve the ledger row
+    /// <em>before</em> it releases the execution claim and dispatch only <em>after</em> (#190, race 2).
+    /// Every other caller should keep using <see cref="TryScheduleStepAsync"/>, which reserves and
+    /// dispatches in one call.
+    /// </remarks>
+    private async Task DispatchReservedStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
+    {
         string? jobId;
         if (delay.HasValue)
         {
@@ -78,8 +95,6 @@ public sealed partial class FlowOrchestratorEngine
                 EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
             }
         }
-
-        return true;
     }
 
     /// <summary>
@@ -276,7 +291,8 @@ public sealed partial class FlowOrchestratorEngine
                 var stuck = !await HasInFlightWorkAsync(run.Id).ConfigureAwait(false);
 
                 // The "in-flight" work may be parked rather than live: a WaitForSignal registered with
-                // no timeoutSeconds parks for 24 h, and a long-interval poll for its whole interval.
+                // no timeoutSeconds parks for FlowSignalOptions.IndefiniteParkInterval, and a
+                // long-interval poll for its whole interval.
                 // Such a step only observes the termination gate on its next wake-up, so a cancelled or
                 // timed-out run would otherwise sit Running for that long. Force-close it when every
                 // remaining step is provably parked.

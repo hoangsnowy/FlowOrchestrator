@@ -66,6 +66,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.RunControl);
         services.AddSingleton(builder.Retention);
         services.AddSingleton(builder.Observability);
+        services.AddSingleton(builder.Signals);
         services.TryAddSingleton<IFlowScheduleStateStore, EphemeralFlowScheduleStateStore>();
 
         // Default no-op notifier so the engine can always resolve IFlowEventNotifier from DI.
@@ -114,7 +115,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         }
 
         services.AddStepHandler<ForEachStepHandler>("ForEach");
-        services.AddStepHandler<WaitForSignalHandler>("WaitForSignal");
+        services.AddStepHandler<WaitForSignalHandler>(WaitForSignalHandler.StepTypeName);
         services.TryAddSingleton<IFlowSignalDispatcher, FlowSignalDispatcher>();
 
         return builder;
