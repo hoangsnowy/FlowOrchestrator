@@ -16,8 +16,8 @@ namespace FlowOrchestrator.ServiceBus;
 /// Only <see cref="IFlowDefinition.Id"/> is serialised; the consumer rehydrates the full
 /// definition from <c>IFlowRepository</c>. The <c>FlowId</c> application property is the
 /// SQL-filter key used by per-flow subscriptions; <c>RunId</c> and <c>StepKey</c> are
-/// included for diagnostics. <c>MessageId</c> is shaped <c>{runId}:{stepKey}:{attempt}</c>
-/// so duplicate-detection on the topic squashes accidental redelivery — though the
+/// included for diagnostics. <c>MessageId</c> is shaped <c>{runId}:{stepKey}:{nonce}</c> — unique
+/// per dispatch, so topic duplicate-detection only squashes the SDK re-sending one message; the
 /// engine's <c>TryRecordDispatchAsync</c> ledger is the authoritative idempotency layer.
 /// </remarks>
 internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposable
@@ -96,6 +96,9 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
         }
     }
 
+    /// <summary>Service Bus rejects a <c>MessageId</c> longer than this.</summary>
+    internal const int MaxMessageIdLength = 128;
+
     internal static ServiceBusMessage BuildMessage(
         IExecutionContext context,
         IFlowDefinition flow,
@@ -106,10 +109,7 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
         var body = JsonSerializer.SerializeToUtf8Bytes(envelope);
         var msg = new ServiceBusMessage(body)
         {
-            // MessageId acts as a duplicate-detection key on the topic. Including ScheduledTime
-            // ticks ensures Pending-step reschedules produce a fresh id (different ScheduledTime),
-            // while genuine duplicate dispatches collide.
-            MessageId = $"{context.RunId}:{step.Key}:{step.ScheduledTime.UtcTicks}",
+            MessageId = BuildMessageId(context.RunId, step.Key),
             ContentType = "application/json",
             Subject = step.Key,
         };
@@ -121,6 +121,33 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
             msg.ScheduledEnqueueTime = at;
         }
         return msg;
+    }
+
+    /// <summary>
+    /// Builds a <c>MessageId</c> that is unique per dispatch by construction.
+    /// </summary>
+    /// <param name="runId">Run the step belongs to; kept in the id for diagnostics.</param>
+    /// <param name="stepKey">Step being dispatched; kept in the id for diagnostics when it fits.</param>
+    /// <returns>
+    /// <c>{runId}:{stepKey}:{nonce}</c>, or <c>{runId}:{nonce}</c> when the step key would push the id
+    /// past <see cref="MaxMessageIdLength"/> (the key is still carried in <c>Subject</c> and the
+    /// <c>StepKey</c> application property).
+    /// </returns>
+    /// <remarks>
+    /// The step topic has duplicate detection on with a 10-minute history window, so the broker
+    /// <b>silently drops</b> any second message carrying an id it has already seen — no error, no
+    /// dead-letter. Up to v1.32 the id was <c>{runId}:{stepKey}:{ScheduledTime ticks}</c>, which made
+    /// the correctness of every Pending reschedule depend on no two dispatches of one step ever sharing
+    /// a tick inside that window (#186). The engine's dispatch ledger and execution claim are the
+    /// idempotency layers; broker dedup only has to squash the SDK's own retry of a send whose first
+    /// attempt actually landed, and that still works because a retry reuses this same message
+    /// instance and therefore this same id.
+    /// </remarks>
+    internal static string BuildMessageId(Guid runId, string stepKey)
+    {
+        var nonce = Guid.NewGuid();
+        var id = $"{runId}:{stepKey}:{nonce:N}";
+        return id.Length <= MaxMessageIdLength ? id : $"{runId}:{nonce:N}";
     }
 
     /// <inheritdoc/>

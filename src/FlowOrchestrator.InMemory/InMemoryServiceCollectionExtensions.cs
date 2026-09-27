@@ -31,7 +31,11 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
         builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
 
-        builder.Services.AddSingleton<IFlowSignalStore, InMemoryFlowSignalStore>();
+        // One instance serves both roles: the retention sweep must prune the same waiter map the
+        // engine and signal endpoint read.
+        builder.Services.AddSingleton<InMemoryFlowSignalStore>();
+        builder.Services.AddSingleton<IFlowSignalStore>(sp => sp.GetRequiredService<InMemoryFlowSignalStore>());
+        builder.Services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<InMemoryFlowSignalStore>());
 
         builder.Services.AddSingleton<IFlowScheduleStateStore, InMemoryFlowScheduleStateStore>();
 

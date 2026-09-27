@@ -81,9 +81,12 @@ public sealed class StepOutputResolver
     private readonly Dictionary<string, object?> _outputCache = new(StringComparer.Ordinal);
     private readonly HashSet<string> _outputLoaded = new(StringComparer.Ordinal);
 
-    // Lazy run-detail cache for .status and .error — loaded at most once per resolver instance.
-    private FlowRunRecord? _runDetail;
-    private bool _runDetailLoaded;
+    // Per-execution step-row cache for .status and .error — one point read per referenced step key.
+    // Was a lazily loaded GetRunDetailAsync (every step and attempt row of the run, JSON columns
+    // included); a resolver is built per step execution and per when-clause evaluation, so that
+    // cache was per-step, not per-run, and a `.status` in a when clause paid a full run-detail
+    // fetch on every step (#189).
+    private readonly Dictionary<string, FlowStepRecord?> _stepRecordCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Initialises a resolver scoped to a single step execution.
@@ -264,27 +267,24 @@ public sealed class StepOutputResolver
 
     private async ValueTask<object?> ResolveStatusAsync(string stepKey)
     {
-        var detail = await GetRunDetailAsync().ConfigureAwait(false);
-        var record = detail?.Steps?.FirstOrDefault(
-            s => string.Equals(s.StepKey, stepKey, StringComparison.Ordinal));
+        var record = await GetStepRecordAsync(stepKey).ConfigureAwait(false);
         return record?.Status;
     }
 
     private async ValueTask<object?> ResolveErrorAsync(string stepKey)
     {
-        var detail = await GetRunDetailAsync().ConfigureAwait(false);
-        var record = detail?.Steps?.FirstOrDefault(
-            s => string.Equals(s.StepKey, stepKey, StringComparison.Ordinal));
+        var record = await GetStepRecordAsync(stepKey).ConfigureAwait(false);
         return record?.ErrorMessage;
     }
 
-    private async ValueTask<FlowRunRecord?> GetRunDetailAsync()
+    private async ValueTask<FlowStepRecord?> GetStepRecordAsync(string stepKey)
     {
-        if (!_runDetailLoaded)
+        if (!_stepRecordCache.TryGetValue(stepKey, out var record))
         {
-            _runDetail = await _runStore.GetRunDetailAsync(_runId).ConfigureAwait(false);
-            _runDetailLoaded = true;
+            record = await _runStore.GetStepAsync(_runId, stepKey).ConfigureAwait(false);
+            _stepRecordCache[stepKey] = record;
         }
-        return _runDetail;
+
+        return record;
     }
 }

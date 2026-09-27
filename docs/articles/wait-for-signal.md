@@ -215,7 +215,7 @@ Before the fix for [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/
 The dispatcher now reads the step's claim state and picks the path deliberately:
 
 - **claim already released** — the overwhelming majority of deliveries, where the step has been parked for seconds or longer: dispatched immediately via `EnqueueStepAsync`. No scheduled-set poll.
-- **claim still held** — only the few-millisecond window above: the short delayed nudge, which is what it was there for.
+- **claim still held** — the parking invocation has not finished its bookkeeping yet: the short delayed nudge. The nudge can still lose the claim on a loaded multi-worker backend (Hangfire, Service Bus), so it is not the only safety: after releasing its claim, the parking invocation re-reads its own waiter and enqueues the resume itself if a payload has landed (log event 3008). A delivery that saw the claim held committed before that read, so one of the two always wakes the step; a duplicate is absorbed by the claim ([#190](https://github.com/hoangsnowy/FlowOrchestrator/issues/190)).
 - **no `IFlowRunRuntimeStore` registered** (custom storage predating the interface): also immediate. The engine guards its claim acquisition with the same `is not null` check, so with no runtime store there is no claim to lose and the race cannot occur.
 - **claim state unreadable** (transient storage fault): the delayed path, logged at `Warning` — a persistently failing claim store would otherwise silently reinstate the latency this fix removes.
 
@@ -225,14 +225,23 @@ No configuration is required, and `SchedulePollingInterval` no longer gates sign
 
 ### The safety net is not always prompt
 
-If the nudge fails to dispatch (queue outage, broker error), the signal is still durably delivered and the step wakes on the safety-net invocation scheduled when it parked. **That invocation is only prompt when the step declares `timeoutSeconds`** — without one the park interval is 24 hours. Set a timeout on any `WaitForSignal` whose recovery you care about.
+If the nudge fails to dispatch (queue outage, broker error), the signal is still durably delivered and the step wakes on the safety-net invocation scheduled when it parked. **That invocation is only prompt when the step declares `timeoutSeconds`** — without one the park interval is `FlowSignalOptions.IndefiniteParkInterval`, 24 hours by default. Set a timeout on any `WaitForSignal` whose recovery you care about, or shorten the interval globally:
+
+```csharp
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.Signals.IndefiniteParkInterval = TimeSpan.FromHours(1);
+});
+```
+
+Each re-check runs the full step path — a claim, an attempt row and a `step.started` / `step.pending` event pair — so a short interval multiplies the run history of every long-parked step.
 
 ## Observability
 
 When event persistence is enabled (`builder.Observability.EnableEventPersistence = true`), the engine emits these events for each `WaitForSignal` step:
 
 - `step.started` on every invocation (initial park, signal arrival, timeout fire).
-- `step.pending` after the first invocation parks the step.
+- `step.pending` every time an invocation parks the step, recorded before its execution claim is released — so it always precedes the `step.completed` of the resume that follows. A parked invocation never emits `step.completed`.
 - `step.completed` on successful delivery.
 - `step.failed` on timeout.
 

@@ -121,6 +121,7 @@ Enable via `options.Observability.EnableOpenTelemetry = true` and wire up via
 | `flow_step_duration_ms` | histogram (ms) | `flow_id`, `step_key`, `status` |
 | `flow_step_poll_attempts` | counter | `flow_id`, `step_key` |
 | `flow_step_dispatch_duration_ms` | histogram | `runtime`, `mode`, `outcome` |
+| `flow_step_claim_lost` | counter | `flow_id`, `step_key` |
 
 The full instrument list lives in [Observability — What is emitted](observability.md#what-is-emitted).
 

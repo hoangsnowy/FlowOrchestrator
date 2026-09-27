@@ -36,6 +36,9 @@ public sealed class FlowOrchestratorBuilder
     /// <summary>Observability options for OpenTelemetry and event persistence.</summary>
     public FlowObservabilityOptions Observability { get; } = new();
 
+    /// <summary>Signal options for <c>WaitForSignal</c> parking and resume-nudge dispatch.</summary>
+    public FlowSignalOptions Signals { get; } = new();
+
     /// <summary>
     /// Activates Hangfire integration. The actual registration of Hangfire-coupled services
     /// (trigger, step runner, recurring sync) is performed by <c>AddFlowOrchestrator</c>

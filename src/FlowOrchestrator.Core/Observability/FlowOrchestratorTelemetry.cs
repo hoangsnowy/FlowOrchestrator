@@ -74,6 +74,19 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
     /// </remarks>
     public Histogram<double> StepDispatchDurationMs { get; }
 
+    /// <summary>
+    /// Incremented every time <c>RunStepAsync</c> loses the execution claim and exits without running
+    /// the step. Tags: <c>flow_id</c>, <c>step_key</c>.
+    /// </summary>
+    /// <remarks>
+    /// Most losses are benign and expected: at-least-once redelivery, the duplicate resume a signal
+    /// can produce (the dispatcher's nudge and the engine's own post-release re-check), and every
+    /// resumed <c>WaitForSignal</c>'s orphaned safety-net attempt, which fires later and finds the step
+    /// already finished. Read it as a rate, per step key: a loss is only harmful when no other attempt
+    /// ran the step, and before this counter such a loss left no trace at all (#190).
+    /// </remarks>
+    public Counter<long> StepClaimLostCounter { get; }
+
     /// <summary>Records the wall-clock time a <c>WaitForSignal</c> step spent parked, in milliseconds.</summary>
     public Histogram<double> SignalWaitMs { get; }
 
@@ -104,6 +117,7 @@ public sealed class FlowOrchestratorTelemetry : IDisposable
         StepSkippedCounter = Meter.CreateCounter<long>("flow_step_skipped");
         StepPollAttemptsCounter = Meter.CreateCounter<long>("flow_step_poll_attempts");
         StepDispatchDurationMs = Meter.CreateHistogram<double>("flow_step_dispatch_duration_ms");
+        StepClaimLostCounter = Meter.CreateCounter<long>("flow_step_claim_lost");
         SignalWaitMs = Meter.CreateHistogram<double>("flow_signal_wait_ms");
         CronLagMs = Meter.CreateHistogram<double>("flow_cron_lag_ms");
         WebhookReceivedCounter = Meter.CreateCounter<long>("webhook_received_total");

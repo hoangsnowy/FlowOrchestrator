@@ -1,3 +1,6 @@
+- name: StepCollection.FindStep — runtime loop keys without allocation (2026-09-26)
+  href: step-collection-findstep-2026-09-26.md
+
 - name: Engine continuation — unwinding O(n²) over a run (2026-09-12)
   href: engine-continuation-oN2-2026-09-12.md
 

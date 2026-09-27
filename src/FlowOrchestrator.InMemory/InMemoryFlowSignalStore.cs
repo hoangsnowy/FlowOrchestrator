@@ -7,9 +7,54 @@ namespace FlowOrchestrator.InMemory;
 /// In-process <see cref="IFlowSignalStore"/> backed by a <see cref="ConcurrentDictionary{TKey, TValue}"/>.
 /// Used by tests and by the in-memory runtime; data does not survive process restart.
 /// </summary>
-public sealed class InMemoryFlowSignalStore : IFlowSignalStore
+/// <remarks>
+/// Also an <see cref="IFlowRetentionStore"/>: the retention sweep drops the waiters of every run the
+/// paired <see cref="InMemoryFlowRunStore"/> no longer holds, mirroring the SQL backends, which delete
+/// <c>FlowSignalWaiters</c> rows together with their run. Before #189 nothing removed a waiter, so the
+/// store grew for the lifetime of the process.
+/// </remarks>
+public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionStore
 {
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowSignalWaiter> _waiters = new();
+    private readonly InMemoryFlowRunStore? _runStore;
+
+    /// <summary>Creates a standalone store; the retention sweep is a no-op without a paired run store.</summary>
+    public InMemoryFlowSignalStore()
+    {
+    }
+
+    /// <summary>Creates a store whose retention sweep follows <paramref name="runStore"/>'s run lifetime.</summary>
+    /// <param name="runStore">The run store whose purged runs lose their waiters on the next sweep.</param>
+    public InMemoryFlowSignalStore(InMemoryFlowRunStore runStore)
+    {
+        _runStore = runStore;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Removes every waiter whose run no longer exists in the paired run store, so it follows the run
+    /// store's own cutoff rather than applying <paramref name="cutoffUtc"/> a second time — a waiter
+    /// has no completion time of its own. Order-independent: a waiter whose run is purged later in the
+    /// same sweep goes on the next one. O(waiters) per sweep, off the request path.
+    /// </remarks>
+    public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
+    {
+        if (_runStore is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var key in _waiters.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_runStore.ContainsRun(key.RunId))
+            {
+                _waiters.TryRemove(key, out _);
+            }
+        }
+
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc/>
     public ValueTask RegisterWaiterAsync(
