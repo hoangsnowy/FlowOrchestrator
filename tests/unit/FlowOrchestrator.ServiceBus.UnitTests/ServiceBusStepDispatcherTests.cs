@@ -52,7 +52,7 @@ public class ServiceBusStepDispatcherTests
     }
 
     [Fact]
-    public void BuildMessage_MessageIdIncludesRunStepAndScheduledTime()
+    public void BuildMessage_MessageIdIsRunStepAndPerDispatchNonce()
     {
         // Arrange
         var (ctx, flow, step) = MakeArgs();
@@ -60,9 +60,12 @@ public class ServiceBusStepDispatcherTests
         // Act
         var msg = ServiceBusStepDispatcher.BuildMessage(ctx, flow, step, scheduledEnqueueAt: null);
 
-        // Assert
-        var expected = $"{ctx.RunId}:{step.Key}:{step.ScheduledTime.UtcTicks}";
-        Assert.Equal(expected, msg.MessageId);
+        // Assert — {runId}:{stepKey}:{32-hex nonce}; no ScheduledTime component (#186).
+        var prefix = $"{ctx.RunId}:{step.Key}:";
+        Assert.StartsWith(prefix, msg.MessageId);
+        var nonce = msg.MessageId[prefix.Length..];
+        Assert.Equal(32, nonce.Length);
+        Assert.True(Guid.TryParseExact(nonce, "N", out _), nonce);
     }
 
     [Fact]

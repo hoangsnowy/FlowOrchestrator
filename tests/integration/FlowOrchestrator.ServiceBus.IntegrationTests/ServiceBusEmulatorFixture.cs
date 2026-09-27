@@ -31,6 +31,14 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
     /// <summary>The flow id whose subscription is pre-provisioned for cron round-trip tests.</summary>
     public static readonly Guid CronTestFlowId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
+    /// <summary>
+    /// Queue with duplicate detection ON, as production creates the step topic
+    /// (<c>ServiceBusTopologyManager</c>). The <c>flow-steps</c> topic above keeps it off so the
+    /// round-trip tests are not coupled to MessageId shape; this queue exists to prove that shape.
+    /// Its window is 5 minutes, the emulator's maximum (production uses 10).
+    /// </summary>
+    public const string DedupProbeQueueName = "dedup-probe";
+
     private const string SqlPassword = "Local-Dev-Pwd-2026!";
 
     private INetwork? _network;
@@ -104,7 +112,8 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
       {{
         ""Name"": ""sbemulator"",
         ""Queues"": [
-          {{ ""Name"": ""flow-cron-triggers"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": false, ""RequiresSession"": false }} }}
+          {{ ""Name"": ""flow-cron-triggers"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": false, ""RequiresSession"": false }} }},
+          {{ ""Name"": ""{DedupProbeQueueName}"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": true, ""DuplicateDetectionHistoryTimeWindow"": ""PT5M"", ""RequiresSession"": false }} }}
         ],
         ""Topics"": [
           {{
