@@ -6,6 +6,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.33.0] - 2026-09-27
+
 ### Fixed
 
 - **Service Bus runtime: a rescheduled step message could be silently dropped by the broker (#186).**
@@ -75,6 +77,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A step handler now always sees `IStepInstance.TriggerData` and `TriggerHeaders`. The engine fills
   them from the run when the runtime hands over a step without them. This was already the case for
   the Service Bus envelope, and now also covers the InMemory runtime's delayed schedules.
+- **Dependency roll-up of the eight open Dependabot PRs (#215).**
+  - `Microsoft.Data.SqlClient` 7.0.3 -> 7.1.0 — the SQL Server store's query path.
+  - OpenTelemetry moves to 1.19 as one release line: `OpenTelemetry`, `.Api`, `.Exporter.Console`,
+    `.Exporter.OpenTelemetryProtocol`, `.Extensions.Hosting` -> 1.19.1; `.Instrumentation.AspNetCore`
+    -> 1.19.0 (1.19.1 is not published for it).
+  - `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Hosting.Abstractions`
+    10.0.11 -> 10.0.12.
+  - AppHost only: `Aspire.Hosting.PostgreSQL` and `Aspire.Hosting.Azure.ServiceBus` 13.5.3 -> 13.5.4.
+  - Test-only: `Microsoft.NET.Test.Sdk` 18.10.0 -> 18.10.1. CI-only: `github/codeql-action` 4.38.0 -> 4.38.1.
+
 ### Performance
 
 Items from the #189 backlog. The per-run incremental status cache (P0 item 1) is a design-first
