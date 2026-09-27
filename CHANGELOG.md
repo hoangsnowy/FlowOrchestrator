@@ -6,6 +6,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two claim races could strand a parked `WaitForSignal` step until its 24-hour safety net (#190).**
+  Both need a multi-worker runtime (Hangfire, Service Bus); the InMemory runtime drains its channel with
+  a single consumer and cannot hit them.
+  - *Race 1 — a signal delivered while the parking invocation held its claim.* `FlowSignalDispatcher`
+    sees the claim held and sends its nudge 500 ms later, a guess at how long the claim lasts. On a
+    loaded backend the guess was wrong: the nudge lost `TryClaimStepAsync` on another worker and exited
+    silently. The engine now re-reads the step's signal waiter **after** releasing the claim and
+    enqueues the resume itself if a payload has landed. Any delivery that saw the claim held committed
+    before that read, so whichever side goes second wakes the step — the window is closed, not
+    narrowed. Costs one point read per `Pending` result of a `WaitForSignal` step with a claim guard in
+    play; polling steps and custom handlers are not affected.
+  - *Race 2 — the claim was released before the ledger row that replaces it.* The `Pending` path now
+    re-reserves the dispatch-ledger row **before** releasing the claim, and dispatches the next attempt
+    after, so the step is never unclaimed and unreserved at once. If another party (recovery, a retry)
+    recorded the row in between, the engine now dispatches anyway (event 3007) instead of risking a
+    step with nothing queued; the claim absorbs the duplicate.
+  - `step.pending` is recorded while the claim is still held, so it always precedes the resume's
+    `step.completed` in the timeline.
+- **A parked step no longer logs `step.completed … with status Pending`.** `Pending` fell into the
+  default arm of the event-type switch, so every parked `WaitForSignal` and every poll iteration read
+  as finished-then-unfinished on the dashboard. A step whose run was cancelled or timed out while it
+  was polling now records `step.skipped` instead.
+
+### Added
+
+- `FlowSignalOptions.IndefiniteParkInterval` (`options.Signals` on the builder): the safety-net
+  re-check interval for a `WaitForSignal` without `timeoutSeconds`. **Default unchanged at 24 hours;**
+  values above 30 days are clamped (the InMemory runtime cannot delay longer than ~49.7 days, and
+  `TimeSpan.MaxValue` would overflow every dispatcher). `WaitForSignalHandler.StepTypeName`.
+- `flow_step_claim_lost` counter (tags `flow_id`, `step_key`). Most losses are benign (redelivery, the
+  duplicate resume a signal can produce, a resumed step's orphaned safety-net attempt); read it as a
+  rate per step key. Before it existed, a harmful loss left no trace at all.
+- Engine log events 3007 (ledger row already taken, dispatched anyway), 3008 (signal found by the
+  post-release re-check, resume enqueued), 3009 (re-check failed), 3010 (claim could not be released
+  after a storage fault during the Pending hand-off).
+
+- `IFlowRunStore.GetStepAsync(runId, stepKey)`: a point read of one step row. The default interface
+  implementation falls back to `GetRunDetailAsync`, so existing custom stores keep compiling. The
+  built-in stores override it.
+
+### Changed
+
+- The dashboard "flows" count now reports **enabled flow definitions**. Before, it reported flows that
+  had at least one run. A flow with no runs now counts. A disabled flow, or history left behind by a
+  flow that is no longer registered, no longer counts.
+- A step handler now always sees `IStepInstance.TriggerData` and `TriggerHeaders`. The engine fills
+  them from the run when the runtime hands over a step without them. This was already the case for
+  the Service Bus envelope, and now also covers the InMemory runtime's delayed schedules.
 ### Performance
 
 Items from the #189 backlog. The per-run incremental status cache (P0 item 1) is a design-first
@@ -37,20 +87,6 @@ change and is not part of this set.
   `COUNT(DISTINCT FlowId)` over the whole run history, run on every 5 s dashboard poll. It now counts
   enabled flow definitions, as the property's docs always said, on all three backends.
 
-### Added
-
-- `IFlowRunStore.GetStepAsync(runId, stepKey)`: a point read of one step row. The default interface
-  implementation falls back to `GetRunDetailAsync`, so existing custom stores keep compiling. The
-  built-in stores override it.
-
-### Changed
-
-- The dashboard "flows" count now reports **enabled flow definitions**. Before, it reported flows that
-  had at least one run. A flow with no runs now counts. A disabled flow, or history left behind by a
-  flow that is no longer registered, no longer counts.
-- A step handler now always sees `IStepInstance.TriggerData` and `TriggerHeaders`. The engine fills
-  them from the run when the runtime hands over a step without them. This was already the case for
-  the Service Bus envelope, and now also covers the InMemory runtime's delayed schedules.
 
 ## [1.32.2] - 2026-09-18
 
