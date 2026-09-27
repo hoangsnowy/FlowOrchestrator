@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 
 namespace FlowOrchestrator.ServiceBus;
 
@@ -19,16 +22,28 @@ namespace FlowOrchestrator.ServiceBus;
 /// </remarks>
 internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposable
 {
+    private const string RuntimeName = "service_bus";
+
     private readonly ServiceBusClient _client;
     private readonly ServiceBusRuntimeOptions _options;
     private readonly Lazy<ServiceBusSender> _sender;
+    private readonly FlowOrchestratorTelemetry? _telemetry;
 
     /// <summary>Initialises the dispatcher with a shared Service Bus client and options.</summary>
-    public ServiceBusStepDispatcher(ServiceBusClient client, ServiceBusRuntimeOptions options)
+    /// <param name="client">Shared Service Bus client; the dispatcher creates one sender from it.</param>
+    /// <param name="options">Runtime options naming the step topic.</param>
+    /// <param name="telemetry">Optional — when supplied, each send is timed on <c>flow_step_dispatch_duration_ms</c>.</param>
+    /// <param name="observability">Optional — <see cref="FlowObservabilityOptions.EnableOpenTelemetry"/> gates the timing.</param>
+    public ServiceBusStepDispatcher(
+        ServiceBusClient client,
+        ServiceBusRuntimeOptions options,
+        FlowOrchestratorTelemetry? telemetry = null,
+        FlowObservabilityOptions? observability = null)
     {
         _client = client;
         _options = options;
         _sender = new Lazy<ServiceBusSender>(() => _client.CreateSender(_options.StepTopicName));
+        _telemetry = observability?.EnableOpenTelemetry == false ? null : telemetry;
     }
 
     /// <inheritdoc/>
@@ -39,7 +54,7 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
         CancellationToken ct = default)
     {
         var msg = BuildMessage(context, flow, step, scheduledEnqueueAt: null);
-        await _sender.Value.SendMessageAsync(msg, ct).ConfigureAwait(false);
+        await SendAsync(msg, scheduled: false, ct).ConfigureAwait(false);
         return msg.MessageId;
     }
 
@@ -53,8 +68,32 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
     {
         var when = DateTimeOffset.UtcNow + delay;
         var msg = BuildMessage(context, flow, step, scheduledEnqueueAt: when);
-        await _sender.Value.SendMessageAsync(msg, ct).ConfigureAwait(false);
+        await SendAsync(msg, scheduled: true, ct).ConfigureAwait(false);
         return msg.MessageId;
+    }
+
+    /// <summary>
+    /// Sends <paramref name="msg"/> and times the broker round-trip — including the lazy sender's
+    /// first-use link attach — on <c>flow_step_dispatch_duration_ms</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is the measurement #192 is missing: the Service Bus runtime showed a 470x p50/p95
+    /// trigger-latency spread against the emulator, and request timings cannot tell whether the tail
+    /// sits on this send or elsewhere.
+    /// </remarks>
+    private async Task SendAsync(ServiceBusMessage msg, bool scheduled, CancellationToken ct)
+    {
+        var start = Stopwatch.GetTimestamp();
+        var ok = false;
+        try
+        {
+            await _sender.Value.SendMessageAsync(msg, ct).ConfigureAwait(false);
+            ok = true;
+        }
+        finally
+        {
+            _telemetry?.RecordDispatch(RuntimeName, scheduled, ok, start);
+        }
     }
 
     /// <summary>Service Bus rejects a <c>MessageId</c> longer than this.</summary>

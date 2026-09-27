@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 
 namespace FlowOrchestrator.InMemory;
 
@@ -17,12 +19,27 @@ namespace FlowOrchestrator.InMemory;
 /// </remarks>
 internal sealed class InMemoryStepDispatcher : IStepDispatcher
 {
+    private const string RuntimeName = "in_memory";
+
     private readonly ChannelWriter<InMemoryStepEnvelope> _writer;
+    private readonly FlowOrchestratorTelemetry? _telemetry;
 
     /// <summary>Initialises the dispatcher with the shared channel writer.</summary>
-    public InMemoryStepDispatcher(ChannelWriter<InMemoryStepEnvelope> writer)
+    /// <param name="writer">Writer side of the channel the runner drains.</param>
+    /// <param name="telemetry">Optional — when supplied, each channel write is timed on <c>flow_step_dispatch_duration_ms</c>.</param>
+    /// <param name="observability">Optional — <see cref="FlowObservabilityOptions.EnableOpenTelemetry"/> gates the timing.</param>
+    /// <remarks>
+    /// Only <see cref="EnqueueStepAsync"/> is timed. <see cref="ScheduleStepAsync"/> returns before
+    /// doing any work — the write happens after the delay, off the caller's path — so there is no
+    /// dispatch cost for the histogram to attribute.
+    /// </remarks>
+    public InMemoryStepDispatcher(
+        ChannelWriter<InMemoryStepEnvelope> writer,
+        FlowOrchestratorTelemetry? telemetry = null,
+        FlowObservabilityOptions? observability = null)
     {
         _writer = writer;
+        _telemetry = observability?.EnableOpenTelemetry == false ? null : telemetry;
     }
 
     /// <inheritdoc/>
@@ -34,7 +51,18 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
     {
         var id = Guid.NewGuid().ToString("N");
         var traceContext = CaptureCurrentTraceContext();
-        await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext }, ct).ConfigureAwait(false);
+        var start = Stopwatch.GetTimestamp();
+        var ok = false;
+        try
+        {
+            await _writer.WriteAsync(new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext }, ct).ConfigureAwait(false);
+            ok = true;
+        }
+        finally
+        {
+            _telemetry?.RecordDispatch(RuntimeName, scheduled: false, ok, start);
+        }
+
         return id;
     }
 

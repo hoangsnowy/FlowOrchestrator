@@ -57,6 +57,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   implementation falls back to `GetRunDetailAsync`, so existing custom stores keep compiling. The
   built-in stores override it.
 
+- **`flow_step_dispatch_duration_ms` histogram**, tagged `runtime` (`hangfire`, `in_memory` or
+  `service_bus`), `mode` (`enqueue` or `schedule`) and `outcome` (`ok` or `error`). It records how
+  long the runtime adapter took to accept each dispatch.
+  - This is the measurement #192 lacked. Against the emulator, the Service Bus runtime showed about
+    20x lower trigger throughput and a 470x p50/p95 latency spread. Request timings alone cannot tell
+    whether that tail sits on the send or somewhere else.
+  - Load-test against a real namespace and compare this histogram's p95 with the trigger p95 to
+    settle it.
+  - Gated by `Observability.EnableOpenTelemetry`, like every other engine metric.
+
 ### Changed
 
 - The dashboard "flows" count now reports **enabled flow definitions**. Before, it reported flows that
