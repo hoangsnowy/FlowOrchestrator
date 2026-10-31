@@ -16,10 +16,9 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Hangfire.SqlServer;
-using OpenTelemetry.Logs;
+using FlowOrchestrator.OpenTelemetry;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
-using OpenTelemetry.Resources;
 
 // Short-circuit `--export-mermaid <flowId|flowName>` before standing up the host.
 if (MermaidExportCli.TryHandle(args, out var exitCode))
@@ -266,34 +265,22 @@ builder.Services.AddHttpClient("ExternalApi", client =>
 // Tempo, …). Both can run concurrently — production typically keeps only the OTLP exporter.
 var enableConsoleExporter = builder.Configuration.GetValue("OBSERVABILITY_CONSOLE", true);
 
-builder.Services.AddOpenTelemetry()
-    .ConfigureResource(r => r.AddService("FlowOrchestrator.SampleApp"))
-    .WithTracing(t =>
-    {
-        t.AddFlowOrchestratorInstrumentation()
-         .AddAspNetCoreInstrumentation()
-         .AddOtlpExporter();
-        if (enableConsoleExporter) t.AddConsoleExporter();
-    })
-    .WithMetrics(m =>
-    {
-        m.AddFlowOrchestratorInstrumentation()
-         .AddAspNetCoreInstrumentation()
-         .AddOtlpExporter();
-        if (enableConsoleExporter) m.AddConsoleExporter();
-    });
-
-// OTel structured-logging exporter: ships every ILogger call as an OTLP log record so the
-// engine's BeginScope correlation (RunId / FlowId / StepKey / Attempt) and stable EventIds
-// land in Aspire Dashboard's Logs tab — alongside the matching trace. Without this, logs
-// only go to stdout via the default ConsoleLogger and the OTLP backend sees zero log records.
-builder.Logging.AddOpenTelemetry(o =>
+// One call (FlowOrchestrator.OpenTelemetry): traces + metrics + logs, logs with IncludeScopes so every
+// line inside a run carries RunId / FlowId / FlowName / StepKey / StepType / TriggerKey / Attempt as
+// attributes, all exported over OTLP whenever OTEL_EXPORTER_OTLP_ENDPOINT is set.
+builder.AddFlowOrchestratorOpenTelemetry(o =>
 {
-    o.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("FlowOrchestrator.SampleApp"));
-    o.IncludeFormattedMessage = true;
-    o.IncludeScopes = true;            // CRITICAL: surfaces BeginScope props as log attributes
-    o.ParseStateValues = true;          // Treat structured-template values as structured attrs
-    o.AddOtlpExporter();
+    o.ServiceName = "FlowOrchestrator.SampleApp";
+    o.ConfigureTracing = t =>
+    {
+        t.AddAspNetCoreInstrumentation();
+        if (enableConsoleExporter) t.AddConsoleExporter();
+    };
+    o.ConfigureMetrics = m =>
+    {
+        m.AddAspNetCoreInstrumentation();
+        if (enableConsoleExporter) m.AddConsoleExporter();
+    };
 });
 
 builder.Services.AddFlowDashboard(builder.Configuration);

@@ -32,6 +32,48 @@ When enabled, FlowOrchestrator registers an `ActivitySource` and a `Meter`, both
 options.Observability.EnableOpenTelemetry = true;
 ```
 
+### One call: `AddFlowOrchestratorOpenTelemetry()` (recommended)
+
+The `FlowOrchestrator.OpenTelemetry` package wires traces, metrics **and logs** in one call:
+
+```bash
+dotnet add package FlowOrchestrator.OpenTelemetry
+```
+
+```csharp
+using FlowOrchestrator.OpenTelemetry;
+
+builder.AddFlowOrchestratorOpenTelemetry(o =>
+{
+    o.ServiceName = "orders-worker";                              // default: OTEL_SERVICE_NAME, then app name
+    o.ConfigureTracing = t => t.AddAspNetCoreInstrumentation();   // optional extra instrumentation
+});
+```
+
+What DevOps configures — nothing else is needed:
+
+| Setting | Effect |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Turns the OTLP exporter on for all three signals (off when unset, so a host without a collector does not log export failures). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS` | Standard OTLP settings (gRPC vs HTTP, API keys for the backend). |
+| `OTEL_SERVICE_NAME` | `service.name` when the code does not set one. |
+
+Logs are exported with scopes, so **every log line written inside a run** — the engine's and your step
+handlers' — carries these attributes:
+
+| Attribute | Where it comes from |
+|---|---|
+| `RunId`, `FlowId` | every engine entry point |
+| `FlowName` | the flow class name (new in 1.34) |
+| `TriggerKey` | trigger entry point (new in 1.34) |
+| `StepKey`, `StepType` | step execution (`StepType` new in 1.34) |
+| `Attempt` | retries |
+
+Filter by `FlowName = "OrderFulfillmentFlow"` instead of a GUID; the trace / span id on each log line
+links it to the `flow.trigger` / `flow.step` span (which now also carries a `flow.name` tag).
+
+### Manual wiring
+
 Wire up the instrumentation in your OTel pipeline:
 
 ```csharp

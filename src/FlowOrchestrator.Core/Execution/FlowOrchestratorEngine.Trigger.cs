@@ -28,9 +28,11 @@ public sealed partial class FlowOrchestratorEngine
 
         // BeginScope ensures every nested log line in this run carries RunId/FlowId,
         // including logs emitted by user-written step handlers further down the stack.
-        using var _scope = EngineLogScope.Begin(_logger, triggerContext.RunId, triggerContext.Flow.Id);
+        using var _scope = EngineLogScope.Begin(_logger, triggerContext.RunId, triggerContext.Flow.Id, stepKey: null, attempt: null,
+            flowName: triggerContext.Flow.GetType().Name, triggerKey: triggerContext.Trigger.Key);
 
         activity?.SetTag("flow.id", triggerContext.Flow.Id.ToString());
+        activity?.SetTag("flow.name", triggerContext.Flow.GetType().Name);
         activity?.SetTag("run.id", triggerContext.RunId.ToString());
         activity?.SetTag("trigger.key", triggerContext.Trigger.Key);
         activity?.SetTag("trigger.type", triggerContext.Trigger.Type);

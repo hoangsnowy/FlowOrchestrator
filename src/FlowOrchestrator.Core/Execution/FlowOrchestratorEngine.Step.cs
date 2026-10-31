@@ -32,9 +32,10 @@ public sealed partial class FlowOrchestratorEngine
         step.TriggerHeaders ??= ctx.TriggerHeaders;
         _contextAccessor.CurrentContext = ctx;
 
-        using var _scope = EngineLogScope.Begin(_logger, ctx.RunId, flow.Id, step.Key);
+        using var _scope = EngineLogScope.Begin(_logger, ctx.RunId, flow.Id, step.Key, attempt: null, flowName: flow.GetType().Name, stepType: step.Type);
 
         activity?.SetTag("flow.id", flow.Id.ToString());
+        activity?.SetTag("flow.name", flow.GetType().Name);
         activity?.SetTag("run.id", ctx.RunId.ToString());
         activity?.SetTag("step.key", step.Key);
         activity?.SetTag("step.type", step.Type);

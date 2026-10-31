@@ -7,7 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDashboardOptions`,
-`WebhookRejectionQuery` / `WebhookRejectionPage`, dashboard sign-in, and a changed dashboard default).
+`WebhookRejectionQuery` / `WebhookRejectionPage`, dashboard sign-in, a new package, and a changed dashboard
+default).
+
+### Added — one-call OpenTelemetry with readable log attributes
+
+- **New package `FlowOrchestrator.OpenTelemetry`:** `builder.AddFlowOrchestratorOpenTelemetry()` wires
+  traces, metrics and logs into the OpenTelemetry SDK (logs with `IncludeScopes`, `IncludeFormattedMessage`,
+  `ParseStateValues`) and exports all three over OTLP whenever `OTEL_EXPORTER_OTLP_ENDPOINT` is set — the
+  only setting operators need. Options for service name, exporter switch and extra instrumentation.
+- **Log scopes and spans carry names, not just GUIDs:** every log line inside a run now also has
+  `FlowName`, `StepType` (step execution) and `TriggerKey` (trigger) next to `RunId` / `FlowId` /
+  `StepKey` / `Attempt`; `flow.trigger` and `flow.step` spans get a `flow.name` tag. New
+  `EngineLogScope.Begin` overload; the existing one is unchanged.
+- The sample app uses the one-call wiring.
 
 ### Added — dashboard sign-in with Keycloak / OpenID Connect (#237)
 

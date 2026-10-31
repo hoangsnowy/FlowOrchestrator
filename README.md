@@ -203,6 +203,7 @@ dotnet add package FlowOrchestrator.SqlServer    # or FlowOrchestrator.PostgreSQ
 # Optional
 dotnet add package FlowOrchestrator.Dashboard    # REST API + SPA dashboard
 dotnet add package FlowOrchestrator.Testing      # FlowTestHost — in-process integration test helper
+dotnet add package FlowOrchestrator.OpenTelemetry  # one-call OTel: traces + metrics + logs over OTLP
 ```
 
 > **`FlowOrchestrator.Hangfire` is required for every runtime.** The
@@ -397,6 +398,7 @@ sample app exposes `--export-mermaid <flowId>` for CI integrations.
 | `FlowOrchestrator.PostgreSQL` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.Dashboard` | `net8.0` · `net9.0` · `net10.0` |
 | `FlowOrchestrator.Testing` | `net8.0` · `net9.0` · `net10.0` |
+| `FlowOrchestrator.OpenTelemetry` | `net8.0` · `net9.0` · `net10.0` |
 
 ---
 
