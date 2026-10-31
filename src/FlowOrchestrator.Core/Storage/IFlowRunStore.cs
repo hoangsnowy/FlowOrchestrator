@@ -132,16 +132,9 @@ public interface IFlowRunStore
             query.FlowId, query.Status, query.Skip, query.Take + 1, search,
             query.IncludeStepPayloads, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
 
-        IReadOnlyList<FlowRunRecord> rows = runs;
-        if (query.RunId is { } runId)
-        {
-            var exact = new List<FlowRunRecord>(1);
-            foreach (var run in runs)
-            {
-                if (run.Id == runId) exact.Add(run);
-            }
-            rows = exact;
-        }
+        IReadOnlyList<FlowRunRecord> rows = query.RunId is { } runId
+            ? runs.Where(run => run.Id == runId).ToList()
+            : runs;
 
         var hasMore = rows.Count > query.Take;
         if (hasMore)
