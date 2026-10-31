@@ -27,6 +27,27 @@ public sealed class FlowDashboardOptions
     public WebhookSecurityOptions WebhookSecurity { get; set; } = new();
 
     /// <summary>
+    /// Time window applied to a free-text search (run list and webhook deliveries) that does not
+    /// bound it itself. Defaults to 7 days.
+    /// </summary>
+    /// <remarks>
+    /// A free-text term cannot use an index (it is a <c>%term%</c> match), so without a window it reads
+    /// every row in retention; the window turns that into a range seek on the time index. It is not
+    /// applied to a run-id lookup or to a term recognised as a status name, which are already index
+    /// seeks. Callers widen it per request with the <c>from</c> / <c>to</c> query parameters. A zero or
+    /// negative value falls back to the 7-day default: the window is what keeps the opt-in
+    /// step-payload search bounded, so it cannot be switched off here.
+    /// Bind from configuration as a <see cref="TimeSpan"/> string, e.g. <c>"30.00:00:00"</c>.
+    /// </remarks>
+    public TimeSpan RunSearchWindow { get; set; } = DefaultRunSearchWindow;
+
+    /// <summary>Default for <see cref="RunSearchWindow"/>: 7 days.</summary>
+    public static readonly TimeSpan DefaultRunSearchWindow = TimeSpan.FromDays(7);
+
+    /// <summary><see cref="RunSearchWindow"/> with non-positive values replaced by <see cref="DefaultRunSearchWindow"/>.</summary>
+    internal TimeSpan EffectiveRunSearchWindow => RunSearchWindow > TimeSpan.Zero ? RunSearchWindow : DefaultRunSearchWindow;
+
+    /// <summary>
     /// Configures the webhook hardening pipeline through a fluent builder.
     /// </summary>
     /// <param name="configure">Configuration callback receiving a <see cref="WebhookSecurityOptionsBuilder"/>.</param>

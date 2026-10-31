@@ -3,7 +3,7 @@ using Microsoft.Data.SqlClient;
 
 namespace FlowOrchestrator.SqlServer.Tests;
 
-public sealed class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
+public sealed partial class SqlFlowRunStoreTests : IClassFixture<SqlServerFixture>
 {
     private readonly SqlFlowRunStore _store;
     private readonly string _connectionString;

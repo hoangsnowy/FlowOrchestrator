@@ -165,7 +165,9 @@ public sealed class PostgreSqlFlowRunStore :
 
     public async Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        var page = await GetRunsPageAsync(flowId, null, skip, take, null);
+        // No total is needed here, so this must not go through GetRunsPageAsync: its COUNT(*) OVER()
+        // evaluates the filter over every run in retention on each overview poll.
+        var page = await SearchRunsAsync(new RunSearchQuery { FlowId = flowId, Skip = skip, Take = take });
         return page.Runs;
     }
 
@@ -267,6 +269,113 @@ public sealed class PostgreSqlFlowRunStore :
             totalCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*)::int FROM flow_runs AS fr{whereSql}", parameters);
 
         return (rows, totalCount);
+    }
+
+    /// <inheritdoc/>
+    public async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var command = BuildSearchRunsCommand(query);
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await using var grid = await conn.QueryMultipleAsync(new CommandDefinition(
+            command.Sql, command.Parameters, cancellationToken: cancellationToken));
+        var rows = (await grid.ReadAsync<FlowRunRecord>()).AsList();
+        int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>() : null;
+
+        var hasMore = rows.Count > query.Take;
+        if (hasMore)
+            rows.RemoveRange(query.Take, rows.Count - query.Take);
+        return new RunSearchPage(rows, hasMore, total);
+    }
+
+    /// <summary>
+    /// Builds the SQL batch for <see cref="SearchRunsAsync"/>: the page query, followed by an exact
+    /// <c>COUNT(*)</c> only when <see cref="RunSearchQuery.CountsTotal"/> is set.
+    /// </summary>
+    /// <param name="query">The structured run query.</param>
+    /// <returns>The batch text, its parameters, and whether the batch returns a second (count) result set.</returns>
+    /// <remarks>
+    /// Same shape rules as the SQL Server store: a run id (or GUID-shaped text) compares
+    /// <c>fr.id</c> by equality instead of <c>fr.id::text ILIKE</c>; no <c>COUNT(*) OVER()</c>, the page
+    /// reads <c>Take + 1</c> rows; the exact count covers only the plain filters; the
+    /// <c>flow_steps</c> probe is added only for <see cref="RunSearchQuery.IncludeStepPayloads"/>, as the
+    /// de-correlated <c>IN</c> over bare columns that the pg_trgm GIN indexes can serve.
+    /// </remarks>
+    internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query)
+    {
+        var filters = new List<string>(4);
+        if (query.FlowId.HasValue)
+            filters.Add("fr.flow_id = @FlowId");
+        if (!string.IsNullOrWhiteSpace(query.Status))
+            filters.Add("fr.status = @Status");
+        if (query.StartedFrom.HasValue)
+            filters.Add("fr.started_at >= @StartedFrom");
+        if (query.StartedTo.HasValue)
+            filters.Add("fr.started_at <= @StartedTo");
+
+        var countsTotal = query.CountsTotal;
+        var countWhere = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
+
+        if (query.RunId.HasValue)
+            filters.Add("fr.id = @RunId");
+
+        string? searchLike = null;
+        Guid? textId = null;
+        if (query.HasText)
+        {
+            var text = query.Text!.Trim();
+            searchLike = "%" + EscapeLikePattern(text) + "%";
+            textId = Guid.TryParse(text, out var parsed) ? parsed : null;
+            var idMatch = textId.HasValue ? "fr.id = @TextId" : "fr.id::text ILIKE @SearchLike";
+            var stepMatch = query.IncludeStepPayloads
+                ? """
+
+                        OR fr.id IN (
+                            SELECT fs.run_id
+                            FROM flow_steps AS fs
+                            WHERE fs.step_key ILIKE @SearchLike
+                               OR fs.error_message ILIKE @SearchLike
+                               OR fs.output_json ILIKE @SearchLike
+                        )
+                  """
+                : string.Empty;
+            filters.Add($"""
+                (
+                        {idMatch}
+                        OR COALESCE(fr.flow_name, '') ILIKE @SearchLike
+                        OR COALESCE(fr.trigger_key, '') ILIKE @SearchLike
+                        OR COALESCE(fr.status, '') ILIKE @SearchLike
+                        OR COALESCE(fr.background_job_id, '') ILIKE @SearchLike{stepMatch}
+                    )
+                """);
+        }
+
+        var where = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
+        var sql = """
+            SELECT fr.id AS "Id", fr.flow_id AS "FlowId", fr.flow_name AS "FlowName",
+                   fr.status AS "Status", fr.trigger_key AS "TriggerKey",
+                   fr.trigger_data_json AS "TriggerDataJson", fr.background_job_id AS "BackgroundJobId",
+                   fr.started_at AS "StartedAt", fr.completed_at AS "CompletedAt",
+                   fr.source_run_id AS "SourceRunId"
+            FROM flow_runs AS fr
+            """ + where + " ORDER BY fr.started_at DESC LIMIT @TakePlusOne OFFSET @Skip;";
+        if (countsTotal)
+            sql += " SELECT COUNT(*)::int FROM flow_runs AS fr" + countWhere + ";";
+
+        var parameters = new
+        {
+            query.FlowId,
+            query.Status,
+            query.RunId,
+            TextId = textId,
+            SearchLike = searchLike,
+            query.StartedFrom,
+            query.StartedTo,
+            Skip = Math.Max(0, query.Skip),
+            TakePlusOne = Math.Max(0, query.Take) + 1,
+        };
+        return (sql, parameters, countsTotal);
     }
 
     /// <inheritdoc/>

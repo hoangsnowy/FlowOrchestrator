@@ -648,6 +648,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .filter-chip-remove:hover{background:var(--accent);color:#faf9f5}
 .filter-chip-clear-all{font-size:11px;color:var(--text-dim);background:transparent;border:none;cursor:pointer;text-decoration:underline;padding:3px 6px}
 .filter-chip-clear-all:hover{color:var(--accent)}
+/* Run search: opt-in step-payload toggle + how the term was applied (status shortcut, window). */
+.runs-deep-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--fo-stone);cursor:pointer;user-select:none;white-space:nowrap}
+.runs-deep-toggle input{accent-color:var(--fo-terracotta)}
+.runs-search-notice{padding:6px 28px;font-size:12px;color:var(--fo-info-text);background:var(--fo-info-bg);border-bottom:1px solid var(--fo-info-border)}
+.runs-search-notice:empty{display:none}
 
 .runs-table .run-actions{display:none;gap:4px;justify-content:flex-end}
 .runs-table tr:hover .run-actions{display:inline-flex}

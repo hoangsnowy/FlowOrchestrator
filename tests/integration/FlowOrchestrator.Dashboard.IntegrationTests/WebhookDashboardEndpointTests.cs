@@ -82,11 +82,36 @@ public sealed class WebhookDashboardEndpointTests
         // Act
         var response = await server.Client.GetAsync("/flows/api/webhooks/recent?q=github&includeTotal=true");
 
-        // Assert
+        // Assert — a search no longer counts its matches: total is null, hasMore drives the pager.
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal(1, doc.RootElement.GetProperty("total").GetInt32());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("total").ValueKind);
+        Assert.False(doc.RootElement.GetProperty("hasMore").GetBoolean());
         Assert.Equal(1, doc.RootElement.GetProperty("items").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Get_recent_search_is_windowed_by_default_and_widened_by_from()
+    {
+        // Arrange — WebhookRejections keeps every delivery with no retention, so an unbounded
+        // %term% search would read the whole table.
+        using var server = new DashboardTestServer();
+        var store = server.Services.GetRequiredService<IWebhookRejectionStore>();
+        var flow = Guid.NewGuid();
+        await store.WriteAsync(new WebhookRejectionRecord { FlowId = flow, TriggerKey = "github-events", Reason = "rate_limited", ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30) });
+        await store.WriteAsync(new WebhookRejectionRecord { FlowId = flow, TriggerKey = "github-events", Reason = "rate_limited", ReceivedAt = DateTimeOffset.UtcNow.AddHours(-1) });
+
+        // Act
+        var windowed = await server.Client.GetAsync("/flows/api/webhooks/recent?q=github&includeTotal=true");
+        var widened = await server.Client.GetAsync("/flows/api/webhooks/recent?q=github&includeTotal=true&from=" + Uri.EscapeDataString(DateTimeOffset.UtcNow.AddDays(-60).ToString("O")));
+
+        // Assert
+        using var windowedDoc = JsonDocument.Parse(await windowed.Content.ReadAsStringAsync());
+        using var widenedDoc = JsonDocument.Parse(await widened.Content.ReadAsStringAsync());
+        Assert.Equal(1, windowedDoc.RootElement.GetProperty("items").GetArrayLength());
+        Assert.True(windowedDoc.RootElement.GetProperty("windowDefaulted").GetBoolean());
+        Assert.Equal(2, widenedDoc.RootElement.GetProperty("items").GetArrayLength());
+        Assert.False(widenedDoc.RootElement.GetProperty("windowDefaulted").GetBoolean());
     }
 
     [Fact]

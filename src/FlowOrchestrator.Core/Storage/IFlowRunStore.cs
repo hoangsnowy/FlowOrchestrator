@@ -106,6 +106,55 @@ public interface IFlowRunStore
         => GetRunsPageAsync(flowId, status, skip, take, search);
 
     /// <summary>
+    /// Returns one page of runs matching a structured <paramref name="query"/>, newest first, without
+    /// counting the whole filtered set unless <see cref="RunSearchQuery.CountsTotal"/> allows it.
+    /// </summary>
+    /// <param name="query">The filters, window and page to read.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The page, whether more rows follow it, and an exact total when one was requested and cheap.</returns>
+    /// <remarks>
+    /// This is the run-list path the dashboard uses. The built-in providers override it so that a run
+    /// id is a primary-key seek, a text term reads only the run's own columns inside the start-time
+    /// window, and step payloads are read only when <see cref="RunSearchQuery.IncludeStepPayloads"/> is
+    /// set. The default implementation keeps third-party providers correct by delegating to
+    /// <see cref="GetRunsPageAsync(Guid?, string?, int, int, string?, bool, DateTimeOffset?, DateTimeOffset?)"/>
+    /// with <c>Take + 1</c> rows; it does not get the seeks.
+    /// </remarks>
+    async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // A run id falls back to a substring match on the legacy overload, then is narrowed to the
+        // exact id here. Text, when also present, wins the store-side match.
+        var search = query.HasText ? query.Text : query.RunId?.ToString("D");
+        var (runs, total) = await GetRunsPageAsync(
+            query.FlowId, query.Status, query.Skip, query.Take + 1, search,
+            query.IncludeStepPayloads, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
+
+        IReadOnlyList<FlowRunRecord> rows = runs;
+        if (query.RunId is { } runId)
+        {
+            var exact = new List<FlowRunRecord>(1);
+            foreach (var run in runs)
+            {
+                if (run.Id == runId) exact.Add(run);
+            }
+            rows = exact;
+        }
+
+        var hasMore = rows.Count > query.Take;
+        if (hasMore)
+        {
+            var trimmed = new List<FlowRunRecord>(query.Take);
+            for (var i = 0; i < query.Take; i++) trimmed.Add(rows[i]);
+            rows = trimmed;
+        }
+
+        return new RunSearchPage(rows, hasMore, query.CountsTotal ? total : null);
+    }
+
+    /// <summary>
     /// Returns full run detail including all step records and their attempt history,
     /// or <see langword="null"/> if no run with <paramref name="runId"/> exists.
     /// </summary>

@@ -6,12 +6,63 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDashboardOptions`,
+`WebhookRejectionQuery` / `WebhookRejectionPage`, and a changed dashboard default).
+
+### Changed
+
+- **Dashboard run search no longer searches step payloads by default.** Free text now matches the
+  run's own columns — run id, flow name, trigger key, status, background job id — inside a start-time
+  window. Step key, error message and output JSON are matched only when the new **"Search step
+  output / errors"** checkbox (API: `GET /api/runs?deep=true`) is ticked. Before, every search that
+  missed the run columns read every `FlowSteps.OutputJson` in retention: on a production database
+  with 15.6k runs and 54 MB of step output, typing `Completed` took about two minutes.
+  `deep` used to default to `true`; it now defaults to `false`.
+- **A run search is bounded to the last 7 days unless you give it a window** (`from` / `to`), and the
+  dashboard says which window it searched. Configure with `FlowDashboardOptions.RunSearchWindow`
+  (`"FlowDashboard": { "RunSearchWindow": "30.00:00:00" }`). Run-id and status lookups are not
+  windowed. The webhook delivery log search uses the same window.
+- **Searches no longer count their matches.** `GET /api/runs?includeTotal=true` returns
+  `total: null` plus `hasMore` when a text or run-id term is present; the pager shows "more
+  results" instead of "of N". Plain filters (flow, status, window) still return an exact total, now
+  from a separate index-only `COUNT(*)` instead of `COUNT(*) OVER()`. `GET /api/webhooks/recent?q=…`
+  behaves the same way.
+
+### Added
+
+- **Exact-match shortcuts in the run search.** A full run id is a primary-key lookup (never a
+  `CAST(Id) LIKE`), and a status name — or its display label (`Blocked`, `Timed Out`) — is applied
+  as the status filter. Common synonyms are mapped and explained in the UI: `Completed` shows
+  Succeeded runs with "No run status named "Completed" — showing Succeeded runs." An explicit status
+  filter wins over the term; wrap a term in double quotes to search it literally.
+- `IFlowRunStore.SearchRunsAsync(RunSearchQuery, CancellationToken)` returning `RunSearchPage`
+  (`Runs`, `HasMore`, `TotalCount?`). SQL Server, PostgreSQL and InMemory implement it with the same
+  semantics; a default implementation keeps third-party stores working through the existing
+  `GetRunsPageAsync` overload. `GetRunsPageAsync` is unchanged.
+- `WebhookRejectionQuery.ReceivedFrom` / `CountTotal` and `WebhookRejectionPage.HasMore` /
+  `TotalCounted` (init-only; existing positional constructors are unchanged).
+
+### Fixed
+
+- `SqlFlowRunStore.GetRunsAsync` / `PostgreSqlFlowRunStore.GetRunsAsync` (the overview's recent-runs
+  poll) no longer evaluate `COUNT(*) OVER()` over every run to throw the total away.
+- SQL Server webhook log search treated `[` as the start of a `LIKE` character class.
+
+Measured on SQL Server 2022 with the production shape (15k runs, 3 steps each, ~12 KB `OutputJson`
+on one step); full numbers in `docs/benchmarks/run-search.md`:
+
+| Search | Before: logical / LOB reads | After: logical / LOB reads |
+|---|---|---|
+| `Completed` | 48,179 / 60,000 | 209 / 0 |
+| full run id | 48,183 / 59,996 | 3 / 0 |
+| TriggerKey fragment | 48,182 / 59,996 | 44 / 0 |
+
 ### Security
 
 - **Dashboard: hash-route query keys are read through an allow-list.** The SPA router copied every
   key of the `#/…?…` query string onto a plain object, so a crafted link could write
   `__proto__` / `constructor` as a property (CodeQL `js/remote-property-injection`, alerts #282 and
-  #283). The router now reads only `flow`, `status`, `q`, `page`, `size` and `view`; any other key in
+  #283). The router now reads only `flow`, `status`, `q`, `deep`, `page`, `size` and `view`; any other key in
   the URL is ignored. No behaviour change for links the dashboard itself produces.
 
 ## [1.33.0] - 2026-09-27

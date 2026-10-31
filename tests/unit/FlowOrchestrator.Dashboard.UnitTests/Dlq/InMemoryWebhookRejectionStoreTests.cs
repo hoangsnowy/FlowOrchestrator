@@ -250,4 +250,47 @@ public sealed class InMemoryWebhookRejectionStoreTests
         Assert.Equal("github-events", page.Items[0].TriggerKey);
         Assert.False(page.Items[0].IsAccepted);
     }
+
+    [Fact]
+    public async Task Query_without_count_reports_has_more_and_a_lower_bound_total()
+    {
+        // Arrange
+        var clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch.AddSeconds(1700000000));
+        var store = new InMemoryWebhookRejectionStore(maxEntries: 50, clock);
+        for (var i = 0; i < 5; i++)
+            await store.WriteAsync(new WebhookRejectionRecord { FlowId = _flow, TriggerKey = "github-events", Reason = "rate_limited", ReceivedAt = clock.GetUtcNow() });
+
+        // Act
+        var first = await store.QueryAsync(new WebhookRejectionQuery(Search: "github", Take: 2) { CountTotal = false });
+        var last = await store.QueryAsync(new WebhookRejectionQuery(Search: "github", Skip: 4, Take: 2) { CountTotal = false });
+        var counted = await store.QueryAsync(new WebhookRejectionQuery(Search: "github", Take: 2));
+
+        // Assert
+        Assert.True(first.HasMore);
+        Assert.False(first.TotalCounted);
+        Assert.Equal(2, first.Total);
+        Assert.False(last.HasMore);
+        Assert.Equal(5, last.Total);
+        Assert.True(counted.TotalCounted);
+        Assert.Equal(5, counted.Total);
+        Assert.True(counted.HasMore);
+    }
+
+    [Fact]
+    public async Task Query_received_from_excludes_older_deliveries()
+    {
+        // Arrange
+        var clock = new FakeTimeProvider(DateTimeOffset.UnixEpoch.AddSeconds(1700000000));
+        var store = new InMemoryWebhookRejectionStore(maxEntries: 50, clock);
+        var now = clock.GetUtcNow();
+        await store.WriteAsync(new WebhookRejectionRecord { FlowId = _flow, TriggerKey = "github-events", Reason = "rate_limited", ReceivedAt = now.AddDays(-30) });
+        await store.WriteAsync(new WebhookRejectionRecord { FlowId = _flow, TriggerKey = "github-events", Reason = "rate_limited", ReceivedAt = now.AddHours(-1) });
+
+        // Act
+        var page = await store.QueryAsync(new WebhookRejectionQuery(Search: "github") { ReceivedFrom = now.AddDays(-7) });
+
+        // Assert
+        var item = Assert.Single(page.Items);
+        Assert.Equal(now.AddHours(-1), item.ReceivedAt);
+    }
 }

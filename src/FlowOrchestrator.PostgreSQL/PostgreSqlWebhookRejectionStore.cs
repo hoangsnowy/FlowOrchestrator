@@ -100,15 +100,17 @@ public sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
         if (!string.IsNullOrEmpty(query.Reason)) where.Append(" AND reason = @Reason");
         if (!query.IncludeAccepted) where.Append(" AND is_accepted = FALSE");
         if (!query.IncludeRejected) where.Append(" AND is_accepted = TRUE");
+        if (query.ReceivedFrom is not null) where.Append(" AND received_at >= @ReceivedFrom");
         if (hasSearch) where.Append(" AND (reason ILIKE @Search OR trigger_key ILIKE @Search OR remote_ip ILIKE @Search)");
 
+        // Take + 1 rows tell the caller whether another page exists without a count.
         var pagedSql = new StringBuilder()
             .Append("SELECT id AS Id, flow_id AS FlowId, trigger_key AS TriggerKey, received_at AS ReceivedAt, ")
             .Append("remote_ip AS RemoteIp, reason AS Reason, status_code AS StatusCode, body_bytes AS BodyBytes, ")
             .Append("body_truncated AS BodyTruncated, headers_json AS HeadersJson, scheme AS Scheme, ")
             .Append("processing_ms AS ProcessingMs, is_accepted AS IsAccepted ")
             .Append("FROM webhook_rejections ").Append(where)
-            .Append(" ORDER BY id DESC OFFSET @Skip LIMIT @Take;").ToString();
+            .Append(" ORDER BY id DESC OFFSET @Skip LIMIT @TakePlusOne;").ToString();
         var totalSql = "SELECT COUNT(*)::bigint FROM webhook_rejections " + where + ";";
 
         await using var conn = new NpgsqlConnection(_connectionString);
@@ -117,12 +119,18 @@ public sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
             FlowId = query.FlowId,
             Reason = query.Reason,
             Search = searchLike,
+            query.ReceivedFrom,
             Skip = skip,
-            Take = take,
+            TakePlusOne = take + 1,
         };
-        var rows = await conn.QueryAsync<WebhookRejectionRecord>(new CommandDefinition(pagedSql, args, cancellationToken: ct));
+        var rows = (await conn.QueryAsync<WebhookRejectionRecord>(new CommandDefinition(pagedSql, args, cancellationToken: ct))).AsList();
+        var hasMore = rows.Count > take;
+        if (hasMore) rows.RemoveRange(take, rows.Count - take);
+        if (!query.CountTotal)
+            return new WebhookRejectionPage(rows, skip + rows.Count) { HasMore = hasMore, TotalCounted = false };
+
         var total = await conn.ExecuteScalarAsync<long>(new CommandDefinition(totalSql, args, cancellationToken: ct));
-        return new WebhookRejectionPage(rows.ToArray(), (int)Math.Min(int.MaxValue, total));
+        return new WebhookRejectionPage(rows, (int)Math.Min(int.MaxValue, total)) { HasMore = hasMore };
     }
 
     /// <inheritdoc/>
