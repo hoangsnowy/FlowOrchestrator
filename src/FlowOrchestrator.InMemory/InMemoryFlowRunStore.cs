@@ -235,24 +235,18 @@ public sealed class InMemoryFlowRunStore :
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
 
-        IEnumerable<FlowRunRecord> candidates;
-        if (query.RunId is { } runId)
-            candidates = _runs.TryGetValue(runId, out var single) ? [single] : [];
-        else
-            candidates = _runs.Values;
+        // A run id is a direct dictionary hit, mirroring the SQL providers' key seek.
+        IEnumerable<FlowRunRecord> candidates = query.RunId is { } runId
+            ? (_runs.TryGetValue(runId, out var single) ? [single] : [])
+            : _runs.Values;
 
         var text = query.HasText ? query.Text!.Trim() : null;
         Guid? textId = text is not null && Guid.TryParse(text, out var parsed) ? parsed : null;
 
-        var matches = new List<FlowRunRecord>();
-        foreach (var run in candidates)
-        {
-            if (!MatchesPlainFilters(run, query))
-                continue;
-            if (text is not null && !MatchesRunText(run, text, textId, query.IncludeStepPayloads))
-                continue;
-            matches.Add(run);
-        }
+        var matches = candidates
+            .Where(run => MatchesPlainFilters(run, query)
+                && (text is null || MatchesRunText(run, text, textId, query.IncludeStepPayloads)))
+            .ToList();
 
         matches.Sort(static (a, b) => b.StartedAt.CompareTo(a.StartedAt));
         var skip = Math.Max(0, query.Skip);

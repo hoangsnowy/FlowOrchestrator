@@ -286,7 +286,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
             var flowId = Guid.NewGuid();
             var span = TimeSpan.FromDays(60);
 
-            var runs = new DataTable();
+            using var runs = new DataTable();
             runs.Columns.Add("Id", typeof(Guid));
             runs.Columns.Add("FlowId", typeof(Guid));
             runs.Columns.Add("FlowName", typeof(string));
@@ -296,7 +296,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
             runs.Columns.Add("StartedAt", typeof(DateTimeOffset));
             runs.Columns.Add("CompletedAt", typeof(DateTimeOffset));
 
-            var steps = new DataTable();
+            using var steps = new DataTable();
             steps.Columns.Add("RunId", typeof(Guid));
             steps.Columns.Add("StepKey", typeof(string));
             steps.Columns.Add("StepType", typeof(string));
