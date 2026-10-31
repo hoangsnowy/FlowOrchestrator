@@ -57,7 +57,7 @@
       "firstName": "Demo",
       "lastName": "Viewer",
       "credentials": [ { "type": "password", "value": "viewer-demo-pass", "temporary": false } ],
-      "realmRoles": [ "flow-viewer" ]
+      "realmRoles": [ "default-roles-flow-orchestrator", "flow-viewer" ]
     },
     {
       "username": "operator",
@@ -67,7 +67,7 @@
       "firstName": "Demo",
       "lastName": "Operator",
       "credentials": [ { "type": "password", "value": "operator-demo-pass", "temporary": false } ],
-      "realmRoles": [ "flow-operator" ]
+      "realmRoles": [ "default-roles-flow-orchestrator", "flow-operator" ]
     }
   ]
 }

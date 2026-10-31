@@ -38,6 +38,7 @@ builder.Services
         o.MapInboundClaims = false;
         o.TokenValidationParameters.NameClaimType = "preferred_username";
         o.TokenValidationParameters.RoleClaimType = "roles";
+        o.SaveTokens = true;   // sign-out sends id_token_hint; without it Keycloak refuses the logout
     });
 
 // Keycloak nests roles in realm_access / resource_access; map them to role claims.
@@ -117,3 +118,10 @@ side. The demo realm is for local use only.
   cannot grant access.
 - **Policies.** `ViewPolicy` / `OperatePolicy` must be registered with `AddAuthorization`; an unknown name
   fails at startup.
+- **Sign-out.** Keycloak only ends its own session when the logout request carries `id_token_hint` (or
+  `client_id`, after a confirmation page). Set `SaveTokens = true` on the OIDC handler; otherwise
+  `/flows/signout` clears the dashboard cookie, Keycloak answers "Missing parameters: id_token_hint", and
+  the next visit signs the user straight back in.
+- **Demo realm users** carry `default-roles-<realm>` next to their dashboard role. Without it the Keycloak
+  account console (`/realms/<realm>/account`) answers 401, because a user imported with explicit realm
+  roles does not get the realm's default roles.

@@ -326,7 +326,17 @@ if (useKeycloak)
             o.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
             o.CallbackPath = "/flows/signin-oidc";
             o.SignedOutCallbackPath = "/flows/signout-callback-oidc";
-            o.SaveTokens = false;
+            // Keeps the id_token in the auth cookie so sign-out sends it as id_token_hint. Without it Keycloak
+            // rejects the logout request ("Missing parameters: id_token_hint"): the local cookie is gone but
+            // the Keycloak session survives, and the next visit signs the user straight back in.
+            o.SaveTokens = true;
+            o.Events.OnRedirectToIdentityProviderForSignOut = context =>
+            {
+                // Belt and braces for an expired / missing id_token: Keycloak accepts client_id instead and
+                // asks the user to confirm the logout.
+                context.ProtocolMessage.ClientId ??= keycloakClientId;
+                return Task.CompletedTask;
+            };
             o.MapInboundClaims = false;
             o.TokenValidationParameters.NameClaimType = "preferred_username";
             o.TokenValidationParameters.RoleClaimType = "roles";
