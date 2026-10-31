@@ -175,6 +175,23 @@ public sealed class DashboardJsContractTests : IDisposable
         Assert.Contains("function restoreRunsFiltersFromRoute(", html);
     }
 
+    [Fact]
+    public async Task GET_root_router_reads_hash_params_through_an_allow_list()
+    {
+        // Arrange — CodeQL js/remote-property-injection (alerts #282/#283): the Router used
+        // to copy every hash query key onto a plain object, so a shared link carrying
+        // `?__proto__=…` became a property write. Names must come from PARAM_KEYS only.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("const PARAM_KEYS = ['flow', 'status', 'q', 'page', 'size', 'view'];", html);
+        Assert.Contains("for (const key of PARAM_KEYS)", html);
+        Assert.DoesNotContain("for (const [k, v] of sp.entries()) params[k] = v;", html);
+        Assert.DoesNotContain("delete merged[k]", html);
+    }
+
     // ── Run status filter covers every terminal status ───────────────────────
 
     [Fact]

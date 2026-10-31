@@ -2795,6 +2795,12 @@ window.addEventListener('pageshow', (e) => {
 const Router = (function () {
   const subscribers = [];
   let _suppressNext = false;
+  // The only query keys the dashboard reads back from the hash. Property names are
+  // always taken from this list, never from the URL, so a shared link carrying
+  // `?__proto__=…` or `?constructor=…` cannot turn into a property write
+  // (CodeQL js/remote-property-injection). Add a key here when a page starts
+  // persisting new state in the hash.
+  const PARAM_KEYS = ['flow', 'status', 'q', 'page', 'size', 'view'];
 
   function parse() {
     const hash = location.hash || '';
@@ -2807,7 +2813,10 @@ const Router = (function () {
     const query = qIdx >= 0 ? raw.slice(qIdx + 1) : '';
     const sp = new URLSearchParams(query);
     const params = {};
-    for (const [k, v] of sp.entries()) params[k] = v;
+    for (const key of PARAM_KEYS) {
+      const v = sp.get(key);
+      if (v !== null) params[key] = v;
+    }
     let view = null;
     if (['timeline','dag','gantt','events'].includes(params.view)) view = params.view;
     const parts = path.split('/');
@@ -2839,10 +2848,11 @@ const Router = (function () {
   // Replace the URL without firing the change subscribers — for filter/page state.
   function replaceParams(patch) {
     const cur = parse();
-    const merged = Object.assign({}, cur.params, patch);
-    // Strip empty / null entries.
-    for (const k of Object.keys(merged)) {
-      if (merged[k] === null || merged[k] === undefined || merged[k] === '') delete merged[k];
+    // Patch wins over the current hash; empty / null entries are dropped.
+    const merged = {};
+    for (const key of PARAM_KEYS) {
+      const v = Object.prototype.hasOwnProperty.call(patch, key) ? patch[key] : cur.params[key];
+      if (v !== null && v !== undefined && v !== '') merged[key] = v;
     }
     const next = _build(Object.assign({}, cur, { params: merged }));
     if (location.hash !== next) {
