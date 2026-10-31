@@ -16,9 +16,12 @@ default).
   traces, metrics and logs into the OpenTelemetry SDK (logs with `IncludeScopes`, `IncludeFormattedMessage`,
   `ParseStateValues`) and exports all three over OTLP whenever `OTEL_EXPORTER_OTLP_ENDPOINT` is set — the
   only setting operators need. Options for service name, exporter switch and extra instrumentation.
+  When the host already exports (Aspire ServiceDefaults, its own `AddOtlpExporter()` or OTel logging), the
+  call leaves the exporter to the host instead of tripping the SDK's "UseOtlpExporter + AddOtlpExporter"
+  startup error; call it after that setup. Namespace: `FlowOrchestrator.Core.Observability`.
 - **Log scopes and spans carry names, not just GUIDs:** every log line inside a run now also has
   `FlowName`, `StepType` (step execution) and `TriggerKey` (trigger) next to `RunId` / `FlowId` /
-  `StepKey` / `Attempt`; `flow.trigger` and `flow.step` spans get a `flow.name` tag. New
+  `StepKey`; `flow.trigger` and `flow.step` spans get a `flow.name` tag. New
   `EngineLogScope.Begin` overload; the existing one is unchanged.
 - The sample app uses the one-call wiring.
 

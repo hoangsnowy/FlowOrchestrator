@@ -2,7 +2,7 @@ using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
-namespace FlowOrchestrator.OpenTelemetry;
+namespace FlowOrchestrator.Core.Observability;
 
 /// <summary>Options for <see cref="FlowOrchestratorOpenTelemetryExtensions.AddFlowOrchestratorOpenTelemetry{TBuilder}"/>.</summary>
 public sealed class FlowOrchestratorOpenTelemetryOptions

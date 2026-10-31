@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using FlowOrchestrator.Core.Observability;
-using FlowOrchestrator.OpenTelemetry;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -46,18 +45,77 @@ public sealed class OpenTelemetryWiringTests
     }
 
     [Theory]
-    [InlineData(null, null, false)]
-    [InlineData(null, "http://otel-collector:4317", true)]
-    [InlineData(false, "http://otel-collector:4317", false)]
-    [InlineData(true, null, true)]
-    public void Otlp_exporter_follows_the_endpoint_setting_unless_overridden(bool? explicitSwitch, string? endpoint, bool expected)
+    [InlineData(null, null, false, false)]
+    [InlineData(null, "http://otel-collector:4317", false, true)]
+    [InlineData(null, "http://otel-collector:4317", true, false)]
+    [InlineData(false, "http://otel-collector:4317", false, false)]
+    [InlineData(true, null, true, true)]
+    public void Otlp_exporter_follows_the_endpoint_unless_the_host_exports_or_it_is_overridden(bool? explicitSwitch, string? endpoint, bool hostExports, bool expected)
     {
-        // Arrange — no collector configured must not mean a stream of export failures.
+        // Arrange — no collector configured must not mean a stream of export failures, and a host that
+        // already exports keeps its own exporter.
         var builder = endpoint is null ? Builder() : Builder(("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint));
         var options = new FlowOrchestratorOpenTelemetryOptions { UseOtlpExporter = explicitSwitch };
 
         // Act
-        var result = FlowOrchestratorOpenTelemetryExtensions.ShouldUseOtlp(options, builder.Configuration);
+        var result = FlowOrchestratorOpenTelemetryExtensions.ShouldUseOtlp(options, builder.Configuration, hostExports);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    public static TheoryData<string> HostSetups => ["aspire-use-otlp", "tracing-add-otlp", "logging-options-add-otlp", "none", "called-twice"];
+
+    [Theory]
+    [MemberData(nameof(HostSetups))]
+    public async Task Coexists_with_a_host_that_already_exports_over_otlp(string hostSetup)
+    {
+        // Arrange — the OpenTelemetry SDK throws at provider build time when UseOtlpExporter() meets another
+        // OTLP registration; every host shape below must still start.
+        // Short exporter timeout: nothing listens on the endpoint, and the shutdown flush must not stall the suite.
+        var builder = Builder(("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1"), ("OTEL_EXPORTER_OTLP_TIMEOUT", "50"));
+        switch (hostSetup)
+        {
+            case "aspire-use-otlp": builder.Services.AddOpenTelemetry().UseOtlpExporter(); break;
+            case "tracing-add-otlp": builder.Services.AddOpenTelemetry().WithTracing(t => t.AddOtlpExporter()); break;
+            case "logging-options-add-otlp": builder.Logging.AddOpenTelemetry(o => o.AddOtlpExporter()); break;
+            case "called-twice": builder.AddFlowOrchestratorOpenTelemetry(); break;
+        }
+        builder.AddFlowOrchestratorOpenTelemetry();
+
+        // Act
+        var ex = await Record.ExceptionAsync(async () =>
+        {
+            using var host = builder.Build();
+            host.Services.GetService<TracerProvider>();
+            host.Services.GetService<OpenTelemetry.Metrics.MeterProvider>();
+            host.Services.GetService<LoggerProvider>();
+            host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("probe").LogInformation("hello");
+            await Task.CompletedTask;
+        });
+
+        // Assert
+        Assert.Null(ex);
+    }
+
+    [Theory]
+    [InlineData("none", false)]
+    [InlineData("aspire-use-otlp", true)]
+    [InlineData("tracing-add-otlp", true)]
+    [InlineData("logging-options", true)]
+    public void Detects_a_host_export_pipeline(string hostSetup, bool expected)
+    {
+        // Arrange
+        var builder = Builder();
+        switch (hostSetup)
+        {
+            case "aspire-use-otlp": builder.Services.AddOpenTelemetry().UseOtlpExporter(); break;
+            case "tracing-add-otlp": builder.Services.AddOpenTelemetry().WithTracing(t => t.AddOtlpExporter()); break;
+            case "logging-options": builder.Logging.AddOpenTelemetry(o => o.IncludeScopes = true); break;
+        }
+
+        // Act
+        var result = FlowOrchestratorOpenTelemetryExtensions.HostAlreadyExports(builder.Services);
 
         // Assert
         Assert.Equal(expected, result);
