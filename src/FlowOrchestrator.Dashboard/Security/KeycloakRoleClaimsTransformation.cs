@@ -87,11 +87,11 @@ public sealed class KeycloakRoleClaimsTransformation : IClaimsTransformation
             return;
         }
 
-        foreach (var item in array.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.String))
-        {
-            if (item.GetString() is { Length: > 0 } role)
-                roles.Add(role);
-        }
+        roles.UnionWith(array.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString())
+            .OfType<string>()
+            .Where(role => role.Length > 0));
     }
 
     private static bool TryParse(string json, out JsonDocument document)
