@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
@@ -33,63 +34,185 @@ public sealed class RunEndpointTests : IDisposable
     {
         // Arrange
         var run = new FlowRunRecord { Id = Guid.NewGuid(), Status = "Succeeded", FlowName = "F" };
-        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 10, null, true, null, null)
-            .Returns(([run], 1));
+        _server.FlowRunStore.SearchRunsAsync(Arg.Is<RunSearchQuery>(q => q.Take == 10 && q.IncludeTotal), Arg.Any<CancellationToken>())
+            .Returns(new RunSearchPage([run], false, 1));
 
         // Act
         var response = await _client.GetAsync("/flows/api/runs?includeTotal=true&take=10");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("\"total\"", body);
-        Assert.Contains("\"items\"", body);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(1, doc.RootElement.GetProperty("total").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("hasMore").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("items").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("search").ValueKind);
     }
 
     [Fact]
-    public async Task GET_api_runs_with_status_filter_uses_GetRunsPageAsync()
+    public async Task GET_api_runs_with_status_filter_passes_status_without_text()
     {
         // Arrange
-        _server.FlowRunStore.GetRunsPageAsync(null, "Failed", 0, 50, null, true, null, null)
-            .Returns((Array.Empty<FlowRunRecord>(), 0));
 
         // Act
         var response = await _client.GetAsync("/flows/api/runs?status=Failed");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, "Failed", 0, 50, null, true, null, null);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.Status == "Failed" && q.Text == null && q.RunId == null && q.StartedFrom == null),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task GET_api_runs_with_deep_false_uses_quick_search()
+    public async Task GET_api_runs_text_search_does_not_search_step_payloads_by_default()
     {
-        // Arrange
-        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 20, "abc", false, null, null)
-            .Returns((Array.Empty<FlowRunRecord>(), 0));
+        // Arrange — step payload search is opt-in; neither a bare search nor the old deep=false
+        // may reach FlowSteps.
 
         // Act
-        var response = await _client.GetAsync("/flows/api/runs?search=abc&take=20&deep=false");
+        var bare = await _client.GetAsync("/flows/api/runs?search=abc&take=20");
+        var quick = await _client.GetAsync("/flows/api/runs?search=abc&take=20&deep=false");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, bare.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, quick.StatusCode);
+        await _server.FlowRunStore.Received(2).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.Text == "abc" && !q.IncludeStepPayloads && q.Take == 20),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_text_search_is_bounded_by_the_default_window()
+    {
+        // Arrange — exact window arithmetic is covered by RunListRequestTests; here the endpoint
+        // must hand the store a lower bound seven days back from the server clock.
+        var expected = DateTimeOffset.UtcNow.AddDays(-7);
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?search=abc");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, null, 0, 20, "abc", false, null, null);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.StartedFrom.HasValue
+                && q.StartedFrom.Value > expected.AddMinutes(-5)
+                && q.StartedFrom.Value < expected.AddMinutes(5)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_deep_true_opts_in_to_step_payloads_inside_a_window()
+    {
+        // Arrange
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?search=tx-7788&deep=true");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.Text == "tx-7788" && q.IncludeStepPayloads && q.StartedFrom.HasValue),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_full_guid_is_a_run_id_lookup_without_text_or_window()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?includeTotal=true&search=" + runId.ToString("D").ToUpperInvariant());
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.RunId == runId && q.Text == null && q.StartedFrom == null && !q.IncludeStepPayloads),
+            Arg.Any<CancellationToken>());
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("runId", doc.RootElement.GetProperty("search").GetProperty("kind").GetString());
     }
 
     [Fact]
     public async Task GET_api_runs_resolves_blocked_search_alias_to_skipped_status()
     {
         // Arrange — "Blocked" is the dashboard's display label for the canonical "Skipped"
-        // run status; a user searching the label must still match Skipped runs.
-        _server.FlowRunStore.GetRunsPageAsync(null, null, 0, 50, "Skipped", true, null, null)
-            .Returns((Array.Empty<FlowRunRecord>(), 0));
+        // run status; a user searching the label must get the Skipped status filter.
 
         // Act
         var response = await _client.GetAsync("/flows/api/runs?search=blocked");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await _server.FlowRunStore.Received(1).GetRunsPageAsync(null, null, 0, 50, "Skipped", true, null, null);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.Status == "Skipped" && q.Text == null),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_status_synonym_is_applied_as_status_filter_and_reported()
+    {
+        // Arrange — the production case: "Completed" is not a run status, and used to fall through
+        // to a scan of every step payload in retention.
+        _server.FlowRunStore.SearchRunsAsync(Arg.Any<RunSearchQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new RunSearchPage(Array.Empty<FlowRunRecord>(), false, 3971));
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?includeTotal=true&search=Completed");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.Status == "Succeeded" && q.Text == null && q.StartedFrom == null && q.IncludeTotal),
+            Arg.Any<CancellationToken>());
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var search = doc.RootElement.GetProperty("search");
+        Assert.Equal("status", search.GetProperty("kind").GetString());
+        Assert.Equal("Succeeded", search.GetProperty("appliedStatus").GetString());
+        Assert.Equal("Completed", search.GetProperty("alias").GetString());
+        Assert.Equal(3971, doc.RootElement.GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_explicit_status_filter_wins_over_a_status_named_term()
+    {
+        // Arrange
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?status=Failed&search=Succeeded");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await _server.FlowRunStore.Received(1).SearchRunsAsync(
+            Arg.Is<RunSearchQuery>(q => q.Status == "Failed" && q.Text == "Succeeded"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_text_search_reports_hasMore_and_a_null_total()
+    {
+        // Arrange
+        var runs = new[]
+        {
+            new FlowRunRecord { Id = Guid.NewGuid(), Status = "Failed" },
+            new FlowRunRecord { Id = Guid.NewGuid(), Status = "Failed" },
+        };
+        _server.FlowRunStore.SearchRunsAsync(Arg.Any<RunSearchQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new RunSearchPage(runs, true, null));
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?includeTotal=true&take=2&search=order-");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("total").ValueKind);
+        Assert.True(doc.RootElement.GetProperty("hasMore").GetBoolean());
+        var search = doc.RootElement.GetProperty("search");
+        Assert.Equal("text", search.GetProperty("kind").GetString());
+        Assert.True(search.GetProperty("windowDefaulted").GetBoolean());
+        Assert.False(search.GetProperty("stepPayloads").GetBoolean());
     }
 
     [Fact]

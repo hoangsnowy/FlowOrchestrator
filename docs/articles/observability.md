@@ -32,6 +32,53 @@ When enabled, FlowOrchestrator registers an `ActivitySource` and a `Meter`, both
 options.Observability.EnableOpenTelemetry = true;
 ```
 
+### One call: `AddFlowOrchestratorOpenTelemetry()` (recommended)
+
+The `FlowOrchestrator.OpenTelemetry` package wires traces, metrics **and logs** in one call:
+
+```bash
+dotnet add package FlowOrchestrator.OpenTelemetry
+```
+
+```csharp
+using FlowOrchestrator.Core.Observability;
+
+builder.AddFlowOrchestratorOpenTelemetry(o =>
+{
+    o.ServiceName = "orders-worker";                              // default: OTEL_SERVICE_NAME, then app name
+    o.ConfigureTracing = t => t.AddAspNetCoreInstrumentation();   // optional extra instrumentation
+});
+```
+
+What DevOps configures — nothing else is needed:
+
+| Setting | Effect |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Turns the OTLP exporter on for all three signals (off when unset, so a host without a collector does not log export failures). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS` | Standard OTLP settings (gRPC vs HTTP, API keys for the backend). |
+| `OTEL_SERVICE_NAME` | `service.name` when the code does not set one. |
+
+Logs are exported with scopes, so **every log line written inside a run** — the engine's and your step
+handlers' — carries these attributes:
+
+| Attribute | Where it comes from |
+|---|---|
+| `RunId`, `FlowId` | every engine entry point |
+| `FlowName` | the flow class name (new in 1.34) |
+| `TriggerKey` | trigger entry point (new in 1.34) |
+| `StepKey`, `StepType` | step execution (`StepType` new in 1.34) |
+
+**Hosts that already export** (Aspire ServiceDefaults, any `AddOtlpExporter()`, or their own
+`builder.Logging.AddOpenTelemetry(...)`): call `AddFlowOrchestratorOpenTelemetry()` *after* that setup. It
+then leaves the exporter to the host — the OpenTelemetry SDK refuses `UseOtlpExporter()` next to another
+OTLP registration — and only adds FlowOrchestrator's sources, meters and log scopes. Calling it twice is a
+no-op. The extension lives in `FlowOrchestrator.Core.Observability`, next to `AddFlowOrchestratorInstrumentation()`.
+
+Filter by `FlowName = "OrderFulfillmentFlow"` instead of a GUID; the trace / span id on each log line
+links it to the `flow.trigger` / `flow.step` span (which now also carries a `flow.name` tag).
+
+### Manual wiring
+
 Wire up the instrumentation in your OTel pipeline:
 
 ```csharp
@@ -139,7 +186,7 @@ Metrics are aggregated, not sampled — leave the default cardinality limits in 
 
 ### Logger scopes and EventIds
 
-The engine wraps every public entry point (`TriggerAsync`, `RunStepAsync`, `RetryStepAsync`) in `_logger.BeginScope(...)` carrying `RunId`, `FlowId`, `StepKey`, and `Attempt` (when applicable). Every nested log line — including logs from your own step handlers — carries those properties automatically. Logging providers that honour scopes (Serilog, NLog, OpenTelemetry Logs, Application Insights, Datadog, …) surface them as searchable fields. Engine hot-path log calls go through source-generated `[LoggerMessage]` partial methods (`EngineLog.cs`) for zero-allocation, AOT-friendly emission. See [Logging integrations](#logging-integrations) below for concrete provider wireup.
+The engine wraps every public entry point (`TriggerAsync`, `RunStepAsync`, `RetryStepAsync`) in `_logger.BeginScope(...)` carrying `RunId` and `FlowId`, plus `FlowName`, `TriggerKey`, `StepKey` and `StepType` where they apply. Every nested log line — including logs from your own step handlers — carries those properties automatically. Logging providers that honour scopes (Serilog, NLog, OpenTelemetry Logs, Application Insights, Datadog, …) surface them as searchable fields. Engine hot-path log calls go through source-generated `[LoggerMessage]` partial methods (`EngineLog.cs`) for zero-allocation, AOT-friendly emission. See [Logging integrations](#logging-integrations) below for concrete provider wireup.
 
 Stable `EventId` constants are defined in `FlowOrchestrator.Core.Observability.LogEvents` so production users can filter or alert on a specific log event without parsing the message template:
 
@@ -182,7 +229,7 @@ producer or cron job hasn't picked up the disable yet).
 
 ### Logging integrations
 
-The library is logging-framework-agnostic — it only uses `Microsoft.Extensions.Logging.ILogger<T>`. Plug in any provider that honours `ILogger.BeginScope` and you get the engine's correlation properties (`RunId`, `FlowId`, `StepKey`, `Attempt`) on every nested log line, including logs emitted by your own step handlers.
+The library is logging-framework-agnostic — it only uses `Microsoft.Extensions.Logging.ILogger<T>`. Plug in any provider that honours `ILogger.BeginScope` and you get the engine's correlation properties (`RunId`, `FlowId`, `FlowName`, `TriggerKey`, `StepKey`, `StepType`) on every nested log line, including logs emitted by your own step handlers.
 
 #### Microsoft.Extensions.Logging (Console)
 

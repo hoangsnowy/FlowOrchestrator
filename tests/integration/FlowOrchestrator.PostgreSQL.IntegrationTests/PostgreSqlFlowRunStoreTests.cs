@@ -4,7 +4,7 @@ using Npgsql;
 
 namespace FlowOrchestrator.PostgreSQL.Tests;
 
-public sealed class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixture>
+public sealed partial class PostgreSqlFlowRunStoreTests : IClassFixture<PostgreSqlFixture>
 {
     private readonly PostgreSqlFlowRunStore _store;
     private readonly string _connectionString;

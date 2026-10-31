@@ -1,0 +1,73 @@
+{
+  "realm": "flow-orchestrator",
+  "displayName": "FlowOrchestrator (local demo)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "roles": {
+    "realm": [
+      { "name": "flow-viewer", "description": "Read-only access to the FlowOrchestrator dashboard." },
+      { "name": "flow-operator", "description": "Trigger, rerun, retry, cancel, signal and change schedules in the FlowOrchestrator dashboard." }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "flow-dashboard",
+      "name": "FlowOrchestrator dashboard",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost:5102/flows/signin-oidc",
+        "https://localhost:7102/flows/signin-oidc"
+      ],
+      "webOrigins": [ "http://localhost:5102", "https://localhost:7102" ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5102/flows/signout-callback-oidc##https://localhost:7102/flows/signout-callback-oidc"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles as roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "viewer@floworchestrator.local",
+      "firstName": "Demo",
+      "lastName": "Viewer",
+      "credentials": [ { "type": "password", "value": "viewer-demo-pass", "temporary": false } ],
+      "realmRoles": [ "default-roles-flow-orchestrator", "flow-viewer" ]
+    },
+    {
+      "username": "operator",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "operator@floworchestrator.local",
+      "firstName": "Demo",
+      "lastName": "Operator",
+      "credentials": [ { "type": "password", "value": "operator-demo-pass", "temporary": false } ],
+      "realmRoles": [ "default-roles-flow-orchestrator", "flow-operator" ]
+    }
+  ]
+}

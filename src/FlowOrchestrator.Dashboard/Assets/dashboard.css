@@ -648,6 +648,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .filter-chip-remove:hover{background:var(--accent);color:#faf9f5}
 .filter-chip-clear-all{font-size:11px;color:var(--text-dim);background:transparent;border:none;cursor:pointer;text-decoration:underline;padding:3px 6px}
 .filter-chip-clear-all:hover{color:var(--accent)}
+/* Run search: opt-in step-payload toggle + how the term was applied (status shortcut, window). */
+.runs-deep-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--fo-stone);cursor:pointer;user-select:none;white-space:nowrap}
+.runs-deep-toggle input{accent-color:var(--fo-terracotta)}
+.runs-search-notice{padding:6px 28px;font-size:12px;color:var(--fo-info-text);background:var(--fo-info-bg);border-bottom:1px solid var(--fo-info-border)}
+.runs-search-notice:empty{display:none}
 
 .runs-table .run-actions{display:none;gap:4px;justify-content:flex-end}
 .runs-table tr:hover .run-actions{display:inline-flex}
@@ -785,3 +790,21 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .chip--reject{background:var(--fo-danger-bg);color:var(--fo-danger-text);box-shadow:inset 0 0 0 1px var(--fo-danger-border)}
 .chip--scheme{background:var(--fo-info-bg);color:var(--fo-info-text);box-shadow:inset 0 0 0 1px var(--fo-info-border);font-size:11px;padding:3px 8px}
 .dim{color:var(--fo-stone)}
+
+/* Signed-in user (GET /api/me) + view-only mode for viewer-role users. */
+.sidebar-user{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;font-family:var(--fo-mono);font-size:11px;color:var(--fo-stone)}
+.sidebar-user[hidden]{display:none}
+.sidebar-user-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.chip--readonly{padding:2px 8px;font-size:10px;background:var(--fo-skip-bg);color:var(--fo-skip-text);box-shadow:inset 0 0 0 1px var(--fo-skip-border)}
+.sidebar-signout{color:var(--fo-terracotta);text-decoration:underline}
+.sidebar-signout:focus-visible{outline:2px solid var(--fo-focus);outline-offset:2px}
+.fo-readonly [onclick*="toggleFlow("],
+.fo-readonly [onclick*="triggerFlow("],
+.fo-readonly [onclick*="cancelRun("],
+.fo-readonly [onclick*="retryAllFailed("],
+.fo-readonly [onclick*="rerunAll("],
+.fo-readonly [onclick*="retryStep("],
+.fo-readonly [onclick*="sendSignal("],
+.fo-readonly [onclick*="triggerScheduledJob("],
+.fo-readonly [onclick*="pauseScheduledJob("],
+.fo-readonly [onclick*="resumeScheduledJob("]{display:none}

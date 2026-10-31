@@ -171,8 +171,46 @@ public sealed class DashboardJsContractTests : IDisposable
         var html = await _body.Value;
 
         // Assert
-        Assert.Contains("Router.replaceParams({ flow, status, q, page", html);
+        Assert.Contains("Router.replaceParams({ flow, status, q, deep, page", html);
         Assert.Contains("function restoreRunsFiltersFromRoute(", html);
+    }
+
+    [Fact]
+    public async Task GET_root_router_reads_hash_params_through_an_allow_list()
+    {
+        // Arrange — CodeQL js/remote-property-injection (alerts #282/#283): the Router used
+        // to copy every hash query key onto a plain object, so a shared link carrying
+        // `?__proto__=…` became a property write. Names must come from PARAM_KEYS only.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("const PARAM_KEYS = ['flow', 'status', 'q', 'deep', 'page', 'size', 'view'];", html);
+        Assert.Contains("for (const key of PARAM_KEYS)", html);
+        Assert.DoesNotContain("for (const [k, v] of sp.entries()) params[k] = v;", html);
+        Assert.DoesNotContain("delete merged[k]", html);
+    }
+
+    [Fact]
+    public async Task GET_root_run_search_offers_opt_in_step_payload_search_and_reflects_the_applied_term()
+    {
+        // Arrange — step payloads are no longer searched by default: the SPA must offer the opt-in,
+        // send deep=1 only when it is ticked, reflect a status shortcut, and page by hasMore when a
+        // search returns no total.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("id=\"runs-filter-deep\"", html);
+        Assert.Contains("Search step output / errors", html);
+        Assert.Contains("if (searchFilter && deepEl && deepEl.checked) url += '&deep=1';", html);
+        Assert.Contains("function applyRunsSearchResult(", html);
+        Assert.Contains("id=\"runs-search-notice\"", html);
+        Assert.Contains("runsTotalExact = typeof page.total === 'number';", html);
+        Assert.Contains("runsHasMore = !!page.hasMore;", html);
+        Assert.DoesNotContain("Search run, step, error, output", html);
     }
 
     // ── Run status filter covers every terminal status ───────────────────────
@@ -205,5 +243,25 @@ public sealed class DashboardJsContractTests : IDisposable
         // Assert
         Assert.Contains("'beforeunload'", html);
         Assert.Contains("clearInterval(autoRefreshTimer)", html);
+    }
+
+    [Fact]
+    public async Task GET_root_shows_the_signed_in_user_and_hides_operator_actions_for_viewers()
+    {
+        // Arrange — the server enforces viewer / operator with a 403; the SPA mirrors it so viewers
+        // are not offered buttons that can only fail, and an expired OIDC session re-signs in.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("id=\"sidebar-user\"", html);
+        Assert.Contains("async function loadDashboardAccess(", html);
+        Assert.Contains("_nativeFetch(BASE + '/me')", html);
+        Assert.Contains("document.body.classList.toggle('fo-readonly', !dashboardAccess.canOperate);", html);
+        Assert.Contains(".fo-readonly [onclick*=\"triggerFlow(\"]", html);
+        Assert.Contains(".fo-readonly [onclick*=\"rerunAll(\"]", html);
+        Assert.Contains("res.status === 401 && dashboardAccess.method === 'oidc'", html);
+        Assert.Contains("loadDashboardAccess();", html);
     }
 }

@@ -5,7 +5,7 @@ using NSubstitute;
 namespace FlowOrchestrator.Core.Tests.Observability;
 
 /// <summary>
-/// Tests for <see cref="EngineLogScope.Begin"/> — the helper that opens the per-step
+/// Tests for <see cref="EngineLogScope.Begin(Microsoft.Extensions.Logging.ILogger?, System.Guid, System.Guid, string?, int?)"/> — the helper that opens the per-step
 /// logger scope carrying <c>RunId</c> / <c>FlowId</c> / <c>StepKey</c> / <c>Attempt</c>.
 /// Guards the CR/LF sanitisation introduced as part of the CodeQL log-forging sweep
 /// (CWE-117); a step key crafted with embedded newlines must NOT be able to inject

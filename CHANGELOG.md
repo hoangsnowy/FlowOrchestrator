@@ -6,6 +6,115 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDashboardOptions`,
+`WebhookRejectionQuery` / `WebhookRejectionPage`, dashboard sign-in, a new package, and a changed dashboard
+default).
+
+### Added — one-call OpenTelemetry with readable log attributes
+
+- **New package `FlowOrchestrator.OpenTelemetry`:** `builder.AddFlowOrchestratorOpenTelemetry()` wires
+  traces, metrics and logs into the OpenTelemetry SDK (logs with `IncludeScopes`, `IncludeFormattedMessage`,
+  `ParseStateValues`) and exports all three over OTLP whenever `OTEL_EXPORTER_OTLP_ENDPOINT` is set — the
+  only setting operators need. Options for service name, exporter switch and extra instrumentation.
+  When the host already exports (Aspire ServiceDefaults, its own `AddOtlpExporter()` or OTel logging), the
+  call leaves the exporter to the host instead of tripping the SDK's "UseOtlpExporter + AddOtlpExporter"
+  startup error; call it after that setup. Namespace: `FlowOrchestrator.Core.Observability`.
+- **Log scopes and spans carry names, not just GUIDs:** every log line inside a run now also has
+  `FlowName`, `StepType` (step execution) and `TriggerKey` (trigger) next to `RunId` / `FlowId` /
+  `StepKey`; `flow.trigger` and `flow.step` spans get a `flow.name` tag. New
+  `EngineLogScope.Begin` overload; the existing one is unchanged.
+- The sample app uses the one-call wiring.
+
+### Added — dashboard sign-in with Keycloak / OpenID Connect (#237)
+
+- **Identity-based access alongside Basic Auth.** `FlowDashboard:Authorization` names the host's
+  authentication schemes (e.g. cookie + OIDC against Keycloak); users then sign in through the identity
+  provider and get **viewer** (`flow-viewer`: read) or **operator** (`flow-operator`: trigger, rerun,
+  retry, cancel, signal, enable / disable, schedule changes) access. Roles and policies are configurable
+  (`ViewerRoles`, `OperatorRoles`, `ViewPolicy`, `OperatePolicy`). Basic Auth keeps working unchanged
+  side by side: valid Basic credentials still get full access, so scripts and probes are unaffected,
+  while a browser without them is redirected to the identity provider. Nothing changes until
+  `Authorization.AuthenticationScheme` is set.
+- `AddFlowDashboardKeycloakRoles(clientId)` maps Keycloak's `realm_access` / `resource_access` roles to
+  role claims (`KeycloakRoleClaimsTransformation`).
+- `GET /flows/api/me` (`method`, `user`, `canOperate`, `canSignOut`) and `GET /flows/signout`. The SPA
+  shows the signed-in user, a **View only** badge and hides state-changing buttons for viewers (the
+  server answers `403` regardless), and re-signs in when an OIDC session expires.
+- Viewers see flow manifests, run trigger bodies and step / attempt inputs and outputs with every value
+  under a secret-looking name masked (`webhookSecret`, HMAC keys, `*secret*` / `*password*` / `*token*` /
+  `*apikey*` / `*authorization*` …), so a read-only user cannot copy a webhook secret or an API key and act
+  outside their role. Operators see payloads as stored.
+- **Cross-site request guard on every state-changing dashboard call** (all auth modes): a `POST` / `PUT`
+  whose `Sec-Fetch-Site` is not `same-origin`, or whose `Origin` names another host, is rejected with
+  `403`. This stops CSRF through the new cookie session and through browser-cached Basic credentials;
+  scripts that send neither header are unaffected. **Read before upgrading:** behind a reverse proxy
+  that serves plain HTTP and rewrites `Host` (and does not use ForwardedHeaders middleware), set `FlowDashboard:TrustedOrigins`
+  to the public origin, or the dashboard's own trigger / rerun / cancel calls are rejected.
+- Startup checks: a misnamed scheme or authorization policy throws at `MapFlowDashboard`; EventId
+  `4100` warns when Basic Auth is the only protection outside Development, `4101` when its password is
+  weak. `/api/me` and `/signout` stay reachable for a signed-in user without a dashboard role.
+- Sample / AppHost: a Keycloak container (port 8088, demo realm with `viewer` / `operator` users) signs
+  in to the **PostgreSQL** sample instance; Basic Auth stays on there for the e2e suite. New guide:
+  `docs/articles/dashboard-security.md`.
+
+### Changed
+
+- **Dashboard run search no longer searches step payloads by default.** Free text now matches the
+  run's own columns — run id, flow name, trigger key, status, background job id — inside a start-time
+  window. Step key, error message and output JSON are matched only when the new **"Search step
+  output / errors"** checkbox (API: `GET /api/runs?deep=true`) is ticked. Before, every search that
+  missed the run columns read every `FlowSteps.OutputJson` in retention: on a production database
+  with 15.6k runs and 54 MB of step output, typing `Completed` took about two minutes.
+  `deep` used to default to `true`; it now defaults to `false`.
+- **A run search is bounded to the last 7 days unless you give it a window** (`from` / `to`), and the
+  dashboard says which window it searched. Configure with `FlowDashboardOptions.RunSearchWindow`
+  (`"FlowDashboard": { "RunSearchWindow": "30.00:00:00" }`). Run-id and status lookups are not
+  windowed. The webhook delivery log search uses the same window.
+- **Searches no longer count their matches.** `GET /api/runs?includeTotal=true` returns
+  `total: null` plus `hasMore` when a text or run-id term is present; the pager shows "more
+  results" instead of "of N". Plain filters (flow, status, window) still return an exact total, now
+  from a separate index-only `COUNT(*)` instead of `COUNT(*) OVER()`. `GET /api/webhooks/recent?q=…`
+  behaves the same way.
+- `GET /api/runs` now clamps `take` to 1–500 and a negative `skip` to 0 (both were unbounded), and reads
+  `from` / `to` without an offset as UTC (PostgreSQL rejected non-UTC offsets).
+
+### Added
+
+- **Exact-match shortcuts in the run search.** A full run id is a primary-key lookup (never a
+  `CAST(Id) LIKE`), and a status name — or its display label (`Blocked`, `Timed Out`) — is applied
+  as the status filter. Common synonyms are mapped and explained in the UI: `Completed` shows
+  Succeeded runs with "No run status named "Completed" — showing Succeeded runs." An explicit status
+  filter wins over the term; wrap a term in double quotes to search it literally.
+- `IFlowRunStore.SearchRunsAsync(RunSearchQuery, CancellationToken)` returning `RunSearchPage`
+  (`Runs`, `HasMore`, `TotalCount?`). SQL Server, PostgreSQL and InMemory implement it with the same
+  semantics; a default implementation keeps third-party stores working through the existing
+  `GetRunsPageAsync` overload. `GetRunsPageAsync` is unchanged.
+- `WebhookRejectionQuery.ReceivedFrom` / `CountTotal` and `WebhookRejectionPage.HasMore` /
+  `TotalCounted` (init-only; existing positional constructors are unchanged).
+
+### Fixed
+
+- `SqlFlowRunStore.GetRunsAsync` / `PostgreSqlFlowRunStore.GetRunsAsync` (the overview's recent-runs
+  poll) no longer evaluate `COUNT(*) OVER()` over every run to throw the total away.
+- SQL Server webhook log search treated `[` as the start of a `LIKE` character class.
+
+Measured on SQL Server 2022 with the production shape (15k runs, 3 steps each, ~12 KB `OutputJson`
+on one step); full numbers in `docs/benchmarks/run-search-production-shape-2026-10-31.md`:
+
+| Search | Before: logical / LOB reads | After: logical / LOB reads |
+|---|---|---|
+| `Completed` | 48,179 / 60,000 | 209 / 0 |
+| full run id | 48,183 / 59,996 | 3 / 0 |
+| TriggerKey fragment | 48,182 / 59,996 | 44 / 0 |
+
+### Security
+
+- **Dashboard: hash-route query keys are read through an allow-list.** The SPA router copied every
+  key of the `#/…?…` query string onto a plain object, so a crafted link could write
+  `__proto__` / `constructor` as a property (CodeQL `js/remote-property-injection`, alerts #282 and
+  #283). The router now reads only `flow`, `status`, `q`, `deep`, `page`, `size` and `view`; any other key in
+  the URL is ignored. No behaviour change for links the dashboard itself produces.
+
 ## [1.33.0] - 2026-09-27
 
 ### Fixed

@@ -39,6 +39,10 @@ public sealed class DashboardTestServer : IDisposable
         var store = Substitute.For<IFlowRunStore>();
         store.GetRunAsync(Arg.Any<Guid>())
              .Returns(call => store.GetRunDetailAsync(call.Arg<Guid>()));
+        // Same reason: SearchRunsAsync is a default interface method, so the proxy would hand the
+        // run-list endpoint a null page. Tests that care arrange it explicitly.
+        store.SearchRunsAsync(Arg.Any<RunSearchQuery>(), Arg.Any<CancellationToken>())
+             .Returns(new RunSearchPage(Array.Empty<FlowRunRecord>(), false, null));
         return store;
     }
     public IFlowRunControlStore RunControlStore { get; } = Substitute.For<IFlowRunControlStore>();
@@ -80,6 +84,14 @@ public sealed class DashboardTestServer : IDisposable
         : this(services => services.AddFlowDashboard(configuration, configureOptions))
     {
     }
+
+    /// <summary>
+    /// Spins up the dashboard with full control over its registration, e.g. to add an authentication
+    /// scheme. <paramref name="registerDashboard"/> must call <c>AddFlowDashboard</c> itself.
+    /// </summary>
+    /// <param name="registerDashboard">Registers the dashboard and any extra services.</param>
+    /// <returns>The started server.</returns>
+    public static DashboardTestServer WithServices(Action<IServiceCollection> registerDashboard) => new(registerDashboard);
 
     private DashboardTestServer(Action<IServiceCollection> registerDashboard)
     {

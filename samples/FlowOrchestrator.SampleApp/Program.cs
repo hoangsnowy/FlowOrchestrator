@@ -12,11 +12,12 @@ using FlowOrchestrator.SampleApp;
 using FlowOrchestrator.SampleApp.Flows;
 using FlowOrchestrator.SampleApp.Steps;
 using Hangfire;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Hangfire.SqlServer;
-using OpenTelemetry.Logs;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
-using OpenTelemetry.Resources;
 
 // Short-circuit `--export-mermaid <flowId|flowName>` before standing up the host.
 if (MermaidExportCli.TryHandle(args, out var exitCode))
@@ -263,34 +264,22 @@ builder.Services.AddHttpClient("ExternalApi", client =>
 // Tempo, …). Both can run concurrently — production typically keeps only the OTLP exporter.
 var enableConsoleExporter = builder.Configuration.GetValue("OBSERVABILITY_CONSOLE", true);
 
-builder.Services.AddOpenTelemetry()
-    .ConfigureResource(r => r.AddService("FlowOrchestrator.SampleApp"))
-    .WithTracing(t =>
-    {
-        t.AddFlowOrchestratorInstrumentation()
-         .AddAspNetCoreInstrumentation()
-         .AddOtlpExporter();
-        if (enableConsoleExporter) t.AddConsoleExporter();
-    })
-    .WithMetrics(m =>
-    {
-        m.AddFlowOrchestratorInstrumentation()
-         .AddAspNetCoreInstrumentation()
-         .AddOtlpExporter();
-        if (enableConsoleExporter) m.AddConsoleExporter();
-    });
-
-// OTel structured-logging exporter: ships every ILogger call as an OTLP log record so the
-// engine's BeginScope correlation (RunId / FlowId / StepKey / Attempt) and stable EventIds
-// land in Aspire Dashboard's Logs tab — alongside the matching trace. Without this, logs
-// only go to stdout via the default ConsoleLogger and the OTLP backend sees zero log records.
-builder.Logging.AddOpenTelemetry(o =>
+// One call (FlowOrchestrator.OpenTelemetry): traces + metrics + logs, logs with IncludeScopes so every
+// line inside a run carries RunId / FlowId / FlowName / StepKey / StepType / TriggerKey / Attempt as
+// attributes, all exported over OTLP whenever OTEL_EXPORTER_OTLP_ENDPOINT is set.
+builder.AddFlowOrchestratorOpenTelemetry(o =>
 {
-    o.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("FlowOrchestrator.SampleApp"));
-    o.IncludeFormattedMessage = true;
-    o.IncludeScopes = true;            // CRITICAL: surfaces BeginScope props as log attributes
-    o.ParseStateValues = true;          // Treat structured-template values as structured attrs
-    o.AddOtlpExporter();
+    o.ServiceName = "FlowOrchestrator.SampleApp";
+    o.ConfigureTracing = t =>
+    {
+        t.AddAspNetCoreInstrumentation();
+        if (enableConsoleExporter) t.AddConsoleExporter();
+    };
+    o.ConfigureMetrics = m =>
+    {
+        m.AddAspNetCoreInstrumentation();
+        if (enableConsoleExporter) m.AddConsoleExporter();
+    };
 });
 
 builder.Services.AddFlowDashboard(builder.Configuration);
@@ -309,6 +298,60 @@ builder.Services.PostConfigure<FlowDashboardOptions>(opts => opts.UseWebhookSecu
        .UseForwardedHeaders(depth: 1);
 }));
 
+// Optional single sign-on through Keycloak (the AppHost turns it on for the PostgreSQL instance by
+// setting Keycloak__Authority). Basic Auth from appsettings.json stays enabled alongside it: a request
+// carrying valid Basic credentials still gets in, a browser without them is sent to Keycloak.
+var keycloakAuthority = builder.Configuration["Keycloak:Authority"];
+var useKeycloak = !string.IsNullOrWhiteSpace(keycloakAuthority);
+if (useKeycloak)
+{
+    var keycloakClientId = builder.Configuration["Keycloak:ClientId"] ?? "flow-dashboard";
+    builder.Services
+        .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+        .AddCookie(o =>
+        {
+            o.Cookie.Name = "flow-dashboard";
+            o.Cookie.HttpOnly = true;
+            o.Cookie.SameSite = SameSiteMode.Lax;
+            o.ExpireTimeSpan = TimeSpan.FromHours(8);
+            o.SlidingExpiration = true;
+        })
+        .AddOpenIdConnect("oidc", o =>
+        {
+            o.Authority = keycloakAuthority;
+            o.ClientId = keycloakClientId;
+            o.ClientSecret = builder.Configuration["Keycloak:ClientSecret"];   // null for the public demo client
+            o.ResponseType = OpenIdConnectResponseType.Code;
+            o.UsePkce = true;
+            o.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            o.CallbackPath = "/flows/signin-oidc";
+            o.SignedOutCallbackPath = "/flows/signout-callback-oidc";
+            // Keeps the id_token in the auth cookie so sign-out sends it as id_token_hint. Without it Keycloak
+            // rejects the logout request ("Missing parameters: id_token_hint"): the local cookie is gone but
+            // the Keycloak session survives, and the next visit signs the user straight back in.
+            o.SaveTokens = true;
+            o.Events.OnRedirectToIdentityProviderForSignOut = context =>
+            {
+                // Belt and braces for an expired / missing id_token: Keycloak accepts client_id instead and
+                // asks the user to confirm the logout.
+                context.ProtocolMessage.ClientId ??= keycloakClientId;
+                return Task.CompletedTask;
+            };
+            o.MapInboundClaims = false;
+            o.TokenValidationParameters.NameClaimType = "preferred_username";
+            o.TokenValidationParameters.RoleClaimType = "roles";
+            // The local Keycloak container serves plain HTTP; never relax this outside Development.
+            o.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        });
+    // Keycloak access tokens carry realm_access / resource_access objects; map them to role claims.
+    builder.Services.AddFlowDashboardKeycloakRoles(keycloakClientId);
+    builder.Services.PostConfigure<FlowDashboardOptions>(opts =>
+    {
+        opts.Authorization.AuthenticationScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        opts.Authorization.ChallengeScheme = "oidc";
+    });
+}
+
 // Storage-reachability probe so a load balancer can drop traffic when the flow store is down.
 builder.Services
     .AddHealthChecks()
@@ -317,6 +360,9 @@ builder.Services
 var app = builder.Build();
 
 app.UseStaticFiles();
+// Handles the OIDC callback (/flows/signin-oidc) and sign-out callback.
+if (useKeycloak)
+    app.UseAuthentication();
 if (useHangfireRuntime)
     app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");

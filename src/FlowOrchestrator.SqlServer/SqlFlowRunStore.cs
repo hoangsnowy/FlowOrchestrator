@@ -132,7 +132,9 @@ public sealed class SqlFlowRunStore :
 
     public async Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50)
     {
-        var page = await GetRunsPageAsync(flowId, null, skip, take, null);
+        // No total is needed here, so this must not go through GetRunsPageAsync: its COUNT(*) OVER()
+        // evaluates the filter over every run in retention on each overview poll.
+        var page = await SearchRunsAsync(new RunSearchQuery { FlowId = flowId, Skip = skip, Take = take });
         return page.Runs;
     }
 
@@ -221,6 +223,130 @@ public sealed class SqlFlowRunStore :
             totalCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM FlowRuns AS fr{whereSql}", parameters);
 
         return (rows, totalCount);
+    }
+
+    /// <inheritdoc/>
+    public async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var command = BuildSearchRunsCommand(query);
+
+        await using var conn = new SqlConnection(_connectionString);
+        using var grid = await conn.QueryMultipleAsync(new CommandDefinition(
+            command.Sql, command.Parameters, cancellationToken: cancellationToken));
+        var rows = (await grid.ReadAsync<FlowRunRecord>()).AsList();
+        int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>() : null;
+
+        var take = ClampTake(query.Take);
+        var hasMore = rows.Count > take;
+        if (hasMore)
+            rows.RemoveRange(take, rows.Count - take);
+        return new RunSearchPage(rows, hasMore, total);
+    }
+
+    /// <summary>Clamps a page size to <c>[0, int.MaxValue - 1]</c> so <c>Take + 1</c> neither goes negative nor overflows.</summary>
+    private static int ClampTake(int take) => Math.Clamp(take, 0, int.MaxValue - 1);
+
+    /// <summary>
+    /// Builds the SQL batch for <see cref="SearchRunsAsync"/>: the page query, followed by an exact
+    /// <c>COUNT(*)</c> only when <see cref="RunSearchQuery.CountsTotal"/> is set.
+    /// </summary>
+    /// <param name="query">The structured run query.</param>
+    /// <returns>The batch text, its parameters, and whether the batch returns a second (count) result set.</returns>
+    /// <remarks>
+    /// Shape rules, each one a fix for the production search that took ~2 minutes on 15k runs:
+    /// <list type="bullet">
+    /// <item>A run id is <c>fr.Id = @RunId</c>, a clustered-key seek. A GUID-shaped text term compares the
+    /// id by equality too, never <c>CAST(fr.Id AS NVARCHAR(36)) LIKE</c>.</item>
+    /// <item>No <c>COUNT(*) OVER()</c>: it forced the predicate over every row in retention. The page reads
+    /// <c>Take + 1</c> rows instead and the caller derives <c>HasMore</c>; the exact count is a separate
+    /// statement over the plain filters only, which <c>IX_FlowRuns_Status</c> /
+    /// <c>IX_FlowRuns_FlowId_Status_StartedAt</c> / <c>IX_FlowRuns_StartedAt</c> answer without touching
+    /// the clustered index.</item>
+    /// <item>Text matches the run's own columns, all covered by <c>IX_FlowRuns_StartedAt</c>, so a
+    /// windowed search is a range seek plus a residual filter that stops after <c>Take + 1</c> hits.</item>
+    /// <item>The <c>FlowSteps</c> payload probe (LOB reads of <c>OutputJson</c>) is added only when
+    /// <see cref="RunSearchQuery.IncludeStepPayloads"/> is set.</item>
+    /// </list>
+    /// User input only ever reaches the batch as parameters; <c>ESCAPE '\'</c> keeps <c>%</c>, <c>_</c>
+    /// and <c>[</c> literal.
+    /// </remarks>
+    internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query)
+    {
+        var filters = new List<string>(4);
+        if (query.FlowId.HasValue)
+            filters.Add("fr.FlowId = @FlowId");
+        if (!string.IsNullOrWhiteSpace(query.Status))
+            filters.Add("fr.Status = @Status");
+        if (query.StartedFrom.HasValue)
+            filters.Add("fr.StartedAt >= @StartedFrom");
+        if (query.StartedTo.HasValue)
+            filters.Add("fr.StartedAt <= @StartedTo");
+
+        // The count only ever covers the plain filters above: CountsTotal is false whenever a text or
+        // run-id term is present.
+        var countsTotal = query.CountsTotal;
+        var countWhere = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
+
+        if (query.RunId.HasValue)
+            filters.Add("fr.Id = @RunId");
+
+        string? searchLike = null;
+        Guid? textId = null;
+        if (query.HasText)
+        {
+            var text = query.Text!.Trim();
+            searchLike = "%" + EscapeLikePattern(text) + "%";
+            textId = Guid.TryParse(text, out var parsed) ? parsed : null;
+            var idMatch = textId.HasValue
+                ? "fr.Id = @TextId"
+                : "CAST(fr.Id AS NVARCHAR(36)) LIKE @SearchLike ESCAPE '\\'";
+            var stepMatch = query.IncludeStepPayloads
+                ? """
+
+                        OR EXISTS (
+                            SELECT 1
+                            FROM FlowSteps AS fs
+                            WHERE fs.RunId = fr.Id
+                              AND (
+                                    ISNULL(fs.StepKey, '') LIKE @SearchLike ESCAPE '\'
+                                    OR ISNULL(fs.ErrorMessage, '') LIKE @SearchLike ESCAPE '\'
+                                    OR ISNULL(fs.OutputJson, '') LIKE @SearchLike ESCAPE '\'
+                                  )
+                        )
+                  """
+                : string.Empty;
+            filters.Add($"""
+                (
+                        {idMatch}
+                        OR ISNULL(fr.FlowName, '') LIKE @SearchLike ESCAPE '\'
+                        OR ISNULL(fr.TriggerKey, '') LIKE @SearchLike ESCAPE '\'
+                        OR ISNULL(fr.Status, '') LIKE @SearchLike ESCAPE '\'
+                        OR ISNULL(fr.BackgroundJobId, '') LIKE @SearchLike ESCAPE '\'{stepMatch}
+                    )
+                """);
+        }
+
+        var where = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
+        var sql = "SELECT fr.Id, fr.FlowId, fr.FlowName, fr.Status, fr.TriggerKey, fr.TriggerDataJson, fr.BackgroundJobId, fr.StartedAt, fr.CompletedAt, fr.SourceRunId FROM FlowRuns AS fr"
+            + where
+            + " ORDER BY fr.StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @TakePlusOne ROWS ONLY;";
+        if (countsTotal)
+            sql += " SELECT COUNT(*) FROM FlowRuns AS fr" + countWhere + ";";
+
+        var parameters = new
+        {
+            query.FlowId,
+            query.Status,
+            query.RunId,
+            TextId = textId,
+            SearchLike = searchLike,
+            StartedFrom = query.StartedFrom?.ToUniversalTime(),   // same instant; kept in UTC like the PostgreSQL store
+            StartedTo = query.StartedTo?.ToUniversalTime(),
+            Skip = Math.Max(0, query.Skip),
+            TakePlusOne = ClampTake(query.Take) + 1,
+        };
+        return (sql, parameters, countsTotal);
     }
 
     /// <inheritdoc/>

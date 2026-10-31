@@ -17,6 +17,7 @@
     <Project Path="src/FlowOrchestrator.ServiceBus/FlowOrchestrator.ServiceBus.csproj" />
     <Project Path="src/FlowOrchestrator.SqlServer/FlowOrchestrator.SqlServer.csproj" />
     <Project Path="src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj" />
+    <Project Path="src/FlowOrchestrator.OpenTelemetry/FlowOrchestrator.OpenTelemetry.csproj" />
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/integration/">
