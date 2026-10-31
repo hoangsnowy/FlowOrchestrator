@@ -6,6 +6,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.1] - 2026-10-31
+
+> **`1.34.0` was tagged but never reached NuGet.org.** Its publish job failed at `Test (Unit)` on the
+> test-isolation bug fixed below, before the pack and push steps ran, so the tag exists while the
+> package does not. `1.34.1` is therefore the first stable release carrying the 1.34.0 changes listed in
+> the next section; the only 1.34.0 artifact on NuGet is `1.34.0-preview.198`, built from the commit the
+> tag points at. No library code changed between the two.
+
+### Fixed
+
+- **`OpenTelemetryWiringTests` counted spans from engine tests running in parallel** (#240). The
+  `FlowOrchestrator` `ActivitySource` is process-wide, so the test's `TracerProvider` also received other
+  tests' `flow.*` spans and `Assert.Single` saw 7. The test now asserts on its own probe-tagged span and
+  emits an untagged span itself, so the isolation is checked on every run. Test-only change.
+
 ## [1.34.0] - 2026-10-31
 
 Minor release: new public API (`IFlowRunStore.SearchRunsAsync`, `FlowDashboardOptions.Authorization` /
