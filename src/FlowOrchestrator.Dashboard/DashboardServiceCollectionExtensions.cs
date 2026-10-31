@@ -230,7 +230,9 @@ public static class DashboardServiceCollectionExtensions
     /// <summary>
     /// Maps the FlowOrchestrator dashboard SPA, REST API endpoints, and webhook receiver
     /// onto <paramref name="endpoints"/> under <paramref name="basePath"/>.
-    /// Optionally applies Basic Auth if configured in <see cref="FlowDashboardOptions.BasicAuth"/>.
+    /// Protects every dashboard route with <see cref="FlowDashboardOptions.BasicAuth"/> and / or
+    /// <see cref="FlowDashboardOptions.Authorization"/> (OIDC / Keycloak) when configured; webhook
+    /// receive endpoints keep their own webhook-secret protection.
     /// </summary>
     /// <param name="endpoints">The endpoint route builder to register routes on.</param>
     /// <param name="basePath">URL prefix for all dashboard routes; defaults to <c>/flows</c>.</param>
@@ -273,10 +275,38 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        if (options.BasicAuth.IsEnabled)
+        // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side; with
+        // neither configured the filter only records "unprotected" for /api/me.
+        ValidateAndReportAccessConfiguration(endpoints.ServiceProvider, options);
+        group.AddEndpointFilter(new Security.DashboardAccessFilter(options));
+
+        // Who the SPA is talking to, and whether it may show state-changing actions.
+        group.MapGet("/api/me", (HttpContext http) =>
         {
-            group.AddEndpointFilter(new FlowDashboardBasicAuthFilter(options.BasicAuth));
-        }
+            var access = http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess
+                         ?? Security.DashboardAccess.Unprotected;
+            return WriteJsonAsync(http.Response, new
+            {
+                method = access.Method,
+                user = access.UserName,
+                canOperate = access.CanOperate,
+                canSignOut = access.Method == "oidc",
+            });
+        });
+
+        // Ends the identity-provider session (cookie + OIDC front-channel sign-out) and returns to the
+        // dashboard, which then challenges again. Basic Auth has no server-side session to end.
+        group.MapGet("/signout", (HttpContext http) =>
+        {
+            var authorization = options.Authorization;
+            var home = http.Request.PathBase + basePath;
+            if (!authorization.IsEnabled)
+                return Results.Redirect(home);
+            var schemes = new List<string> { authorization.AuthenticationScheme! };
+            if (authorization.EffectiveChallengeScheme is { } challenge && challenge != authorization.AuthenticationScheme)
+                schemes.Add(challenge);
+            return Results.SignOut(new Microsoft.AspNetCore.Authentication.AuthenticationProperties { RedirectUri = home }, schemes);
+        });
 
         // Render once at startup and cache the page in three pre-compressed forms
         // (raw / Brotli / Gzip). The MapGet handler picks the best available
@@ -1402,7 +1432,7 @@ public static class DashboardServiceCollectionExtensions
     /// the transfer encoding differs.
     /// </para>
     /// </remarks>
-    private static async Task WriteJsonAsync<T>(HttpResponse response, T value)
+    internal static async Task WriteJsonAsync<T>(HttpResponse response, T value)
     {
         response.ContentType = "application/json; charset=utf-8";
         response.Headers.Vary = "Accept-Encoding";
@@ -1620,74 +1650,52 @@ public static class DashboardServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Endpoint filter that enforces HTTP Basic Authentication on all dashboard routes
-    /// when <see cref="FlowDashboardBasicAuthOptions.IsEnabled"/> is true.
+    /// Fails fast when identity-based access names a scheme the host never registered, and warns about
+    /// Basic Auth set-ups that are not fit for production.
     /// </summary>
-    private sealed class FlowDashboardBasicAuthFilter(FlowDashboardBasicAuthOptions options) : IEndpointFilter
+    private static void ValidateAndReportAccessConfiguration(IServiceProvider services, FlowDashboardOptions options)
     {
-        /// <inheritdoc/>
-        public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        var logger = services.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Dashboard.Auth");
+        var authorization = options.Authorization;
+        var basic = options.BasicAuth;
+
+        if (authorization.IsEnabled)
         {
-            if (IsAuthorized(context.HttpContext, options))
+            var schemes = services.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationSchemeProvider>()
+                ?? throw new InvalidOperationException(
+                    "FlowDashboard:Authorization:AuthenticationScheme is set but no authentication is registered. Call services.AddAuthentication(...) with that scheme.");
+            foreach (var name in new[] { authorization.AuthenticationScheme!, authorization.EffectiveChallengeScheme! })
             {
-                return next(context);
+                // Startup-only, once per scheme: the provider's lookup is a dictionary read wrapped in a Task.
+                if (schemes.GetSchemeAsync(name).GetAwaiter().GetResult() is null)
+                    throw new InvalidOperationException(
+                        $"FlowDashboard:Authorization names the authentication scheme '{name}', which is not registered. Register it with AddAuthentication().Add…(\"{name}\").");
             }
-
-            var realm = string.IsNullOrWhiteSpace(options.Realm)
-                ? "FlowOrchestrator Dashboard"
-                : options.Realm.Replace("\"", string.Empty, StringComparison.Ordinal);
-
-            context.HttpContext.Response.Headers.WWWAuthenticate = $"Basic realm=\"{realm}\", charset=\"UTF-8\"";
-            return ValueTask.FromResult<object?>(Results.Unauthorized());
+            if (logger is not null)
+                Security.DashboardAuthLog.IdentityAccessEnabled(logger, authorization.AuthenticationScheme!, authorization.EffectiveChallengeScheme!, basic.IsEnabled ? "also enabled" : "disabled");
         }
+
+        if (!basic.IsEnabled || logger is null)
+            return;
+
+        var environment = services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>();
+        if (!authorization.IsEnabled && environment is not null && !Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(environment))
+            Security.DashboardAuthLog.BasicAuthOutsideDevelopment(logger, environment!.EnvironmentName);
+        if (IsWeakBasicAuthPassword(basic))
+            Security.DashboardAuthLog.WeakBasicAuthPassword(logger);
     }
 
-    private static bool IsAuthorized(HttpContext http, FlowDashboardBasicAuthOptions options)
+    /// <summary>
+    /// <see langword="true"/> for a Basic Auth password that is a well-known default, shorter than 12
+    /// characters, or equal to the user name.
+    /// </summary>
+    internal static bool IsWeakBasicAuthPassword(FlowDashboardBasicAuthOptions basic)
     {
-        if (!options.IsEnabled)
-        {
-            return true;
-        }
-
-        if (!http.Request.Headers.TryGetValue("Authorization", out var authHeaders))
-        {
-            return false;
-        }
-
-        const string basicPrefix = "Basic ";
-        var headerValue = authHeaders.ToString();
-        if (!headerValue.StartsWith(basicPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var encoded = headerValue[basicPrefix.Length..].Trim();
-        if (string.IsNullOrWhiteSpace(encoded))
-        {
-            return false;
-        }
-
-        string userAndPassword;
-        try
-        {
-            var decodedBytes = Convert.FromBase64String(encoded);
-            userAndPassword = Encoding.UTF8.GetString(decodedBytes);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-
-        var separatorIndex = userAndPassword.IndexOf(':');
-        if (separatorIndex <= 0)
-        {
-            return false;
-        }
-
-        var username = userAndPassword[..separatorIndex];
-        var password = userAndPassword[(separatorIndex + 1)..];
-        return SecureEquals(username, options.Username!) &&
-               SecureEquals(password, options.Password!);
+        var password = basic.Password ?? string.Empty;
+        string[] wellKnown = ["admin", "password", "changeme", "secret", "123456", "12345678", "dashboard", "flows"];
+        return password.Length < 12
+            || string.Equals(password, basic.Username, StringComparison.OrdinalIgnoreCase)
+            || Array.Exists(wellKnown, w => string.Equals(w, password, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool SecureEquals(string left, string right)

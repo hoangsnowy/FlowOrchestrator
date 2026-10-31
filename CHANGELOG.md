@@ -7,7 +7,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDashboardOptions`,
-`WebhookRejectionQuery` / `WebhookRejectionPage`, and a changed dashboard default).
+`WebhookRejectionQuery` / `WebhookRejectionPage`, dashboard sign-in, and a changed dashboard default).
+
+### Added — dashboard sign-in with Keycloak / OpenID Connect (#237)
+
+- **Identity-based access alongside Basic Auth.** `FlowDashboard:Authorization` names the host's
+  authentication schemes (e.g. cookie + OIDC against Keycloak); users then sign in through the identity
+  provider and get **viewer** (`flow-viewer`: read) or **operator** (`flow-operator`: trigger, rerun,
+  retry, cancel, signal, enable / disable, schedule changes) access. Roles and policies are configurable
+  (`ViewerRoles`, `OperatorRoles`, `ViewPolicy`, `OperatePolicy`). Basic Auth keeps working unchanged
+  side by side: valid Basic credentials still get full access, so scripts and probes are unaffected,
+  while a browser without them is redirected to the identity provider. Nothing changes until
+  `Authorization.AuthenticationScheme` is set.
+- `AddFlowDashboardKeycloakRoles(clientId)` maps Keycloak's `realm_access` / `resource_access` roles to
+  role claims (`KeycloakRoleClaimsTransformation`).
+- `GET /flows/api/me` (`method`, `user`, `canOperate`, `canSignOut`) and `GET /flows/signout`. The SPA
+  shows the signed-in user, a **View only** badge and hides state-changing buttons for viewers (the
+  server answers `403` regardless), and re-signs in when an OIDC session expires.
+- Startup checks: a misnamed scheme throws at `MapFlowDashboard`; EventId `4100` warns when Basic Auth
+  is the only protection outside Development, `4101` when its password is weak.
+- Sample / AppHost: a Keycloak container (port 8088, demo realm with `viewer` / `operator` users) signs
+  in to the **PostgreSQL** sample instance; Basic Auth stays on there for the e2e suite. New guide:
+  `docs/articles/dashboard-security.md`.
 
 ### Changed
 

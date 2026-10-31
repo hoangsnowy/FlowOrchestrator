@@ -37,6 +37,9 @@
 - name: Dashboard
   href: dashboard.md
 
+- name: Securing the Dashboard
+  href: dashboard-security.md
+
 - name: Mermaid Diagram Export
   href: mermaid-export.md
 

@@ -74,6 +74,17 @@
     <PackageVersion Include="MessagePack" Version="2.5.303" />
   </ItemGroup>
 
+  <!--
+    Sample app only: OpenID Connect sign-in against the AppHost's Keycloak container.
+    The library itself takes no dependency on it (the dashboard uses whatever scheme the
+    host registers). The ASP.NET Core package major must match the sample's TFM.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.33" Condition="'$(TargetFramework)' == 'net8.0'" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="9.0.22" Condition="'$(TargetFramework)' == 'net9.0'" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.14" Condition="'$(TargetFramework)' != 'net8.0' And '$(TargetFramework)' != 'net9.0'" />
+  </ItemGroup>
+
   <!-- Observability — keep all OpenTelemetry packages on the same release line. -->
   <ItemGroup>
     <PackageVersion Include="OpenTelemetry" Version="1.19.1" />

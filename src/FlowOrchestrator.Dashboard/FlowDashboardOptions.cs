@@ -15,6 +15,13 @@ public sealed class FlowDashboardOptions
     /// <summary>HTTP Basic Auth settings. Disabled when <see cref="FlowDashboardBasicAuthOptions.Username"/> is not set.</summary>
     public FlowDashboardBasicAuthOptions BasicAuth { get; set; } = new();
 
+    /// <summary>
+    /// Identity-based access through the host's ASP.NET Core authentication (OpenID Connect / Keycloak),
+    /// with viewer and operator roles. Works alongside <see cref="BasicAuth"/>; disabled until
+    /// <see cref="FlowDashboardAuthorizationOptions.AuthenticationScheme"/> is set.
+    /// </summary>
+    public FlowDashboardAuthorizationOptions Authorization { get; set; } = new();
+
     /// <summary>UI branding settings (title, subtitle, logo URL).</summary>
     public FlowDashboardBrandingOptions Branding { get; set; } = new();
 

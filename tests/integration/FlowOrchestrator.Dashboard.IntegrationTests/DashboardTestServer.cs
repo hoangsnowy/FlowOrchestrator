@@ -85,6 +85,14 @@ public sealed class DashboardTestServer : IDisposable
     {
     }
 
+    /// <summary>
+    /// Spins up the dashboard with full control over its registration, e.g. to add an authentication
+    /// scheme. <paramref name="registerDashboard"/> must call <c>AddFlowDashboard</c> itself.
+    /// </summary>
+    /// <param name="registerDashboard">Registers the dashboard and any extra services.</param>
+    /// <returns>The started server.</returns>
+    public static DashboardTestServer WithServices(Action<IServiceCollection> registerDashboard) => new(registerDashboard);
+
     private DashboardTestServer(Action<IServiceCollection> registerDashboard)
     {
         // Configure Hangfire in-memory so any background job infrastructure works during tests.

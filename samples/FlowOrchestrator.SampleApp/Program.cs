@@ -12,6 +12,9 @@ using FlowOrchestrator.SampleApp;
 using FlowOrchestrator.SampleApp.Flows;
 using FlowOrchestrator.SampleApp.Steps;
 using Hangfire;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Hangfire.SqlServer;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Trace;
@@ -309,6 +312,50 @@ builder.Services.PostConfigure<FlowDashboardOptions>(opts => opts.UseWebhookSecu
        .UseForwardedHeaders(depth: 1);
 }));
 
+// Optional single sign-on through Keycloak (the AppHost turns it on for the PostgreSQL instance by
+// setting Keycloak__Authority). Basic Auth from appsettings.json stays enabled alongside it: a request
+// carrying valid Basic credentials still gets in, a browser without them is sent to Keycloak.
+var keycloakAuthority = builder.Configuration["Keycloak:Authority"];
+var useKeycloak = !string.IsNullOrWhiteSpace(keycloakAuthority);
+if (useKeycloak)
+{
+    var keycloakClientId = builder.Configuration["Keycloak:ClientId"] ?? "flow-dashboard";
+    builder.Services
+        .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+        .AddCookie(o =>
+        {
+            o.Cookie.Name = "flow-dashboard";
+            o.Cookie.HttpOnly = true;
+            o.Cookie.SameSite = SameSiteMode.Lax;
+            o.ExpireTimeSpan = TimeSpan.FromHours(8);
+            o.SlidingExpiration = true;
+        })
+        .AddOpenIdConnect("oidc", o =>
+        {
+            o.Authority = keycloakAuthority;
+            o.ClientId = keycloakClientId;
+            o.ClientSecret = builder.Configuration["Keycloak:ClientSecret"];   // null for the public demo client
+            o.ResponseType = OpenIdConnectResponseType.Code;
+            o.UsePkce = true;
+            o.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            o.CallbackPath = "/flows/signin-oidc";
+            o.SignedOutCallbackPath = "/flows/signout-callback-oidc";
+            o.SaveTokens = false;
+            o.MapInboundClaims = false;
+            o.TokenValidationParameters.NameClaimType = "preferred_username";
+            o.TokenValidationParameters.RoleClaimType = "roles";
+            // The local Keycloak container serves plain HTTP; never relax this outside Development.
+            o.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        });
+    // Keycloak access tokens carry realm_access / resource_access objects; map them to role claims.
+    builder.Services.AddFlowDashboardKeycloakRoles(keycloakClientId);
+    builder.Services.PostConfigure<FlowDashboardOptions>(opts =>
+    {
+        opts.Authorization.AuthenticationScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        opts.Authorization.ChallengeScheme = "oidc";
+    });
+}
+
 // Storage-reachability probe so a load balancer can drop traffic when the flow store is down.
 builder.Services
     .AddHealthChecks()
@@ -317,6 +364,9 @@ builder.Services
 var app = builder.Build();
 
 app.UseStaticFiles();
+// Handles the OIDC callback (/flows/signin-oidc) and sign-out callback.
+if (useKeycloak)
+    app.UseAuthentication();
 if (useHangfireRuntime)
     app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");

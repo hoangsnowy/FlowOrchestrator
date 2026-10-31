@@ -75,6 +75,39 @@ function assertSameOriginUrl(url) {
   return parsed.toString();
 }
 
+// ── Signed-in user (GET /api/me) ──
+// method: "none" | "basic" | "oidc". Under OIDC a fetch never sees the identity provider's redirect:
+// an expired session surfaces as a 401 on an API call, so the page reloads once to sign in again.
+let dashboardAccess = { method: 'none', user: null, canOperate: true, canSignOut: false };
+let _sessionExpiredHandled = false;
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = async function (input, init) {
+  const res = await _nativeFetch(input, init);
+  if (res.status === 401 && dashboardAccess.method === 'oidc' && !_sessionExpiredHandled) {
+    _sessionExpiredHandled = true;
+    showToast('Your session expired. Signing you in again…', 'info');
+    setTimeout(() => location.reload(), 1500);
+  }
+  return res;
+};
+
+async function loadDashboardAccess() {
+  try {
+    const r = await _nativeFetch(BASE + '/me');
+    if (!r.ok) return;
+    dashboardAccess = await r.json();
+  } catch { return; }
+  // Viewers do not get state-changing buttons; the server enforces the same rule with a 403.
+  document.body.classList.toggle('fo-readonly', !dashboardAccess.canOperate);
+  const el = $('sidebar-user');
+  if (!el || dashboardAccess.method === 'none') return;
+  el.innerHTML = '<span class="sidebar-user-name" title="Signed in via ' + (dashboardAccess.method === 'oidc' ? 'single sign-on' : 'Basic Auth') + '">'
+    + esc(dashboardAccess.user || 'Signed in') + '</span>'
+    + (dashboardAccess.canOperate ? '' : '<span class="chip chip--readonly">View only</span>')
+    + (dashboardAccess.canSignOut ? '<a class="sidebar-signout" href="' + BASE.replace(/\/api$/, '') + '/signout">Sign out</a>' : '');
+  el.hidden = false;
+}
+
 async function fetchJSON(url, opts) {
   const safe = assertSameOriginUrl(url);
   const r = await fetch(safe, opts || undefined);
@@ -3017,6 +3050,7 @@ window.addEventListener('beforeunload', () => {
 
 _initThemeAndDensityUI();
 initAutoRefreshSettings();
+loadDashboardAccess();
 const _initialRoute = Router.parse();
 if (_initialRoute.page !== 'overview' || _initialRoute.runId) {
   applyRoute(_initialRoute);

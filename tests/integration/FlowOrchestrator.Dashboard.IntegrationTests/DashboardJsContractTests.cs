@@ -244,4 +244,24 @@ public sealed class DashboardJsContractTests : IDisposable
         Assert.Contains("'beforeunload'", html);
         Assert.Contains("clearInterval(autoRefreshTimer)", html);
     }
+
+    [Fact]
+    public async Task GET_root_shows_the_signed_in_user_and_hides_operator_actions_for_viewers()
+    {
+        // Arrange — the server enforces viewer / operator with a 403; the SPA mirrors it so viewers
+        // are not offered buttons that can only fail, and an expired OIDC session re-signs in.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("id=\"sidebar-user\"", html);
+        Assert.Contains("async function loadDashboardAccess(", html);
+        Assert.Contains("_nativeFetch(BASE + '/me')", html);
+        Assert.Contains("document.body.classList.toggle('fo-readonly', !dashboardAccess.canOperate);", html);
+        Assert.Contains(".fo-readonly [onclick^=\"triggerFlow(\"]", html);
+        Assert.Contains(".fo-readonly [onclick^=\"rerunAll(\"]", html);
+        Assert.Contains("res.status === 401 && dashboardAccess.method === 'oidc'", html);
+        Assert.Contains("loadDashboardAccess();", html);
+    }
 }

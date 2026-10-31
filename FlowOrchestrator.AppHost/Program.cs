@@ -52,13 +52,31 @@ builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-sqlserver")
        .WithReference(sql)
        .WaitFor(sql);
 
+// ── Keycloak (OIDC sign-in for the PostgreSQL instance) ──────────── port 8088 ─
+// Plain container rather than Aspire.Hosting.Keycloak, which only ships as a preview for this
+// Aspire line. start-dev keeps state in-container, so the demo realm (two users: viewer /
+// operator, see keycloak/flow-orchestrator-realm.json) is re-imported on every start and the
+// bootstrap admin password can be random per run. Not for production use.
+var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.4")
+       .WithArgs("start-dev", "--import-realm")
+       .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", "admin")
+       .WithEnvironment("KC_BOOTSTRAP_ADMIN_PASSWORD", Guid.NewGuid().ToString("N"))
+       .WithBindMount("./keycloak", "/opt/keycloak/data/import", isReadOnly: true)
+       .WithHttpEndpoint(port: 8088, targetPort: 8080, name: "http");
+
 // ── Instance 2: PostgreSQL backend ──────────────────────────────── port 5102 ─
+// Signs in through Keycloak (viewer / operator roles) while Basic Auth stays enabled side by
+// side, so scripts and the e2e suite keep using -u admin:admin. The OIDC handler loads Keycloak's
+// metadata on the first sign-in, so this instance does not wait for Keycloak to start.
 builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-postgresql")
        .WithEnvironment("FLOW_STORAGE", "postgresql")
+       .WithEnvironment("Keycloak__Authority", "http://localhost:8088/realms/flow-orchestrator")
+       .WithEnvironment("Keycloak__ClientId", "flow-dashboard")
        .WithEndpoint("http",  e => e.Port = 5102)
        .WithEndpoint("https", e => e.Port = 7102)
        .WithReference(postgres)
-       .WaitFor(postgres);
+       .WaitFor(postgres)
+       .WithReferenceRelationship(keycloak);
 
 // ── Instance 3: Fully in-memory — no Hangfire, no database ──────── port 5103 ─
 // Demonstrates RUNTIME=inmemory + FLOW_STORAGE=inmemory: Channel<T>-backed step
