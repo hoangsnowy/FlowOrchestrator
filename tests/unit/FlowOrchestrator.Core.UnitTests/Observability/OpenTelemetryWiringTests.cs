@@ -124,8 +124,10 @@ public sealed class OpenTelemetryWiringTests
     [Fact]
     public async Task One_call_exports_logs_with_scopes_and_flow_orchestrator_spans()
     {
-        // Arrange
+        // Arrange — the "FlowOrchestrator" ActivitySource is process-wide, so engine tests running in parallel
+        // emit spans into this provider too. Only the span tagged with this test's probe id counts.
         var spans = new List<Activity>();
+        var probe = Guid.NewGuid().ToString("N");
         var builder = Builder();
         builder.AddFlowOrchestratorOpenTelemetry(o => o.ConfigureTracing = t => t.AddProcessor(new CaptureProcessor(spans)));
         using var host = builder.Build();
@@ -137,6 +139,12 @@ public sealed class OpenTelemetryWiringTests
         using (var activity = FlowOrchestratorTelemetry.SharedActivitySource.StartActivity("flow.step"))
         {
             activity?.SetTag("flow.name", "OrderFlow");
+            activity?.SetTag("test.probe", probe);
+        }
+        // Deterministic stand-in for an engine test running in parallel (what failed the v1.34.0 tag
+        // build): an untagged span from the same source lands in this provider.
+        using (FlowOrchestratorTelemetry.SharedActivitySource.StartActivity("flow.trigger"))
+        {
         }
         await host.StopAsync();
 
@@ -144,7 +152,9 @@ public sealed class OpenTelemetryWiringTests
         Assert.True(logOptions.IncludeScopes);
         Assert.True(logOptions.IncludeFormattedMessage);
         Assert.True(logOptions.ParseStateValues);
-        var span = Assert.Single(spans);
+        Activity[] mine;
+        lock (spans) mine = spans.Where(s => Equals(s.GetTagItem("test.probe"), probe)).ToArray();
+        var span = Assert.Single(mine);
         Assert.Equal("OrderFlow", span.GetTagItem("flow.name"));
     }
 
