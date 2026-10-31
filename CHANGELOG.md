@@ -6,6 +6,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+- **Dashboard: hash-route query keys are read through an allow-list.** The SPA router copied every
+  key of the `#/…?…` query string onto a plain object, so a crafted link could write
+  `__proto__` / `constructor` as a property (CodeQL `js/remote-property-injection`, alerts #282 and
+  #283). The router now reads only `flow`, `status`, `q`, `page`, `size` and `view`; any other key in
+  the URL is ignored. No behaviour change for links the dashboard itself produces.
+
 ## [1.33.0] - 2026-09-27
 
 ### Fixed
