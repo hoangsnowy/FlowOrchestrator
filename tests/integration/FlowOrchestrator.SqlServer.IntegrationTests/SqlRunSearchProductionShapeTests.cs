@@ -54,6 +54,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         Assert.Equal(50, rows);
         Assert.Equal(_fixture.SucceededCount, total);
         Assert.DoesNotContain("FlowSteps", io.Tables);
+        Assert.DoesNotContain("Worktable", io.Tables);
         Assert.Equal(0, io.LobLogicalReads);
         Assert.InRange(io.LogicalReads, 1, 1_000);
         Assert.True(legacy.Io.LobLogicalReads > 10_000, "the legacy query is expected to read every step payload");
@@ -74,6 +75,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         Assert.Equal(1, rows);
         Assert.Null(total);
         Assert.DoesNotContain("FlowSteps", io.Tables);
+        Assert.DoesNotContain("Worktable", io.Tables);
         Assert.Equal(0, io.LobLogicalReads);
         Assert.InRange(io.LogicalReads, 1, 20);
     }
@@ -99,8 +101,29 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         Assert.Equal(1, rows);
         Assert.Null(total);
         Assert.DoesNotContain("FlowSteps", io.Tables);
+        Assert.DoesNotContain("Worktable", io.Tables);
         Assert.Equal(0, io.LobLogicalReads);
         Assert.InRange(io.LogicalReads, 1, 1_000);
+    }
+
+    [Fact]
+    public async Task Common_term_stops_after_one_page_instead_of_counting_every_match()
+    {
+        // Arrange — 1,500 runs match "webhook-claim" across the whole table and no window is set, so
+        // only Take + 1 (no COUNT(*) OVER()) lets the scan stop after ~51 matches.
+        var query = new RunSearchQuery { Text = "webhook-claim", Take = 50, IncludeTotal = true };
+
+        // Act
+        var (io, rows, total, elapsed) = await MeasureAsync(query);
+        var legacy = await MeasureLegacyAsync("webhook-claim");
+        Report("common TriggerKey fragment, no window", query, io, elapsed, legacy);
+
+        // Assert
+        Assert.Equal(50, rows);
+        Assert.Null(total);
+        Assert.DoesNotContain("Worktable", io.Tables);
+        Assert.DoesNotContain("FlowSteps", io.Tables);
+        Assert.InRange(io.LogicalReads, 1, 200);
     }
 
     [Fact]
