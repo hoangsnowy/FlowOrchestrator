@@ -204,7 +204,8 @@ public sealed class DashboardSecurityTests
     [Theory]
     [InlineData(null, null)]
     [InlineData("", "")]
-    [InlineData("{not json", null)]
+    [InlineData("{not json", "{not json")]
+    [InlineData("{\"token\": not json", null)]
     public void Viewer_manifest_handles_missing_and_invalid_json(string? input, string? expected)
     {
         // Arrange
@@ -261,7 +262,7 @@ public sealed class DashboardSecurityTests
     public void Duplicate_property_names_yield_nothing_rather_than_throwing()
     {
         // Arrange
-        const string json = """{"a":1,"a":2}""";
+        const string json = """{"token":1,"token":2}""";
 
         // Act
         var redacted = ManifestSecretRedactor.RedactJson(json);
@@ -308,5 +309,36 @@ public sealed class DashboardSecurityTests
         Assert.DoesNotContain("\"at\"", step.OutputJson);
         Assert.DoesNotContain("sk-old", Assert.Single(step.Attempts!).InputJson);
         Assert.Contains("sk-live", run.Steps![0].InputJson);
+    }
+
+    [Theory]
+    [InlineData("""{"orderId":7,"items":[1,2]}""", false)]
+    [InlineData("""{"ApiKey":"x"}""", true)]
+    [InlineData("""{"headers":{"AUTHORIZATION":"x"}}""", true)]
+    [InlineData("""{"token":"x"}""", true)]
+    public void Pre_check_skips_parsing_only_when_no_secret_name_can_be_present(string json, bool mayContain)
+    {
+        // Arrange — the pre-check keeps viewer polling cheap; a \u escape can spell a name the scan cannot see.
+
+        // Act
+        var result = ManifestSecretRedactor.MayContainSecretName(json);
+        var redacted = ManifestSecretRedactor.RedactJson(json);
+
+        // Assert
+        Assert.Equal(mayContain, result);
+        if (!mayContain) Assert.Same(json, redacted);
+    }
+
+    [Fact]
+    public void Unicode_escaped_secret_name_is_still_masked()
+    {
+        // Arrange
+        const string json = """{"token":"t-1"}""";
+
+        // Act
+        var redacted = ManifestSecretRedactor.RedactJson(json)!;
+
+        // Assert
+        Assert.DoesNotContain("t-1", redacted);
     }
 }

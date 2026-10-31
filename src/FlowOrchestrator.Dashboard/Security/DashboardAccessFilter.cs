@@ -46,7 +46,13 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
     private readonly string _signOutPath = basePath.TrimEnd('/') + "/signout";
 
     /// <inheritdoc/>
-    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    /// <remarks>
+    /// Synchronous for the common cases (unprotected, valid Basic, Basic challenge): this runs on every
+    /// dashboard request including the 5 s poll, so it returns <paramref name="next"/>'s ValueTask directly
+    /// instead of adding an async state machine. Unprotected requests leave <see cref="HttpContext.Items"/>
+    /// alone; readers fall back to <see cref="DashboardAccess.Unprotected"/>.
+    /// </remarks>
+    public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
         var basic = options.BasicAuth;
@@ -56,22 +62,28 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
         // post, so state-changing calls must come from the dashboard's own origin. Scripts that send
         // neither header (curl, probes) are unaffected.
         if (IsMutating(http.Request.Method) && IsCrossSiteRequest(http, options.TrustedOrigins))
-            return await ErrorAsync(http, StatusCodes.Status403Forbidden, "Cross-site request blocked: state-changing dashboard calls must come from the dashboard itself.");
+            return ErrorAsync(http, StatusCodes.Status403Forbidden, "Cross-site request blocked: state-changing dashboard calls must come from the dashboard itself.");
 
         if (!basic.IsEnabled && !identity.IsEnabled)
-        {
-            http.Items[DashboardAccess.ItemKey] = DashboardAccess.Unprotected;
-            return await next(context);
-        }
+            return next(context);
 
         if (basic.IsEnabled && TryValidateBasic(http, basic, out var basicUser))
         {
             http.Items[DashboardAccess.ItemKey] = new DashboardAccess("basic", basicUser, CanOperate: true);
-            return await next(context);
+            return next(context);
         }
 
         if (!identity.IsEnabled)
-            return BasicChallenge(http, basic);
+            return ValueTask.FromResult(BasicChallenge(http, basic));
+
+        return AuthenticateAndInvokeAsync(context, next);
+    }
+
+    private async ValueTask<object?> AuthenticateAndInvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var http = context.HttpContext;
+        var basic = options.BasicAuth;
+        var identity = options.Authorization;
 
         var result = await http.AuthenticateAsync(identity.AuthenticationScheme);
         if (result.Succeeded && result.Principal is { } principal)

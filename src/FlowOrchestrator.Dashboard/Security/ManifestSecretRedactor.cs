@@ -31,9 +31,14 @@ internal static class ManifestSecretRedactor
         "connectionstring", "credential", "authorization", "bearer", "cookie", "signature",
     ];
 
+#if NET9_0_OR_GREATER
+    private static readonly System.Buffers.SearchValues<string> SecretNameSearch =
+        System.Buffers.SearchValues.Create(SecretNameFragments, StringComparison.OrdinalIgnoreCase);
+#endif
+
     // /api/flows is polled by the overview; viewers would otherwise re-parse every manifest on every poll.
     // Keyed by flow id + manifest content; bounded by clearing once it outgrows any realistic flow count.
-    private static readonly ConcurrentDictionary<(Guid Id, int Hash, int Length), (string Source, string? Redacted)> ManifestCache = new();
+    private static readonly ConcurrentDictionary<(Guid Id, int Length), (string Source, string? Redacted)> ManifestCache = new();
     private const int ManifestCacheLimit = 2_048;
 
     /// <summary>Returns <paramref name="flows"/> unchanged for operators, or copies with masked manifests for viewers.</summary>
@@ -159,7 +164,9 @@ internal static class ManifestSecretRedactor
         if (string.IsNullOrWhiteSpace(manifestJson))
             return manifestJson;
 
-        var key = (id, manifestJson.GetHashCode(), manifestJson.Length);
+        // (Id, Length) + an ordinal compare: no per-poll hash of the whole manifest, and the compare returns at
+        // once when the store hands back the same string instance.
+        var key = (id, manifestJson.Length);
         // The source is compared ordinally, so a hash collision costs a re-parse, never a wrong result.
         if (ManifestCache.TryGetValue(key, out var cached) && string.Equals(cached.Source, manifestJson, StringComparison.Ordinal))
             return cached.Redacted;
@@ -178,6 +185,11 @@ internal static class ManifestSecretRedactor
     internal static string? RedactJson(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
+            return json;
+
+        // Most payloads carry no secret-looking name: scanning the text is ~20x cheaper than parsing and
+        // allocates nothing. A \u escape could spell a name the scan cannot see, so it forces the parse.
+        if (!MayContainSecretName(json))
             return json;
 
         try
@@ -212,6 +224,24 @@ internal static class ManifestSecretRedactor
                     Redact(item);
                 break;
         }
+    }
+
+    /// <summary>Cheap text pre-check for <see cref="RedactJson"/>: any secret fragment or any <c>\u</c> escape.</summary>
+    internal static bool MayContainSecretName(string json)
+    {
+        var text = json.AsSpan();
+        if (text.IndexOf(@"\u", StringComparison.Ordinal) >= 0)
+            return true;
+#if NET9_0_OR_GREATER
+        return text.IndexOfAny(SecretNameSearch) >= 0;
+#else
+        foreach (var fragment in SecretNameFragments)
+        {
+            if (text.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+        }
+        return false;
+#endif
     }
 
     /// <summary><see langword="true"/> when a property or header name looks like it carries a secret.</summary>
