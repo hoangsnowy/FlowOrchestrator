@@ -3,6 +3,14 @@ let currentPage = 'overview';
 let allFlows = [];
 let allRuns = [];
 let runsTotal = 0;
+// A text / run-id search does not count its matches (the server returns total:null + hasMore),
+// so runsTotal is then only a lower bound and the pager shows "more" instead of "of N".
+let runsTotalExact = true;
+let runsHasMore = false;
+// Set when the server turned a status synonym ("Completed") into the status filter; kept until
+// the user changes a filter, so auto-refresh does not wipe it.
+let runsAliasNotice = '';
+let runsWindowNotice = '';
 let runsPage = 1;
 const runsPageSizeStorageKey = 'flow-dashboard:runs-page-size';
 const runsPageSizeAllowed = [10, 20, 50, 100];
@@ -1583,6 +1591,7 @@ function renderFilterChips() {
   }
   if (status) chips.push({ key: 'status', label: 'Status: ' + (status === 'Skipped' ? 'Blocked' : status) });
   if (q) chips.push({ key: 'q', label: 'Search: "' + (q.length > 24 ? q.slice(0, 23) + '…' : q) + '"' });
+  if (q && params.deep === '1') chips.push({ key: 'deep', label: 'Incl. step output / errors' });
   if (chips.length === 0) { container.innerHTML = ''; return; }
   container.innerHTML = chips.map(c =>
     '<span class="filter-chip">' + esc(c.label)
@@ -1591,10 +1600,49 @@ function renderFilterChips() {
   ).join('') + '<button class="filter-chip-clear-all" type="button" onclick="clearAllRunsFilters()">Clear all</button>';
 }
 
+function runStatusDisplayLabel(status) {
+  if (status === 'Skipped') return 'Blocked';
+  if (status === 'TimedOut') return 'Timed Out';
+  return status;
+}
+
+// Reflects how the server applied the search term (see RunListRequest.DescribeSearch):
+// a status name becomes the status filter, a synonym also explains itself, and a free-text
+// search states the start-time window it was bounded to.
+function applyRunsSearchResult(search) {
+  runsWindowNotice = '';
+  if (search && search.kind === 'status' && search.appliedStatus) {
+    const statusEl = $('runs-filter-status');
+    const searchEl = $('runs-filter-search');
+    if (statusEl) statusEl.value = search.appliedStatus;
+    if (searchEl) searchEl.value = '';
+    runsAliasNotice = search.alias
+      ? 'No run status named "' + search.alias + '" — showing ' + runStatusDisplayLabel(search.appliedStatus) + ' runs.'
+      : '';
+    Router.replaceParams({ status: search.appliedStatus, q: '' });
+  } else if (search && search.kind === 'text' && search.from) {
+    const fromMs = Date.parse(search.from);
+    const days = Math.max(1, Math.round((Date.now() - fromMs) / 86400000));
+    const scope = search.stepPayloads
+      ? 'run id, flow, trigger, status, step output and errors'
+      : 'run id, flow, trigger and status';
+    runsWindowNotice = 'Searching ' + scope + ' of runs started since ' + formatTimestamp(search.from)
+      + (search.windowDefaulted ? ' (last ' + days + ' day' + (days === 1 ? '' : 's') + ')' : '') + '.';
+  }
+  renderRunsSearchNotice();
+}
+
+function renderRunsSearchNotice() {
+  const el = $('runs-search-notice');
+  if (!el) return;
+  el.textContent = [runsAliasNotice, runsWindowNotice].filter(Boolean).join(' ');
+}
+
 function removeRunsFilter(key) {
   if (key === 'flow') { $('runs-filter-flow').value = ''; }
   else if (key === 'status') { $('runs-filter-status').value = ''; }
   else if (key === 'q') { $('runs-filter-search').value = ''; }
+  else if (key === 'deep' && $('runs-filter-deep')) { $('runs-filter-deep').checked = false; }
   onRunsFilterChange();
 }
 
@@ -1602,6 +1650,7 @@ function clearAllRunsFilters() {
   $('runs-filter-flow').value = '';
   $('runs-filter-status').value = '';
   $('runs-filter-search').value = '';
+  if ($('runs-filter-deep')) $('runs-filter-deep').checked = false;
   onRunsFilterChange();
 }
 
@@ -2011,7 +2060,9 @@ function onRunsFilterChange() {
   const flow = $('runs-filter-flow').value;
   const status = $('runs-filter-status').value;
   const q = $('runs-filter-search').value.trim();
-  Router.replaceParams({ flow, status, q, page: '1' });
+  const deep = $('runs-filter-deep') && $('runs-filter-deep').checked ? '1' : '';
+  runsAliasNotice = '';
+  Router.replaceParams({ flow, status, q, deep, page: '1' });
   renderRunDetailEmpty();
   loadRuns();
 }
@@ -2105,7 +2156,8 @@ function renderRunsPagination() {
     return '<button class="page-num'+active+'" onclick="gotoRunsPage('+p+')"'+aria+'>'+p+'</button>';
   }).join('');
 
-  const showJump = maxPage >= 8;
+  // Without an exact total the last page is unknown, so jumping makes no sense.
+  const showJump = runsTotalExact && maxPage >= 8;
   const jumpHtml = showJump
     ? '<span class="runs-page-jump"><label class="runs-page-jump-label" for="runs-page-jump-input">Go to</label>'
       + '<input id="runs-page-jump-input" class="runs-page-jump-input" type="number" inputmode="numeric" min="1" max="'+maxPage+'" placeholder="'+runsPage+'" onkeydown="onJumpToRunsPage(event)" aria-label="Jump to page (1 to '+maxPage+')"></span>'
@@ -2113,7 +2165,9 @@ function renderRunsPagination() {
 
   $('runs-pagination').innerHTML =
     '<div class="runs-page-left">'
-    + '<div class="runs-page-info">'+(hasRuns ? ('Showing <b>'+start+'</b>–<b>'+end+'</b> of <b>'+runsTotal+'</b>') : 'No runs')+'</div>'
+    + '<div class="runs-page-info">'+(!hasRuns ? 'No runs'
+        : runsTotalExact ? ('Showing <b>'+start+'</b>–<b>'+end+'</b> of <b>'+runsTotal+'</b>')
+        : ('Showing <b>'+start+'</b>–<b>'+(start + allRuns.length - 1)+'</b>'+(runsHasMore ? ' · more results' : '')))+'</div>'
     + '<label class="runs-page-size"><span>Rows</span>'
     +   '<select class="filter-select runs-page-size-select" onchange="changeRunsPageSize(this.value)" aria-label="Rows per page">'+sizeOpts+'</select>'
     + '</label>'
@@ -2212,10 +2266,17 @@ async function loadRuns(preserveScroll) {
     if (flowFilter) url += '&flowId='+encodeURIComponent(flowFilter);
     if (statusFilter) url += '&status='+encodeURIComponent(statusFilter);
     if (searchFilter) url += '&search='+encodeURIComponent(searchFilter);
+    const deepEl = $('runs-filter-deep');
+    if (searchFilter && deepEl && deepEl.checked) url += '&deep=1';
 
     const page = await fetchJSON(url, { signal });
     allRuns = Array.isArray(page.items) ? page.items : [];
-    runsTotal = typeof page.total === 'number' ? page.total : allRuns.length;
+    runsTotalExact = typeof page.total === 'number';
+    runsHasMore = !!page.hasMore;
+    // Without an exact total, a lower bound one past this page keeps the Next button and the
+    // page math working.
+    runsTotal = runsTotalExact ? page.total : skip + allRuns.length + (runsHasMore ? 1 : 0);
+    applyRunsSearchResult(page.search);
 
     const maxPage = Math.max(1, Math.ceil(runsTotal / runsPageSize));
     if (runsTotal > 0 && runsPage > maxPage) {
@@ -2603,12 +2664,14 @@ async function loadWebhooks(opts) {
       fetchJSON(BASE+'/webhooks/stats?hours=24').catch(() => ({ counts: {} }))
     ]);
     const items = page && Array.isArray(page.items) ? page.items : (Array.isArray(page) ? page : []);
-    const total = page && typeof page.total === 'number' ? page.total : items.length;
+    // A search skips the count (total:null); a lower bound one past this page keeps Next enabled.
+    const exact = !!page && typeof page.total === 'number';
+    const total = exact ? page.total : skip + items.length + (page && page.hasMore ? 1 : 0);
     if (statsEl) statsEl.innerHTML = renderWebhookStats(stats);
     listEl.innerHTML = items.length === 0
       ? '<div class="empty-msg">' + (webhookSearch ? 'No deliveries match your search.' : 'No webhook deliveries yet.') + '</div>'
       : renderWebhookTable(items);
-    if (pagerEl) pagerEl.innerHTML = renderWebhookPager(total);
+    if (pagerEl) pagerEl.innerHTML = renderWebhookPager(total, exact, items.length, !!(page && page.hasMore));
   } catch (e) {
     if (isAbortError(e)) return;
     listEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load webhook log. <button class="btn-retry" onclick="loadWebhooks()">Retry</button></div>';
@@ -2698,7 +2761,8 @@ function renderWebhookTable(items) {
     + '</tbody></table>';
 }
 
-function renderWebhookPager(total) {
+function renderWebhookPager(total, exact, count, hasMore) {
+  if (exact === undefined) exact = true;
   const maxPage = Math.max(1, Math.ceil(total / webhookPageSize));
   const cur = Math.min(webhookPage, maxPage);
   const has = total > 0;
@@ -2721,7 +2785,7 @@ function renderWebhookPager(total) {
   const sizeOpts = webhookPageSizeAllowed.map(function(s) {
     return '<option value="' + s + '"' + (s === webhookPageSize ? ' selected' : '') + '>' + s + '</option>';
   }).join('');
-  const showJump = maxPage >= 8;
+  const showJump = exact && maxPage >= 8;
   const jumpHtml = showJump
     ? '<span class="runs-page-jump"><label class="runs-page-jump-label" for="webhook-page-jump-input">Go to</label>'
       + '<input id="webhook-page-jump-input" class="runs-page-jump-input" type="number" inputmode="numeric" min="1" max="' + maxPage + '" placeholder="' + cur + '" onkeydown="onWebhookJumpKeydown(event)" aria-label="Jump to page (1 to ' + maxPage + ')"></span>'
@@ -2729,7 +2793,7 @@ function renderWebhookPager(total) {
 
   return ''
     + '<div class="runs-page-left">'
-    +   '<div class="runs-page-info">' + (has ? ('Showing <b>' + start + '</b>–<b>' + end + '</b> of <b>' + total + '</b>') : 'No deliveries') + '</div>'
+    +   '<div class="runs-page-info">' + (!has ? 'No deliveries' : exact ? ('Showing <b>' + start + '</b>–<b>' + end + '</b> of <b>' + total + '</b>') : ('Showing <b>' + start + '</b>–<b>' + (start + count - 1) + '</b>' + (hasMore ? ' · more results' : ''))) + '</div>'
     +   '<label class="runs-page-size"><span>Rows</span>'
     +     '<select class="filter-select runs-page-size-select" onchange="setWebhookPageSize(this.value)" aria-label="Rows per page">' + sizeOpts + '</select>'
     +   '</label>'
@@ -2800,7 +2864,7 @@ const Router = (function () {
   // `?__proto__=…` or `?constructor=…` cannot turn into a property write
   // (CodeQL js/remote-property-injection). Add a key here when a page starts
   // persisting new state in the hash.
-  const PARAM_KEYS = ['flow', 'status', 'q', 'page', 'size', 'view'];
+  const PARAM_KEYS = ['flow', 'status', 'q', 'deep', 'page', 'size', 'view'];
 
   function parse() {
     const hash = location.hash || '';
@@ -2937,6 +3001,8 @@ function restoreRunsFiltersFromRoute(params) {
   if (flowEl && flowEl.value !== flow) flowEl.value = flow;
   if (statusEl && statusEl.value !== status) statusEl.value = status;
   if (searchEl && searchEl.value !== q) searchEl.value = q;
+  const deepEl = $('runs-filter-deep');
+  if (deepEl) deepEl.checked = params.deep === '1';
   if (Number.isFinite(page) && page >= 1) runsPage = page;
 }
 

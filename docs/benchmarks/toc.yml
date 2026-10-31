@@ -1,3 +1,6 @@
+- name: RUN search on the production shape — before / after (2026-10-31)
+  href: run-search-production-shape-2026-10-31.md
+
 - name: StepCollection.FindStep — runtime loop keys without allocation (2026-09-26)
   href: step-collection-findstep-2026-09-26.md
 

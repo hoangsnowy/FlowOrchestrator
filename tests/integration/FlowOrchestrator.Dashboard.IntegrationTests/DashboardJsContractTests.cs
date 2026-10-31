@@ -171,7 +171,7 @@ public sealed class DashboardJsContractTests : IDisposable
         var html = await _body.Value;
 
         // Assert
-        Assert.Contains("Router.replaceParams({ flow, status, q, page", html);
+        Assert.Contains("Router.replaceParams({ flow, status, q, deep, page", html);
         Assert.Contains("function restoreRunsFiltersFromRoute(", html);
     }
 
@@ -186,10 +186,31 @@ public sealed class DashboardJsContractTests : IDisposable
         var html = await _body.Value;
 
         // Assert
-        Assert.Contains("const PARAM_KEYS = ['flow', 'status', 'q', 'page', 'size', 'view'];", html);
+        Assert.Contains("const PARAM_KEYS = ['flow', 'status', 'q', 'deep', 'page', 'size', 'view'];", html);
         Assert.Contains("for (const key of PARAM_KEYS)", html);
         Assert.DoesNotContain("for (const [k, v] of sp.entries()) params[k] = v;", html);
         Assert.DoesNotContain("delete merged[k]", html);
+    }
+
+    [Fact]
+    public async Task GET_root_run_search_offers_opt_in_step_payload_search_and_reflects_the_applied_term()
+    {
+        // Arrange — step payloads are no longer searched by default: the SPA must offer the opt-in,
+        // send deep=1 only when it is ticked, reflect a status shortcut, and page by hasMore when a
+        // search returns no total.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("id=\"runs-filter-deep\"", html);
+        Assert.Contains("Search step output / errors", html);
+        Assert.Contains("if (searchFilter && deepEl && deepEl.checked) url += '&deep=1';", html);
+        Assert.Contains("function applyRunsSearchResult(", html);
+        Assert.Contains("id=\"runs-search-notice\"", html);
+        Assert.Contains("runsTotalExact = typeof page.total === 'number';", html);
+        Assert.Contains("runsHasMore = !!page.hasMore;", html);
+        Assert.DoesNotContain("Search run, step, error, output", html);
     }
 
     // ── Run status filter covers every terminal status ───────────────────────

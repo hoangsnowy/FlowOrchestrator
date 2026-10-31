@@ -209,7 +209,11 @@
         </div>
         <div class="runs-filters" role="search" aria-label="Filter runs">
           <label class="visually-hidden" for="runs-filter-search">Search runs</label>
-          <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Search run, step, error, output..." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)" aria-label="Search runs"/>
+          <input class="filter-input runs-search" id="runs-filter-search" type="search" placeholder="Run id, flow, trigger, status…" title="A full run id or a status name (e.g. Failed) is an exact lookup. Wrap text in quotes to search it literally." oninput="onRunsSearchInput()" onkeydown="onRunsSearchKeydown(event)" aria-label="Search runs"/>
+          <label class="runs-deep-toggle" for="runs-filter-deep" title="Also match step keys, error messages and step output JSON. Slower: reads every step payload in the search window.">
+            <input id="runs-filter-deep" type="checkbox" onchange="onRunsFilterChange()"/>
+            Search step output / errors
+          </label>
           <label class="visually-hidden" for="runs-filter-flow">Filter by flow</label>
           <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()" aria-label="Filter by flow"><option value="">All Flows</option></select>
           <label class="visually-hidden" for="runs-filter-status">Filter by status</label>
@@ -225,6 +229,7 @@
         </div>
       </header>
       <div class="runs-filter-chips" id="runs-filter-chips" aria-label="Active filters"></div>
+      <div class="runs-search-notice" id="runs-search-notice" role="status" aria-live="polite"></div>
       <div class="runs-list" id="runs-list" role="region" aria-label="Run list" aria-live="polite" aria-busy="false"></div>
       <div class="runs-pagination" id="runs-pagination"></div>
     </div>

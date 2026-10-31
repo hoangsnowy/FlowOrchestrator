@@ -23,11 +23,42 @@ public sealed record WebhookRejectionQuery(
     bool IncludeAccepted = true,
     bool IncludeRejected = true,
     int Skip = 0,
-    int Take = 50);
+    int Take = 50)
+{
+    /// <summary>
+    /// Inclusive lower bound on <see cref="WebhookRejectionRecord.ReceivedAt"/>. The table keeps every
+    /// delivery, accepted ones included, so a free-text search should always carry one.
+    /// </summary>
+    public DateTimeOffset? ReceivedFrom { get; init; }
+
+    /// <summary>
+    /// <see langword="false"/> skips the exact <c>COUNT</c> of matching rows; the page then reports
+    /// <see cref="WebhookRejectionPage.HasMore"/> and a lower-bound <see cref="WebhookRejectionPage.Total"/>.
+    /// Defaults to <see langword="true"/> for compatibility.
+    /// </summary>
+    /// <remarks>
+    /// A <c>%term%</c> search cannot use an index, so counting its matches reads the whole table on
+    /// every keystroke; the dashboard turns the count off whenever a search term is present.
+    /// </remarks>
+    public bool CountTotal { get; init; } = true;
+}
 
 /// <summary>Paged result from <see cref="IWebhookRejectionStore.QueryAsync"/>.</summary>
 /// <param name="Items">Rows for the current page (already filtered + paged).</param>
-/// <param name="Total">Total row count matching the filter, before pagination.</param>
+/// <param name="Total">
+/// Total row count matching the filter, before pagination. When <see cref="TotalCounted"/> is
+/// <see langword="false"/> it is only the lower bound <c>Skip + Items.Count</c>.
+/// </param>
 public sealed record WebhookRejectionPage(
     IReadOnlyList<WebhookRejectionRecord> Items,
-    int Total);
+    int Total)
+{
+    /// <summary><see langword="true"/> when at least one more matching row follows this page.</summary>
+    public bool HasMore { get; init; }
+
+    /// <summary>
+    /// <see langword="false"/> when the store skipped the count because
+    /// <see cref="WebhookRejectionQuery.CountTotal"/> was <see langword="false"/>.
+    /// </summary>
+    public bool TotalCounted { get; init; } = true;
+}

@@ -224,6 +224,74 @@ public sealed class InMemoryFlowRunStore :
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Mirrors the SQL providers' semantics so dashboard behaviour does not depend on the backend: a
+    /// run id is an exact lookup, a GUID-shaped text term matches the id by equality, text matches only
+    /// the run's own columns unless <see cref="RunSearchQuery.IncludeStepPayloads"/> is set, and the
+    /// total is counted only for queries without a text or run-id term.
+    /// </remarks>
+    public Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        IEnumerable<FlowRunRecord> candidates;
+        if (query.RunId is { } runId)
+            candidates = _runs.TryGetValue(runId, out var single) ? [single] : [];
+        else
+            candidates = _runs.Values;
+
+        var text = query.HasText ? query.Text!.Trim() : null;
+        Guid? textId = text is not null && Guid.TryParse(text, out var parsed) ? parsed : null;
+
+        var matches = new List<FlowRunRecord>();
+        foreach (var run in candidates)
+        {
+            if (!MatchesPlainFilters(run, query))
+                continue;
+            if (text is not null && !MatchesRunText(run, text, textId, query.IncludeStepPayloads))
+                continue;
+            matches.Add(run);
+        }
+
+        matches.Sort(static (a, b) => b.StartedAt.CompareTo(a.StartedAt));
+        var skip = Math.Max(0, query.Skip);
+        var take = Math.Max(0, query.Take);
+        var available = Math.Max(0, matches.Count - skip);
+        IReadOnlyList<FlowRunRecord> page = matches.GetRange(Math.Min(skip, matches.Count), Math.Min(take, available));
+        int? total = query.CountsTotal ? matches.Count : null;
+        return Task.FromResult(new RunSearchPage(page, available > take, total));
+    }
+
+    private static bool MatchesPlainFilters(FlowRunRecord run, RunSearchQuery query)
+    {
+        if (query.FlowId.HasValue && run.FlowId != query.FlowId.Value)
+            return false;
+        if (!string.IsNullOrWhiteSpace(query.Status) && !string.Equals(run.Status, query.Status, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (query.StartedFrom.HasValue && run.StartedAt < query.StartedFrom.Value)
+            return false;
+        if (query.StartedTo.HasValue && run.StartedAt > query.StartedTo.Value)
+            return false;
+        return true;
+    }
+
+    private bool MatchesRunText(FlowRunRecord run, string text, Guid? textId, bool includeStepPayloads)
+    {
+        var idMatches = textId.HasValue ? run.Id == textId.Value : ContainsIgnoreCase(run.Id.ToString(), text);
+        if (idMatches
+            || ContainsIgnoreCase(run.FlowName, text)
+            || ContainsIgnoreCase(run.TriggerKey, text)
+            || ContainsIgnoreCase(run.Status, text)
+            || ContainsIgnoreCase(run.BackgroundJobId, text))
+        {
+            return true;
+        }
+
+        return includeStepPayloads && MatchesStepRows(run.Id, text);
+    }
+
+    /// <inheritdoc/>
     public Task<FlowRunRecord?> GetRunAsync(Guid runId)
         // Header only: no step enumeration, no attempt materialisation. Cloned for the same reason
         // as GetRunDetailAsync — the write path mutates the stored record in place, so a caller
@@ -841,21 +909,30 @@ public sealed class InMemoryFlowRunStore :
             return true;
         }
 
-        if (!deepSearch)
+        return deepSearch && MatchesStepRows(run.Id, search);
+    }
+
+    private bool MatchesStepRows(Guid runId, string search)
+    {
+        // Scans this run's current step rows (incl. OutputJson). Enumerate via the per-run step-key
+        // index (O(steps_in_run)) and direct-look-up each step, instead of scanning the global _steps
+        // dictionary (O(total_steps) per run — quadratic over run history). Attempt history is
+        // intentionally not searched — it duplicates the current row.
+        if (!_stepKeysByRun.TryGetValue(runId, out var stepKeys))
             return false;
 
-        // Deep search also scans this run's current step rows (incl. OutputJson). Enumerate via
-        // the per-run step-key index (O(steps_in_run)) and direct-look-up each step, instead of
-        // scanning the global _steps dictionary (O(total_steps) per run — quadratic over run
-        // history). Attempt history is intentionally not searched — it duplicates the current row.
-        if (!_stepKeysByRun.TryGetValue(run.Id, out var stepKeys))
-            return false;
+        foreach (var stepKey in stepKeys.Keys)
+        {
+            if (_steps.TryGetValue((runId, stepKey), out var s)
+                && (ContainsIgnoreCase(s.StepKey, search)
+                    || ContainsIgnoreCase(s.ErrorMessage, search)
+                    || ContainsIgnoreCase(s.OutputJson, search)))
+            {
+                return true;
+            }
+        }
 
-        return stepKeys.Keys.Any(stepKey =>
-            _steps.TryGetValue((run.Id, stepKey), out var s)
-            && (ContainsIgnoreCase(s.StepKey, search)
-                || ContainsIgnoreCase(s.ErrorMessage, search)
-                || ContainsIgnoreCase(s.OutputJson, search)));
+        return false;
     }
 
     private static bool ContainsIgnoreCase(string? value, string search)

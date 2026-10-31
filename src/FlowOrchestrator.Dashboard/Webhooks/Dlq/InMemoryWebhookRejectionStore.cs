@@ -112,15 +112,21 @@ public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
                 var searchMatchesIp = r.RemoteIp?.Contains(search ?? string.Empty, StringComparison.OrdinalIgnoreCase) ?? false;
                 var matchesSearchFilter = string.IsNullOrEmpty(search)
                     || searchMatchesReason || searchMatchesTrigger || searchMatchesIp;
+                var matchesWindow = query.ReceivedFrom is null || r.ReceivedAt >= query.ReceivedFrom.Value;
                 return matchesAcceptedFilter
                     && matchesRejectedFilter
                     && matchesFlowFilter
                     && matchesReasonFilter
+                    && matchesWindow
                     && matchesSearchFilter;
             })
             .ToArray();
         var page = filtered.Skip(skip).Take(take).ToArray();
-        return ValueTask.FromResult(new WebhookRejectionPage(page, filtered.Length));
+        var hasMore = filtered.Length > skip + page.Length;
+        // Same contract as the SQL stores: with CountTotal off, Total is only the lower bound.
+        return ValueTask.FromResult(query.CountTotal
+            ? new WebhookRejectionPage(page, filtered.Length) { HasMore = hasMore }
+            : new WebhookRejectionPage(page, skip + page.Length) { HasMore = hasMore, TotalCounted = false });
     }
 
     /// <inheritdoc/>

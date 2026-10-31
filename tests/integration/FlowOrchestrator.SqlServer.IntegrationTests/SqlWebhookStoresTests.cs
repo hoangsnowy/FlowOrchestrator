@@ -112,4 +112,29 @@ public sealed class SqlWebhookStoresTests : IClassFixture<SqlServerFixture>
         Assert.True(counts["replay"] >= 3);
         Assert.True(counts["rate_limited"] >= 1);
     }
+
+    [Fact]
+    public async Task Rejection_search_is_windowed_uncounted_and_treats_brackets_literally()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        var key = "hook[a]-" + Guid.NewGuid().ToString("N")[..8];
+        await _dlq.WriteAsync(new WebhookRejectionRecord { FlowId = flowId, TriggerKey = key, Reason = "rate_limited", ReceivedAt = now.AddDays(-30) });
+        for (var i = 0; i < 3; i++)
+            await _dlq.WriteAsync(new WebhookRejectionRecord { FlowId = flowId, TriggerKey = key, Reason = "rate_limited", ReceivedAt = now.AddMinutes(-i) });
+        // "[a]" would be a character class without escaping and match "hooka-…" too.
+        await _dlq.WriteAsync(new WebhookRejectionRecord { FlowId = flowId, TriggerKey = "hooka-" + key[8..], Reason = "rate_limited", ReceivedAt = now });
+
+        // Act
+        var page = await _dlq.QueryAsync(new WebhookRejectionQuery(FlowId: flowId, Search: key, Take: 2) { ReceivedFrom = now.AddDays(-7), CountTotal = false });
+        var all = await _dlq.QueryAsync(new WebhookRejectionQuery(FlowId: flowId, Search: key, Take: 10));
+
+        // Assert
+        Assert.Equal(2, page.Items.Count);
+        Assert.True(page.HasMore);
+        Assert.False(page.TotalCounted);
+        Assert.Equal(4, all.Total);
+        Assert.All(all.Items, r => Assert.Equal(key, r.TriggerKey));
+    }
 }

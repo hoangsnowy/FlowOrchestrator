@@ -619,21 +619,58 @@ public static class DashboardServiceCollectionExtensions
             var includeTotal = query.TryGetValue("includeTotal", out var itv)
                                && bool.TryParse(itv, out var it) && it;
 
-            var page = await store.QueryAsync(new FlowOrchestrator.Core.Storage.WebhookRejectionQuery(
-                FlowId: flowId,
-                Reason: reason,
-                Search: string.IsNullOrWhiteSpace(search) ? null : search,
-                IncludeAccepted: includeAccepted,
-                IncludeRejected: includeRejected,
-                Skip: skip,
-                Take: take), http.RequestAborted);
+            var hasSearch = !string.IsNullOrWhiteSpace(search);
+            DateTimeOffset? receivedFrom = query.TryGetValue("from", out var fromValues)
+                && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fromParsed)
+                ? fromParsed : null;
+            // The table keeps every delivery (accepted ones too) with no retention, and a %term% match
+            // cannot use an index: a search is windowed by default and does not count its matches.
+            var windowDefaulted = false;
+            if (hasSearch && receivedFrom is null)
+            {
+                var options = http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
+                var clock = http.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System;
+                receivedFrom = clock.GetUtcNow() - options.EffectiveRunSearchWindow;
+                windowDefaulted = true;
+            }
+
+            FlowOrchestrator.Core.Storage.WebhookRejectionPage page;
+            try
+            {
+                page = await store.QueryAsync(new FlowOrchestrator.Core.Storage.WebhookRejectionQuery(
+                    FlowId: flowId,
+                    Reason: reason,
+                    Search: hasSearch ? search : null,
+                    IncludeAccepted: includeAccepted,
+                    IncludeRejected: includeRejected,
+                    Skip: skip,
+                    Take: take)
+                {
+                    ReceivedFrom = receivedFrom,
+                    CountTotal = !hasSearch,
+                }, http.RequestAborted);
+            }
+            catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+            {
+                return;
+            }
 
             // Backwards-compat: when no pagination signal is sent (no skip,
             // no q, no includeTotal), return a bare array so v1.25.0 callers
             // keep working. New callers ask for `includeTotal=true` and get
             // the paged shape that the new dashboard SPA needs.
-            if (includeTotal || !string.IsNullOrWhiteSpace(search) || skip > 0)
-                await WriteJsonAsync(http.Response, new { items = page.Items, total = page.Total, skip, take });
+            if (includeTotal || hasSearch || skip > 0)
+                await WriteJsonAsync(http.Response, new
+                {
+                    items = page.Items,
+                    // null when a search skipped the count; hasMore drives the pager instead.
+                    total = page.TotalCounted ? page.Total : (int?)null,
+                    hasMore = page.HasMore,
+                    skip,
+                    take,
+                    from = receivedFrom,
+                    windowDefaulted,
+                });
             else
                 await WriteJsonAsync(http.Response, page.Items);
         });
@@ -657,51 +694,46 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapGet("/api/runs", async (HttpContext http, IFlowRunStore store) =>
         {
-            var query = http.Request.Query;
-            Guid? flowId = query.TryGetValue("flowId", out var flowIdValues) && Guid.TryParse(flowIdValues, out var fid) ? fid : null;
-            string? status = query.TryGetValue("status", out var statusValues) ? statusValues.ToString() : null;
-            string? search = query.TryGetValue("search", out var searchValues) ? searchValues.ToString() : null;
-            // The dashboard renders the "Skipped" run status under the display label "Blocked",
-            // so a user typing what they see in the run search box would otherwise match nothing
-            // (the store searches the raw status column). Resolve the display label back to its
-            // canonical status token here — keeping the "Blocked" vocabulary inside the UI layer.
-            search = RunStatusDisplay.ResolveSearchAlias(search);
-            int skip = query.TryGetValue("skip", out var skipValues) && int.TryParse(skipValues, out var s) ? s : 0;
-            int take = query.TryGetValue("take", out var takeValues) && int.TryParse(takeValues, out var t) ? t : 50;
-            bool includeTotal = query.TryGetValue("includeTotal", out var includeTotalValues)
-                && bool.TryParse(includeTotalValues, out var includeTotalParsed)
-                && includeTotalParsed;
-            DateTimeOffset? startedFrom = query.TryGetValue("from", out var fromValues)
-                && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fromParsed)
-                ? fromParsed : null;
-            DateTimeOffset? startedTo = query.TryGetValue("to", out var toValues)
-                && DateTimeOffset.TryParse(toValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var toParsed)
-                ? toParsed : null;
-            // Deep search (default) also scans step rows; deep=false|0 is the cheap top-level-only
-            // quick search used by the command palette typeahead.
-            var deepRaw = query.TryGetValue("deep", out var deepValues) ? deepValues.ToString() : null;
-            bool deepSearch = !(string.Equals(deepRaw, "false", StringComparison.OrdinalIgnoreCase) || deepRaw == "0");
+            // Optional services resolved with a fallback: the dashboard integration-test host does not
+            // register them (see CLAUDE.md, "DI parameters that integration tests don't register").
+            var options = http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
+            var clock = http.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System;
+            var request = RunListRequest.Parse(http.Request.Query, options, clock.GetUtcNow());
 
-            if (includeTotal || !string.IsNullOrWhiteSpace(status) || !string.IsNullOrWhiteSpace(search) || startedFrom.HasValue || startedTo.HasValue)
+            if (!request.IsPlainListing)
             {
-                var page = await store.GetRunsPageAsync(flowId, status, skip, take, search, deepSearch, startedFrom, startedTo);
-                if (includeTotal)
+                RunSearchPage page;
+                try
                 {
-                    await WriteJsonAsync(http.Response,new
+                    // A read: cancelling it when the caller goes away is correct, there is no durable
+                    // write behind it.
+                    page = await store.SearchRunsAsync(request.Query, http.RequestAborted);
+                }
+                catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (request.IncludeTotal)
+                {
+                    await WriteJsonAsync(http.Response, new
                     {
                         items = page.Runs,
+                        // null for a text / run-id search: those report hasMore instead of counting.
                         total = page.TotalCount,
-                        skip,
-                        take
+                        hasMore = page.HasMore,
+                        skip = request.Query.Skip,
+                        take = request.Query.Take,
+                        search = request.DescribeSearch(),
                     });
                     return;
                 }
 
-                await WriteJsonAsync(http.Response,page.Runs);
+                await WriteJsonAsync(http.Response, page.Runs);
                 return;
             }
 
-            var runs = await store.GetRunsAsync(flowId, skip, take);
+            var runs = await store.GetRunsAsync(request.Query.FlowId, request.Query.Skip, request.Query.Take);
             await WriteJsonAsync(http.Response,runs);
         });
 
