@@ -46,7 +46,13 @@ production gap — the Azure SQL tier reads those 60,000 LOB pages from storage.
 | `Completed` (→ `Status = 'Succeeded'`, with exact total) | 588 / 48,248 / 60,000 | 1.6 / 212 / 0 | FlowRuns |
 | full run id | 584 / 48,252 / 59,996 | 0.8 / 3 / 0 | FlowRuns |
 | TriggerKey fragment `claim-0001` (rare; scans the whole 7-day window) | 604 / 48,252 / 59,996 | 8.0 / 44 / 0 | FlowRuns |
+| TriggerKey fragment `webhook-claim` (1,500 matches, **no** window) | 544 / 46,751 / 54,000 | 3.0 / 171 / 0 | FlowRuns |
 | opt-in step payload search, 7-day window | 598 / 48,255 / 59,997 | 492 / 11,173 / 7,001 | FlowSteps, FlowRuns |
+
+The `webhook-claim` row is the `COUNT(*) OVER()` guard: without a window and with many matches, only
+`Take + 1` lets the scan stop after the 51st match. Every "after" query is also asserted to need no
+`Worktable` (the spool a window aggregate builds). Reverting the store to `COUNT(*) OVER()` turns four
+of the five tests red.
 
 The opt-in payload search is still a payload scan — that is what it is for — but bounded to the
 window: 7,001 of 60,000 LOB pages, and it stops once `Take + 1` runs match.
