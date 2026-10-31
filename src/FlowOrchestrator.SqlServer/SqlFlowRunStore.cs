@@ -237,11 +237,15 @@ public sealed class SqlFlowRunStore :
         var rows = (await grid.ReadAsync<FlowRunRecord>()).AsList();
         int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>() : null;
 
-        var hasMore = rows.Count > query.Take;
+        var take = ClampTake(query.Take);
+        var hasMore = rows.Count > take;
         if (hasMore)
-            rows.RemoveRange(query.Take, rows.Count - query.Take);
+            rows.RemoveRange(take, rows.Count - take);
         return new RunSearchPage(rows, hasMore, total);
     }
+
+    /// <summary>Clamps a page size to <c>[0, int.MaxValue - 1]</c> so <c>Take + 1</c> neither goes negative nor overflows.</summary>
+    private static int ClampTake(int take) => Math.Clamp(take, 0, int.MaxValue - 1);
 
     /// <summary>
     /// Builds the SQL batch for <see cref="SearchRunsAsync"/>: the page query, followed by an exact
@@ -337,10 +341,10 @@ public sealed class SqlFlowRunStore :
             query.RunId,
             TextId = textId,
             SearchLike = searchLike,
-            query.StartedFrom,
-            query.StartedTo,
+            StartedFrom = query.StartedFrom?.ToUniversalTime(),   // same instant; kept in UTC like the PostgreSQL store
+            StartedTo = query.StartedTo?.ToUniversalTime(),
             Skip = Math.Max(0, query.Skip),
-            TakePlusOne = Math.Max(0, query.Take) + 1,
+            TakePlusOne = ClampTake(query.Take) + 1,
         };
         return (sql, parameters, countsTotal);
     }

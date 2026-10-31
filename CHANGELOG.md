@@ -24,8 +24,16 @@ This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDas
 - `GET /flows/api/me` (`method`, `user`, `canOperate`, `canSignOut`) and `GET /flows/signout`. The SPA
   shows the signed-in user, a **View only** badge and hides state-changing buttons for viewers (the
   server answers `403` regardless), and re-signs in when an OIDC session expires.
-- Startup checks: a misnamed scheme throws at `MapFlowDashboard`; EventId `4100` warns when Basic Auth
-  is the only protection outside Development, `4101` when its password is weak.
+- Viewers see flow manifests with secret-looking values (`webhookSecret`, HMAC keys, anything named
+  `*secret*` / `*password*` / `*token*` / `*apikey*` …) masked, so a read-only user cannot copy a webhook
+  secret and start runs through the webhook endpoint. Operators see the manifest as stored.
+- **Cross-site request guard on every state-changing dashboard call** (all auth modes): a `POST` / `PUT`
+  whose `Sec-Fetch-Site` is not `same-origin`, or whose `Origin` names another host, is rejected with
+  `403`. This stops CSRF through the new cookie session and through browser-cached Basic credentials;
+  scripts that send neither header are unaffected.
+- Startup checks: a misnamed scheme or authorization policy throws at `MapFlowDashboard`; EventId
+  `4100` warns when Basic Auth is the only protection outside Development, `4101` when its password is
+  weak. `/api/me` and `/signout` stay reachable for a signed-in user without a dashboard role.
 - Sample / AppHost: a Keycloak container (port 8088, demo realm with `viewer` / `operator` users) signs
   in to the **PostgreSQL** sample instance; Basic Auth stays on there for the e2e suite. New guide:
   `docs/articles/dashboard-security.md`.
@@ -48,6 +56,8 @@ This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDas
   results" instead of "of N". Plain filters (flow, status, window) still return an exact total, now
   from a separate index-only `COUNT(*)` instead of `COUNT(*) OVER()`. `GET /api/webhooks/recent?q=…`
   behaves the same way.
+- `GET /api/runs` now clamps `take` to 1–500 and a negative `skip` to 0 (both were unbounded), and reads
+  `from` / `to` without an offset as UTC (PostgreSQL rejected non-UTC offsets).
 
 ### Added
 
@@ -70,7 +80,7 @@ This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDas
 - SQL Server webhook log search treated `[` as the start of a `LIKE` character class.
 
 Measured on SQL Server 2022 with the production shape (15k runs, 3 steps each, ~12 KB `OutputJson`
-on one step); full numbers in `docs/benchmarks/run-search.md`:
+on one step); full numbers in `docs/benchmarks/run-search-production-shape-2026-10-31.md`:
 
 | Search | Before: logical / LOB reads | After: logical / LOB reads |
 |---|---|---|

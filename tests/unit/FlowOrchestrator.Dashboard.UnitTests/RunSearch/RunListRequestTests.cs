@@ -221,4 +221,21 @@ public sealed class RunListRequestTests
         // Assert
         Assert.Equal(expected, request.Query.Take);
     }
+
+    [Theory]
+    [InlineData("2026-10-01T07:00:00+07:00")]
+    [InlineData("2026-10-01T00:00:00Z")]
+    [InlineData("2026-10-01T00:00:00")]
+    public void Window_bounds_are_normalised_to_utc(string from)
+    {
+        // Arrange — Npgsql refuses a non-zero offset for timestamptz; no offset means UTC.
+
+        // Act
+        var request = Parse("?search=x&from=" + Uri.EscapeDataString(from) + "&to=" + Uri.EscapeDataString(from));
+
+        // Assert
+        Assert.Equal(TimeSpan.Zero, request.Query.StartedFrom!.Value.Offset);
+        Assert.Equal(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), request.Query.StartedFrom);
+        Assert.Equal(TimeSpan.Zero, request.Query.StartedTo!.Value.Offset);
+    }
 }

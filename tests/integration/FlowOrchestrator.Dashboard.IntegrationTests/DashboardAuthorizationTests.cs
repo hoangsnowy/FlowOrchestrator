@@ -308,6 +308,89 @@ public sealed class DashboardAuthorizationTests
         Assert.Contains("'Cookies'", invalid.Message);
     }
 
+    [Fact]
+    public async Task Viewer_gets_masked_manifests_and_operator_gets_them_as_stored()
+    {
+        // Arrange — a viewer must not be able to copy a webhook secret and trigger through the webhook endpoint.
+        using var server = Server(basic: false, identity: true);
+        var flow = new FlowDefinitionRecord
+        {
+            Id = Guid.NewGuid(),
+            Name = "Orders",
+            ManifestJson = "{\"triggers\":{\"hook\":{\"type\":\"Webhook\",\"inputs\":{\"webhookSecret\":\"s3cr3t-value\"}}}}",
+        };
+        server.FlowStore.GetAllAsync().Returns([flow]);
+        server.FlowStore.GetByIdAsync(flow.Id).Returns(flow);
+
+        // Act
+        var viewerList = await (await server.Client.SendAsync(Request(HttpMethod.Get, "/flows/api/flows", user: "vera", roles: "flow-viewer"))).Content.ReadAsStringAsync();
+        var viewerOne = await (await server.Client.SendAsync(Request(HttpMethod.Get, $"/flows/api/flows/{flow.Id}", user: "vera", roles: "flow-viewer"))).Content.ReadAsStringAsync();
+        var operatorOne = await (await server.Client.SendAsync(Request(HttpMethod.Get, $"/flows/api/flows/{flow.Id}", user: "otto", roles: "flow-operator"))).Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.DoesNotContain("s3cr3t-value", viewerList);
+        Assert.DoesNotContain("s3cr3t-value", viewerOne);
+        Assert.Contains("redacted", viewerOne);
+        Assert.Contains("s3cr3t-value", operatorOne);
+        Assert.Equal("s3cr3t-value", System.Text.Json.Nodes.JsonNode.Parse(flow.ManifestJson)!["triggers"]!["hook"]!["inputs"]!["webhookSecret"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Cross_site_state_changing_call_is_blocked_whatever_the_credentials(bool useBasic)
+    {
+        // Arrange — a forged form post from another site carries the cookie / cached Basic credentials.
+        using var server = Server(basic: true, identity: true);
+        var request = useBasic
+            ? Request(HttpMethod.Post, $"/flows/api/runs/{Guid.NewGuid()}/cancel", basic: true)
+            : Request(HttpMethod.Post, $"/flows/api/runs/{Guid.NewGuid()}/cancel", user: "otto", roles: "flow-operator");
+        request.Headers.Add("Sec-Fetch-Site", "cross-site");
+        var sameOrigin = Request(HttpMethod.Post, $"/flows/api/runs/{Guid.NewGuid()}/cancel", user: "otto", roles: "flow-operator");
+        sameOrigin.Headers.Add("Sec-Fetch-Site", "same-origin");
+        var foreignOrigin = Request(HttpMethod.Post, $"/flows/api/runs/{Guid.NewGuid()}/cancel", basic: true);
+        foreignOrigin.Headers.Add("Origin", "https://evil.example.com");
+
+        // Act
+        var blocked = await server.Client.SendAsync(request);
+        var allowed = await server.Client.SendAsync(sameOrigin);
+        var blockedByOrigin = await server.Client.SendAsync(foreignOrigin);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Forbidden, blocked.StatusCode);
+        Assert.Contains("Cross-site", await blocked.Content.ReadAsStringAsync());
+        Assert.NotEqual(HttpStatusCode.Forbidden, allowed.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, blockedByOrigin.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signed_in_user_without_a_role_can_still_reach_me_and_signout()
+    {
+        // Arrange
+        using var server = Server(basic: false, identity: true);
+
+        // Act
+        var me = await server.Client.SendAsync(Request(HttpMethod.Get, "/flows/api/me", user: "nobody", roles: "billing"));
+        var runs = await server.Client.SendAsync(Request(HttpMethod.Get, "/flows/api/runs", user: "nobody", roles: "billing"));
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, me.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, runs.StatusCode);
+    }
+
+    [Fact]
+    public void Unregistered_policy_fails_at_startup()
+    {
+        // Arrange
+
+        // Act
+        var ex = Record.Exception(() => Server(basic: false, identity: true, configure: o => o.Authorization.OperatePolicy = "Missing"));
+
+        // Assert
+        var invalid = Assert.IsType<InvalidOperationException>(ex);
+        Assert.Contains("'Missing'", invalid.Message);
+    }
+
     /// <summary>
     /// Authenticates from <c>X-Test-*</c> headers; challenges with a redirect, like the OIDC handler would.
     /// </summary>

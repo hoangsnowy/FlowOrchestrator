@@ -136,12 +136,83 @@ public sealed class DashboardSecurityTests
         var defaults = new FlowDashboardAuthorizationOptions();
         var custom = new FlowDashboardAuthorizationOptions { ViewerRoles = [], OperatorRoles = ["ops"], AuthenticationScheme = "Cookies" };
 
-        // Act + Assert
-        Assert.Equal(["flow-viewer"], defaults.EffectiveViewerRoles);
-        Assert.Equal(["flow-operator"], defaults.EffectiveOperatorRoles);
-        Assert.Empty(custom.EffectiveViewerRoles);
-        Assert.Equal(["ops"], custom.EffectiveOperatorRoles);
-        Assert.Equal("Cookies", custom.EffectiveChallengeScheme);
+        // Act
+        var defaultViewers = defaults.EffectiveViewerRoles;
+        var defaultOperators = defaults.EffectiveOperatorRoles;
+        var customViewers = custom.EffectiveViewerRoles;
+        var customOperators = custom.EffectiveOperatorRoles;
+        var challenge = custom.EffectiveChallengeScheme;
+
+        // Assert
+        Assert.Equal(["flow-viewer"], defaultViewers);
+        Assert.Equal(["flow-operator"], defaultOperators);
+        Assert.Empty(customViewers);
+        Assert.Equal(["ops"], customOperators);
+        Assert.Equal("Cookies", challenge);
         Assert.False(defaults.IsEnabled);
+    }
+
+    [Theory]
+    [InlineData("same-origin", null, false)]
+    [InlineData("none", null, false)]
+    [InlineData("same-site", null, true)]
+    [InlineData("cross-site", null, true)]
+    [InlineData(null, "https://flows.example.com", false)]
+    [InlineData(null, "https://evil.example.com", true)]
+    [InlineData(null, "null", true)]
+    [InlineData(null, null, false)]
+    [InlineData("same-origin", "https://evil.example.com", false)]
+    public void Cross_site_detection_prefers_fetch_metadata_then_origin(string? fetchSite, string? origin, bool crossSite)
+    {
+        // Arrange — Sec-Fetch-Site wins because the browser computes it (proxy-proof); a request with
+        // neither header is a script and is allowed.
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        http.Request.Host = new Microsoft.AspNetCore.Http.HostString("flows.example.com");
+        if (fetchSite is not null) http.Request.Headers["Sec-Fetch-Site"] = fetchSite;
+        if (origin is not null) http.Request.Headers.Origin = origin;
+
+        // Act
+        var result = DashboardAccessFilter.IsCrossSiteRequest(http);
+
+        // Assert
+        Assert.Equal(crossSite, result);
+    }
+
+    [Fact]
+    public void Viewer_manifest_masks_secret_values_anywhere_and_keeps_the_rest()
+    {
+        // Arrange
+        const string manifest = """
+            {"triggers":{"hook":{"type":"Webhook","inputs":{"webhookSecret":"s3cr3t","webhookHmacKey":"k","slug":"orders"}}},
+             "steps":{"call":{"type":"Http","inputs":{"url":"https://x","ApiKey":"abc","headers":[{"authToken":"t"}],"retries":3,"nested":{"password":42}}}}}
+            """;
+
+        // Act
+        var redacted = ManifestSecretRedactor.RedactJson(manifest)!;
+
+        // Assert
+        Assert.DoesNotContain("s3cr3t", redacted);
+        Assert.DoesNotContain("\"abc\"", redacted);
+        Assert.DoesNotContain("\"t\"", redacted);
+        Assert.DoesNotContain("42", redacted);
+        Assert.Contains("\"slug\":\"orders\"", redacted);
+        Assert.Contains("\"retries\":3", redacted);
+        Assert.Contains("https://x", redacted);
+        Assert.Equal(5, redacted.Split(ManifestSecretRedactor.Mask).Length - 1);
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", "")]
+    [InlineData("{not json", null)]
+    public void Viewer_manifest_handles_missing_and_invalid_json(string? input, string? expected)
+    {
+        // Arrange
+
+        // Act
+        var redacted = ManifestSecretRedactor.RedactJson(input);
+
+        // Assert
+        Assert.Equal(expected, redacted);
     }
 }

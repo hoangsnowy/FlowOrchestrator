@@ -278,7 +278,7 @@ public static class DashboardServiceCollectionExtensions
         // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side; with
         // neither configured the filter only records "unprotected" for /api/me.
         ValidateAndReportAccessConfiguration(endpoints.ServiceProvider, options);
-        group.AddEndpointFilter(new Security.DashboardAccessFilter(options));
+        group.AddEndpointFilter(new Security.DashboardAccessFilter(options, basePath));
 
         // Who the SPA is talking to, and whether it may show state-changing actions.
         group.MapGet("/api/me", (HttpContext http) =>
@@ -343,10 +343,12 @@ public static class DashboardServiceCollectionExtensions
 
         // ── Flow catalog endpoints ──
 
+        // Viewers get manifests with secret-looking values masked: a webhookSecret copied from here would
+        // let them start runs through the webhook endpoint, which their role must not allow.
         group.MapGet("/api/flows", async (HttpContext http, IFlowStore store) =>
         {
             var flows = await store.GetAllAsync();
-            await WriteJsonAsync(http.Response,flows);
+            await WriteJsonAsync(http.Response, Security.ManifestSecretRedactor.ForViewer(flows, CanOperate(http)).ToList());
         });
 
         group.MapGet("/api/flows/{id:guid}", async (HttpContext http, IFlowStore store, Guid id) =>
@@ -357,7 +359,7 @@ public static class DashboardServiceCollectionExtensions
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
-            await WriteJsonAsync(http.Response,flow);
+            await WriteJsonAsync(http.Response, CanOperate(http) ? flow : Security.ManifestSecretRedactor.Redacted(flow));
         });
 
         group.MapGet("/api/flows/{id:guid}/mermaid", async (HttpContext http, IFlowRepository repo, Guid id) =>
@@ -651,8 +653,8 @@ public static class DashboardServiceCollectionExtensions
 
             var hasSearch = !string.IsNullOrWhiteSpace(search);
             DateTimeOffset? receivedFrom = query.TryGetValue("from", out var fromValues)
-                && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fromParsed)
-                ? fromParsed : null;
+                && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var fromParsed)
+                ? fromParsed.ToUniversalTime() : null;   // UTC: Npgsql rejects a non-zero offset for timestamptz
             // The table keeps every delivery (accepted ones too) with no retention, and a %term% match
             // cannot use an index: a search is windowed by default and does not count its matches.
             var windowDefaulted = false;
@@ -1671,6 +1673,15 @@ public static class DashboardServiceCollectionExtensions
                     throw new InvalidOperationException(
                         $"FlowDashboard:Authorization names the authentication scheme '{name}', which is not registered. Register it with AddAuthentication().Add…(\"{name}\").");
             }
+            foreach (var policy in new[] { authorization.ViewPolicy, authorization.OperatePolicy })
+            {
+                if (string.IsNullOrWhiteSpace(policy))
+                    continue;
+                var policies = services.GetService<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider>();
+                if (policies?.GetPolicyAsync(policy).GetAwaiter().GetResult() is null)
+                    throw new InvalidOperationException(
+                        $"FlowDashboard:Authorization names the authorization policy '{policy}', which is not registered. Register it with AddAuthorization(o => o.AddPolicy(\"{policy}\", …)).");
+            }
             if (logger is not null)
                 Security.DashboardAuthLog.IdentityAccessEnabled(logger, authorization.AuthenticationScheme!, authorization.EffectiveChallengeScheme!, basic.IsEnabled ? "also enabled" : "disabled");
         }
@@ -1697,6 +1708,10 @@ public static class DashboardServiceCollectionExtensions
             || string.Equals(password, basic.Username, StringComparison.OrdinalIgnoreCase)
             || Array.Exists(wellKnown, w => string.Equals(w, password, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>Whether the caller resolved by the access filter may change state (and see secrets).</summary>
+    private static bool CanOperate(HttpContext http)
+        => (http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess ?? Security.DashboardAccess.Unprotected).CanOperate;
 
     private static bool SecureEquals(string left, string right)
     {

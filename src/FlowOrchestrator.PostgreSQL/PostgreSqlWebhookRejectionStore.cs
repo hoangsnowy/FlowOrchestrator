@@ -93,7 +93,8 @@ public sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
         var skip = query.Skip < 0 ? 0 : query.Skip;
         var take = query.Take <= 0 ? 50 : (query.Take > 500 ? 500 : query.Take);
         var hasSearch = !string.IsNullOrEmpty(query.Search);
-        var searchLike = hasSearch ? "%" + query.Search!.Replace("%", "\\%").Replace("_", "\\_") + "%" : null;
+        // Backslash is ILIKE's escape character, so it is escaped first, then % and _.
+        var searchLike = hasSearch ? "%" + query.Search!.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%" : null;
 
         var where = new StringBuilder("WHERE 1=1");
         if (query.FlowId is not null) where.Append(" AND flow_id = @FlowId");
@@ -119,7 +120,7 @@ public sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
             FlowId = query.FlowId,
             Reason = query.Reason,
             Search = searchLike,
-            query.ReceivedFrom,
+            ReceivedFrom = query.ReceivedFrom?.ToUniversalTime(),   // Npgsql rejects a non-zero offset for timestamptz
             Skip = skip,
             TakePlusOne = take + 1,
         };

@@ -148,7 +148,7 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/flows/api/runs` | List runs — queryable: `?flowId=`, `?status=`, `?search=`, `?from=`, `?to=`, `?deep=`, `?skip=`, `?take=`, `?includeTotal=`. With `includeTotal=true` the response is `{ items, total, skip, take }` instead of a bare array. |
+| `GET` | `/flows/api/runs` | List runs — queryable: `?flowId=`, `?status=`, `?search=`, `?from=`, `?to=`, `?deep=`, `?skip=`, `?take=`, `?includeTotal=`. With `includeTotal=true` the response is `{ items, total, hasMore, skip, take, search }` instead of a bare array — see *Run search* below. |
 | `GET` | `/flows/api/runs/active` | List currently-running runs |
 | `GET` | `/flows/api/runs/stats` | Aggregate statistics for the dashboard overview |
 | `GET` | `/flows/api/runs/timeseries` | Bucketed run counts for the overview charts — `?bucket=hour\|day`, `?hours=` (default 24, max 720), `?days=` (default 30, max 365), `?since=`/`?until=`, `?flowId=` |
@@ -161,31 +161,36 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 | `POST` | `/flows/api/runs/{runId}/rerun` | Re-run a finished run with its original trigger payload (the idempotency header is stripped); the new run records `sourceRunId`. **`409`** with `runId: null, disabled: true` when the flow is disabled |
 | `POST` | `/flows/api/runs/{runId}/steps/{stepKey}/retry` | Retry a failed step |
 
-**Run search (`?search=`)** matches (case-insensitively) the run's id, flow
-name, trigger key, status, and background job id, plus the run's **current**
-step rows — step key, error message, and output JSON. Superseded retry
-*attempt* history is not searched (its output duplicates the current step row).
+**Run search (`?search=`)** — how the term is applied, in order:
 
-Performance by backend:
-- **PostgreSQL** — the step-level substring match is index-accelerated by the
-  `pg_trgm` GIN indexes the migrator creates best-effort at startup (the query
-  is shaped as a de-correlated `IN` over bare columns so the planner can use
-  them). Grant `CREATE EXTENSION` (or pre-create `pg_trgm`) to keep it fast.
-- **SQL Server** — `LIKE '%term%'` is non-sargable and there is no substring
-  index (Full-Text Search is intentionally not used), so a deep search over a
-  large step history is a scan. **Bound it** with `?flowId=` and/or the
-  `?from=` / `?to=` window — that cuts the scanned rows dramatically (≈8× per
-  flow on the benchmark dataset). See
-  [the deep-search investigation](../benchmarks/sql-deep-search-investigation-2026-05-24.md).
+1. **A full run id** (GUID) is a primary-key lookup; it is not windowed.
+2. **A status name** (`Failed`, `succeeded`), its display label (`Blocked`, `Timed Out`) or a common
+   synonym (`Completed` → Succeeded, `Canceled` → Cancelled, `Timeout` → TimedOut, …) becomes the
+   `status` filter, unless `?status=` is already set. The response's `search` object reports
+   `kind: "status"`, `appliedStatus` and, for a synonym, `alias`; the SPA moves the term into the status
+   dropdown and explains the mapping.
+3. **Anything else** is a case-insensitive substring of the run's own columns — id, flow name, trigger
+   key, status, background job id. Wrap the term in double quotes (`"Completed"`) to skip steps 1–2.
 
-**Start-time window (`?from=` / `?to=`)** accepts ISO-8601 timestamps and bounds
-the search to runs started within `[from, to]`, which keeps a search over a large
-run history fast.
+**Step payloads are searched only on request.** `?deep=true` (or `1`; the SPA's *Search step output /
+errors* checkbox) also matches the run's current step rows — step key, error message, output JSON.
+Superseded retry *attempt* history is never searched. `deep` defaults to `false`.
 
-**Quick vs deep search (`?deep=`)** defaults to deep (the step-row scan described
-above). Pass `deep=false` (or `deep=0`) for the quick path that matches only the
-top-level run columns (id / flow name / trigger key / status / job id) — much
-cheaper, used by the Cmd/Ctrl+K command palette for instant run typeahead.
+**Start-time window.** A text search without `?from=` is bounded to the last
+`FlowDashboardOptions.RunSearchWindow` (7 days by default; anchored on `?to=` when only `to` is given).
+`?from=` / `?to=` take ISO-8601 timestamps (no offset means UTC) and widen or narrow it. The response's
+`search.from` / `search.windowDefaulted` say which window was used.
+
+**Totals.** With `includeTotal=true` the response is
+`{ items, total, hasMore, skip, take, search }`. A text or run-id search does not count its matches:
+`total` is `null` and `hasMore` tells whether another page exists. Plain filters (flow, status, window)
+return an exact `total`. `take` is clamped to 1–500 and a negative `skip` to 0.
+
+Performance: every default search is an index seek or a range scan over the window on
+`IX_FlowRuns_StartedAt`; see
+[the production-shape benchmark](../benchmarks/run-search-production-shape-2026-10-31.md). The opt-in
+payload search reads step payloads inside the window — on PostgreSQL the `pg_trgm` GIN indexes the
+migrator creates best-effort accelerate it; on SQL Server it is a scan of the window's step rows.
 
 ### Realtime Event Stream (SSE)
 

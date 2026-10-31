@@ -45,11 +45,11 @@ internal sealed record RunListRequest(
             && bool.TryParse(includeTotalValues, out var includeTotalParsed)
             && includeTotalParsed;
         DateTimeOffset? startedFrom = query.TryGetValue("from", out var fromValues)
-            && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fromParsed)
-            ? fromParsed : null;
+            && DateTimeOffset.TryParse(fromValues, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var fromParsed)
+            ? fromParsed.ToUniversalTime() : null;   // UTC: Npgsql rejects a non-zero offset for timestamptz
         DateTimeOffset? startedTo = query.TryGetValue("to", out var toValues)
-            && DateTimeOffset.TryParse(toValues, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var toParsed)
-            ? toParsed : null;
+            && DateTimeOffset.TryParse(toValues, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var toParsed)
+            ? toParsed.ToUniversalTime() : null;
         var deepRaw = query.TryGetValue("deep", out var deepValues) ? deepValues.ToString() : null;
         bool deep = string.Equals(deepRaw, "true", StringComparison.OrdinalIgnoreCase) || deepRaw == "1";
 

@@ -259,8 +259,8 @@ public sealed class DashboardJsContractTests : IDisposable
         Assert.Contains("async function loadDashboardAccess(", html);
         Assert.Contains("_nativeFetch(BASE + '/me')", html);
         Assert.Contains("document.body.classList.toggle('fo-readonly', !dashboardAccess.canOperate);", html);
-        Assert.Contains(".fo-readonly [onclick^=\"triggerFlow(\"]", html);
-        Assert.Contains(".fo-readonly [onclick^=\"rerunAll(\"]", html);
+        Assert.Contains(".fo-readonly [onclick*=\"triggerFlow(\"]", html);
+        Assert.Contains(".fo-readonly [onclick*=\"rerunAll(\"]", html);
         Assert.Contains("res.status === 401 && dashboardAccess.method === 'oidc'", html);
         Assert.Contains("loadDashboardAccess();", html);
     }

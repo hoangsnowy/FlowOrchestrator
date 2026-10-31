@@ -128,19 +128,20 @@ public interface IFlowRunStore
         // A run id falls back to a substring match on the legacy overload, then is narrowed to the
         // exact id here. Text, when also present, wins the store-side match.
         var search = query.HasText ? query.Text : query.RunId?.ToString("D");
+        var take = Math.Clamp(query.Take, 0, int.MaxValue - 1);
         var (runs, total) = await GetRunsPageAsync(
-            query.FlowId, query.Status, query.Skip, query.Take + 1, search,
+            query.FlowId, query.Status, Math.Max(0, query.Skip), take + 1, search,
             query.IncludeStepPayloads, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
 
         IReadOnlyList<FlowRunRecord> rows = query.RunId is { } runId
             ? runs.Where(run => run.Id == runId).ToList()
             : runs;
 
-        var hasMore = rows.Count > query.Take;
+        var hasMore = rows.Count > take;
         if (hasMore)
         {
-            var trimmed = new List<FlowRunRecord>(query.Take);
-            for (var i = 0; i < query.Take; i++) trimmed.Add(rows[i]);
+            var trimmed = new List<FlowRunRecord>(take);
+            for (var i = 0; i < take; i++) trimmed.Add(rows[i]);
             rows = trimmed;
         }
 

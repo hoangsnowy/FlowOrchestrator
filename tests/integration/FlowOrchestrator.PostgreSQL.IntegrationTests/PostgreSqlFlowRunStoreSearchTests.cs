@@ -170,4 +170,37 @@ public sealed partial class PostgreSqlFlowRunStoreTests
         // Assert
         Assert.Equal(new[] { newer, older }, runs.Select(r => r.Id));
     }
+
+    [Fact]
+    public async Task SearchRunsAsync_non_positive_take_returns_an_empty_page_instead_of_throwing()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        await SeedSearchRunAsync(flowId, "TakeFlow", "Failed", DateTimeOffset.UtcNow);
+
+        // Act
+        var negative = await _store.SearchRunsAsync(new RunSearchQuery { FlowId = flowId, Take = -1 });
+        var zero = await _store.SearchRunsAsync(new RunSearchQuery { FlowId = flowId, Take = 0 });
+
+        // Assert
+        Assert.Empty(negative.Runs);
+        Assert.True(negative.HasMore);
+        Assert.Empty(zero.Runs);
+        Assert.True(zero.HasMore);
+    }
+
+    [Fact]
+    public async Task SearchRunsAsync_accepts_a_window_with_a_non_utc_offset()
+    {
+        // Arrange — the dashboard normalises to UTC, but direct store callers may pass any offset.
+        var flowId = Guid.NewGuid();
+        var runId = await SeedSearchRunAsync(flowId, "OffsetFlow", "Failed", DateTimeOffset.UtcNow.AddHours(-1));
+        var from = DateTimeOffset.UtcNow.AddHours(-2).ToOffset(TimeSpan.FromHours(7));
+
+        // Act
+        var page = await _store.SearchRunsAsync(new RunSearchQuery { FlowId = flowId, StartedFrom = from });
+
+        // Assert
+        Assert.Equal(runId, Assert.Single(page.Runs).Id);
+    }
 }

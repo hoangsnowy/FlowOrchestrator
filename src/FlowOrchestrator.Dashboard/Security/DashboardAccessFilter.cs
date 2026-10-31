@@ -38,9 +38,12 @@ internal sealed record DashboardAccess(string Method, string? UserName, bool Can
 /// <c>GET</c> reads. Webhook receive endpoints are mapped outside the dashboard group and never reach this
 /// filter.</para>
 /// </remarks>
-internal sealed class DashboardAccessFilter(FlowDashboardOptions options) : IEndpointFilter
+internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string basePath) : IEndpointFilter
 {
     private static readonly string[] RoleClaimTypes = [ClaimTypes.Role, "role", "roles"];
+    private readonly string _apiPrefix = basePath.TrimEnd('/') + "/api/";
+    private readonly string _mePath = basePath.TrimEnd('/') + "/api/me";
+    private readonly string _signOutPath = basePath.TrimEnd('/') + "/signout";
 
     /// <inheritdoc/>
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
@@ -48,6 +51,12 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options) : IEnd
         var http = context.HttpContext;
         var basic = options.BasicAuth;
         var identity = options.Authorization;
+
+        // CSRF: a cookie session (and a browser-cached Basic credential) rides along on a cross-site form
+        // post, so state-changing calls must come from the dashboard's own origin. Scripts that send
+        // neither header (curl, probes) are unaffected.
+        if (IsMutating(http.Request.Method) && IsCrossSiteRequest(http))
+            return await ErrorAsync(http, StatusCodes.Status403Forbidden, "Cross-site request blocked: state-changing dashboard calls must come from the dashboard itself.");
 
         if (!basic.IsEnabled && !identity.IsEnabled)
         {
@@ -73,7 +82,9 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options) : IEnd
             http.Items[DashboardAccess.ItemKey] = new DashboardAccess("oidc", DisplayName(principal), canOperate);
 
             var needsOperate = IsMutating(http.Request.Method);
-            if (needsOperate ? canOperate : canView)
+            // /api/me and /signout stay reachable for any signed-in user, so one without a dashboard role
+            // can still see why and switch accounts.
+            if (needsOperate ? canOperate : (canView || IsAccountEndpoint(http)))
                 return await next(context);
 
             return await ErrorAsync(http, StatusCodes.Status403Forbidden, needsOperate
@@ -109,9 +120,40 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options) : IEnd
     internal static bool IsMutating(string method)
         => !(HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method));
 
-    private static bool IsPageNavigation(HttpContext http)
+    private bool IsPageNavigation(HttpContext http)
         => HttpMethods.IsGet(http.Request.Method)
-           && !(http.Request.Path.Value ?? string.Empty).Contains("/api/", StringComparison.Ordinal);
+           && !(http.Request.Path.Value ?? string.Empty).StartsWith(_apiPrefix, StringComparison.OrdinalIgnoreCase);
+
+    private bool IsAccountEndpoint(HttpContext http)
+    {
+        var path = http.Request.Path.Value ?? string.Empty;
+        return string.Equals(path, _mePath, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(path, _signOutPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when a browser says the request comes from another origin: <c>Sec-Fetch-Site</c>
+    /// other than <c>same-origin</c> / <c>none</c>, or, from browsers without fetch metadata, an
+    /// <c>Origin</c> whose host differs from the request host.
+    /// </summary>
+    /// <remarks>
+    /// <c>Sec-Fetch-Site</c> is preferred because the browser computes it, so it stays correct behind a
+    /// reverse proxy that rewrites <c>Host</c>. A request with neither header (a script) is not cross-site.
+    /// </remarks>
+    internal static bool IsCrossSiteRequest(HttpContext http)
+    {
+        var fetchSite = http.Request.Headers["Sec-Fetch-Site"].ToString();
+        if (fetchSite.Length > 0)
+            return !(string.Equals(fetchSite, "same-origin", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(fetchSite, "none", StringComparison.OrdinalIgnoreCase));
+
+        var origin = http.Request.Headers.Origin.ToString();
+        if (origin.Length == 0)
+            return false;
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var originUri))
+            return true;   // "null" (sandboxed iframe, file:) or garbage
+        return !string.Equals(originUri.Authority, http.Request.Host.Value, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async ValueTask<bool> HasAccessAsync(HttpContext http, ClaimsPrincipal principal, string? policy, IReadOnlyList<string> roles)
     {

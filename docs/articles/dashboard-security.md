@@ -98,3 +98,16 @@ the realm in `FlowOrchestrator.AppHost/keycloak/flow-orchestrator-realm.json` an
 **PostgreSQL** sample instance (<http://localhost:5102/flows>). Demo users: `viewer` / `viewer-demo-pass`
 and `operator` / `operator-demo-pass`. Basic Auth (`admin` / `admin`) still works on that instance, side by
 side. The demo realm is for local use only.
+
+## Hardening notes
+
+- **Cross-site requests.** Every state-changing call (`POST` / `PUT`) is rejected with `403` when the
+  browser marks it cross-site (`Sec-Fetch-Site` other than `same-origin`) or sends an `Origin` for another
+  host. Keep the auth cookie `HttpOnly` and `SameSite=Lax` (or `Strict`); never `SameSite=None`.
+- **Secrets in manifests.** Viewers get flow manifests with `webhookSecret`, HMAC keys and other
+  secret-looking values masked. Operators see them as stored, so treat the operator role as privileged.
+- **Client roles.** `AddFlowDashboardKeycloakRoles()` without a `clientId` maps the client roles of
+  *every* client in the token; pass the dashboard's client id so another client's `flow-operator` role
+  cannot grant access.
+- **Policies.** `ViewPolicy` / `OperatePolicy` must be registered with `AddAuthorization`; an unknown name
+  fails at startup.
