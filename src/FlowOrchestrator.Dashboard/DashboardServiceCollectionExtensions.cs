@@ -1675,10 +1675,8 @@ public static class DashboardServiceCollectionExtensions
                     throw new InvalidOperationException(
                         $"FlowDashboard:Authorization names the authentication scheme '{name}', which is not registered. Register it with AddAuthentication().Add…(\"{name}\").");
             }
-            foreach (var policy in new[] { authorization.ViewPolicy, authorization.OperatePolicy })
+            foreach (var policy in new[] { authorization.ViewPolicy, authorization.OperatePolicy }.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p!))
             {
-                if (string.IsNullOrWhiteSpace(policy))
-                    continue;
                 // Resolved in a scope: a host may register a scoped IAuthorizationPolicyProvider.
                 using var policyScope = services.CreateScope();
                 var policies = policyScope.ServiceProvider.GetService<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider>();

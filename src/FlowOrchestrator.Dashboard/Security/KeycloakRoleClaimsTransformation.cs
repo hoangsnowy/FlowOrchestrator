@@ -45,11 +45,8 @@ public sealed class KeycloakRoleClaimsTransformation : IClaimsTransformation
         foreach (var claim in identity.FindAll("resource_access"))
             ReadClientRoles(claim.Value, _clientId, roles);
 
-        foreach (var role in roles)
-        {
-            if (!identity.HasClaim(identity.RoleClaimType, role))
-                identity.AddClaim(new Claim(identity.RoleClaimType, role));
-        }
+        foreach (var role in roles.Where(r => !identity.HasClaim(identity.RoleClaimType, r)).ToList())
+            identity.AddClaim(new Claim(identity.RoleClaimType, role));
         identity.AddClaim(new Claim(MarkerClaimType, "1"));
         return Task.FromResult(principal);
     }
@@ -90,9 +87,9 @@ public sealed class KeycloakRoleClaimsTransformation : IClaimsTransformation
             return;
         }
 
-        foreach (var item in array.EnumerateArray())
+        foreach (var item in array.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.String))
         {
-            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } role)
+            if (item.GetString() is { Length: > 0 } role)
                 roles.Add(role);
         }
     }
