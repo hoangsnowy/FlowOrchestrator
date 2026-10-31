@@ -215,4 +215,95 @@ public sealed class DashboardSecurityTests
         // Assert
         Assert.Equal(expected, redacted);
     }
+
+    [Theory]
+    [InlineData("http://flows.corp", null, null, false)]
+    [InlineData("http://flows.corp", "flows.corp", null, false)]
+    [InlineData("http://flows.corp", null, "http://flows.corp", false)]
+    [InlineData("http://flows.corp", null, "http://flows.corp/", false)]
+    [InlineData("http://evil.corp", "flows.corp", "http://flows.corp", true)]
+    public void Origin_check_accepts_forwarded_host_and_trusted_origins_behind_a_host_rewriting_proxy(string origin, string? forwardedHost, string? trusted, bool crossSite)
+    {
+        // Arrange — plain HTTP sends no Sec-Fetch-Site and the proxy rewrote Host to the upstream address.
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        http.Request.Host = new Microsoft.AspNetCore.Http.HostString(forwardedHost is null && trusted is null ? "flows.corp" : "backend:5000");
+        http.Request.Headers.Origin = origin;
+        if (forwardedHost is not null) http.Request.Headers["X-Forwarded-Host"] = forwardedHost;
+        string[]? trustedOrigins = trusted is null ? null : [trusted];
+
+        // Act
+        var result = DashboardAccessFilter.IsCrossSiteRequest(http, trustedOrigins);
+
+        // Assert
+        Assert.Equal(crossSite, result);
+    }
+
+    [Fact]
+    public void Secret_names_are_masked_whatever_the_value_type()
+    {
+        // Arrange
+        const string json = """{"apiKeys":["k1","k2"],"webhookSecret":{"value":"x"},"headers":{"Authorization":"Bearer abc"},"plain":{"keep":"me"}}""";
+
+        // Act
+        var redacted = ManifestSecretRedactor.RedactJson(json)!;
+
+        // Assert
+        Assert.DoesNotContain("k1", redacted);
+        Assert.DoesNotContain("\"x\"", redacted);
+        Assert.DoesNotContain("Bearer abc", redacted);
+        Assert.Contains("\"keep\":\"me\"", redacted);
+    }
+
+    [Fact]
+    public void Duplicate_property_names_yield_nothing_rather_than_throwing()
+    {
+        // Arrange
+        const string json = """{"a":1,"a":2}""";
+
+        // Act
+        var redacted = ManifestSecretRedactor.RedactJson(json);
+
+        // Assert
+        Assert.Null(redacted);
+    }
+
+    [Fact]
+    public void Run_copy_masks_trigger_body_step_and_attempt_payloads_without_touching_the_original()
+    {
+        // Arrange
+        var run = new FlowOrchestrator.Core.Storage.FlowRunRecord
+        {
+            Id = Guid.NewGuid(),
+            Status = "Failed",
+            TriggerDataJson = """{"orderId":7,"token":"t-1"}""",
+            Steps =
+            [
+                new FlowOrchestrator.Core.Storage.FlowStepRecord
+                {
+                    StepKey = "call",
+                    StepType = "Http",
+                    Status = "Failed",
+                    InputJson = """{"url":"https://x","apiKey":"sk-live"}""",
+                    OutputJson = """{"accessToken":"at"}""",
+                    Attempts =
+                    [
+                        new FlowOrchestrator.Core.Storage.FlowStepAttemptRecord { StepKey = "call", StepType = "Http", Status = "Failed", InputJson = """{"apiKey":"sk-old"}""" },
+                    ],
+                },
+            ],
+        };
+
+        // Act
+        var copy = ManifestSecretRedactor.Redacted(run);
+
+        // Assert
+        var step = Assert.Single(copy.Steps!);
+        Assert.DoesNotContain("t-1", copy.TriggerDataJson);
+        Assert.Contains("\"orderId\":7", copy.TriggerDataJson);
+        Assert.DoesNotContain("sk-live", step.InputJson);
+        Assert.Contains("https://x", step.InputJson);
+        Assert.DoesNotContain("\"at\"", step.OutputJson);
+        Assert.DoesNotContain("sk-old", Assert.Single(step.Attempts!).InputJson);
+        Assert.Contains("sk-live", run.Steps![0].InputJson);
+    }
 }

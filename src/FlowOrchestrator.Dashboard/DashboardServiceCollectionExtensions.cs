@@ -750,7 +750,7 @@ public static class DashboardServiceCollectionExtensions
                 {
                     await WriteJsonAsync(http.Response, new
                     {
-                        items = page.Runs,
+                        items = RunsForCaller(http, page.Runs),
                         // null for a text / run-id search: those report hasMore instead of counting.
                         total = page.TotalCount,
                         hasMore = page.HasMore,
@@ -761,18 +761,18 @@ public static class DashboardServiceCollectionExtensions
                     return;
                 }
 
-                await WriteJsonAsync(http.Response, page.Runs);
+                await WriteJsonAsync(http.Response, RunsForCaller(http, page.Runs));
                 return;
             }
 
             var runs = await store.GetRunsAsync(request.Query.FlowId, request.Query.Skip, request.Query.Take);
-            await WriteJsonAsync(http.Response,runs);
+            await WriteJsonAsync(http.Response, RunsForCaller(http, runs));
         });
 
         group.MapGet("/api/runs/active", async (HttpContext http, IFlowRunStore store) =>
         {
             var runs = await store.GetActiveRunsAsync();
-            await WriteJsonAsync(http.Response,runs);
+            await WriteJsonAsync(http.Response, RunsForCaller(http, runs));
         });
 
         group.MapGet("/api/runs/stats", async (HttpContext http, IFlowRunStore store) =>
@@ -845,7 +845,8 @@ public static class DashboardServiceCollectionExtensions
             }
 
             run.TriggerHeaders = await outputsRepository.GetTriggerHeadersAsync(id);
-            await WriteJsonAsync(http.Response,run);
+            // Step inputs persist the manifest's configured values (API keys, tokens); mask them for viewers.
+            await WriteJsonAsync(http.Response, CanOperate(http) ? run : Security.ManifestSecretRedactor.Redacted(run));
         });
 
         group.MapGet("/api/runs/{id:guid}/steps", async (HttpContext http, IFlowRunStore store, Guid id) =>
@@ -856,7 +857,8 @@ public static class DashboardServiceCollectionExtensions
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
-            await WriteJsonAsync(http.Response,run.Steps ?? []);
+            IEnumerable<FlowStepRecord> steps = run.Steps ?? [];
+            await WriteJsonAsync(http.Response, CanOperate(http) ? steps : steps.Select(Security.ManifestSecretRedactor.Redacted).ToList());
         });
 
         group.MapGet("/api/runs/{runId:guid}/events", async (HttpContext http, IServiceProvider services, Guid runId) =>
@@ -1677,7 +1679,9 @@ public static class DashboardServiceCollectionExtensions
             {
                 if (string.IsNullOrWhiteSpace(policy))
                     continue;
-                var policies = services.GetService<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider>();
+                // Resolved in a scope: a host may register a scoped IAuthorizationPolicyProvider.
+                using var policyScope = services.CreateScope();
+                var policies = policyScope.ServiceProvider.GetService<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider>();
                 if (policies?.GetPolicyAsync(policy).GetAwaiter().GetResult() is null)
                     throw new InvalidOperationException(
                         $"FlowDashboard:Authorization names the authorization policy '{policy}', which is not registered. Register it with AddAuthorization(o => o.AddPolicy(\"{policy}\", …)).");
@@ -1708,6 +1712,14 @@ public static class DashboardServiceCollectionExtensions
             || string.Equals(password, basic.Username, StringComparison.OrdinalIgnoreCase)
             || Array.Exists(wellKnown, w => string.Equals(w, password, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>Run list rows as stored for operators; with the trigger body masked for viewers.</summary>
+    /// <remarks>
+    /// Allocation-free for operators and unprotected dashboards (the common poll); viewers pay one JSON
+    /// parse per row with a trigger body.
+    /// </remarks>
+    private static IReadOnlyList<FlowRunRecord> RunsForCaller(HttpContext http, IReadOnlyList<FlowRunRecord> runs)
+        => CanOperate(http) ? runs : runs.Select(Security.ManifestSecretRedactor.Redacted).ToList();
 
     /// <summary>Whether the caller resolved by the access filter may change state (and see secrets).</summary>
     private static bool CanOperate(HttpContext http)

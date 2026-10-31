@@ -254,7 +254,7 @@ public sealed class PostgreSqlFlowRunStore :
             LIMIT @Take OFFSET @Skip
             """;
 
-        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom, StartedTo = startedTo };
+        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom?.ToUniversalTime(), StartedTo = startedTo?.ToUniversalTime() };
         var totalCount = 0;
         var rows = (await conn.QueryAsync<FlowRunRecord, int, FlowRunRecord>(
             pageSql,

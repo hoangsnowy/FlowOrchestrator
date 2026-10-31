@@ -104,8 +104,14 @@ side. The demo realm is for local use only.
 - **Cross-site requests.** Every state-changing call (`POST` / `PUT`) is rejected with `403` when the
   browser marks it cross-site (`Sec-Fetch-Site` other than `same-origin`) or sends an `Origin` for another
   host. Keep the auth cookie `HttpOnly` and `SameSite=Lax` (or `Strict`); never `SameSite=None`.
-- **Secrets in manifests.** Viewers get flow manifests with `webhookSecret`, HMAC keys and other
-  secret-looking values masked. Operators see them as stored, so treat the operator role as privileged.
+- **Secrets.** Viewers get flow manifests, run trigger bodies and step / attempt inputs and outputs with
+  every value under a secret-looking name masked (`*secret*`, `*password*`, `*token*`, `*apikey*`,
+  `*authorization*`, `*cookie*`, `*signature*`, HMAC keys …). Operators see them as stored, so treat the
+  operator role as privileged. Masking is by name — keep real secrets out of manifests where you can.
+- **Reverse proxies.** Over plain HTTP browsers send no `Sec-Fetch-Site`, so the dashboard compares
+  `Origin` with `Host` / `X-Forwarded-Host`. If your proxy rewrites `Host` and sends no `X-Forwarded-Host`,
+  list the public origin in `FlowDashboard:TrustedOrigins` (e.g. `["http://flows.corp"]`) or the
+  dashboard's own trigger / rerun calls get `403`.
 - **Client roles.** `AddFlowDashboardKeycloakRoles()` without a `clientId` maps the client roles of
   *every* client in the token; pass the dashboard's client id so another client's `flow-operator` role
   cannot grant access.

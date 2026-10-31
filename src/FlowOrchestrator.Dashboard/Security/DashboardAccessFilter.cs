@@ -55,7 +55,7 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
         // CSRF: a cookie session (and a browser-cached Basic credential) rides along on a cross-site form
         // post, so state-changing calls must come from the dashboard's own origin. Scripts that send
         // neither header (curl, probes) are unaffected.
-        if (IsMutating(http.Request.Method) && IsCrossSiteRequest(http))
+        if (IsMutating(http.Request.Method) && IsCrossSiteRequest(http, options.TrustedOrigins))
             return await ErrorAsync(http, StatusCodes.Status403Forbidden, "Cross-site request blocked: state-changing dashboard calls must come from the dashboard itself.");
 
         if (!basic.IsEnabled && !identity.IsEnabled)
@@ -140,7 +140,7 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
     /// <c>Sec-Fetch-Site</c> is preferred because the browser computes it, so it stays correct behind a
     /// reverse proxy that rewrites <c>Host</c>. A request with neither header (a script) is not cross-site.
     /// </remarks>
-    internal static bool IsCrossSiteRequest(HttpContext http)
+    internal static bool IsCrossSiteRequest(HttpContext http, IReadOnlyList<string>? trustedOrigins = null)
     {
         var fetchSite = http.Request.Headers["Sec-Fetch-Site"].ToString();
         if (fetchSite.Length > 0)
@@ -152,7 +152,23 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
             return false;
         if (!Uri.TryCreate(origin, UriKind.Absolute, out var originUri))
             return true;   // "null" (sandboxed iframe, file:) or garbage
-        return !string.Equals(originUri.Authority, http.Request.Host.Value, StringComparison.OrdinalIgnoreCase);
+        // Behind a proxy that rewrites Host (plain HTTP sends no Sec-Fetch-Site), the public host survives in
+        // X-Forwarded-Host, or the operator lists it in FlowDashboard:TrustedOrigins.
+        if (string.Equals(originUri.Authority, http.Request.Host.Value, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var forwardedHost = http.Request.Headers["X-Forwarded-Host"].ToString().Split(',')[0].Trim();
+        if (forwardedHost.Length > 0 && string.Equals(originUri.Authority, forwardedHost, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (trustedOrigins is not null)
+        {
+            var originValue = originUri.GetLeftPart(UriPartial.Authority);
+            foreach (var trusted in trustedOrigins)
+            {
+                if (string.Equals(trusted.TrimEnd('/'), originValue, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+        }
+        return true;
     }
 
     private static async ValueTask<bool> HasAccessAsync(HttpContext http, ClaimsPrincipal principal, string? policy, IReadOnlyList<string> roles)

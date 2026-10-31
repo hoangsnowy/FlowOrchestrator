@@ -24,13 +24,16 @@ This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDas
 - `GET /flows/api/me` (`method`, `user`, `canOperate`, `canSignOut`) and `GET /flows/signout`. The SPA
   shows the signed-in user, a **View only** badge and hides state-changing buttons for viewers (the
   server answers `403` regardless), and re-signs in when an OIDC session expires.
-- Viewers see flow manifests with secret-looking values (`webhookSecret`, HMAC keys, anything named
-  `*secret*` / `*password*` / `*token*` / `*apikey*` …) masked, so a read-only user cannot copy a webhook
-  secret and start runs through the webhook endpoint. Operators see the manifest as stored.
+- Viewers see flow manifests, run trigger bodies and step / attempt inputs and outputs with every value
+  under a secret-looking name masked (`webhookSecret`, HMAC keys, `*secret*` / `*password*` / `*token*` /
+  `*apikey*` / `*authorization*` …), so a read-only user cannot copy a webhook secret or an API key and act
+  outside their role. Operators see payloads as stored.
 - **Cross-site request guard on every state-changing dashboard call** (all auth modes): a `POST` / `PUT`
   whose `Sec-Fetch-Site` is not `same-origin`, or whose `Origin` names another host, is rejected with
   `403`. This stops CSRF through the new cookie session and through browser-cached Basic credentials;
-  scripts that send neither header are unaffected.
+  scripts that send neither header are unaffected. **Read before upgrading:** behind a reverse proxy
+  that serves plain HTTP and rewrites `Host` without `X-Forwarded-Host`, set `FlowDashboard:TrustedOrigins`
+  to the public origin, or the dashboard's own trigger / rerun / cancel calls are rejected.
 - Startup checks: a misnamed scheme or authorization policy throws at `MapFlowDashboard`; EventId
   `4100` warns when Basic Auth is the only protection outside Development, `4101` when its password is
   weak. `/api/me` and `/signout` stay reachable for a signed-in user without a dashboard role.

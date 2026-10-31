@@ -22,6 +22,19 @@ public sealed class FlowDashboardOptions
     /// </summary>
     public FlowDashboardAuthorizationOptions Authorization { get; set; } = new();
 
+    /// <summary>
+    /// Extra origins (e.g. <c>"https://flows.example.com"</c>) allowed to make state-changing dashboard calls.
+    /// Only needed behind a reverse proxy that rewrites <c>Host</c>, serves plain HTTP, and does not send
+    /// <c>X-Forwarded-Host</c>.
+    /// </summary>
+    /// <remarks>
+    /// State-changing calls (trigger, rerun, retry, cancel, signal, schedule changes) are rejected when the
+    /// browser marks them cross-site. Browsers send <c>Sec-Fetch-Site</c> only to HTTPS and localhost; over
+    /// plain HTTP the dashboard compares <c>Origin</c> with <c>Host</c> / <c>X-Forwarded-Host</c>, and a proxy
+    /// that rewrites <c>Host</c> to its upstream address makes the dashboard's own calls look cross-site.
+    /// </remarks>
+    public string[]? TrustedOrigins { get; set; }
+
     /// <summary>UI branding settings (title, subtitle, logo URL).</summary>
     public FlowDashboardBrandingOptions Branding { get; set; } = new();
 

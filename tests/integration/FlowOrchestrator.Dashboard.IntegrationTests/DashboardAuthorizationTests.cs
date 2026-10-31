@@ -379,6 +379,30 @@ public sealed class DashboardAuthorizationTests
     }
 
     [Fact]
+    public async Task Viewer_gets_run_detail_with_step_secrets_masked()
+    {
+        // Arrange — step inputs persist the manifest's configured values, API keys included.
+        using var server = Server(basic: false, identity: true);
+        var runId = Guid.NewGuid();
+        server.FlowRunStore.GetRunDetailAsync(runId).Returns(_ => new FlowRunRecord
+        {
+            Id = runId,
+            Status = "Failed",
+            Steps = [new FlowStepRecord { RunId = runId, StepKey = "call", StepType = "Http", Status = "Failed", InputJson = "{\"apiKey\":\"sk-live-123\"}" }],
+        });
+
+        // Act
+        var viewer = await (await server.Client.SendAsync(Request(HttpMethod.Get, $"/flows/api/runs/{runId}", user: "vera", roles: "flow-viewer"))).Content.ReadAsStringAsync();
+        var viewerSteps = await (await server.Client.SendAsync(Request(HttpMethod.Get, $"/flows/api/runs/{runId}/steps", user: "vera", roles: "flow-viewer"))).Content.ReadAsStringAsync();
+        var op = await (await server.Client.SendAsync(Request(HttpMethod.Get, $"/flows/api/runs/{runId}", user: "otto", roles: "flow-operator"))).Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.DoesNotContain("sk-live-123", viewer);
+        Assert.DoesNotContain("sk-live-123", viewerSteps);
+        Assert.Contains("sk-live-123", op);
+    }
+
+    [Fact]
     public void Unregistered_policy_fails_at_startup()
     {
         // Arrange
