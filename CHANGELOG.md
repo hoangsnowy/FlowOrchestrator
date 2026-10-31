@@ -6,9 +6,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-This section needs a **minor** bump (new public API on `IFlowRunStore`, `FlowDashboardOptions`,
-`WebhookRejectionQuery` / `WebhookRejectionPage`, dashboard sign-in, a new package, and a changed dashboard
-default).
+## [1.34.0] - 2026-10-31
+
+Minor release: new public API (`IFlowRunStore.SearchRunsAsync`, `FlowDashboardOptions.Authorization` /
+`RunSearchWindow` / `TrustedOrigins`, `WebhookRejectionQuery` / `WebhookRejectionPage` init properties), a new
+package (`FlowOrchestrator.OpenTelemetry`), and a changed dashboard default (run search no longer reads step
+payloads unless asked).
 
 ### Added — one-call OpenTelemetry with readable log attributes
 
