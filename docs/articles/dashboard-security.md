@@ -109,7 +109,7 @@ side. The demo realm is for local use only.
   `*authorization*`, `*cookie*`, `*signature*`, HMAC keys …). Operators see them as stored, so treat the
   operator role as privileged. Masking is by name — keep real secrets out of manifests where you can.
 - **Reverse proxies.** Over plain HTTP browsers send no `Sec-Fetch-Site`, so the dashboard compares
-  `Origin` with `Host` / `X-Forwarded-Host`. If your proxy rewrites `Host` and sends no `X-Forwarded-Host`,
+  `Origin` with `Host`. If your proxy rewrites `Host` (and ForwardedHeaders middleware does not restore it),
   list the public origin in `FlowDashboard:TrustedOrigins` (e.g. `["http://flows.corp"]`) or the
   dashboard's own trigger / rerun calls get `403`.
 - **Client roles.** `AddFlowDashboardKeycloakRoles()` without a `clientId` maps the client roles of

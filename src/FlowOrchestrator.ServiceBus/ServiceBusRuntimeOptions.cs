@@ -49,4 +49,16 @@ public sealed class ServiceBusRuntimeOptions
     /// Maximum delivery attempts before a message is dead-lettered. Default 10.
     /// </summary>
     public int MaxDeliveryCount { get; set; } = 10;
+
+    /// <summary>
+    /// When <see langword="true"/> (default), step dispatch sends over its own <c>ServiceBusClient</c> — a
+    /// dedicated AMQP connection — instead of the connection shared with every per-flow processor and the
+    /// cron processor. Set to <see langword="false"/> to keep a single connection per process.
+    /// </summary>
+    /// <remarks>
+    /// With one shared connection, sends queue behind the receive links of every flow's processor. Measured
+    /// on the Service Bus emulator (#192): 104 triggers with 32 in flight went from a 10.1 s send p50 on the
+    /// shared connection to 63–83 ms on a dedicated one. The cost is one extra connection per process.
+    /// </remarks>
+    public bool UseDedicatedSenderConnection { get; set; } = true;
 }

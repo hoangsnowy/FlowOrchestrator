@@ -25,26 +25,37 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
     private const string RuntimeName = "service_bus";
 
     private readonly ServiceBusClient _client;
+    private readonly bool _ownsClient;
     private readonly ServiceBusRuntimeOptions _options;
     private readonly Lazy<ServiceBusSender> _sender;
     private readonly FlowOrchestratorTelemetry? _telemetry;
 
-    /// <summary>Initialises the dispatcher with a shared Service Bus client and options.</summary>
-    /// <param name="client">Shared Service Bus client; the dispatcher creates one sender from it.</param>
+    /// <summary>Initialises the dispatcher with a Service Bus client and options.</summary>
+    /// <param name="client">Client the dispatcher creates its one sender from.</param>
     /// <param name="options">Runtime options naming the step topic.</param>
     /// <param name="telemetry">Optional — when supplied, each send is timed on <c>flow_step_dispatch_duration_ms</c>.</param>
     /// <param name="observability">Optional — <see cref="FlowObservabilityOptions.EnableOpenTelemetry"/> gates the timing.</param>
+    /// <param name="ownsClient">
+    /// <see langword="true"/> when <paramref name="client"/> was created for this dispatcher alone (a dedicated
+    /// AMQP connection, see <see cref="ServiceBusRuntimeOptions.UseDedicatedSenderConnection"/>); it is then
+    /// disposed with the dispatcher.
+    /// </param>
     public ServiceBusStepDispatcher(
         ServiceBusClient client,
         ServiceBusRuntimeOptions options,
         FlowOrchestratorTelemetry? telemetry = null,
-        FlowObservabilityOptions? observability = null)
+        FlowObservabilityOptions? observability = null,
+        bool ownsClient = false)
     {
         _client = client;
+        _ownsClient = ownsClient;
         _options = options;
         _sender = new Lazy<ServiceBusSender>(() => _client.CreateSender(_options.StepTopicName));
         _telemetry = observability?.EnableOpenTelemetry == false ? null : telemetry;
     }
+
+    /// <summary>The client this dispatcher sends through (test seam).</summary>
+    internal ServiceBusClient Client => _client;
 
     /// <inheritdoc/>
     public async ValueTask<string?> EnqueueStepAsync(
@@ -156,6 +167,10 @@ internal sealed class ServiceBusStepDispatcher : IStepDispatcher, IAsyncDisposab
         if (_sender.IsValueCreated)
         {
             await _sender.Value.DisposeAsync().ConfigureAwait(false);
+        }
+        if (_ownsClient)
+        {
+            await _client.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

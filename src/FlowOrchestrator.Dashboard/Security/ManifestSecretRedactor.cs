@@ -33,7 +33,7 @@ internal static class ManifestSecretRedactor
 
     // /api/flows is polled by the overview; viewers would otherwise re-parse every manifest on every poll.
     // Keyed by flow id + manifest content; bounded by clearing once it outgrows any realistic flow count.
-    private static readonly ConcurrentDictionary<(Guid Id, int Hash, int Length), string?> ManifestCache = new();
+    private static readonly ConcurrentDictionary<(Guid Id, int Hash, int Length), (string Source, string? Redacted)> ManifestCache = new();
     private const int ManifestCacheLimit = 2_048;
 
     /// <summary>Returns <paramref name="flows"/> unchanged for operators, or copies with masked manifests for viewers.</summary>
@@ -71,13 +71,54 @@ internal static class ManifestSecretRedactor
         Status = run.Status,
         TriggerKey = run.TriggerKey,
         TriggerDataJson = RedactJson(run.TriggerDataJson),
-        TriggerHeaders = run.TriggerHeaders,
+        TriggerHeaders = MaskHeaders(run.TriggerHeaders),
         BackgroundJobId = run.BackgroundJobId,
         StartedAt = run.StartedAt,
         CompletedAt = run.CompletedAt,
         SourceRunId = run.SourceRunId,
         Steps = run.Steps?.Select(Redacted).ToList(),
     };
+
+    /// <summary>
+    /// Returns a run-list row for a viewer: the trigger body is dropped (the list never shows it; run detail
+    /// shows it masked), so a polled list costs no JSON parsing.
+    /// </summary>
+    /// <param name="run">The row as read from the store.</param>
+    /// <returns>A copy without the trigger body.</returns>
+    public static FlowRunRecord RedactedListRow(FlowRunRecord run) => new()
+    {
+        Id = run.Id,
+        FlowId = run.FlowId,
+        FlowName = run.FlowName,
+        Status = run.Status,
+        TriggerKey = run.TriggerKey,
+        TriggerDataJson = null,
+        TriggerHeaders = MaskHeaders(run.TriggerHeaders),
+        BackgroundJobId = run.BackgroundJobId,
+        StartedAt = run.StartedAt,
+        CompletedAt = run.CompletedAt,
+        SourceRunId = run.SourceRunId,
+    };
+
+    /// <summary>Masks header values whose name looks secret (e.g. <c>X-Api-Key</c>, <c>X-Auth-Token</c>).</summary>
+    /// <param name="headers">Captured trigger headers; <c>Authorization</c> / <c>Cookie</c> / <c>X-Webhook-Key</c> are already dropped at capture.</param>
+    /// <returns>A masked copy, or <see langword="null"/>.</returns>
+    internal static IReadOnlyDictionary<string, string>? MaskHeaders(IReadOnlyDictionary<string, string>? headers)
+    {
+        if (headers is null)
+            return null;
+        var masked = new Dictionary<string, string>(headers.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in headers)
+            masked[name] = IsSecretName(name) ? Mask : value;
+        return masked;
+    }
+
+    /// <summary>Returns a webhook delivery log row safe for a viewer: no body excerpt, secret-looking headers masked.</summary>
+    /// <param name="record">The stored row.</param>
+    /// <returns>A masked copy.</returns>
+    /// <remarks>The body excerpt is cut at a byte limit, so it is usually not valid JSON and cannot be masked by name; viewers get none.</remarks>
+    public static WebhookRejectionRecord Redacted(WebhookRejectionRecord record)
+        => record with { BodyTruncated = null, HeadersJson = RedactJson(record.HeadersJson) };
 
     /// <summary>Returns a copy of <paramref name="step"/> with its inputs, outputs and attempts masked.</summary>
     /// <param name="step">The step as read from the store.</param>
@@ -119,13 +160,14 @@ internal static class ManifestSecretRedactor
             return manifestJson;
 
         var key = (id, manifestJson.GetHashCode(), manifestJson.Length);
-        if (ManifestCache.TryGetValue(key, out var cached))
-            return cached;
+        // The source is compared ordinally, so a hash collision costs a re-parse, never a wrong result.
+        if (ManifestCache.TryGetValue(key, out var cached) && string.Equals(cached.Source, manifestJson, StringComparison.Ordinal))
+            return cached.Redacted;
 
         if (ManifestCache.Count >= ManifestCacheLimit)
             ManifestCache.Clear();
         var redacted = RedactJson(manifestJson);
-        ManifestCache[key] = redacted;
+        ManifestCache[key] = (manifestJson, redacted);
         return redacted;
     }
 
@@ -172,7 +214,8 @@ internal static class ManifestSecretRedactor
         }
     }
 
-    private static bool IsSecretName(string name)
+    /// <summary><see langword="true"/> when a property or header name looks like it carries a secret.</summary>
+    internal static bool IsSecretName(string name)
     {
         foreach (var fragment in SecretNameFragments)
         {

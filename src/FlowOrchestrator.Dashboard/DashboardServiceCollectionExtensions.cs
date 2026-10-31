@@ -694,7 +694,7 @@ public static class DashboardServiceCollectionExtensions
             if (includeTotal || hasSearch || skip > 0)
                 await WriteJsonAsync(http.Response, new
                 {
-                    items = page.Items,
+                    items = WebhookRowsForCaller(http, page.Items),
                     // null when a search skipped the count; hasMore drives the pager instead.
                     total = page.TotalCounted ? page.Total : (int?)null,
                     hasMore = page.HasMore,
@@ -704,7 +704,7 @@ public static class DashboardServiceCollectionExtensions
                     windowDefaulted,
                 });
             else
-                await WriteJsonAsync(http.Response, page.Items);
+                await WriteJsonAsync(http.Response, WebhookRowsForCaller(http, page.Items));
         });
 
         group.MapGet("/api/webhooks/stats", async (HttpContext http) =>
@@ -1713,13 +1713,17 @@ public static class DashboardServiceCollectionExtensions
             || Array.Exists(wellKnown, w => string.Equals(w, password, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>Run list rows as stored for operators; with the trigger body masked for viewers.</summary>
+    /// <summary>Webhook delivery rows as stored for operators; without the body excerpt and with secret headers masked for viewers.</summary>
+    private static IReadOnlyList<WebhookRejectionRecord> WebhookRowsForCaller(HttpContext http, IReadOnlyList<WebhookRejectionRecord> rows)
+        => CanOperate(http) ? rows : rows.Select(Security.ManifestSecretRedactor.Redacted).ToList();
+
+    /// <summary>Run list rows as stored for operators; without the trigger body for viewers.</summary>
     /// <remarks>
-    /// Allocation-free for operators and unprotected dashboards (the common poll); viewers pay one JSON
-    /// parse per row with a trigger body.
+    /// Allocation-free for operators and unprotected dashboards (the common poll); viewers get a copied row
+    /// and no JSON parsing.
     /// </remarks>
     private static IReadOnlyList<FlowRunRecord> RunsForCaller(HttpContext http, IReadOnlyList<FlowRunRecord> runs)
-        => CanOperate(http) ? runs : runs.Select(Security.ManifestSecretRedactor.Redacted).ToList();
+        => CanOperate(http) ? runs : runs.Select(Security.ManifestSecretRedactor.RedactedListRow).ToList();
 
     /// <summary>Whether the caller resolved by the access filter may change state (and see secrets).</summary>
     private static bool CanOperate(HttpContext http)

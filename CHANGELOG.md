@@ -45,7 +45,7 @@ default).
   whose `Sec-Fetch-Site` is not `same-origin`, or whose `Origin` names another host, is rejected with
   `403`. This stops CSRF through the new cookie session and through browser-cached Basic credentials;
   scripts that send neither header are unaffected. **Read before upgrading:** behind a reverse proxy
-  that serves plain HTTP and rewrites `Host` without `X-Forwarded-Host`, set `FlowDashboard:TrustedOrigins`
+  that serves plain HTTP and rewrites `Host` (and does not use ForwardedHeaders middleware), set `FlowDashboard:TrustedOrigins`
   to the public origin, or the dashboard's own trigger / rerun / cancel calls are rejected.
 - Startup checks: a misnamed scheme or authorization policy throws at `MapFlowDashboard`; EventId
   `4100` warns when Basic Auth is the only protection outside Development, `4101` when its password is

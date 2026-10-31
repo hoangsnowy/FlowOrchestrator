@@ -152,19 +152,19 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
             return false;
         if (!Uri.TryCreate(origin, UriKind.Absolute, out var originUri))
             return true;   // "null" (sandboxed iframe, file:) or garbage
-        // Behind a proxy that rewrites Host (plain HTTP sends no Sec-Fetch-Site), the public host survives in
-        // X-Forwarded-Host, or the operator lists it in FlowDashboard:TrustedOrigins.
         if (string.Equals(originUri.Authority, http.Request.Host.Value, StringComparison.OrdinalIgnoreCase))
             return false;
-        var forwardedHost = http.Request.Headers["X-Forwarded-Host"].ToString().Split(',')[0].Trim();
-        if (forwardedHost.Length > 0 && string.Equals(originUri.Authority, forwardedHost, StringComparison.OrdinalIgnoreCase))
-            return false;
+        // Behind a proxy that rewrites Host over plain HTTP (no Sec-Fetch-Site), either let ASP.NET Core's
+        // ForwardedHeaders middleware restore Request.Host, or list the public origin in TrustedOrigins.
+        // X-Forwarded-Host is deliberately not read here: a host with permissive credentialed CORS would let
+        // a cross-site page set it.
         if (trustedOrigins is not null)
         {
-            var originValue = originUri.GetLeftPart(UriPartial.Authority);
             foreach (var trusted in trustedOrigins)
             {
-                if (string.Equals(trusted.TrimEnd('/'), originValue, StringComparison.OrdinalIgnoreCase))
+                if (Uri.TryCreate(trusted, UriKind.Absolute, out var trustedUri)
+                    && string.Equals(trustedUri.Scheme, originUri.Scheme, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(trustedUri.Authority, originUri.Authority, StringComparison.OrdinalIgnoreCase))
                     return false;
             }
         }

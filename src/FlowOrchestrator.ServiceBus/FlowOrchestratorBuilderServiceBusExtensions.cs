@@ -45,7 +45,16 @@ public static class FlowOrchestratorBuilderServiceBusExtensions
         builder.Services.TryAddSingleton(sp => new ServiceBusAdministrationClient(options.ConnectionString));
         builder.Services.TryAddSingleton<ServiceBusTopologyManager>();
 
-        builder.Services.TryAddSingleton<IStepDispatcher, ServiceBusStepDispatcher>();
+        // Step sends get their own connection by default (#192): sharing the processors' connection
+        // queued sends behind every flow's receive links.
+        builder.Services.TryAddSingleton<IStepDispatcher>(sp => new ServiceBusStepDispatcher(
+            options.UseDedicatedSenderConnection
+                ? new ServiceBusClient(options.ConnectionString)
+                : sp.GetRequiredService<ServiceBusClient>(),
+            options,
+            sp.GetService<FlowOrchestrator.Core.Observability.FlowOrchestratorTelemetry>(),
+            sp.GetService<FlowObservabilityOptions>(),
+            ownsClient: options.UseDedicatedSenderConnection));
 
         builder.Services.AddScoped<IServiceBusFlowRunner, ServiceBusFlowOrchestrator>();
 

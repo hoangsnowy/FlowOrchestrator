@@ -218,13 +218,16 @@ public sealed class DashboardSecurityTests
 
     [Theory]
     [InlineData("http://flows.corp", null, null, false)]
-    [InlineData("http://flows.corp", "flows.corp", null, false)]
+    [InlineData("http://flows.corp", "flows.corp", null, true)]
+    [InlineData("http://flows.corp", null, "http://flows.corp:80", false)]
+    [InlineData("https://flows.corp", null, "http://flows.corp", true)]
     [InlineData("http://flows.corp", null, "http://flows.corp", false)]
     [InlineData("http://flows.corp", null, "http://flows.corp/", false)]
     [InlineData("http://evil.corp", "flows.corp", "http://flows.corp", true)]
-    public void Origin_check_accepts_forwarded_host_and_trusted_origins_behind_a_host_rewriting_proxy(string origin, string? forwardedHost, string? trusted, bool crossSite)
+    public void Origin_check_accepts_trusted_origins_but_not_x_forwarded_host_behind_a_host_rewriting_proxy(string origin, string? forwardedHost, string? trusted, bool crossSite)
     {
         // Arrange — plain HTTP sends no Sec-Fetch-Site and the proxy rewrote Host to the upstream address.
+        // X-Forwarded-Host is ignored on purpose (a permissive-CORS host would let a cross-site page set it).
         var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
         http.Request.Host = new Microsoft.AspNetCore.Http.HostString(forwardedHost is null && trusted is null ? "flows.corp" : "backend:5000");
         http.Request.Headers.Origin = origin;
