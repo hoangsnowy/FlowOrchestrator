@@ -103,7 +103,7 @@
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
     <PackageVersion Include="Testcontainers.MsSql" Version="4.15.0" />
-    <PackageVersion Include="Testcontainers" Version="4.15.0" />
+    <PackageVersion Include="Testcontainers" Version="4.16.0" />
     <!--
       SSH.NET is pinned (not referenced directly): Testcontainers pulls it in
       transitively, and every version <= 2025.1.0 carries GHSA-q939-rpr3-3284
