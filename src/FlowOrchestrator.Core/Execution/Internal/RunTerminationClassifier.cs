@@ -18,15 +18,19 @@ internal static class RunTerminationClassifier
     /// <param name="flow">The flow whose manifest provides RunAfter dependencies for leaf detection.</param>
     /// <param name="statuses">The terminal-status map keyed by runtime step key.</param>
     /// <remarks>
-    /// A single foreach over <paramref name="statuses"/> populates three boolean tally
-    /// flags up-front so the subsequent rule cascade does not re-enumerate the dictionary
-    /// for trivial existence checks. The downstream leaf-collection pass materialises a
-    /// small intermediate list; the trade-off was made to keep CodeQL's
-    /// <c>cs/linq/missed-where</c> analysis quiet. Leaf and failure-handling detection
-    /// operate on runtime step keys (e.g. <c>loop.0.child</c>): a dependent's template
-    /// <c>RunAfter</c> keys are resolved into runtime space and a scoped step is treated as
-    /// a non-leaf whenever its iteration children are present, so loop bodies classify from
-    /// their children rather than from the loop step's own status.
+    /// Leaf and failure-handling detection operate on runtime step keys (e.g. <c>loop.0.child</c>):
+    /// a dependent's template <c>RunAfter</c> keys are resolved into runtime space and a scoped step
+    /// is treated as a non-leaf whenever its iteration children are present, so loop bodies classify
+    /// from their children rather than from the loop step's own status.
+    /// <para>
+    /// <b>Complexity: O(n · d)</b> for n statuses and d = the largest <c>RunAfter</c> fan-in, plus
+    /// the key lengths for the ancestor walk. Runs once per run completion and once per recovered
+    /// run. The previous form asked "is anything depending on this key?" by scanning every other
+    /// status for every status, building two strings per comparison — O(n²) time and allocation,
+    /// 44.7 ms / 35 MB at a 500-iteration loop (#189). This form inverts the question: one pass
+    /// collects every key something depends on, then each status is a set lookup. Keys are held as
+    /// <see cref="StepKeySlice"/> views, so no runtime key string is built to be hashed.
+    /// </para>
     /// <para>
     /// Rules, in order:
     /// <list type="number">
@@ -63,9 +67,7 @@ internal static class RunTerminationClassifier
                     : StepStatus.Failed.ToString();
         }
 
-        if (anyFailed && statuses.Any(kvp =>
-                kvp.Value == StepStatus.Failed
-                && !IsFailureHandled(kvp.Key, flow, statuses)))
+        if (anyFailed && AnyUnhandledFailure(flow, statuses))
         {
             return StepStatus.Failed.ToString();
         }
@@ -73,40 +75,50 @@ internal static class RunTerminationClassifier
         // Determine "all leaves skipped". A leaf is a step that nothing else in the run
         // depends on — neither a downstream RunAfter edge nor a structural child (loop
         // iteration). We want: at least one leaf && every leaf is Skipped.
-        var leafEntries = statuses
-            .Where(kvp => IsLeaf(kvp.Key, flow, statuses))
-            .ToList();
-
-        return (leafEntries.Count > 0 && leafEntries.TrueForAll(kvp => kvp.Value == StepStatus.Skipped))
-            ? StepStatus.Skipped.ToString()
-            : StepStatus.Succeeded.ToString();
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when a failed step has at least one downstream step
-    /// that ran and <see cref="StepStatus.Succeeded"/>, indicating an explicit recovery handler.
-    /// </summary>
-    /// <remarks>
-    /// Dependents are searched over the run's actual step keys (which may be runtime loop
-    /// keys such as <c>loop.0.child</c>), and each dependent's template <c>RunAfter</c> keys
-    /// are resolved into runtime space before comparison — a sibling dependency declared as
-    /// the bare template key <c>child</c> on step <c>loop.0.next</c> resolves to the runtime
-    /// key <c>loop.0.child</c>. Without this resolution a recovery handler inside a loop body
-    /// would never match its failed predecessor.
-    /// </remarks>
-    private static bool IsFailureHandled(
-        string failedStepKey,
-        IFlowDefinition flow,
-        IReadOnlyDictionary<string, StepStatus> statuses)
-    {
-        foreach (var kvp in statuses)
+        var nonLeaves = CollectNonLeafKeys(flow, statuses);
+        var anyLeaf = false;
+        foreach (var (key, status) in statuses)
         {
-            if (kvp.Value != StepStatus.Succeeded)
+            if (nonLeaves.Contains(StepKeySlice.Of(key)))
             {
                 continue;
             }
 
-            if (DependsOn(kvp.Key, failedStepKey, flow))
+            if (status != StepStatus.Skipped)
+            {
+                return StepStatus.Succeeded.ToString();
+            }
+
+            anyLeaf = true;
+        }
+
+        return anyLeaf ? StepStatus.Skipped.ToString() : StepStatus.Succeeded.ToString();
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when some failed step has no downstream step that ran and
+    /// <see cref="StepStatus.Succeeded"/> — i.e. no explicit recovery handler.
+    /// </summary>
+    /// <remarks>
+    /// One pass collects every key that a succeeded step depends on, resolved into runtime space
+    /// (a sibling dependency declared as the bare template key <c>child</c> on step
+    /// <c>loop.0.next</c> resolves to <c>loop.0.child</c>); a failed step is handled exactly when its
+    /// key is in that set. O(n · d).
+    /// </remarks>
+    private static bool AnyUnhandledFailure(IFlowDefinition flow, IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        var handled = new HashSet<StepKeySlice>(StepKeySliceComparer.Instance);
+        foreach (var (key, status) in statuses)
+        {
+            if (status == StepStatus.Succeeded)
+            {
+                AddResolvedDependencies(flow, key, handled, excludeSelf: false);
+            }
+        }
+
+        foreach (var (key, status) in statuses)
+        {
+            if (status == StepStatus.Failed && !handled.Contains(StepKeySlice.Of(key)))
             {
                 return true;
             }
@@ -116,54 +128,52 @@ internal static class RunTerminationClassifier
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when nothing else in the run depends on
-    /// <paramref name="key"/> — neither a downstream <c>RunAfter</c> edge nor a structural
-    /// child (a loop iteration whose runtime key is nested under <paramref name="key"/>).
-    /// Such a step is a leaf of the executed graph.
+    /// Returns the set of keys that something else in the run depends on: every step's
+    /// <c>RunAfter</c> dependencies resolved into runtime space, plus every dotted ancestor of every
+    /// runtime key (a loop iteration <c>loop.0.child</c> makes <c>loop</c> and <c>loop.0</c>
+    /// non-leaves even though no <c>RunAfter</c> edge connects them).
     /// </summary>
     /// <remarks>
-    /// Operates on runtime step keys. A loop step (e.g. <c>loop</c>) is therefore correctly
-    /// excluded from the leaf set whenever its iteration children (<c>loop.0.child</c>) are
-    /// present, so an all-skipped loop body classifies as <see cref="StepStatus.Skipped"/>
-    /// rather than borrowing the loop step's own <see cref="StepStatus.Succeeded"/> status.
+    /// A step depending on itself does not make itself a non-leaf — the previous per-pair scan
+    /// skipped the key under test as a candidate, and this preserves that.
     /// </remarks>
-    private static bool IsLeaf(string key, IFlowDefinition flow, IReadOnlyDictionary<string, StepStatus> statuses)
+    private static HashSet<StepKeySlice> CollectNonLeafKeys(IFlowDefinition flow, IReadOnlyDictionary<string, StepStatus> statuses)
     {
-        foreach (var candidateKey in statuses.Keys)
+        var nonLeaves = new HashSet<StepKeySlice>(statuses.Count, StepKeySliceComparer.Instance);
+        foreach (var key in statuses.Keys)
         {
-            if (string.Equals(candidateKey, key, StringComparison.Ordinal))
+            // Structural ancestors: every prefix that ends just before a '.'. The prefix ending at
+            // index 0 is the empty key, which the per-pair test also treated as an owner of any key
+            // starting with '.'.
+            for (var dot = key.IndexOf('.'); dot >= 0; dot = key.IndexOf('.', dot + 1))
             {
-                continue;
+                nonLeaves.Add(new StepKeySlice(key, dot));
             }
 
-            // Structural child: a loop iteration step (e.g. "loop.0.child") makes its
-            // owning scoped step ("loop") a non-leaf even though no RunAfter edge connects them.
-            if (IsStructuralDescendant(candidateKey, key))
-            {
-                return false;
-            }
-
-            if (DependsOn(candidateKey, key, flow))
-            {
-                return false;
-            }
+            AddResolvedDependencies(flow, key, nonLeaves, excludeSelf: true);
         }
 
-        return true;
+        return nonLeaves;
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="dependentKey"/> declares
-    /// <paramref name="predecessorKey"/> as a <c>RunAfter</c> dependency, accounting for the
-    /// loop-scope prefix so a sibling dependency expressed as a bare template key matches the
-    /// runtime predecessor in the same iteration scope.
+    /// Adds the runtime-space key of every <c>RunAfter</c> dependency declared by the step at
+    /// <paramref name="dependentKey"/> to <paramref name="target"/>.
     /// </summary>
-    private static bool DependsOn(string dependentKey, string predecessorKey, IFlowDefinition flow)
+    /// <param name="flow">The flow whose manifest declares the dependencies.</param>
+    /// <param name="dependentKey">Runtime key of the dependent step.</param>
+    /// <param name="target">Set receiving the resolved dependency keys.</param>
+    /// <param name="excludeSelf">When set, a dependency resolving to <paramref name="dependentKey"/> itself is not added.</param>
+    private static void AddResolvedDependencies(
+        IFlowDefinition flow,
+        string dependentKey,
+        HashSet<StepKeySlice> target,
+        bool excludeSelf)
     {
         var metadata = flow.Manifest.Steps.FindStep(dependentKey);
         if (metadata?.RunAfter is null || metadata.RunAfter.Count == 0)
         {
-            return false;
+            return;
         }
 
         foreach (var dependency in metadata.RunAfter.Keys)
@@ -173,25 +183,14 @@ internal static class RunTerminationClassifier
                 continue;
             }
 
-            if (string.Equals(ResolveRuntimeDependencyKey(dependentKey, dependency), predecessorKey, StringComparison.Ordinal))
+            var resolved = ResolveRuntimeDependencyKey(dependentKey, dependency);
+            if (excludeSelf && StepKeySliceComparer.Instance.Equals(resolved, StepKeySlice.Of(dependentKey)))
             {
-                return true;
+                continue;
             }
+
+            target.Add(resolved);
         }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="candidateKey"/> is nested strictly
-    /// beneath <paramref name="ownerKey"/> in the dot-separated runtime key hierarchy
-    /// (e.g. <c>loop.0.child</c> is a descendant of <c>loop</c>).
-    /// </summary>
-    private static bool IsStructuralDescendant(string candidateKey, string ownerKey)
-    {
-        return candidateKey.Length > ownerKey.Length
-            && candidateKey[ownerKey.Length] == '.'
-            && candidateKey.StartsWith(ownerKey, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -199,20 +198,23 @@ internal static class RunTerminationClassifier
     /// by prepending the dependent step's loop-scope prefix when the dependency is a sibling
     /// (no dot, same scope level). Mirrors <c>FlowGraphPlanner.ResolveRuntimeDependencyKey</c>.
     /// </summary>
-    private static string ResolveRuntimeDependencyKey(string runtimeStepKey, string dependencyKey)
+    /// <remarks>
+    /// Returns a <see cref="StepKeySlice"/> over the two existing strings rather than the
+    /// interpolated <c>$"{parent}.{dependency}"</c> the per-pair scan built on every comparison.
+    /// </remarks>
+    private static StepKeySlice ResolveRuntimeDependencyKey(string runtimeStepKey, string dependencyKey)
     {
         if (dependencyKey.Contains('.', StringComparison.Ordinal))
         {
-            return dependencyKey;
+            return StepKeySlice.Of(dependencyKey);
         }
 
         var lastDot = runtimeStepKey.LastIndexOf('.');
         if (lastDot <= 0)
         {
-            return dependencyKey;
+            return StepKeySlice.Of(dependencyKey);
         }
 
-        var runtimeParentPath = runtimeStepKey[..lastDot];
-        return $"{runtimeParentPath}.{dependencyKey}";
+        return new StepKeySlice(runtimeStepKey, lastDot, dependencyKey);
     }
 }
