@@ -6,7 +6,10 @@ namespace FlowOrchestrator.SqlServer.Tests;
 
 public sealed class SqlServerFixture : IAsyncLifetime
 {
-    private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2025-latest")
+    // SQL Server 2025 images (through CU11) crash intermittently during startup, worse when several
+    // start at once — microsoft/mssql-docker#974, fixed in 2025 CU12. Move back to 2025-latest
+    // once CU12 ships.
+    private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
         .Build();
 
     public string ConnectionString => _container.GetConnectionString();

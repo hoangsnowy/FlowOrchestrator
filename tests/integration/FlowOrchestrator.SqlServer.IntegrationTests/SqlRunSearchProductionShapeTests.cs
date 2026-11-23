@@ -260,7 +260,10 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         public const string RareTriggerFragment = "claim-0001";
         public const string PayloadToken = "policy-77f3c2e1-needle";
 
-        private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2025-latest").Build();
+        // SQL Server 2025 images (through CU11) crash intermittently during startup, worse when several
+        // start at once — microsoft/mssql-docker#974, fixed in 2025 CU12. Move back to 2025-latest
+        // once CU12 ships.
+        private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
 
         public string ConnectionString => _container.GetConnectionString();
         public DateTimeOffset Now { get; } = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero).AddHours(12);
