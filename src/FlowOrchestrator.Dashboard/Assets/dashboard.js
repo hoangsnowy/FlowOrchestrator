@@ -100,9 +100,12 @@ async function loadDashboardAccess() {
   // Viewers do not get state-changing buttons; the server enforces the same rule with a 403.
   document.body.classList.toggle('fo-readonly', !dashboardAccess.canOperate);
   const el = $('sidebar-user');
-  if (!el || dashboardAccess.method === 'none') return;
-  el.innerHTML = '<span class="sidebar-user-name" title="Signed in via ' + (dashboardAccess.method === 'oidc' ? 'single sign-on' : 'Basic Auth') + '">'
-    + esc(dashboardAccess.user || 'Signed in') + '</span>'
+  // An unprotected dashboard shows nothing here while anonymous callers may operate (Development or an
+  // explicit opt-in), and "Anonymous · View only" where it is read-only.
+  const anonymous = dashboardAccess.method === 'none';
+  if (!el || (anonymous && dashboardAccess.canOperate)) return;
+  el.innerHTML = '<span class="sidebar-user-name" title="' + (anonymous ? 'No dashboard sign-in is configured' : 'Signed in via ' + (dashboardAccess.method === 'oidc' ? 'single sign-on' : 'Basic Auth')) + '">'
+    + esc(anonymous ? 'Anonymous' : (dashboardAccess.user || 'Signed in')) + '</span>'
     + (dashboardAccess.canOperate ? '' : '<span class="chip chip--readonly">View only</span>')
     + (dashboardAccess.canSignOut ? '<a class="sidebar-signout" href="' + BASE.replace(/\/api$/, '') + '/signout">Sign out</a>' : '');
   el.hidden = false;

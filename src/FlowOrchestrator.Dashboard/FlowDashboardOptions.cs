@@ -23,6 +23,30 @@ public sealed class FlowDashboardOptions
     public FlowDashboardAuthorizationOptions Authorization { get; set; } = new();
 
     /// <summary>
+    /// Lets anonymous callers use state-changing endpoints and see unredacted manifests on a dashboard that
+    /// has neither <see cref="BasicAuth"/> nor <see cref="Authorization"/> configured, outside the
+    /// Development environment. Defaults to <see langword="false"/>. Bind from configuration as
+    /// <c>FlowDashboard:AllowAnonymousOperators</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without authentication, the dashboard is read-only outside Development: trigger, re-run, retry,
+    /// cancel, signal, enable / disable and schedule changes return <c>403</c>, and webhook secrets / HMAC
+    /// keys in manifests are masked, exactly as for a signed-in viewer. In the Development environment
+    /// anonymous callers keep full operator access regardless of this setting.
+    /// </para>
+    /// <para>
+    /// <b>Security risk:</b> setting this to <see langword="true"/> gives everyone who can reach the dashboard
+    /// URL full operator rights — they can start, re-run and cancel flows, deliver signals, change schedules,
+    /// and read webhook secrets. Only enable it when access to the dashboard is already restricted by
+    /// something in front of it (a private network, an authenticating reverse proxy, or host-level
+    /// authorization on the mapped endpoints). Prefer configuring <see cref="BasicAuth"/> or
+    /// <see cref="Authorization"/>.
+    /// </para>
+    /// </remarks>
+    public bool AllowAnonymousOperators { get; set; }
+
+    /// <summary>
     /// Extra origins (e.g. <c>"https://flows.example.com"</c>) allowed to make state-changing dashboard calls.
     /// Only needed behind a reverse proxy that rewrites <c>Host</c>, serves plain HTTP, and does not send
     /// ASP.NET Core ForwardedHeaders middleware restoring it.
