@@ -161,14 +161,16 @@ options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
 ## FlowObservabilityOptions
 
 ```csharp
-options.Observability.EnableEventPersistence = true;
 options.Observability.EnableOpenTelemetry = true;
 ```
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EnableEventPersistence` | `bool` | `true` | Write `FlowEvent` records to `IOutputsRepository` (requires the storage backend to implement `IFlowEventReader`). Powers the step timeline in the dashboard. Set to `false` to skip event writes. |
 | `EnableOpenTelemetry` | `bool` | `true` | Emit `FlowOrchestratorTelemetry` trace spans and metrics from the engine. The `ActivitySource` and `Meter` are always registered by `AddFlowOrchestrator`; this flag controls whether spans/counters are emitted. Use `AddFlowOrchestratorInstrumentation()` on your OTel pipeline to consume them. |
+
+`EnableEventPersistence` was removed in 2.0: run events are no longer persisted, and the dashboard's run
+timeline is derived from step attempts with no option to set. See
+[Migrating to 2.0](migrating-to-2.0.md).
 
 ---
 
@@ -309,7 +311,6 @@ builder.Services.AddFlowOrchestrator(options =>
     options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
 
     // Observability
-    options.Observability.EnableEventPersistence = true;
     options.Observability.EnableOpenTelemetry = true;
 
     // Retention
@@ -344,7 +345,6 @@ builder.Services.AddFlowOrchestrator(options =>
     options.UseInMemoryRuntime();    // Channel<T> dispatcher + PeriodicTimer cron
 
     options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
-    options.Observability.EnableEventPersistence = true;
 
     options.AddFlow<HelloWorldFlow>();
 });

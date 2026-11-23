@@ -23,7 +23,6 @@ FlowOrchestrator writes to fourteen tables. The auto-migrator
 | `FlowStepClaims` | Exclusive execution claim per step (the "Execute once" half). |
 | `FlowRunControls` | Cancellation, idempotency key, run timeout. |
 | `FlowIdempotencyKeys` | Idempotency dedupe at trigger time. |
-| `FlowEvents` | State-transition audit log (when event persistence is enabled). |
 | `FlowSignalWaiters` | Parked `WaitForSignal` steps. |
 | `FlowScheduleStates` | Recurring-trigger sync state. |
 | `WebhookReplayNonces` | Seen webhook timestamp/nonce pairs for replay protection (TTL-expired). |
@@ -202,11 +201,10 @@ A single run typically writes:
 - *N* rows in `FlowStepDispatches` (one per dispatched step — the idempotent dispatch ledger)
 - *N* rows in `FlowStepClaims` (one per executed step; deliberately **not** released on terminal status, since the row is what makes execution exactly-once)
 - *M* rows in `FlowStepAttempts` (one per attempt — usually 1, more with retries)
-- *K* rows in `FlowEvents` (when event persistence is on; ~5 per step)
 - 1 row in `FlowSignalWaiters` per `WaitForSignal` step
 - 1 row in `FlowIdempotencyKeys` per trigger carrying an idempotency key
 
-For a 5-step flow with retries off and event persistence on, that is ~40 rows per run. At one million runs per month, expect tens of GB per year before retention.
+For a 5-step flow with retries off, that is ~25 rows per run. At one million runs per month, expect tens of GB per year before retention.
 
 > [!NOTE]
 > `FlowStepDispatches` and `FlowSignalWaiters` were omitted from the sweep before the fix for

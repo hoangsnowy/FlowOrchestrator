@@ -61,7 +61,7 @@ result.RunId          // Guid the engine assigned
 result.Status         // Succeeded | Failed | Cancelled | TimedOut | Running
 result.Duration       // Wall-clock time TriggerAsync spent waiting
 result.TimedOut       // true when test-host timeout fired (run may still be in flight)
-result.Events         // Persisted event log (recorded automatically)
+result.Events         // Run timeline (run/step started, completed, failed, pending, skipped), derived from step attempts
 result.Steps["my_step"].Status        // Per-step terminal status
 result.Steps["my_step"].Output        // JsonElement of the handler's output
 result.Steps["my_step"].Inputs        // JsonElement of the resolved inputs

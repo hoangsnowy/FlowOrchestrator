@@ -21,6 +21,7 @@ Hangfire queue across, which new startup checks may stop the app, and how to ver
 | 6 | **Step inputs resolved in a single pass** — substituted trigger / step values are never re-evaluated (shipped in 1.34.2) | Practically no one (it was a vulnerability) | None |
 | 7 | **Removed APIs**: `IFlowRepository`, `IFlowExecutor`, legacy sequential mode, … | Custom storage backends, hand-built engines, custom `IStepInstance` / `IOutputsRepository` | Code changes |
 | 8 | Untyped handlers on Hangfire no longer get Newtonsoft-restored POCOs | Hangfire hosts with untyped (`IStepHandler` without `<TInput>`) handlers that cast inputs to POCOs | Check casts |
+| 9 | **Persisted run events removed** (`FlowEvents`, `EnableEventPersistence`, `IFlowEventReader`); the dashboard Events drawer and `FlowTestRunResult.Events` now derive the timeline from step attempts | Hosts that set `EnableEventPersistence`, custom storage backends, anything reading `FlowEvents` directly | Delete code; optional manual `DROP TABLE` |
 
 If you only use the built-in pieces (a flow manifest, `IStepHandler<TInput>` handlers, one of the
 built-in storage backends and runtimes, the dashboard), most of 2.0 is **items 1–3 plus a configuration
@@ -53,9 +54,9 @@ Upgrading straight from an old 1.x to 2.0 works too; do every step below, plus t
 ## Step 0 — Before you start
 
 - [ ] **Read the release notes** for 1.34.2, 1.34.3 and 2.0 (`CHANGELOG.md`).
-- [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). The 2.0 alphas make
-      no schema change so far, but take the backup anyway; you will want it for
-      [rollback](#rollback).
+- [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). So far 2.0 changes
+      nothing in an existing database (see [Step 8](#step-8--database)), but take the backup anyway; you
+      will want it for [rollback](#rollback).
 - [ ] **Inventory your extension points.** Search your solution for these; each one has a section below:
 
   ```text
@@ -63,7 +64,8 @@ Upgrading straight from an old 1.x to 2.0 works too; do every step below, plus t
   IFlowRunStore  IFlowRunRuntimeStore  IFlowRunControlStore  IOutputsRepository  IStepInstance
   IRecurringTriggerSync  SyncTriggers(  FlowOrchestratorOptions  AddFlowOrchestratorSqlServer
   AddFlowOrchestratorPostgreSql  ScopeMoveNext  EndScopeAsync  AllKnownStepKeys  FindParentStep
-  FindNextStep  ShouldExecute  HangfireEnabled  FlowSignalDispatcher(
+  FindNextStep  ShouldExecute  HangfireEnabled  FlowSignalDispatcher(  EnableEventPersistence
+  IFlowEventReader  RecordEventAsync  GetRunEventsAsync  FlowEvent  FlowEvents  flow_events
   ```
 
   No hits means you use only the built-ins and can skip [Step 6](#step-6--update-custom-extensions).
@@ -368,6 +370,11 @@ Skip this step if the [Step 0 inventory](#step-0--before-you-start) found nothin
 | `FlowGraphEvaluation.AllKnownStepKeys` | removed | Use `ReadyStepKeys` / `BlockedStepKeys` / `WaitingStepKeys` |
 | `IHangfireStepRunner.RunStepAsync(ctx, IFlowDefinition, step)` | removed (≤ 1.16 jobs) | See [Step 4](#step-4--move-the-hangfire-queue-across-hangfire-hosts-only) |
 | `FlowSyncHostedService`, `FlowRetentionHostedService` (internal, in the Hangfire package) | internal, in `FlowOrchestrator.Core.Hosting` | Registered by `AddFlowOrchestrator()`; do not register them yourself |
+| `FlowObservabilityOptions.EnableEventPersistence` | removed (run events are no longer persisted) | Delete the assignment |
+| `IOutputsRepository.RecordEventAsync`, `FlowOrchestrator.Core.Storage.FlowEvent` | removed | Delete your implementation |
+| `IFlowEventReader.GetRunEventsAsync` | removed; **`FlowRunTimeline.Build(run)`** (`FlowOrchestrator.Core.Storage`) derives the same `FlowEventRecord` list from `IFlowRunStore.GetRunDetailAsync(runId)` | Call it instead; delete your reader implementation and its registration |
+| `LogEvents.EventPersistenceFailed` (EventId 3002) | removed; 3002 is retired | Drop alert rules on 3002 |
+| direct queries on `FlowEvents` / `flow_events` | the table is no longer written | Read `GET {base}/api/runs/{runId}/events`, `FlowStepAttempts`, or OpenTelemetry spans |
 
 ### Custom storage backend
 
@@ -381,7 +388,13 @@ services.AddSingleton<IFlowRunControlStore>(sp => sp.GetRequiredService<MyRunSto
 services.AddSingleton<IFlowStore, MyFlowStore>();
 services.AddSingleton<IOutputsRepository, MyOutputsRepository>();
 // no IFlowRepository any more — FlowRegistry is built from AddFlow<T>() by Core
+// no IFlowEventReader / RecordEventAsync any more — the run timeline is derived from step attempts
 ```
+
+If your backend stored run events, delete `RecordEventAsync`, the `IFlowEventReader` implementation and
+registration, and the event-row delete in `CleanupAsync`. The dashboard's Events drawer now reads
+`GetRunDetailAsync`, so make sure it returns `FlowStepRecord.Attempts` (one entry per execution, with
+start / end / status / error) — that is what the timeline is built from.
 
 Then check your implementation against the 1.34.3 storage fixes, which define the contract precisely:
 
@@ -480,13 +493,42 @@ builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhook
 
 ## Step 8 — Database
 
-**No schema change so far in 2.0.** The SQL Server and PostgreSQL migrators still run automatically at
-startup and find nothing to do on a 1.34.x database, so the same database works for 1.34.3 and 2.0 —
-which is what makes the [rollback](#rollback) below possible.
+The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database they
+**change nothing**, so the same database works for 1.34.3 and 2.0 — which is what makes the
+[rollback](#rollback) below possible.
 
-This will change before GA; see [Still landing before 2.0 GA](#still-landing-before-20-ga). From that
-point this section will list the migration the 2.0 migrator applies, how long it takes on large
-tables, and how to run it ahead of the deployment.
+### The run events table is no longer used
+
+2.0 no longer writes or reads the run events table, and a **new** 2.0 database is created without it.
+On a database that 1.34.x created, the table (and its index) is **left in place** — the migrator never
+deletes data at startup — and retention stops touching it, so it keeps the 1.x history but does not grow
+or shrink any more.
+
+| Backend | Table | Index |
+|---|---|---|
+| SQL Server / Azure SQL | `FlowEvents` (the connection's default schema, normally `dbo`) | `IX_FlowEvents_RunId_Sequence` |
+| PostgreSQL | `flow_events` (the connection's `search_path`, normally `public`) | `ix_flow_events_run_id_sequence` |
+
+Under 2.0 the dashboard Events drawer derives every run's timeline — 1.x runs included — from the step
+attempts, so the table only matters to a 1.34.x [rollback](#rollback), whose drawer reads it. Once you
+are sure you will not roll back, reclaim the space by dropping it (the index goes with the table):
+
+```sql
+-- SQL Server / Azure SQL (run against the FlowOrchestrator database)
+DROP TABLE IF EXISTS [FlowEvents];
+```
+
+```sql
+-- PostgreSQL (run against the FlowOrchestrator database, same search_path as the app)
+DROP TABLE IF EXISTS flow_events;
+```
+
+The table can be large (around 5.6 KB per run on SQL Server); on a busy database run the drop in a
+maintenance window. Dropping it is safe while 2.0 is running.
+
+More schema changes land before GA; see [Still landing before 2.0 GA](#still-landing-before-20-ga). From
+that point this section will also list the migration the 2.0 migrator applies, how long it takes on
+large tables, and how to run it ahead of the deployment.
 
 ---
 
@@ -511,7 +553,7 @@ tables, and how to run it ahead of the deployment.
 
 ## Rollback
 
-Because 2.0 makes no schema change yet, rolling back to **1.34.3** is a redeploy:
+Because 2.0 changes nothing in an existing database yet, rolling back to **1.34.3** is a redeploy:
 
 1. Pause cron triggers and hold webhook traffic.
 2. **Hangfire hosts:** wait until no 2.0 step job is Enqueued or Processing — a 1.x worker cannot run
@@ -522,6 +564,10 @@ Because 2.0 makes no schema change yet, rolling back to **1.34.3** is a redeploy
 Runs started on 2.0 that are still in progress continue on 1.34.3 (same tables), except for the Hangfire
 jobs covered in step 2.
 
+1.34.3 reads run events from `FlowEvents` again, which 2.0 did not write: runs executed under 2.0 show an
+empty Events drawer on 1.34.3 (their steps, attempts and outputs are all there). If you already dropped
+the table, 1.34.3's migrator recreates it empty at startup.
+
 ---
 
 ## Still landing before 2.0 GA
@@ -529,10 +575,6 @@ jobs covered in step 2.
 These are part of 2.0 but **not in the current alphas**. Plan for them now; this guide gains a step for
 each when it lands:
 
-- **Run events table removed.** `FlowEvents` and the event-persistence option go away. The dashboard
-  Events tab and `FlowOrchestrator.Testing` keep working from a timeline built out of step attempts and
-  runs. If anything of yours reads the `FlowEvents` table directly, move it to the dashboard API or to
-  OpenTelemetry now.
 - **Step data stored once.** Step outputs, step inputs and trigger data are no longer duplicated into
   `FlowOutputs`. This is a schema change with an automatic migration (and a backfill for runs that are
   in progress during the upgrade).

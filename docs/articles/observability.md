@@ -1,26 +1,21 @@
 # Observability
 
-FlowOrchestrator exposes run events, OpenTelemetry traces/metrics, and a retention system to give you visibility into what your flows are doing in production.
+FlowOrchestrator exposes a run timeline, OpenTelemetry traces/metrics, and a retention system to give you visibility into what your flows are doing in production.
 
-## Run Events
+## Run timeline
 
-When event persistence is enabled, FlowOrchestrator writes structured `FlowEvent` records for every state transition: `run.started`, `step.started`, `step.completed` / `step.failed`, `step.pending` (poll reschedule), `step.skipped`, and `run.completed`. Built-in step types — including `WaitForSignal` (`step.pending` while waiting, `step.completed` once the signal lands) and `ForEach` (per child-iteration events) — emit through the same channel as user-written handlers.
-
-```csharp
-options.Observability.EnableEventPersistence = true;
-```
-
-Events are queryable via the REST API:
+Every run has a chronological timeline: `run.started`, then for each step attempt `step.started` followed by `step.completed` / `step.failed` / `step.pending` (a poll or signal wait that will run again, or a loop waiting on its iterations), `step.skipped` with the recorded reason (unmet `runAfter`, a false `When` clause with its evaluation, or a terminated run), and finally `run.completed`. Built-in step types — `WaitForSignal`, polling steps, `ForEach` child iterations — appear exactly like user-written handlers.
 
 ```http
-GET /flows/api/runs/{runId}/events
+GET /flows/api/runs/{runId}/events?skip=0&take=200
 ```
 
-Returns a time-ordered list of events with timestamps and payload. These power the step timeline view in the dashboard.
+The timeline is **derived on read** from the run record and its `FlowStepAttempts` rows (one row per execution) by `FlowRunTimeline.Build(run)` in `FlowOrchestrator.Core.Storage` — call it yourself on an `IFlowRunStore.GetRunDetailAsync` result. Nothing is written for it on the step-execution path and there is no option to enable.
 
-### Without event persistence
+> [!NOTE]
+> Up to 1.34.x these entries were persisted to a `FlowEvents` table, written on every step (two extra commits per step, ~37 % of per-step storage time). 2.0 removed that table and the `EnableEventPersistence` option; see [Migrating to 2.0](migrating-to-2.0.md#step-8--database) for the manual cleanup of an upgraded database. The live dashboard stream (`IFlowEventNotifier`, SSE) is a separate, non-persisted channel and is unaffected.
 
-The dashboard can still show step status and I/O from `FlowSteps` and `FlowOutputs`, but the precise timing of each state transition is unavailable.
+For precise timings across services, use the OpenTelemetry spans below.
 
 ---
 
@@ -405,8 +400,8 @@ When enabled, `FlowRetentionHostedService` runs on the configured interval and c
 
 **Nothing cascades.** The per-run tables carry no foreign key to `FlowRuns`, so `CleanupAsync` deletes each one explicitly, inside one transaction, for every run whose `CompletedAt` is older than the cutoff:
 
-`FlowStepClaims` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowEvents` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
-(PostgreSQL: the `flow_*` snake_case equivalents.)
+`FlowStepClaims` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
+(PostgreSQL: the `flow_*` snake_case equivalents.) A `FlowEvents` table left over from 1.x is not touched; see [Migrating to 2.0](migrating-to-2.0.md#step-8--database).
 
 > [!WARNING]
 > `FlowStepDispatches` / `flow_step_dispatches` and `FlowSignalWaiters` / `flow_signal_waiters` were **not** deleted before the fix for [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/188) — the sweep relied on a cascade that does not exist. Both tables grew by one row per dispatched step and per parked signal, for every run ever executed, and were never reclaimed.

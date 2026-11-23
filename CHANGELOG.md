@@ -38,6 +38,41 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   signing correctly set `UseWebhookSecurity(s => s.UseEnforcementMode(WebhookEnforcementMode.Audit))` while
   they fix them; `Off` remains available as an explicit choice.
 
+### Removed — **breaking:** persisted run events
+
+The `FlowEvents` table (`flow_events` on PostgreSQL) and everything that wrote or read it are gone.
+Measured on SQL Server at 200k runs (`docs/benchmarks/run-search-2026-11-23.md`, search investigation),
+the log cost **2 extra awaited commits per step** on the step's critical path (`step.started` before the
+handler, `step.completed` before the continuation) plus 2 per run — **~37 % of per-step storage time** —
+and **1.1 GB / 4.3 M rows**, 3.4x the whole `FlowRuns` table. Everything it recorded is already kept
+elsewhere: run start / end / status on `FlowRuns`, one `FlowStepAttempts` row per execution (start,
+end, status, error), the skip reason and `When` evaluation trace on the step rows, and OpenTelemetry spans.
+
+#### Read before upgrading
+
+- **Removed API:** `FlowObservabilityOptions.EnableEventPersistence`, `IOutputsRepository.RecordEventAsync`,
+  `IFlowEventReader` (and its `GetRunEventsAsync`), `FlowOrchestrator.Core.Storage.FlowEvent`,
+  `LogEvents.EventPersistenceFailed` (EventId **3002** is retired, not reused). Delete any
+  `options.Observability.EnableEventPersistence = …` line.
+- **Custom storage backends:** delete your `RecordEventAsync` implementation and your `IFlowEventReader`
+  implementation / registration, and stop deleting event rows in `CleanupAsync`.
+- **What replaces each reader:**
+  - The dashboard *Events* drawer keeps working unchanged: `GET {base}/api/runs/{runId}/events` keeps its
+    URL, paging (`skip` / `take`) and JSON shape, and now returns a timeline built on read from the run
+    and its step attempts (`run.started`, per attempt `step.started` + `step.completed` / `step.failed` /
+    `step.pending`, `step.skipped` with the recorded reason, `run.completed`).
+  - `FlowTestRunResult.Events` (`FlowOrchestrator.Testing`) keeps its type (`FlowEventRecord`) and is now
+    always populated from the same derived timeline, with no option to set.
+  - Both use the new `FlowRunTimeline.Build(FlowRunRecord)` in `FlowOrchestrator.Core.Storage`, which you
+    can call on a `GetRunDetailAsync` result yourself.
+  - The live dashboard stream (`IFlowEventNotifier` / SSE) is a separate, non-persisted channel and is
+    unchanged.
+- **Database:** the migrators no longer create the table on a new database, and **never drop it** on an
+  existing one, so a rollback to 1.34.x can still read its history. Retention no longer touches it, so
+  on an upgraded database it stops growing but is not emptied. Once you no longer need a rollback, drop
+  it by hand — SQL Server: `DROP TABLE IF EXISTS [FlowEvents];`, PostgreSQL:
+  `DROP TABLE IF EXISTS flow_events;` (see [Migrating to 2.0](docs/articles/migrating-to-2.0.md)).
+
 ### Changed — **breaking:** Hangfire is an opt-in runtime, no longer a dependency of everything
 
 Hangfire remains a first-class, fully supported runtime. What changes is that it is now only in the

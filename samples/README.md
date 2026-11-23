@@ -40,7 +40,7 @@ this table says which flow makes it visible on the dashboard.
 | `WebhookEnterpriseSampleFlow` (…0125) | Webhook hardening (v1.25): HMAC (GitHub scheme), replay nonces, rate limit, DLQ | "Webhooks" dashboard tab |
 
 Cross-cutting features every run exercises: run timeout latch (`RunControl.DefaultRunTimeout`),
-retention sweep (`Retention`), event persistence + OpenTelemetry (`Observability` — spans, metrics,
+retention sweep (`Retention`), OpenTelemetry (`Observability` — spans, metrics,
 and structured logs land in the Aspire dashboard), health checks (`/health`), crash recovery
 (`FlowRunRecoveryHostedService` re-dispatches on startup).
 
