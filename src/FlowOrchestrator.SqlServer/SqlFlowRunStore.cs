@@ -10,7 +10,8 @@ namespace FlowOrchestrator.SqlServer;
 /// A single class implements <see cref="IFlowRunStore"/>, <see cref="IFlowRunRuntimeStore"/>,
 /// <see cref="IFlowRunControlStore"/>, and <see cref="IFlowRetentionStore"/> to share the connection string
 /// and avoid multiple registrations.
-/// Step claim deduplication uses a SQL <c>INSERT IF NOT EXISTS</c> pattern for atomicity.
+/// Step claim deduplication uses a <c>MERGE WITH (HOLDLOCK, UPDLOCK)</c> insert-if-absent, so concurrent
+/// claimers of one step get exactly one <see langword="true"/> and never a duplicate-key error.
 /// </summary>
 public sealed class SqlFlowRunStore :
     IFlowRunStore,
@@ -515,13 +516,25 @@ public sealed class SqlFlowRunStore :
     public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connectionString);
-        var rows = await conn.ExecuteAsync("""
-            INSERT INTO FlowStepDispatches (RunId, StepKey)
-            SELECT @RunId, @StepKey
-            WHERE NOT EXISTS (
-                SELECT 1 FROM FlowStepDispatches WHERE RunId = @RunId AND StepKey = @StepKey)
-            """, new { RunId = runId, StepKey = stepKey });
-        return rows > 0;
+        // UPDLOCK, HOLDLOCK on the probe takes a key-range lock in update mode, so a concurrent
+        // recorder of the same key blocks until this insert commits and then sees the row, instead of
+        // both passing NOT EXISTS and the loser hitting a PK violation. The catch covers anything
+        // that still races through: losing the insert means "already recorded", not an error.
+        try
+        {
+            var rows = await conn.ExecuteAsync("""
+                INSERT INTO FlowStepDispatches (RunId, StepKey)
+                SELECT @RunId, @StepKey
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM FlowStepDispatches WITH (UPDLOCK, HOLDLOCK)
+                    WHERE RunId = @RunId AND StepKey = @StepKey)
+                """, new { RunId = runId, StepKey = stepKey });
+            return rows > 0;
+        }
+        catch (SqlException ex) when (SqlUniqueViolation.Matches(ex))
+        {
+            return false;
+        }
     }
 
     public async Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
@@ -603,18 +616,31 @@ public sealed class SqlFlowRunStore :
     public async Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
     {
         await using var conn = new SqlConnection(_connectionString);
-        var affected = await conn.ExecuteScalarAsync<int>(
-            """
-            MERGE FlowStepClaims AS target
-            USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
-            ON target.RunId = source.RunId AND target.StepKey = source.StepKey
-            WHEN NOT MATCHED THEN
-                INSERT (RunId, StepKey, ClaimedAt) VALUES (@RunId, @StepKey, SYSDATETIMEOFFSET());
-            SELECT @@ROWCOUNT;
-            """,
-            new { RunId = runId, StepKey = stepKey });
+        // A bare MERGE is not atomic between its match probe and its INSERT: two concurrent claimers
+        // both see "not matched" and the loser throws a PK violation instead of returning false.
+        // HOLDLOCK makes the probe take a serializable key-range lock and UPDLOCK takes it in update
+        // mode, so the second claimer blocks until the first commits and then matches — the same
+        // pattern, and the same deadlock reasoning, as SqlFlowStore.SaveAsync. The catch covers
+        // anything that still races through: losing the insert means "already claimed".
+        try
+        {
+            var affected = await conn.ExecuteScalarAsync<int>(
+                """
+                MERGE FlowStepClaims WITH (HOLDLOCK, UPDLOCK) AS target
+                USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
+                ON target.RunId = source.RunId AND target.StepKey = source.StepKey
+                WHEN NOT MATCHED THEN
+                    INSERT (RunId, StepKey, ClaimedAt) VALUES (@RunId, @StepKey, SYSDATETIMEOFFSET());
+                SELECT @@ROWCOUNT;
+                """,
+                new { RunId = runId, StepKey = stepKey });
 
-        return affected > 0;
+            return affected > 0;
+        }
+        catch (SqlException ex) when (SqlUniqueViolation.Matches(ex))
+        {
+            return false;
+        }
     }
 
     public async Task ReleaseStepClaimAsync(Guid runId, string stepKey)
@@ -808,29 +834,38 @@ public sealed class SqlFlowRunStore :
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
         var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
 
-        var affected = await conn.ExecuteScalarAsync<int>(
-            """
-            MERGE FlowIdempotencyKeys AS target
-            USING (
-                SELECT @FlowId AS FlowId, @TriggerKey AS TriggerKey, @IdempotencyKey AS IdempotencyKey
-            ) AS source
-            ON target.FlowId = source.FlowId
-               AND target.TriggerKey = source.TriggerKey
-               AND target.IdempotencyKey = source.IdempotencyKey
-            WHEN NOT MATCHED THEN
-                INSERT (FlowId, TriggerKey, IdempotencyKey, RunId, CreatedAtUtc)
-                VALUES (@FlowId, @TriggerKey, @IdempotencyKey, @RunId, SYSDATETIMEOFFSET());
-            SELECT @@ROWCOUNT;
-            """,
-            new
-            {
-                FlowId = flowId,
-                TriggerKey = normalizedTriggerKey,
-                IdempotencyKey = normalizedIdempotencyKey,
-                RunId = runId
-            });
+        // Same race and the same fix as TryClaimStepAsync: HOLDLOCK + UPDLOCK serialise concurrent
+        // registrations of one key, and a duplicate-key error still means "someone else won".
+        try
+        {
+            var affected = await conn.ExecuteScalarAsync<int>(
+                """
+                MERGE FlowIdempotencyKeys WITH (HOLDLOCK, UPDLOCK) AS target
+                USING (
+                    SELECT @FlowId AS FlowId, @TriggerKey AS TriggerKey, @IdempotencyKey AS IdempotencyKey
+                ) AS source
+                ON target.FlowId = source.FlowId
+                   AND target.TriggerKey = source.TriggerKey
+                   AND target.IdempotencyKey = source.IdempotencyKey
+                WHEN NOT MATCHED THEN
+                    INSERT (FlowId, TriggerKey, IdempotencyKey, RunId, CreatedAtUtc)
+                    VALUES (@FlowId, @TriggerKey, @IdempotencyKey, @RunId, SYSDATETIMEOFFSET());
+                SELECT @@ROWCOUNT;
+                """,
+                new
+                {
+                    FlowId = flowId,
+                    TriggerKey = normalizedTriggerKey,
+                    IdempotencyKey = normalizedIdempotencyKey,
+                    RunId = runId
+                });
 
-        return affected > 0;
+            return affected > 0;
+        }
+        catch (SqlException ex) when (SqlUniqueViolation.Matches(ex))
+        {
+            return false;
+        }
     }
 
     public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
