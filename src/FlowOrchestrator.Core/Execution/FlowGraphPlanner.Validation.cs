@@ -4,7 +4,7 @@ namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Validation surface of <see cref="FlowGraphPlanner"/> — manifest sanity checks,
-/// missing-dependency detection, and DFS cycle detection.
+/// step-key shape checks, missing-dependency detection, and DFS cycle detection.
 /// </summary>
 public sealed partial class FlowGraphPlanner
 {
@@ -23,6 +23,20 @@ public sealed partial class FlowGraphPlanner
         if (!flat.Any(kvp => kvp.Value.RunAfter.Count == 0))
         {
             errors.Add("Flow has no entry step (step with empty runAfter).");
+        }
+
+        // Runtime step keys are '.'-joined paths ("loop.3.child"), so a top-level key that is empty
+        // or itself contains '.' is ambiguous with a scoped path and is not modelled by Evaluate.
+        foreach (var stepKey in flow.Manifest.Steps.Keys)
+        {
+            if (stepKey.Length == 0)
+            {
+                errors.Add("Flow has a step with an empty key.");
+            }
+            else if (stepKey.Contains('.', StringComparison.Ordinal))
+            {
+                errors.Add($"Step key '{stepKey}' contains '.', which is reserved as the runtime scope separator.");
+            }
         }
 
         foreach (var (stepKey, metadata) in flat)

@@ -5,10 +5,9 @@ using NSubstitute;
 namespace FlowOrchestrator.Core.Tests.Execution;
 
 /// <summary>
-/// Locks the runtime loop-key expansion performed by <c>FlowGraphPlanner.BuildKnownStepKeys</c>
-/// against the allocation refactor: expanding each scope prefix once instead of once per child,
-/// and short-circuiting <c>RemoveNumericSegments</c> when nothing needs removing, must leave the
-/// known/ready/waiting sets byte-identical.
+/// Locks the runtime loop-key expansion performed by <see cref="FlowGraphPlanner.Evaluate"/>: every
+/// scope instance is expanded once, each missing child is classified exactly once, and the classified
+/// lists come back in ordinal order.
 /// </summary>
 public class FlowGraphPlannerLoopKeyExpansionTests
 {
@@ -32,11 +31,14 @@ public class FlowGraphPlannerLoopKeyExpansionTests
         var evaluation = _sut.Evaluate(flow, statuses);
 
         // Assert
-        Assert.Equal(evaluation.AllKnownStepKeys.Distinct(StringComparer.Ordinal).Count(), evaluation.AllKnownStepKeys.Count);
-        Assert.Contains("loop.0.child_0", evaluation.AllKnownStepKeys);
-        Assert.Contains("loop.1.child_1", evaluation.AllKnownStepKeys);
-        Assert.Contains("loop.1.child_1", evaluation.ReadyStepKeys);
-        Assert.DoesNotContain("after", evaluation.ReadyStepKeys);
+        var classified = evaluation.ReadyStepKeys
+            .Concat(evaluation.BlockedStepKeys)
+            .Concat(evaluation.WaitingStepKeys)
+            .ToArray();
+        Assert.Equal(classified.Distinct(StringComparer.Ordinal).Count(), classified.Length);
+        Assert.Equal(["loop.1.child_1"], evaluation.ReadyStepKeys);
+        Assert.Equal(["after"], evaluation.WaitingStepKeys);
+        Assert.DoesNotContain("loop.0.child_0", classified);
     }
 
     [Fact]
@@ -54,14 +56,14 @@ public class FlowGraphPlannerLoopKeyExpansionTests
         // Act
         var evaluation = _sut.Evaluate(flow, statuses);
 
-        // Assert
-        Assert.Contains("outer.0.inner", evaluation.AllKnownStepKeys);
-        Assert.Contains("outer.0.inner.0.leaf", evaluation.AllKnownStepKeys);
-        Assert.Equal(evaluation.AllKnownStepKeys.Distinct(StringComparer.Ordinal).Count(), evaluation.AllKnownStepKeys.Count);
+        // Assert — the inner scope instance "outer.0.inner.0" is expanded to its missing child.
+        Assert.Equal(["outer.0.inner.0.tail"], evaluation.ReadyStepKeys);
+        Assert.Empty(evaluation.BlockedStepKeys);
+        Assert.Empty(evaluation.WaitingStepKeys);
     }
 
     [Fact]
-    public void Evaluate_KnownKeys_AreOrdinalSorted()
+    public void Evaluate_ReadyKeys_AreOrdinalSorted()
     {
         // Arrange
         var flow = CreateLoopFlow();
@@ -76,10 +78,8 @@ public class FlowGraphPlannerLoopKeyExpansionTests
         // Act
         var evaluation = _sut.Evaluate(flow, statuses);
 
-        // Assert
-        Assert.Equal(
-            evaluation.AllKnownStepKeys.OrderBy(k => k, StringComparer.Ordinal).ToArray(),
-            evaluation.AllKnownStepKeys.ToArray());
+        // Assert — "loop.10" sorts before "loop.2" ordinally.
+        Assert.Equal(["loop.10.child_1", "loop.2.child_1"], evaluation.ReadyStepKeys);
     }
 
     private static IFlowDefinition CreateLoopFlow()
@@ -117,7 +117,12 @@ public class FlowGraphPlannerLoopKeyExpansionTests
     {
         var innerBody = new StepCollection
         {
-            ["leaf"] = new StepMetadata { Type = "noop" }
+            ["leaf"] = new StepMetadata { Type = "noop" },
+            ["tail"] = new StepMetadata
+            {
+                Type = "noop",
+                RunAfter = new RunAfterCollection { ["leaf"] = [StepStatus.Succeeded] }
+            }
         };
 
         var outerBody = new StepCollection

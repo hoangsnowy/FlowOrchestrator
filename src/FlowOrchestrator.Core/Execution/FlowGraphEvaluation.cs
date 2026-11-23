@@ -22,12 +22,6 @@ public sealed class FlowGraphEvaluation
     /// once those dependencies complete.
     /// </summary>
     public IReadOnlyList<string> WaitingStepKeys { get; init; } = [];
-
-    /// <summary>
-    /// All step keys known for this run, including runtime-generated loop iteration keys
-    /// (e.g. <c>"processItems.0.validate"</c>).
-    /// </summary>
-    public IReadOnlyList<string> AllKnownStepKeys { get; init; } = [];
 }
 
 /// <summary>
