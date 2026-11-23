@@ -148,7 +148,6 @@ public sealed class InMemoryHotPathAndRetentionTests
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?> { ["signalName"] = "go" },
             Index = 3,
-            ScopeMoveNext = true,
         };
 
         // Act
@@ -168,7 +167,6 @@ public sealed class InMemoryHotPathAndRetentionTests
         Assert.Equal(step.ScheduledTime, envelope.Step.ScheduledTime);
         Assert.Equal("go", envelope.Step.Inputs["signalName"]);
         Assert.Equal(3, envelope.Step.Index);
-        Assert.True(envelope.Step.ScopeMoveNext);
     }
 
     [Fact]

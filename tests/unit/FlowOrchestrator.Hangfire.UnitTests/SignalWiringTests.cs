@@ -105,6 +105,5 @@ public sealed class SignalWiringTests
         public string Key => "wait";
         public WaitForSignalInput Inputs { get; set; } = new() { SignalName = "go" };
         public int Index { get; set; }
-        public bool ScopeMoveNext { get; set; }
     }
 }

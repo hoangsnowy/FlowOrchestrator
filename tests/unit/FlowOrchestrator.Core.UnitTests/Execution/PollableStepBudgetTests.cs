@@ -57,7 +57,6 @@ public sealed class PollableStepBudgetTests
         public string Key => "poll";
         public BudgetInput Inputs { get; set; } = inputs;
         public int Index { get; set; }
-        public bool ScopeMoveNext { get; set; }
     }
 
     private sealed class BudgetHandler(Func<(JsonElement Result, bool IsJson)> fetch) : PollableStepHandler<BudgetInput>

@@ -44,7 +44,4 @@ public sealed class StepInstance : IStepInstance
 
     /// <inheritdoc/>
     public int Index { get; set; }
-
-    /// <inheritdoc/>
-    public bool ScopeMoveNext { get; set; }
 }

@@ -145,7 +145,6 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
             ScheduledTime = instance.ScheduledTime,
             Inputs = instance.Inputs,
             Index = instance.Index,
-            ScopeMoveNext = instance.ScopeMoveNext,
         }
         : step;
 

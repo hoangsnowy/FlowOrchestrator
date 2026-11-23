@@ -91,13 +91,6 @@ internal sealed class TypedStepInstanceAdapter<TInput> : IStepInstance<TInput>
         set => _inner.Index = value;
     }
 
-    /// <inheritdoc/>
-    public bool ScopeMoveNext
-    {
-        get => _inner.ScopeMoveNext;
-        set => _inner.ScopeMoveNext = value;
-    }
-
     /// <summary>
     /// Serialises the strongly-typed <see cref="Inputs"/> back onto the wrapped
     /// step instance's untyped input dictionary so handler-side mutations are

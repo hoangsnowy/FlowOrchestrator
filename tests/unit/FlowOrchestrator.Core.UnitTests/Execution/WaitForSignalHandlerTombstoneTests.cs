@@ -44,7 +44,6 @@ public sealed class WaitForSignalHandlerTombstoneTests
         public string Key { get; } = key;
         public WaitForSignalInput Inputs { get; set; } = inputs;
         public int Index { get; set; }
-        public bool ScopeMoveNext { get; set; }
     }
 
     private static IFlowDefinition Flow() => Substitute.For<IFlowDefinition>();
