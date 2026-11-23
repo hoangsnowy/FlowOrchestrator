@@ -30,8 +30,10 @@ internal sealed record RunListRequest(
     /// <returns>The resolved request.</returns>
     /// <remarks>
     /// Query parameters: <c>flowId</c>, <c>status</c>, <c>search</c>, <c>skip</c>, <c>take</c>,
-    /// <c>includeTotal</c>, <c>from</c>, <c>to</c>, and <c>deep</c> — <c>deep=true|1</c> opts in to
-    /// matching step key / error / output JSON. Step payloads are not searched by default.
+    /// <c>includeTotal</c>, <c>from</c>, <c>to</c>, <c>after</c> and <c>deep</c> — <c>deep=true|1</c> opts in to
+    /// matching step key / error / output JSON. Step payloads are not searched by default. <c>after</c> is
+    /// the opaque <c>nextCursor</c> of the previous page (keyset paging); an unparsable value is ignored.
+    /// The total is capped at <see cref="FlowDashboardOptions.RunListTotalCountCap"/>.
     /// </remarks>
     public static RunListRequest Parse(IQueryCollection query, FlowDashboardOptions options, DateTimeOffset now)
     {
@@ -52,6 +54,8 @@ internal sealed record RunListRequest(
             ? toParsed.ToUniversalTime() : null;
         var deepRaw = query.TryGetValue("deep", out var deepValues) ? deepValues.ToString() : null;
         bool deep = string.Equals(deepRaw, "true", StringComparison.OrdinalIgnoreCase) || deepRaw == "1";
+        RunSearchCursor? after = query.TryGetValue("after", out var afterValues) && RunSearchCursor.TryParse(afterValues.ToString(), out var cursor)
+            ? cursor : null;
 
         var term = RunSearchTerm.Parse(search, hasExplicitStatus: status is not null, includeStepPayloads: deep);
 
@@ -75,15 +79,18 @@ internal sealed record RunListRequest(
             StartedFrom = startedFrom,
             StartedTo = startedTo,
             Skip = skip,
+            After = after,
             Take = take,
             IncludeTotal = includeTotal,
+            TotalCountCap = options.RunListTotalCountCap > 0 ? options.RunListTotalCountCap : null,
         };
 
         var isPlainListing = !includeTotal
             && term.Kind == RunSearchTermKind.None
             && status is null
             && startedFrom is null
-            && startedTo is null;
+            && startedTo is null
+            && after is null;
 
         return new RunListRequest(storeQuery, term, windowDefaulted, includeTotal, isPlainListing);
     }

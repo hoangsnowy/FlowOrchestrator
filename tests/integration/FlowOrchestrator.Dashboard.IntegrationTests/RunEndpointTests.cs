@@ -216,6 +216,47 @@ public sealed class RunEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task GET_api_runs_returns_a_next_cursor_and_a_capped_total()
+    {
+        // Arrange
+        var last = new FlowRunRecord { Id = Guid.NewGuid(), Status = "Succeeded", StartedAt = DateTimeOffset.UtcNow };
+        var cursor = new RunSearchCursor(last.StartedAt, last.Id);
+        _server.FlowRunStore.SearchRunsAsync(Arg.Is<RunSearchQuery>(q => q.TotalCountCap == FlowDashboardOptions.DefaultRunListTotalCountCap), Arg.Any<CancellationToken>())
+            .Returns(new RunSearchPage([last], true, 10_000) { TotalIsLowerBound = true, NextCursor = cursor });
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?includeTotal=true&take=1");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(10_000, doc.RootElement.GetProperty("total").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("totalCapped").GetBoolean());
+        Assert.Equal(cursor.Encode(), doc.RootElement.GetProperty("nextCursor").GetString());
+    }
+
+    [Fact]
+    public async Task GET_api_runs_after_passes_the_decoded_cursor_to_the_store()
+    {
+        // Arrange
+        var cursor = new RunSearchCursor(DateTimeOffset.UtcNow.AddMinutes(-3), Guid.NewGuid());
+        RunSearchQuery? received = null;
+        _server.FlowRunStore.SearchRunsAsync(Arg.Do<RunSearchQuery>(q => received = q), Arg.Any<CancellationToken>())
+            .Returns(new RunSearchPage([], false, 0));
+
+        // Act
+        var response = await _client.GetAsync("/flows/api/runs?includeTotal=true&take=20&after=" + Uri.EscapeDataString(cursor.Encode()));
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(received);
+        Assert.Equal(cursor.Id, received!.After!.Value.Id);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("nextCursor").ValueKind);
+        Assert.False(doc.RootElement.GetProperty("totalCapped").GetBoolean());
+    }
+
+    [Fact]
     public async Task GET_api_runs_active_returns_200()
     {
         // Arrange

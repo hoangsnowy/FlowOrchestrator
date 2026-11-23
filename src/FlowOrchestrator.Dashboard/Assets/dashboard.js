@@ -7,6 +7,13 @@ let runsTotal = 0;
 // so runsTotal is then only a lower bound and the pager shows "more" instead of "of N".
 let runsTotalExact = true;
 let runsHasMore = false;
+// The server stops counting at a cap (totalCapped:true): runsCountCap is that cap, shown as "N+".
+let runsCountCap = 0;
+// Keyset cursors: runsCursors[n] is the server's nextCursor for reaching page n from page n-1. A page
+// reached that way is stable while new runs start; any other page falls back to skip. Reset when the
+// filters or the page size change (runsCursorSig).
+let runsCursors = {};
+let runsCursorSig = '';
 // Set when the server turned a status synonym ("Completed") into the status filter; kept until
 // the user changes a filter, so auto-refresh does not wipe it.
 let runsAliasNotice = '';
@@ -2202,7 +2209,7 @@ function renderRunsPagination() {
   $('runs-pagination').innerHTML =
     '<div class="runs-page-left">'
     + '<div class="runs-page-info">'+(!hasRuns ? 'No runs'
-        : runsTotalExact ? ('Showing <b>'+start+'</b>–<b>'+end+'</b> of <b>'+runsTotal+'</b>')
+        : runsTotalExact ? ('Showing <b>'+start+'</b>–<b>'+end+'</b> of <b>'+(runsCountCap ? esc(runsCountCap.toLocaleString())+'+' : runsTotal)+'</b>')
         : ('Showing <b>'+start+'</b>–<b>'+(start + allRuns.length - 1)+'</b>'+(runsHasMore ? ' · more results' : '')))+'</div>'
     + '<label class="runs-page-size"><span>Rows</span>'
     +   '<select class="filter-select runs-page-size-select" onchange="changeRunsPageSize(this.value)" aria-label="Rows per page">'+sizeOpts+'</select>'
@@ -2299,20 +2306,29 @@ async function loadRuns(preserveScroll) {
     const statusFilter = $('runs-filter-status').value;
     const searchFilter = $('runs-filter-search').value.trim();
     const skip = (runsPage - 1) * runsPageSize;
-    let url = BASE+'/runs?includeTotal=true&take='+runsPageSize+'&skip='+skip;
+    const deepEl = $('runs-filter-deep');
+    const cursorSig = [flowFilter, statusFilter, searchFilter, deepEl && deepEl.checked ? '1' : '', runsPageSize].join('\u0001');
+    if (cursorSig !== runsCursorSig) { runsCursors = {}; runsCursorSig = cursorSig; }
+    // Keyset when we came here with Next from the previous page (an index seek, and the page does not
+    // shift as new runs start); skip otherwise (page 1, a jump, a reload).
+    const cursor = runsPage > 1 ? runsCursors[runsPage] : null;
+    let url = BASE+'/runs?includeTotal=true&take='+runsPageSize+(cursor ? '&after='+encodeURIComponent(cursor) : '&skip='+skip);
     if (flowFilter) url += '&flowId='+encodeURIComponent(flowFilter);
     if (statusFilter) url += '&status='+encodeURIComponent(statusFilter);
     if (searchFilter) url += '&search='+encodeURIComponent(searchFilter);
-    const deepEl = $('runs-filter-deep');
     if (searchFilter && deepEl && deepEl.checked) url += '&deep=1';
 
     const page = await fetchJSON(url, { signal });
     allRuns = Array.isArray(page.items) ? page.items : [];
     runsTotalExact = typeof page.total === 'number';
     runsHasMore = !!page.hasMore;
-    // Without an exact total, a lower bound one past this page keeps the Next button and the
-    // page math working.
-    runsTotal = runsTotalExact ? page.total : skip + allRuns.length + (runsHasMore ? 1 : 0);
+    runsCountCap = runsTotalExact && page.totalCapped ? page.total : 0;
+    if (typeof page.nextCursor === 'string' && page.nextCursor) runsCursors[runsPage + 1] = page.nextCursor;
+    // Without an exact total (a search, or a count that stopped at the cap), a lower bound one past
+    // this page keeps the Next button and the page math working.
+    runsTotal = runsTotalExact && !runsCountCap
+      ? page.total
+      : Math.max(runsCountCap, skip + allRuns.length + (runsHasMore ? 1 : 0));
     applyRunsSearchResult(page.search);
 
     const maxPage = Math.max(1, Math.ceil(runsTotal / runsPageSize));
