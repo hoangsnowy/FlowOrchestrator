@@ -6,6 +6,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed — CI publishes to NuGet.org through Trusted Publishing
+
+- `publish.yml` no longer reads a long-lived `NUGET_API_KEY` secret. It exchanges the job's GitHub
+  OIDC token for a one-hour key through `NuGet/login@v1` (`id-token: write`), backed by a Trusted
+  Publishing policy on nuget.org (owner `thelastsnow`, workflow `publish.yml`). The old key had
+  expired and failed the push for `155e14c` with a 403.
+
 ### Changed — **breaking:** targets .NET 10 and .NET 11; .NET 8 and .NET 9 dropped
 
 - Every package now ships `net10.0` (LTS) and `net11.0` (STS). `net8.0` and `net9.0` were removed:
