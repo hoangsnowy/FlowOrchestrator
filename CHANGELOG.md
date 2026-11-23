@@ -8,7 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
-- **Webhook replay protection judges freshness from the signed timestamp.** For signature schemes that
+- **Webhook replay protection judges freshness from the signed timestamp**
+  ([GHSA-5mx6-chp3-36c4](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-5mx6-chp3-36c4)). For signature schemes that
   sign their own timestamp (Stripe `t=`, Slack, Mailgun, and custom `TimestampDotBody` /
   `ColonDelimited` specs), the replay gate read the unsigned `X-Webhook-Timestamp` header instead and
   derived the replay key from it. Anyone holding a captured delivery could replay it indefinitely by
