@@ -31,7 +31,6 @@ public static class SqlServerServiceCollectionExtensions
 
         builder.Services.AddSingleton<SqlOutputsRepository>(_ => new SqlOutputsRepository(connectionString));
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<SqlOutputsRepository>());
-        builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<SqlOutputsRepository>());
 
         builder.Services.AddSingleton<IFlowSignalStore>(_ => new SqlFlowSignalStore(connectionString));
 

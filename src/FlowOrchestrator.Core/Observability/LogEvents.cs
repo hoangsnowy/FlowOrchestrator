@@ -58,8 +58,8 @@ public static class LogEvents
     /// <summary>A best-effort dispatch annotation failed. Engine continues; log is informational.</summary>
     public static readonly EventId DispatchAnnotateFailed = new(3001, nameof(DispatchAnnotateFailed));
 
-    /// <summary>A flow event could not be persisted. Engine continues; log is informational.</summary>
-    public static readonly EventId EventPersistenceFailed = new(3002, nameof(EventPersistenceFailed));
+    // 3002 (EventPersistenceFailed) is retired: persisted run events were removed in 2.0.
+    // Do not reuse the number.
 
     /// <summary>The realtime <c>IFlowEventNotifier</c> threw while publishing. Engine continues; log is informational.</summary>
     public static readonly EventId EventNotifierFailed = new(3003, nameof(EventNotifierFailed));

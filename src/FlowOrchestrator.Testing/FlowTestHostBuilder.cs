@@ -129,7 +129,6 @@ public sealed class FlowTestHostBuilder<TFlow> where TFlow : class, IFlowDefinit
                     opts.UseInMemory();
                     opts.UseInMemoryRuntime();
                     opts.AddFlow<TFlow>();
-                    opts.Observability.EnableEventPersistence = true;
 
                     foreach (var configure in _orchestratorConfigurations)
                     {

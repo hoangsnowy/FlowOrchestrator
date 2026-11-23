@@ -7,25 +7,23 @@ using FlowOrchestrator.Core.Storage;
 namespace FlowOrchestrator.InMemory;
 
 /// <summary>
-/// In-memory implementation of <see cref="IOutputsRepository"/> and <see cref="IFlowEventReader"/>.
-/// Stores trigger data, step outputs, and events in concurrent dictionaries keyed by RunId.
+/// In-memory implementation of <see cref="IOutputsRepository"/>.
+/// Stores trigger data, trigger headers and step inputs/outputs in concurrent dictionaries keyed by RunId.
 /// All data is lost on process restart.
 /// </summary>
 /// <remarks>
 /// Also an <see cref="IFlowRetentionStore"/>: the retention sweep drops the trigger data, headers,
-/// step inputs/outputs and events of every run the paired <see cref="InMemoryFlowRunStore"/> no
-/// longer holds, mirroring the SQL backends, which delete <c>FlowOutputs</c> / <c>FlowEvents</c>
-/// rows together with their run. Without it the repository grew for the lifetime of the process.
+/// step inputs/outputs of every run the paired <see cref="InMemoryFlowRunStore"/> no
+/// longer holds, mirroring the SQL backends, which delete <c>FlowOutputs</c> rows together with
+/// their run. Without it the repository grew for the lifetime of the process.
 /// </remarks>
-public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventReader, IFlowRetentionStore
+public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowRetentionStore
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ConcurrentDictionary<Guid, JsonElement> _triggerData = new();
     private readonly ConcurrentDictionary<Guid, IReadOnlyDictionary<string, string>> _triggerHeaders = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), JsonElement> _stepOutputs = new();
-    private readonly ConcurrentDictionary<Guid, List<FlowEventRecord>> _events = new();
-    private readonly ConcurrentDictionary<Guid, long> _sequences = new();
     private readonly InMemoryFlowRunStore? _runStore;
 
     /// <summary>Creates a standalone repository; the retention sweep is a no-op without a paired run store.</summary>
@@ -34,7 +32,7 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
     }
 
     /// <summary>Creates a repository whose retention sweep follows <paramref name="runStore"/>'s run lifetime.</summary>
-    /// <param name="runStore">The run store whose purged runs lose their outputs and events on the next sweep.</param>
+    /// <param name="runStore">The run store whose purged runs lose their outputs on the next sweep.</param>
     public InMemoryOutputsRepository(InMemoryFlowRunStore runStore)
     {
         _runStore = runStore;
@@ -96,51 +94,11 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
         return ValueTask.FromResult<object?>(null);
     }
 
-    public ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
-    {
-        var next = _sequences.AddOrUpdate(ctx.RunId, 1L, static (_, value) => value + 1L);
-        var list = _events.GetOrAdd(ctx.RunId, _ => new List<FlowEventRecord>());
-        lock (list)
-        {
-            list.Add(new FlowEventRecord
-            {
-                Sequence = next,
-                RunId = ctx.RunId,
-                Timestamp = evt.Timestamp,
-                Type = evt.Type,
-                StepKey = evt.StepKey ?? step.Key,
-                Message = evt.Message
-            });
-        }
-
-        return ValueTask.CompletedTask;
-    }
-
-    public Task<IReadOnlyList<FlowEventRecord>> GetRunEventsAsync(Guid runId, int skip = 0, int take = 200)
-    {
-        if (!_events.TryGetValue(runId, out var list))
-        {
-            return Task.FromResult<IReadOnlyList<FlowEventRecord>>([]);
-        }
-
-        IReadOnlyList<FlowEventRecord> result;
-        lock (list)
-        {
-            result = list
-                .OrderBy(x => x.Sequence)
-                .Skip(Math.Max(0, skip))
-                .Take(Math.Max(1, take))
-                .ToList();
-        }
-
-        return Task.FromResult(result);
-    }
-
     /// <inheritdoc/>
     /// <remarks>
     /// Removes every entry whose run no longer exists in the paired run store, so it follows the run
     /// store's own cutoff rather than applying <paramref name="cutoffUtc"/> a second time — outputs
-    /// and events carry no completion time of their own. Safe against in-flight runs: the engine
+    /// carry no completion time of their own. Safe against in-flight runs: the engine
     /// starts a run in the run store before it writes any output for it. Order-independent: entries
     /// whose run is purged later in the same sweep go on the next one. O(entries) per sweep, off the
     /// request path.
@@ -176,16 +134,6 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
             if (!_runStore.ContainsRun(key.RunId))
             {
                 _stepOutputs.TryRemove(key, out _);
-            }
-        }
-
-        foreach (var runId in _events.Keys)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!_runStore.ContainsRun(runId))
-            {
-                _events.TryRemove(runId, out _);
-                _sequences.TryRemove(runId, out _);
             }
         }
 

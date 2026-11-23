@@ -98,8 +98,6 @@ public sealed partial class FlowOrchestratorEngine
                 EngineLog.StepStartTrackingFailed(_logger, ex);
             }
 
-            await RecordEventAsync(ctx, flow, step, "step.started", $"Step '{step.Key}' started.").ConfigureAwait(false);
-
             var stepExecutionStart = Stopwatch.GetTimestamp();
             IStepResult result;
             Exception? handlerException = null;
@@ -173,26 +171,6 @@ public sealed partial class FlowOrchestratorEngine
                     new KeyValuePair<string, object?>("status", result.Status.ToString()));
             }
 
-            // Running is non-terminal too: a scoped step that fanned out is parked on its
-            // LoopBarrier until every iteration finishes, so it gets the waiting event, and the
-            // step.completed pair below is emitted later by the continuation that settles it.
-            // Pending emits nothing here: the Pending branch below records its own step.pending
-            // (carrying the retry delay) while it still owns the claim, or step.skipped when the run
-            // was terminated mid-poll. Before #190 Pending fell into the default arm, so every parked
-            // WaitForSignal and every poll iteration logged "step.completed … with status Pending"
-            // immediately followed by step.pending — a timeline that read as finished-then-unfinished.
-            if (result.Status != StepStatus.Pending)
-            {
-                var (stepEventType, stepEventMessage) = result.Status switch
-                {
-                    StepStatus.Failed => ("step.failed", result.FailedReason ?? $"Step '{step.Key}' failed."),
-                    StepStatus.Running => ("step.pending", $"Step '{step.Key}' is waiting for its child steps to complete."),
-                    _ => ("step.completed", $"Step '{step.Key}' completed with status {result.Status}.")
-                };
-
-                await RecordEventAsync(ctx, flow, step, stepEventType, stepEventMessage).ConfigureAwait(false);
-            }
-
             // Pending / Running are non-terminal — only publish step.completed for terminal statuses.
             if (result.Status is not (StepStatus.Pending or StepStatus.Running))
             {
@@ -243,21 +221,12 @@ public sealed partial class FlowOrchestratorEngine
                         EngineLog.StepSkipTrackingFailed(_logger, ex, step.Key);
                     }
 
-                    await RecordEventAsync(ctx, flow, step, "step.skipped", $"Step '{step.Key}' skipped: run is {controlAfterPending}.")
-                        .ConfigureAwait(false);
                     await AbandonEnclosingLoopsAsync(ctx, flow, step, controlAfterPending).ConfigureAwait(false);
                     await TryCompleteRunAsync(ctx.RunId, controlAfterPending).ConfigureAwait(false);
                     return result.Result;
                 }
 
                 var retryDelay = result.DelayNextStep ?? TimeSpan.FromSeconds(10);
-
-                // Emit step.pending while this invocation still owns the claim. Once the claim is
-                // released below, a signal-driven resume can claim, run and complete the step before
-                // this invocation continues — emitting afterwards put step.pending AFTER that
-                // resume's step.completed in the timeline (#190, race 2).
-                await RecordEventAsync(ctx, flow, step, "step.pending", $"Step '{step.Key}' pending for {retryDelay}.")
-                    .ConfigureAwait(false);
 
                 // Hand the step from "claimed by this invocation" to "queued for the next attempt"
                 // with the dispatch ledger continuously covering it. Order matters (#190, race 2):
@@ -716,16 +685,7 @@ public sealed partial class FlowOrchestratorEngine
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 EngineLog.StepSkipTrackingFailed(_logger, ex, loopKey);
-                continue;
             }
-
-            await RecordEventAsync(
-                ctx,
-                flow,
-                step,
-                "step.skipped",
-                $"Loop step '{loopKey}' abandoned: run is {terminalStatus}.",
-                loopKey).ConfigureAwait(false);
         }
     }
 
@@ -745,10 +705,5 @@ public sealed partial class FlowOrchestratorEngine
         {
             EngineLog.StepSkipTrackingFailed(_logger, ex, step.Key);
         }
-
-        // Deliberately no step.skipped event here, unlike the terminated-mid-poll path. This gate is
-        // also reached by a parked step's safety-net attempt long after the timeout sweep already
-        // force-closed the run and marked the step Skipped — an event here would land up to a full
-        // park interval after the run closed, duplicating one the timeline may already show.
     }
 }

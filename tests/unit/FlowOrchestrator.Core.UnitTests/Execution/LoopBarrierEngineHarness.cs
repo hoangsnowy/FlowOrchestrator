@@ -90,7 +90,7 @@ internal sealed class LoopBarrierEngineHarness
             [Store],
             [Store],
             runControlOptions ?? new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             Substitute.For<ILogger<FlowOrchestratorEngine>>(),
             eventNotifier ?? NoopFlowEventNotifier.Instance);

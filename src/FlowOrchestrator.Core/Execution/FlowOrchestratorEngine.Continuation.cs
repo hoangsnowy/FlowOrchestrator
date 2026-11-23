@@ -51,14 +51,6 @@ public sealed partial class FlowOrchestratorEngine
                     new KeyValuePair<string, object?>("step_key", blockedStepKey),
                     new KeyValuePair<string, object?>("reason", "prerequisites_unmet"));
             }
-
-            await RecordEventAsync(
-                ctx,
-                flow,
-                step,
-                "step.skipped",
-                $"Step '{blockedStepKey}' skipped because dependencies did not match.",
-                blockedStepKey).ConfigureAwait(false);
         }
 
         if (skippedAny)
@@ -165,12 +157,6 @@ public sealed partial class FlowOrchestratorEngine
         termination ??= RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
 
         await TryCompleteRunAsync(ctx.RunId, termination).ConfigureAwait(false);
-        await RecordEventAsync(
-            ctx,
-            flow,
-            step,
-            "run.completed",
-            $"Run completed with status {termination}.").ConfigureAwait(false);
     }
 
     /// <summary>
@@ -349,14 +335,6 @@ public sealed partial class FlowOrchestratorEngine
                 StepKey = loopKey,
                 Status = StepStatus.Succeeded.ToString()
             }, CancellationToken.None).ConfigureAwait(false);
-
-            await RecordEventAsync(
-                ctx,
-                flow,
-                step,
-                "step.completed",
-                $"Loop step '{loopKey}' completed: all iterations reached a terminal status.",
-                loopKey).ConfigureAwait(false);
         }
 
         return settled.Count > 0;
@@ -434,14 +412,6 @@ public sealed partial class FlowOrchestratorEngine
                 new KeyValuePair<string, object?>("step_key", stepKey),
                 new KeyValuePair<string, object?>("reason", "when_false"));
         }
-
-        await RecordEventAsync(
-            ctx,
-            flow,
-            new StepInstance(stepKey, metadata.Type) { RunId = ctx.RunId, ScheduledTime = DateTimeOffset.UtcNow },
-            "step.skipped",
-            $"Step '{stepKey}' skipped because '{trace.Expression}' evaluated to false.",
-            stepKey).ConfigureAwait(false);
 
         return true;
     }

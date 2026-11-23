@@ -33,7 +33,7 @@ public sealed class FlowOrchestratorBuilder
     /// <summary>Retention options for the background data cleanup sweep.</summary>
     public FlowRetentionOptions Retention { get; } = new();
 
-    /// <summary>Observability options for OpenTelemetry and event persistence.</summary>
+    /// <summary>Observability options for OpenTelemetry instrumentation.</summary>
     public FlowObservabilityOptions Observability { get; } = new();
 
     /// <summary>Signal options for <c>WaitForSignal</c> parking and resume-nudge dispatch.</summary>

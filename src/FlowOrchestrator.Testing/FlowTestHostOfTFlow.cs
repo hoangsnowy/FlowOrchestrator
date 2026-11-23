@@ -78,8 +78,7 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
     {
         ThrowIfDisposed();
         var runStore = Services.GetRequiredService<IFlowRunStore>();
-        var eventReader = Services.GetService<IFlowEventReader>();
-        return RunPoller.WaitForTerminalAsync(runStore, eventReader, runId, timeout, CancellationToken.None);
+        return RunPoller.WaitForTerminalAsync(runStore, runId, timeout, CancellationToken.None);
     }
 
     /// <inheritdoc/>
@@ -122,7 +121,6 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
 
         var orchestrator = sp.GetRequiredService<IFlowOrchestrator>();
         var runStore = sp.GetRequiredService<IFlowRunStore>();
-        var eventReader = sp.GetService<IFlowEventReader>();
         var flow = sp.GetServices<IFlowDefinition>().OfType<TFlow>().FirstOrDefault()
             ?? throw new InvalidOperationException(
                 $"Flow {typeof(TFlow).Name} is not registered. Ensure AddFlow<{typeof(TFlow).Name}>() ran in the host configuration.");
@@ -144,7 +142,7 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
 
         var runId = triggerContext.RunId;
         return await RunPoller
-            .WaitForTerminalAsync(runStore, eventReader, runId, timeout ?? DefaultTimeout, cancellationToken)
+            .WaitForTerminalAsync(runStore, runId, timeout ?? DefaultTimeout, cancellationToken)
             .ConfigureAwait(false);
     }
 

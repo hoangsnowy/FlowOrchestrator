@@ -10,7 +10,7 @@ namespace FlowOrchestrator.InMemory.Tests;
 
 /// <summary>
 /// Retention of <see cref="InMemoryOutputsRepository"/>: trigger data, trigger headers, step
-/// inputs/outputs and events of a run purged by the retention sweep must go with the run, or a
+/// inputs/outputs of a run purged by the retention sweep must go with the run, or a
 /// long-lived in-memory host grows by one run's payloads for every run it ever executed.
 /// </summary>
 public sealed class InMemoryOutputsRetentionTests
@@ -40,7 +40,6 @@ public sealed class InMemoryOutputsRetentionTests
         await outputs.SaveTriggerHeadersAsync(triggerCtx, _flow, trigger);
         await outputs.SaveStepInputAsync(execCtx, _flow, step);
         await outputs.SaveStepOutputAsync(execCtx, _flow, step, new StepResult { Key = "a", Result = new { ok = true } });
-        await outputs.RecordEventAsync(execCtx, _flow, step, new FlowEvent { Type = "StepCompleted", Message = "done" });
     }
 
     private static async Task AssertOutputsGoneAsync(InMemoryOutputsRepository outputs, Guid runId)
@@ -49,7 +48,6 @@ public sealed class InMemoryOutputsRetentionTests
         Assert.Null(await outputs.GetTriggerHeadersAsync(runId));
         Assert.Null(await outputs.GetStepOutputAsync(runId, "a"));
         Assert.Null(await outputs.GetStepOutputAsync(runId, "a:input"));
-        Assert.Empty(await outputs.GetRunEventsAsync(runId));
     }
 
     private static async Task AssertOutputsPresentAsync(InMemoryOutputsRepository outputs, Guid runId)
@@ -58,11 +56,10 @@ public sealed class InMemoryOutputsRetentionTests
         Assert.NotNull(await outputs.GetTriggerHeadersAsync(runId));
         Assert.NotNull(await outputs.GetStepOutputAsync(runId, "a"));
         Assert.NotNull(await outputs.GetStepOutputAsync(runId, "a:input"));
-        Assert.Single(await outputs.GetRunEventsAsync(runId));
     }
 
     [Fact]
-    public async Task Retention_sweep_over_UseInMemory_registrations_drops_outputs_and_events_of_purged_runs()
+    public async Task Retention_sweep_over_UseInMemory_registrations_drops_outputs_of_purged_runs()
     {
         // Arrange — wire storage exactly as UseInMemory() does, then seed one expired run and one
         // run still inside the retention window, each with the full set of output kinds.

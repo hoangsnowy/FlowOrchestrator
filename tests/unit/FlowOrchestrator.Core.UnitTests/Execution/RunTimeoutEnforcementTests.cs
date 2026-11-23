@@ -40,7 +40,7 @@ public sealed class RunTimeoutEnforcementTests
             [store],
             [store],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             notifier ?? NoopFlowEventNotifier.Instance);

@@ -44,7 +44,7 @@ public sealed class RunControlTests
             [store],
             [store],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             NoopFlowEventNotifier.Instance);

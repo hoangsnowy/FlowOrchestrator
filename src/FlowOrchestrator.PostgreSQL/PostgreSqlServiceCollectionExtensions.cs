@@ -31,7 +31,6 @@ public static class PostgreSqlServiceCollectionExtensions
 
         builder.Services.AddSingleton<PostgreSqlOutputsRepository>(_ => new PostgreSqlOutputsRepository(connectionString));
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
-        builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
 
         builder.Services.AddSingleton<IFlowSignalStore>(_ => new PostgreSqlFlowSignalStore(connectionString));
 

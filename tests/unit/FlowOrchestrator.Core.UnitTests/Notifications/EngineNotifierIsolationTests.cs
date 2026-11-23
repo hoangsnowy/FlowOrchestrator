@@ -28,13 +28,13 @@ public sealed class EngineNotifierIsolationTests
     private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
-    private FlowOrchestratorEngine CreateEngine(IFlowEventNotifier notifier, bool enableEventPersistence = false) =>
+    private FlowOrchestratorEngine CreateEngine(IFlowEventNotifier notifier) =>
         new FlowOrchestratorEngine(
             _dispatcher, _graphPlanner, _stepExecutor,
             _flowStore, _runStore, _outputsRepo, _ctxAccessor, _flowRepo,
             [EngineTestStores.PermissiveRuntimeStore()], [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = enableEventPersistence, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             notifier);
@@ -154,33 +154,6 @@ public sealed class EngineNotifierIsolationTests
 
         // Assert
         Assert.NotNull(result);
-    }
-
-    [Fact]
-    public async Task TriggerAsync_when_outputs_repository_RecordEventAsync_throws_OCE_run_still_completes()
-    {
-        // Arrange — same regression class as the notifier OCE test, but on the engine's other
-        // best-effort observability path: IOutputsRepository.RecordEventAsync. The pre-fix filter
-        // `when (ex is not OperationCanceledException)` weakened this from the documented
-        // "best-effort, MUST NEVER abort a flow" contract; this test pins the restored behaviour.
-        _runStore.TryRecordDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .ReturnsForAnyArgs(Task.FromResult(true));
-
-        // Make the OutputsRepository throw OCE on every RecordEventAsync call.
-        _outputsRepo.WhenForAnyArgs(r => r.RecordEventAsync(default!, default!, default!, default!))
-            .Do(_ => throw new OperationCanceledException("repository internal cancellation"));
-
-        var notifier = Substitute.For<IFlowEventNotifier>();
-        var flow = MakeFlow("step1");
-        var ctx = MakeTriggerCtx(flow);
-
-        // Act — must not throw even though the event-persistence layer is broken.
-        var result = await CreateEngine(notifier, enableEventPersistence: true).TriggerAsync(ctx);
-
-        // Assert
-        Assert.NotNull(result);
-        // Engine still dispatched the entry step despite repository OCE.
-        await _dispatcher.ReceivedWithAnyArgs().EnqueueStepAsync(default!, default!, default!);
     }
 
     [Fact]

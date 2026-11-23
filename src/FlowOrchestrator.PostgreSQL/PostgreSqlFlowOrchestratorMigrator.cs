@@ -165,17 +165,6 @@ public sealed class PostgreSqlFlowOrchestratorMigrator : IHostedService
 
         CREATE INDEX IF NOT EXISTS ix_flow_idempotency_keys_run_id ON flow_idempotency_keys (run_id);
 
-        CREATE TABLE IF NOT EXISTS flow_events (
-            sequence      BIGSERIAL    PRIMARY KEY,
-            run_id        UUID         NOT NULL,
-            timestamp_utc TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-            type          VARCHAR(128) NOT NULL,
-            step_key      VARCHAR(256) NULL,
-            message       TEXT         NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS ix_flow_events_run_id_sequence ON flow_events (run_id, sequence);
-
         CREATE TABLE IF NOT EXISTS flow_step_dispatches (
             run_id          UUID         NOT NULL,
             step_key        VARCHAR(256) NOT NULL,

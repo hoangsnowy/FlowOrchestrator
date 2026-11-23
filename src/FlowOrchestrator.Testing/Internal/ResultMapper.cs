@@ -14,7 +14,6 @@ internal static class ResultMapper
 
     public static FlowTestRunResult Map(
         FlowRunRecord run,
-        IReadOnlyList<FlowEventRecord> events,
         TimeSpan duration,
         bool timedOut)
     {
@@ -32,7 +31,7 @@ internal static class ResultMapper
             RunId = run.Id,
             Status = ParseRunStatus(run.Status),
             Steps = steps,
-            Events = events,
+            Events = FlowRunTimeline.Build(run),
             Duration = duration,
             TimedOut = timedOut
         };

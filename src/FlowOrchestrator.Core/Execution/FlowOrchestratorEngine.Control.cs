@@ -460,44 +460,4 @@ public sealed partial class FlowOrchestratorEngine
         var output = await _outputsRepository.GetStepOutputAsync(runId, runningKey).ConfigureAwait(false);
         return LoopBarrier.TryReadIterationCount(output, out _);
     }
-
-    /// <summary>
-    /// Persists a lifecycle event via <see cref="IOutputsRepository.RecordEventAsync"/>, swallowing
-    /// every exception (including <see cref="OperationCanceledException"/>). Event persistence is
-    /// best-effort observability — a storage failure or internally-cancelled write must NEVER abort
-    /// a flow that is otherwise progressing. The CodeQL <c>when</c> filter on the catch is
-    /// deliberately a tautology so the CWE-396 / cs/catch-of-all-exceptions analyzer stays quiet
-    /// without weakening the documented isolation contract.
-    /// </summary>
-    private async ValueTask RecordEventAsync(
-        IExecutionContext ctx,
-        IFlowDefinition flow,
-        IStepInstance step,
-        string type,
-        string? message,
-        string? stepKey = null)
-    {
-        if (!_observabilityOptions.EnableEventPersistence)
-        {
-            return;
-        }
-
-        try
-        {
-            await _outputsRepository.RecordEventAsync(
-                ctx,
-                flow,
-                step,
-                new FlowEvent
-                {
-                    Type = type,
-                    Message = message,
-                    StepKey = stepKey
-                }).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not null)
-        {
-            EngineLog.EventPersistenceFailed(_logger, ex, type);
-        }
-    }
 }

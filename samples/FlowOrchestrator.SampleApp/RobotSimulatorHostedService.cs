@@ -70,7 +70,7 @@ public sealed class RobotSimulatorHostedService : BackgroundService
             // Catch-all isolation is deliberate: the simulator must never take the sample host
             // down — log and try again next second. Cancellation is handled by the catch above;
             // the tautological `when` filter keeps CodeQL's CWE-396 analyzer satisfied without
-            // weakening that contract (same pattern as the engine's RecordEventAsync).
+            // weakening that contract (same pattern as the engine's PublishEventSafelyAsync).
             catch (Exception ex) when (ex is not null)
             {
                 _logger.LogWarning(ex, "[RobotSimulator] sweep failed — retrying next interval.");

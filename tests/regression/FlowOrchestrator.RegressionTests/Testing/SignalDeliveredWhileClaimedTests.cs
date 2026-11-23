@@ -63,7 +63,7 @@ public sealed class SignalDeliveredWhileClaimedTests
     [Fact]
     public async Task Parked_step_timeline_never_reports_completion_before_it_completes()
     {
-        // Arrange — same race; this time assert on the persisted event timeline.
+        // Arrange — same race; this time assert on the run timeline (derived from the step attempts).
         var store = new RacingSignalStore(holdUntilNudgeLosesClaim: true);
         using var claimLost = new ClaimLostListener(ApprovalFlow.StepKey);
         store.ClaimLost = claimLost.FirstLoss;

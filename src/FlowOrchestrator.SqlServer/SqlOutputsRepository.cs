@@ -8,12 +8,10 @@ using Microsoft.Data.SqlClient;
 namespace FlowOrchestrator.SqlServer;
 
 /// <summary>
-/// Dapper-based SQL Server implementation of <see cref="IOutputsRepository"/> and <see cref="IFlowEventReader"/>.
-/// Persists step inputs/outputs and trigger data to the <c>FlowOutputs</c> table,
-/// and events to the <c>FlowEvents</c> table.
+/// Dapper-based SQL Server implementation of <see cref="IOutputsRepository"/>.
+/// Persists step inputs/outputs and trigger data to the <c>FlowOutputs</c> table.
 /// </summary>
 internal sealed class SqlOutputsRepository : IOutputsRepository
-    , IFlowEventReader
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 
@@ -100,51 +98,6 @@ internal sealed class SqlOutputsRepository : IOutputsRepository
     public async ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey)
     {
         return await GetJsonElementAsync(runId, stepKey).ConfigureAwait(false);
-    }
-
-    public async ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
-    {
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO FlowEvents (RunId, Timestamp, Type, StepKey, Message)
-            VALUES (@RunId, @Timestamp, @Type, @StepKey, @Message)
-            """,
-            new
-            {
-                RunId = ctx.RunId,
-                Timestamp = evt.Timestamp,
-                evt.Type,
-                StepKey = evt.StepKey ?? step.Key,
-                evt.Message
-            }).ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<FlowEventRecord>> GetRunEventsAsync(Guid runId, int skip = 0, int take = 200)
-    {
-        await using var conn = new SqlConnection(_connectionString);
-        var rows = await conn.QueryAsync<FlowEventRecord>(
-            """
-            SELECT
-                Sequence,
-                RunId,
-                Timestamp,
-                Type,
-                StepKey,
-                Message
-            FROM FlowEvents
-            WHERE RunId = @RunId
-            ORDER BY Sequence
-            OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY
-            """,
-            new
-            {
-                RunId = runId,
-                Skip = Math.Max(0, skip),
-                Take = Math.Max(1, take)
-            }).ConfigureAwait(false);
-
-        return rows.AsList();
     }
 
     private async Task UpsertAsync(Guid runId, string key, string? valueJson)

@@ -40,8 +40,8 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3011, Level = LogLevel.Error, Message = "Dispatching step {StepKey} failed and its dispatch-ledger row could not be released; startup recovery will skip it.")]
     public static partial void DispatchReleaseAfterFailureFailed(ILogger logger, Exception ex, string stepKey);
 
-    [LoggerMessage(EventId = 3002, Level = LogLevel.Warning, Message = "Failed to record flow event {EventType}.")]
-    public static partial void EventPersistenceFailed(ILogger logger, Exception ex, string eventType);
+    // EventId 3002 (EventPersistenceFailed) is retired: persisted run events were removed in 2.0.
+    // Do not reuse the number — log pipelines filtering on it would silently change meaning.
 
     [LoggerMessage(EventId = 3003, Level = LogLevel.Warning, Message = "Realtime event notifier threw while publishing {EventType}; engine continuing.")]
     public static partial void EventNotifierFailed(ILogger logger, Exception ex, string eventType);

@@ -18,9 +18,13 @@ public sealed class FlowTestRunResult
     public required IReadOnlyDictionary<string, FlowTestStepResult> Steps { get; init; }
 
     /// <summary>
-    /// Persisted event log for this run, ordered by sequence ascending.
-    /// Empty when <c>Observability.EnableEventPersistence</c> is left at its default (off).
+    /// Chronological timeline of this run (run started/completed, and each step attempt's
+    /// started/completed/failed/pending/skipped), ordered by <see cref="FlowEventRecord.Sequence"/>.
     /// </summary>
+    /// <remarks>
+    /// Derived from the run record and its step attempts by <see cref="FlowRunTimeline.Build"/>;
+    /// since 2.0 run events are no longer persisted, so this is always populated and needs no option.
+    /// </remarks>
     public required IReadOnlyList<FlowEventRecord> Events { get; init; }
 
     /// <summary>Total wall-clock time between <c>TriggerAsync</c> being called and the result being produced.</summary>

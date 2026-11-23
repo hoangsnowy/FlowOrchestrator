@@ -151,18 +151,17 @@ builder.Services.AddFlowOrchestrator(options =>
 
     // ── M2.6: Run-data retention ──────────────────────────────────────────────
     // FlowRetentionHostedService sweeps IFlowRetentionStore on the configured
-    // interval, deleting runs (and their step/output/event records) older than
+    // interval, deleting runs (and their step/attempt/output records) older than
     // DataTtl. Disabled by default; enable here for production deployments.
     options.Retention.Enabled = true;
     options.Retention.DataTtl = TimeSpan.FromDays(30);
 
     // ── M2.5: Observability ───────────────────────────────────────────────────
-    // EnableEventPersistence — writes FlowEvent records to IOutputsRepository
-    //   (flow_events table), making run timelines visible in the dashboard.
-    // EnableOpenTelemetry    — activates FlowOrchestratorTelemetry ActivitySource
+    // EnableOpenTelemetry — activates FlowOrchestratorTelemetry ActivitySource
     //   and Meter; wire up AddOpenTelemetry() + AddFlowOrchestratorInstrumentation()
     //   in production to export spans/metrics to your observability backend.
-    options.Observability.EnableEventPersistence = true;
+    //   (The dashboard's run timeline needs no option: it is derived from the
+    //   run's step attempts.)
     options.Observability.EnableOpenTelemetry = true;
 
     // ── Flow registrations ────────────────────────────────────────────────────

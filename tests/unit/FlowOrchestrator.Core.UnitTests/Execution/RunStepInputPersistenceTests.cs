@@ -112,7 +112,7 @@ public sealed class RunStepInputPersistenceTests
                 new Dictionary<string, StepStatus>(StringComparer.Ordinal) { ["a"] = StepStatus.Succeeded })],
             [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             Substitute.For<ILogger<FlowOrchestratorEngine>>(),
             NoopFlowEventNotifier.Instance);

@@ -14,7 +14,7 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// <summary>
 /// Pins the engine's <see cref="StepStatus.Pending"/> path against the two claim races of issue #190:
 /// the order of the ledger / claim / dispatch hand-off, the post-release signal-waiter re-check, and
-/// the event-type mapping for non-terminal results.
+/// the status recorded on the attempt row (which the derived run timeline reads) for non-terminal results.
 /// </summary>
 /// <remarks>
 /// Every storage and dispatcher call the Pending path makes is appended to one shared log, so the
@@ -85,12 +85,12 @@ public sealed class PendingPathClaimOrderingTests
                 return new ValueTask<FlowSignalWaiter?>((FlowSignalWaiter?)null);
             });
 
-        _outputsRepo.RecordEventAsync(
-                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<FlowEvent>())
+        _runStore.RecordStepCompleteAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(call =>
             {
-                _calls.Add("event:" + call.Arg<FlowEvent>().Type);
-                return ValueTask.CompletedTask;
+                _calls.Add("complete:" + call.ArgAt<string>(2));
+                return Task.CompletedTask;
             });
 
         _stepExecutor.ExecuteAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
@@ -120,7 +120,7 @@ public sealed class PendingPathClaimOrderingTests
     }
 
     [Fact]
-    public async Task Pending_emits_step_pending_while_the_claim_is_still_held()
+    public async Task Pending_records_the_attempt_outcome_while_the_claim_is_still_held()
     {
         // Arrange
         var engine = CreateEngine();
@@ -128,16 +128,17 @@ public sealed class PendingPathClaimOrderingTests
         // Act
         await RunStepAsync(engine);
 
-        // Assert — a resume that claims and completes the step the instant the claim clears can
-        // never appear before this event in the timeline.
-        var pendingIndex = _calls.IndexOf("event:step.pending");
+        // Assert — the attempt row's Pending completion (the derived timeline's step.pending) is
+        // written before the claim clears, so a resume that claims and completes the step the
+        // instant the claim is released always lands after it in the timeline.
+        var pendingIndex = _calls.IndexOf("complete:Pending");
         var releaseIndex = _calls.IndexOf("release-claim");
         Assert.NotEqual(-1, pendingIndex);
         Assert.True(pendingIndex < releaseIndex, string.Join(", ", _calls));
     }
 
     [Fact]
-    public async Task Pending_result_never_emits_step_completed()
+    public async Task Pending_result_records_a_single_non_terminal_attempt_outcome()
     {
         // Arrange
         var engine = CreateEngine();
@@ -145,10 +146,11 @@ public sealed class PendingPathClaimOrderingTests
         // Act
         await RunStepAsync(engine);
 
-        // Assert — pre-#190 a Pending result fell into the default arm of the event switch and logged
-        // "step.completed … with status Pending" right before the real step.pending.
-        Assert.DoesNotContain("event:step.completed", _calls);
-        Assert.Single(_calls, c => c == "event:step.pending");
+        // Assert — the attempt is closed exactly once, as Pending, never with a terminal status, so
+        // the derived timeline shows step.pending and no step.completed for a poll iteration.
+        Assert.DoesNotContain("complete:Succeeded", _calls);
+        Assert.Single(_calls, c => c.StartsWith("complete:", StringComparison.Ordinal));
+        Assert.Contains("complete:Pending", _calls);
     }
 
     [Fact]
@@ -328,7 +330,7 @@ public sealed class PendingPathClaimOrderingTests
             && c.GetArguments()[1] is EventId { Id: 3009 });
     }
 
-    // ── Events & telemetry ──────────────────────────────────────────────────────
+    // ── Recorded outcome & telemetry ────────────────────────────────────────────
 
     [Fact]
     public async Task A_run_terminated_mid_poll_records_step_skipped_and_nothing_else()
@@ -343,19 +345,22 @@ public sealed class PendingPathClaimOrderingTests
         // Act
         await RunStepAsync(engine);
 
-        // Assert — skipped instead of parked: no park event, no completion, no hand-off, no re-check.
-        var events = _calls.Where(c => c.StartsWith("event:", StringComparison.Ordinal)).ToList();
-        Assert.Equal(["event:step.started", "event:step.skipped"], events);
+        // Assert — skipped instead of parked: the attempt ends Skipped (so the derived timeline shows
+        // step.skipped, not step.pending), with no hand-off and no re-check.
+        var outcomes = _calls.Where(c => c.StartsWith("complete:", StringComparison.Ordinal)).ToList();
+        Assert.Equal("complete:Skipped", outcomes[^1]);
+        Assert.DoesNotContain("complete:Succeeded", outcomes);
         Assert.DoesNotContain("release-dispatch", _calls);
         Assert.DoesNotContain("release-claim", _calls);
         Assert.DoesNotContain("read-waiter", _calls);
     }
 
     [Fact]
-    public async Task A_step_skipped_at_the_entry_gate_records_no_event()
+    public async Task A_step_skipped_at_the_entry_gate_is_recorded_skipped_without_executing()
     {
         // Arrange — the entry gate is also what a parked step's safety-net attempt hits long after the
-        // timeout sweep force-closed the run; an event there would land up to a park interval late.
+        // timeout sweep force-closed the run. The repeated Skipped attempt it records is collapsed by
+        // FlowRunTimeline, so it never adds a late step.skipped entry to the timeline.
         var controlStore = Substitute.For<IFlowRunControlStore>();
         controlStore.GetRunControlAsync(_runId)
             .Returns(Task.FromResult<FlowRunControlRecord?>(new FlowRunControlRecord { RunId = _runId, CancelRequested = true }));
@@ -365,7 +370,7 @@ public sealed class PendingPathClaimOrderingTests
         await RunStepAsync(engine);
 
         // Assert
-        Assert.DoesNotContain(_calls, c => c.StartsWith("event:", StringComparison.Ordinal));
+        Assert.Equal(["complete:Skipped"], _calls.Where(c => c.StartsWith("complete:", StringComparison.Ordinal)));
         Assert.Empty(_stepExecutor.ReceivedCalls());
     }
 
@@ -583,7 +588,7 @@ public sealed class PendingPathClaimOrderingTests
             [runtimeStoreOverride ?? _runtimeStore],
             [runControlStore ?? EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = true, EnableOpenTelemetry = enableOpenTelemetry },
+            new FlowObservabilityOptions { EnableOpenTelemetry = enableOpenTelemetry },
             telemetry ?? new FlowOrchestratorTelemetry(),
             _logger,
             eventNotifier: NoopFlowEventNotifier.Instance,

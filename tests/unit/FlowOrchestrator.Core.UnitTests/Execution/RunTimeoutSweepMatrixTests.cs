@@ -38,7 +38,7 @@ public sealed class RunTimeoutSweepMatrixTests
             _dispatcher, _graphPlanner, _stepExecutor, _flowStore, store,
             _outputsRepo, _ctxAccessor, _flowRepo, [store], [store],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             NoopFlowEventNotifier.Instance);

@@ -71,18 +71,11 @@ public sealed class FlowRetentionOptions
 }
 
 /// <summary>
-/// Configuration for OpenTelemetry instrumentation and event persistence.
-/// Applied via <c>FlowOrchestratorBuilder.WithObservability()</c>.
+/// Configuration for OpenTelemetry instrumentation.
+/// Applied via <see cref="FlowOrchestratorBuilder.Observability"/>.
 /// </summary>
 public sealed class FlowObservabilityOptions
 {
-    /// <summary>
-    /// When <see langword="true"/>, flow and step lifecycle events are persisted to
-    /// <see cref="FlowOrchestrator.Core.Storage.IOutputsRepository.RecordEventAsync"/>
-    /// and retrievable via <see cref="FlowOrchestrator.Core.Storage.IFlowEventReader"/>.
-    /// </summary>
-    public bool EnableEventPersistence { get; set; } = true;
-
     /// <summary>
     /// When <see langword="true"/>, emits OpenTelemetry metrics (counters, histograms) and
     /// distributed trace spans via <c>System.Diagnostics.Activity</c> and <c>Meter</c>.
@@ -115,9 +108,8 @@ public sealed class FlowSignalOptions
     /// payload has landed, so this is the worst-case resume latency if every other resume path fails.
     /// </summary>
     /// <remarks>
-    /// Each re-invocation runs the full step path — a claim, an attempt row, a <c>step.started</c> /
-    /// <c>step.pending</c> event pair and a few storage round-trips — so a short interval multiplies the
-    /// run history of every long-parked step. The engine wakes a parked step directly on delivery, and
+    /// Each re-invocation runs the full step path — a claim, an attempt row and a few storage
+    /// round-trips — so a short interval multiplies the run history of every long-parked step. The engine wakes a parked step directly on delivery, and
     /// re-checks the waiter itself after releasing the claim (#190), so the safety net is a last resort
     /// and the 24-hour default is deliberate. Values at or below <see cref="TimeSpan.Zero"/> are
     /// ignored and the default is used; values above <see cref="MaxIndefiniteParkInterval"/> are clamped.

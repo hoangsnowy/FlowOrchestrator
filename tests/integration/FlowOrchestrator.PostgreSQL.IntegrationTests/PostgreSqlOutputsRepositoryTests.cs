@@ -167,21 +167,6 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
         Assert.Equal(2, je.GetProperty("value").GetInt32());
     }
 
-    [Fact]
-    public async Task RecordEventAsync_completes_without_error()
-    {
-        // Arrange
-        var ctx = MakeExecutionContext(Guid.NewGuid());
-        var flow = Substitute.For<IFlowDefinition>();
-        var step = Substitute.For<IStepInstance>();
-
-        // Act
-        var ex = await Record.ExceptionAsync(() => _repo.RecordEventAsync(ctx, flow, step, new FlowEvent { Type = "test" }).AsTask());
-
-        // Assert
-        Assert.Null(ex);
-    }
-
     private static ITriggerContext MakeTriggerContext(Guid runId)
     {
         var ctx = Substitute.For<ITriggerContext>();

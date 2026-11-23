@@ -13,7 +13,6 @@ internal static class RunPoller
 
     public static async Task<FlowTestRunResult> WaitForTerminalAsync(
         IFlowRunStore runStore,
-        IFlowEventReader? eventReader,
         Guid runId,
         TimeSpan timeout,
         CancellationToken ct)
@@ -28,10 +27,7 @@ internal static class RunPoller
             var run = await runStore.GetRunDetailAsync(runId).ConfigureAwait(false);
             if (run is not null && ResultMapper.IsTerminal(run.Status))
             {
-                var events = eventReader is null
-                    ? Array.Empty<FlowEventRecord>()
-                    : await eventReader.GetRunEventsAsync(runId).ConfigureAwait(false);
-                return ResultMapper.Map(run, events, sw.Elapsed, timedOut: false);
+                return ResultMapper.Map(run, sw.Elapsed, timedOut: false);
             }
 
             if (sw.Elapsed >= deadline)
@@ -42,10 +38,7 @@ internal static class RunPoller
                     Status = "Running",
                     StartedAt = DateTimeOffset.UtcNow
                 };
-                var events = eventReader is null
-                    ? Array.Empty<FlowEventRecord>()
-                    : await eventReader.GetRunEventsAsync(runId).ConfigureAwait(false);
-                return ResultMapper.Map(snapshot, events, sw.Elapsed, timedOut: true);
+                return ResultMapper.Map(snapshot, sw.Elapsed, timedOut: true);
             }
 
             try

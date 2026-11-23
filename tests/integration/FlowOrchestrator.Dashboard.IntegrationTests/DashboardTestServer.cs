@@ -60,7 +60,6 @@ public sealed class DashboardTestServer : IDisposable
     /// </summary>
     public FlowRegistry Flows { get; set; } = FlowRegistry.Empty;
     public IOutputsRepository OutputsRepository { get; } = Substitute.For<IOutputsRepository>();
-    public IFlowEventReader EventReader { get; } = Substitute.For<IFlowEventReader>();
     public IFlowScheduleStateStore ScheduleStateStore { get; } = Substitute.For<IFlowScheduleStateStore>();
 
     /// <summary>Mock engine used to verify trigger and retry calls from dashboard endpoints.</summary>
@@ -126,8 +125,6 @@ public sealed class DashboardTestServer : IDisposable
 
         ScheduleStateStore.GetAllAsync().Returns(Array.Empty<FlowScheduleState>());
         ScheduleStateStore.GetAsync(Arg.Any<string>()).Returns(default(FlowScheduleState?));
-        EventReader.GetRunEventsAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<int>())
-            .Returns(Array.Empty<FlowEventRecord>());
         RunControlStore.GetRunControlAsync(Arg.Any<Guid>()).Returns(default(FlowRunControlRecord?));
         TriggerInspector.GetJobsAsync().Returns(Array.Empty<RecurringTriggerInfo>());
         RuntimeStore.GetStepStatusesAsync(Arg.Any<Guid>())
@@ -147,7 +144,6 @@ public sealed class DashboardTestServer : IDisposable
         builder.Services.AddSingleton(RuntimeStore);
         builder.Services.AddTransient(_ => Flows);
         builder.Services.AddSingleton(OutputsRepository);
-        builder.Services.AddSingleton(EventReader);
         builder.Services.AddSingleton(ScheduleStateStore);
         builder.Services.AddSingleton(FlowOrchestrator);
         builder.Services.AddSingleton(SignalDispatcher);

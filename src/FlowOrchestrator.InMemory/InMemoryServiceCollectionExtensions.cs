@@ -28,9 +28,8 @@ public static class InMemoryServiceCollectionExtensions
 
         builder.Services.AddSingleton<InMemoryOutputsRepository>();
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
-        builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
         // Registered after the run store so a single sweep purges the run first and its outputs
-        // and events right after; the repository follows the run store's lifetime, not the cutoff.
+        // right after; the repository follows the run store's lifetime, not the cutoff.
         builder.Services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
 
         // One instance serves both roles: the retention sweep must prune the same waiter map the
