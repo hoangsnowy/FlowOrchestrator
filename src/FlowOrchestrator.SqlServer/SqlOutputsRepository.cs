@@ -70,9 +70,6 @@ internal sealed class SqlOutputsRepository : IOutputsRepository
         return await GetJsonElementAsync(runId, stepKey).ConfigureAwait(false);
     }
 
-    public ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
-        => ValueTask.CompletedTask;
-
     public async ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
     {
         await using var conn = new SqlConnection(_connectionString);

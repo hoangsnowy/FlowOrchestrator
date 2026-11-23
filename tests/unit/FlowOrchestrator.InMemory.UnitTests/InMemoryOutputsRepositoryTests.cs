@@ -119,21 +119,6 @@ public class InMemoryOutputsRepositoryTests
     }
 
     [Fact]
-    public async Task EndScopeAsync_DoesNotThrow()
-    {
-        // Arrange
-        var flow = CreateFlow();
-        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
-        var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
-
-        // Act
-        var ex = await Record.ExceptionAsync(async () => await _sut.EndScopeAsync(ctx, flow, step));
-
-        // Assert
-        Assert.Null(ex);
-    }
-
-    [Fact]
     public async Task RecordEventAsync_DoesNotThrow()
     {
         // Arrange

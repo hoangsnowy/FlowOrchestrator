@@ -143,21 +143,6 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
     }
 
     [Fact]
-    public async Task EndScopeAsync_completes_without_error()
-    {
-        // Arrange
-        var ctx = MakeExecutionContext(Guid.NewGuid());
-        var flow = Substitute.For<IFlowDefinition>();
-        var step = Substitute.For<IStepInstance>();
-
-        // Act
-        var ex = await Record.ExceptionAsync(() => _repo.EndScopeAsync(ctx, flow, step).AsTask());
-
-        // Assert
-        Assert.Null(ex);
-    }
-
-    [Fact]
     public async Task RecordEventAsync_completes_without_error()
     {
         // Arrange

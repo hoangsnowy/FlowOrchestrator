@@ -77,9 +77,6 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
         return ValueTask.FromResult<object?>(null);
     }
 
-    public ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
-        => ValueTask.CompletedTask;
-
     public ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
     {
         var next = _sequences.AddOrUpdate(ctx.RunId, 1L, static (_, value) => value + 1L);
