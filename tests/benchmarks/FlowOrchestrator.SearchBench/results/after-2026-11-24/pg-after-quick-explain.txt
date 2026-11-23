@@ -1,0 +1,382 @@
+### runId prefix, recent [7d]
+Limit  (cost=8.45..8.46 rows=1 width=354) (actual time=0.021..0.022 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=8.45..8.46 rows=1 width=354) (actual time=0.021..0.022 rows=1.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.014..0.014 rows=1.00 loops=1)
+              Index Cond: ((id >= 'bbdafe3e-0000-0000-0000-000000000000'::uuid) AND (id <= 'bbdafe3e-ffff-ffff-ffff-ffffffffffff'::uuid))
+              Index Searches: 1
+              Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.071 ms
+Execution Time: 0.045 ms
+
+### runId prefix, 60d old [7d]
+Limit  (cost=8.45..8.46 rows=1 width=354) (actual time=0.019..0.020 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=8.45..8.46 rows=1 width=354) (actual time=0.019..0.019 rows=1.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.011..0.012 rows=1.00 loops=1)
+              Index Cond: ((id >= 'f41296b2-0000-0000-0000-000000000000'::uuid) AND (id <= 'f41296b2-ffff-ffff-ffff-ffffffffffff'::uuid))
+              Index Searches: 1
+              Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.057 ms
+Execution Time: 0.042 ms
+
+### flow name, common 'Invoice' [7d]
+Limit  (cost=163.55..163.56 rows=2 width=354) (actual time=30.037..30.043 rows=51.00 loops=1)
+  Buffers: shared hit=9194
+  ->  Sort  (cost=163.55..163.56 rows=2 width=354) (actual time=30.036..30.038 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=9194
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=85.44..163.54 rows=2 width=354) (actual time=27.784..29.758 rows=2251.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%invoice%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Rows Removed by Filter: 26353
+              Heap Blocks: exact=9128
+              Buffers: shared hit=9194
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..85.44 rows=20 width=0) (actual time=4.574..4.574 rows=28604.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%invoice%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=66
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.139 ms
+Execution Time: 30.164 ms
+
+### flow name, rare 'Gdpr' [7d]
+Limit  (cost=13.78..691.53 rows=51 width=354) (actual time=10.561..10.563 rows=16.00 loops=1)
+  Buffers: shared hit=800
+  ->  Incremental Sort  (cost=13.78..1674.94 rows=125 width=354) (actual time=10.560..10.561 rows=16.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Buffers: shared hit=800
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1669.32 rows=125 width=354) (actual time=0.813..10.544 rows=16.00 loops=1)
+              Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Filter: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%gdpr%'::text)
+              Rows Removed by Filter: 15740
+              Index Searches: 1
+              Buffers: shared hit=800
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.128 ms
+Execution Time: 10.585 ms
+
+### trigger key, common 'order-created' [7d]
+Limit  (cost=261.83..261.84 rows=2 width=354) (actual time=35.560..35.565 rows=51.00 loops=1)
+  Buffers: shared hit=9292
+  ->  Sort  (cost=261.83..261.84 rows=2 width=354) (actual time=35.558..35.560 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=9292
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=183.72..261.82 rows=2 width=354) (actual time=33.378..35.304 rows=2099.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%order-created%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Rows Removed by Filter: 25325
+              Heap Blocks: exact=9112
+              Buffers: shared hit=9292
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..183.72 rows=20 width=0) (actual time=10.081..10.081 rows=27424.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%order-created%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=180
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.142 ms
+Execution Time: 35.688 ms
+
+### trigger key, rare 'backfill' [7d]
+Limit  (cost=180.62..180.62 rows=2 width=354) (actual time=1.889..1.894 rows=51.00 loops=1)
+  Buffers: shared hit=847
+  ->  Sort  (cost=180.62..180.62 rows=2 width=354) (actual time=1.888..1.891 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 67kB
+        Buffers: shared hit=847
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=102.51..180.61 rows=2 width=354) (actual time=1.761..1.863 rows=83.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%backfill%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Rows Removed by Filter: 761
+              Heap Blocks: exact=807
+              Buffers: shared hit=847
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.758..0.758 rows=844.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%backfill%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=40
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.122 ms
+Execution Time: 1.989 ms
+
+### no match 'zq-nomatch-7731' [7d]
+Limit  (cost=295.97..295.97 rows=2 width=354) (actual time=0.204..0.204 rows=0.00 loops=1)
+  Buffers: shared hit=47
+  ->  Sort  (cost=295.97..295.97 rows=2 width=354) (actual time=0.203..0.204 rows=0.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=47
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=217.85..295.96 rows=2 width=354) (actual time=0.201..0.202 rows=0.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%zq-nomatch-7731%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Buffers: shared hit=47
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..217.85 rows=20 width=0) (actual time=0.199..0.199 rows=0.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%zq-nomatch-7731%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=47
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.087 ms
+Execution Time: 0.252 ms
+
+### runId prefix, recent [all]
+Limit  (cost=8.45..8.46 rows=1 width=354) (actual time=0.020..0.021 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=8.45..8.46 rows=1 width=354) (actual time=0.020..0.020 rows=1.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.016..0.016 rows=1.00 loops=1)
+              Index Cond: ((id >= 'bbdafe3e-0000-0000-0000-000000000000'::uuid) AND (id <= 'bbdafe3e-ffff-ffff-ffff-ffffffffffff'::uuid))
+              Index Searches: 1
+              Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.072 ms
+Execution Time: 0.041 ms
+
+### runId prefix, 60d old [all]
+Limit  (cost=8.45..8.46 rows=1 width=354) (actual time=0.014..0.014 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=8.45..8.46 rows=1 width=354) (actual time=0.013..0.014 rows=1.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.011..0.011 rows=1.00 loops=1)
+              Index Cond: ((id >= 'f41296b2-0000-0000-0000-000000000000'::uuid) AND (id <= 'f41296b2-ffff-ffff-ffff-ffffffffffff'::uuid))
+              Index Searches: 1
+              Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.052 ms
+Execution Time: 0.031 ms
+
+### flow name, common 'Invoice' [all]
+Limit  (cost=163.93..163.98 rows=20 width=354) (actual time=33.282..33.287 rows=51.00 loops=1)
+  Buffers: shared hit=9194
+  ->  Sort  (cost=163.93..163.98 rows=20 width=354) (actual time=33.281..33.283 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=9194
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=85.44..163.49 rows=20 width=354) (actual time=5.645..30.327 rows=28604.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%invoice%'::text)
+              Heap Blocks: exact=9128
+              Buffers: shared hit=9194
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..85.44 rows=20 width=0) (actual time=4.814..4.815 rows=28604.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%invoice%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=66
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.114 ms
+Execution Time: 33.401 ms
+
+### flow name, rare 'Gdpr' [all]
+Limit  (cost=13.39..676.10 rows=51 width=354) (actual time=23.250..38.336 rows=51.00 loops=1)
+  Buffers: shared hit=2725
+  ->  Incremental Sort  (cost=13.39..20830.51 rows=1602 width=354) (actual time=23.249..38.331 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=2725
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..20758.42 rows=1602 width=354) (actual time=0.937..38.260 rows=52.00 loops=1)
+              Filter: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%gdpr%'::text)
+              Rows Removed by Filter: 53928
+              Index Searches: 1
+              Buffers: shared hit=2725
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.144 ms
+Execution Time: 38.372 ms
+
+### trigger key, common 'order-created' [all]
+Limit  (cost=262.21..262.26 rows=20 width=354) (actual time=38.031..38.036 rows=51.00 loops=1)
+  Buffers: shared hit=9292
+  ->  Sort  (cost=262.21..262.26 rows=20 width=354) (actual time=38.030..38.032 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=9292
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=183.72..261.77 rows=20 width=354) (actual time=10.683..35.222 rows=27424.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%order-created%'::text)
+              Heap Blocks: exact=9112
+              Buffers: shared hit=9292
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..183.72 rows=20 width=0) (actual time=9.891..9.892 rows=27424.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%order-created%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=180
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.129 ms
+Execution Time: 38.164 ms
+
+### trigger key, rare 'backfill' [all]
+Limit  (cost=180.99..181.04 rows=20 width=354) (actual time=1.831..1.835 rows=51.00 loops=1)
+  Buffers: shared hit=847
+  ->  Sort  (cost=180.99..181.04 rows=20 width=354) (actual time=1.830..1.832 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=847
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=102.51..180.56 rows=20 width=354) (actual time=0.787..1.705 rows=844.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%backfill%'::text)
+              Heap Blocks: exact=807
+              Buffers: shared hit=847
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.720..0.720 rows=844.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%backfill%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=40
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.084 ms
+Execution Time: 1.889 ms
+
+### no match 'zq-nomatch-7731' [all]
+Limit  (cost=296.34..296.39 rows=20 width=354) (actual time=0.190..0.190 rows=0.00 loops=1)
+  Buffers: shared hit=47
+  ->  Sort  (cost=296.34..296.39 rows=20 width=354) (actual time=0.189..0.190 rows=0.00 loops=1)
+        Sort Key: started_at DESC, id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=47
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=217.86..295.91 rows=20 width=354) (actual time=0.187..0.187 rows=0.00 loops=1)
+              Recheck Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%zq-nomatch-7731%'::text)
+              Buffers: shared hit=47
+              ->  Bitmap Index Scan on ix_flow_runs_run_search_trgm  (cost=0.00..217.85 rows=20 width=0) (actual time=0.184..0.184 rows=0.00 loops=1)
+                    Index Cond: (lower((((((((((id)::text || '|'::text) || (COALESCE(flow_name, ''::character varying))::text) || '|'::text) || (COALESCE(trigger_key, ''::character varying))::text) || '|'::text) || (status)::text) || '|'::text) || (COALESCE(background_job_id, ''::character varying))::text)) ~~ '%zq-nomatch-7731%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=47
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.086 ms
+Execution Time: 0.228 ms
+
+### status word 'Failed' (+total)
+Limit  (cost=1.87..77.61 rows=51 width=354) (actual time=0.095..0.144 rows=51.00 loops=1)
+  Buffers: shared hit=60
+  ->  Incremental Sort  (cost=1.87..15729.51 rows=10591 width=354) (actual time=0.094..0.141 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=60
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..15252.92 rows=10591 width=354) (actual time=0.015..0.109 rows=52.00 loops=1)
+              Filter: ((status)::text = 'Failed'::text)
+              Rows Removed by Filter: 1001
+              Index Searches: 1
+              Buffers: shared hit=60
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.049 ms
+Execution Time: 0.159 ms
+
+### status word 'TimedOut' (+total)
+Limit  (cost=5.81..282.29 rows=51 width=354) (actual time=0.151..0.279 rows=51.00 loops=1)
+  Buffers: shared hit=149
+  ->  Incremental Sort  (cost=5.81..15380.54 rows=2836 width=354) (actual time=0.150..0.276 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=149
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..15252.92 rows=2836 width=354) (actual time=0.020..0.243 rows=52.00 loops=1)
+              Filter: ((status)::text = 'TimedOut'::text)
+              Rows Removed by Filter: 2754
+              Index Searches: 1
+              Buffers: shared hit=149
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.049 ms
+Execution Time: 0.296 ms
+
+### full run id (old)
+Limit  (cost=8.45..8.45 rows=1 width=354) (actual time=0.012..0.013 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=8.45..8.45 rows=1 width=354) (actual time=0.012..0.012 rows=1.00 loops=1)
+        Sort Key: started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.010..0.010 rows=1.00 loops=1)
+              Index Cond: (id = 'f41296b2-8e25-47a6-9da1-bc4b0861a157'::uuid)
+              Index Searches: 1
+              Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.044 ms
+Execution Time: 0.028 ms
+
+### unfiltered first page (+total)
+Limit  (cost=0.50..6.56 rows=51 width=354) (actual time=0.019..0.028 rows=51.00 loops=1)
+  Buffers: shared hit=6
+  ->  Incremental Sort  (cost=0.50..23761.42 rows=200200 width=354) (actual time=0.019..0.025 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=6
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..14752.42 rows=200200 width=354) (actual time=0.009..0.015 rows=52.00 loops=1)
+              Index Searches: 1
+              Buffers: shared hit=6
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.040 ms
+Execution Time: 0.050 ms
+
+### unfiltered first page (no total)
+Limit  (cost=0.50..6.56 rows=51 width=354) (actual time=0.021..0.029 rows=51.00 loops=1)
+  Buffers: shared hit=6
+  ->  Incremental Sort  (cost=0.50..23761.42 rows=200200 width=354) (actual time=0.021..0.027 rows=51.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=6
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..14752.42 rows=200200 width=354) (actual time=0.012..0.017 rows=52.00 loops=1)
+              Index Searches: 1
+              Buffers: shared hit=6
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.039 ms
+Execution Time: 0.056 ms
+
+### unfiltered page 50 OFFSET (+total)
+Limit  (cost=291.28..297.34 rows=51 width=354) (actual time=0.594..0.604 rows=51.00 loops=1)
+  Buffers: shared hit=133
+  ->  Incremental Sort  (cost=0.50..23761.42 rows=200200 width=354) (actual time=0.027..0.541 rows=2501.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 79  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=133
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..14752.42 rows=200200 width=354) (actual time=0.012..0.252 rows=2502.00 loops=1)
+              Index Searches: 1
+              Buffers: shared hit=133
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.057 ms
+Execution Time: 0.625 ms
+
+### unfiltered page 2000 OFFSET
+Limit  (cost=11863.16..11869.21 rows=51 width=354) (actual time=20.054..20.064 rows=51.00 loops=1)
+  Buffers: shared hit=5042
+  ->  Incremental Sort  (cost=0.50..23761.42 rows=200200 width=354) (actual time=0.026..17.968 rows=100001.00 loops=1)
+        Sort Key: started_at DESC, id
+        Presorted Key: started_at
+        Full-sort Groups: 3126  Sort Method: quicksort  Average Memory: 41kB  Peak Memory: 41kB
+        Buffers: shared hit=5042
+        ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..14752.42 rows=200200 width=354) (actual time=0.014..8.103 rows=100002.00 loops=1)
+              Index Searches: 1
+              Buffers: shared hit=5042
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.067 ms
+Execution Time: 20.093 ms
+

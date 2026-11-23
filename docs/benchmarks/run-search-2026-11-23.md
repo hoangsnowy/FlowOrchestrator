@@ -477,63 +477,159 @@ retention. `SearchRunsAsync` hydrates the page with a primary-key `IN`. Built-in
 See `tests/benchmarks/FlowOrchestrator.SearchBench/README.md`; `tables.py results/timings.tsv` regenerates the
 tables above.
 
-## Implementation (2.0, SQL Server) — what shipped and what is still to measure
 
-Branch `perf/2.0-run-search`. Everything above was measured on **prototype** query text
-(`MsSqlBench.Build`). The shipped text (`SqlRunSearchCommandBuilder`) follows the winning candidates,
-with these differences — each needs the re-measurement listed below before its number is quoted as
-"after":
+## Implementation (2.0) — shipped code, before / after (2026-11-24)
+
+Branch `perf/2.0-run-search`. Same harness, same deterministic data set (200k runs / 1.99M steps, seed
+`20261123`), same host and container settings as above, re-seeded fresh; one database container at a time,
+nothing else running. **Before** = the "shipped" columns of the tables above (the 1.x query text on the 1.x
+schema). **After** = the 2.0 query text exactly as the stores send it (`SqlFlowRunStore` /
+`PostgreSqlFlowRunStore.BuildSearchRunsCommand`, invoked directly), on the schema the 2.0 migrators produce.
+p50 ms over ≥ 20 warm runs; rows marked n=3 are the median of 3. Raw numbers:
+`tests/benchmarks/FlowOrchestrator.SearchBench/results/after-2026-11-24/` (`timings.tsv`, `writes.txt`,
+`ddl.tsv`, sizes, plans) and the two `after-2026-11-24-*.log` files; sequences `run-mssql-after.sh` /
+`run-pg-after.sh`. Differences from the seeded data of the first session: no events table (2.0 removed it),
+and a few hundred runs inserted "now" by the write-cost runs.
+
+### SQL Server / Azure SQL
+
+What shipped (`SqlRunSearchCommandBuilder`) and how it differs from the measured candidates:
 
 | Shipped | Differs from the measured candidate | Why |
 |---|---|---|
 | Every `LIKE` is `LOWER(col) COLLATE Latin1_General_100_BIN2 LIKE @LowerLike` (run columns, step columns, legacy `GetRunsPageAsync`) | candidate `collate-deep` rewrote only the step predicates | one semantic everywhere |
-| `IX_FlowRuns_StartedAt_Search (StartedAt DESC) INCLUDE (RunSearchText, FlowId, Status)` | candidate included `RunSearchText` only | the index is hinted, so a flow / status filter must not cost a key lookup per scanned row |
-| Id prefix: own statement first, merged in C# (`SqlGuid` order) | measured as the seek alone (6 logical reads), not as a two-statement batch | the measured `IN (… UNION …)` shape regressed rare terms 88 → 505 ms |
-| `@IdPrefix` sent as `VARCHAR` | prototype sent `NVARCHAR` | `IdText` is `CHAR(36)`; an `NVARCHAR` parameter converts the column and can turn the seek into a scan under a `SQL_*` collation |
-| Keyset `ORDER BY StartedAt DESC, Id` with the `OR` predicate | same as measured (`mssql-keyset`) | — |
-| Capped count `COUNT(*)` over `TOP (cap + 1)` | same as measured | — |
-| Token table: no `Source = Run` rows (run columns are matched by `RunSearchText`) | prototype stored 9 run tokens per run | saves ~11% of the table; quick search keeps substring semantics |
-| Token insert: separate statement **after** the step's `COMMIT`, same round trip, `sp_executesql` in `TRY…CATCH` | doc proposed folding it into the step transaction | with `IGNORE_DUP_KEY`, concurrent steps of one run inserting the same token wait on each other's key locks; inside the step transaction that wait would hold the step's row locks. Cost: one extra log flush per step completion, **not measured** |
-| Deep search with tokens: run columns by substring **plus** token probe; `LIKE` probe kept for runs at or before the back-fill cursor | prototype was token-only | results stay a superset of quick search and complete while the back-fill runs |
+| `IX_FlowRuns_StartedAt_Search (StartedAt DESC) INCLUDE (RunSearchText, FlowId, Status)`, hinted; page ids read from it, full rows by key, `ORDER BY` on the inner (index) columns | candidate included `RunSearchText` only | flow / status filters stay on the index; ordering by the outer `fr.*` columns made the optimizer sort the joined rows, whose `TriggerDataJson` sends the sort to a worktable — caught by `SqlRunSearchProductionShapeTests`, fixed |
+| Id prefix: own statement first (`IdText LIKE @IdPrefix`, `@IdPrefix` as `VARCHAR`), merged in C# (`SqlGuid` order) | measured as the seek alone | the `IN (… UNION …)` shape regressed rare terms 88 → 505 ms; `VARCHAR` keeps the `CHAR(36)` seek |
+| Token table: no `Source = Run` rows; insert as a separate statement **after** the step's `COMMIT` (same round trip, `sp_executesql` in `TRY…CATCH`); deep search = run columns by substring **plus** token probe, `LIKE` kept for runs the back-fill has not reached | prototype stored run tokens, was token-only, insert proposed inside the step transaction | quick search keeps substring semantics; a duplicate-key wait between concurrent steps of one run never holds the step's row locks |
 
-### Still to measure (needs Docker; harness commands)
+**Quick search** (p50 ms)
 
-```bash
-cd tests/benchmarks/FlowOrchestrator.SearchBench
-dotnet run -c Release -- mssql-seed 200000                  # if the container is new; BEFORE = the "shipped" columns above
-dotnet run -c Release -- mssql-migrate tokens               # shipped migrator: startup-blocked time + online index build time
-dotnet run -c Release -- mssql-base quick                   # AFTER: quick search, id prefix, capped count (keyset text = mssql-keyset)
-dotnet run -c Release -- mssql-base deep                    # AFTER: deep search with BIN2 LIKE (token index not used by this path)
-dotnet run -c Release -- mssql-backfill 500                 # shipped back-fill duration + token rows at 200k runs
-dotnet run -c Release -- mssql-write baseline 200           # per-step write cost without the token index
-dotnet run -c Release -- mssql-write tokens 200 shipped-tokens   # same with UseRunSearchIndex(): compare StartRunAsync / RecordStepCompleteAsync
-```
+| Scenario | before | after | |
+|---|---|---|---|
+| runId prefix, recent [7d] | 67.7 | **7.8** | 8.7x |
+| runId prefix, 60 days old [7d] | 67.5 — **not found** | **7.2 — found** | any age |
+| flow name, common 'Invoice' [7d] | 2.40 | **1.38** | |
+| flow name, rare 'Gdpr' [7d] | 88.5 | **6.7** | 13x |
+| trigger key, common 'order-created' [7d] | 3.37 | **1.33** | |
+| trigger key, rare 'backfill' [7d] | 130.2 | **5.0** | 26x |
+| no match [7d] | 178.5 | **6.5** | 27x |
+| runId prefix, recent [all] | 926.0 | **83.1** | 11x |
+| runId prefix, 60 days old [all] | 901.3 | **83.7** | 11x |
+| flow name, common 'Invoice' [all] | 2.85 | **1.04** | |
+| flow name, rare 'Gdpr' [all] | 235.5 | **22.9** | 10x |
+| trigger key, common 'order-created' [all] | 3.24 | **1.07** | |
+| trigger key, rare 'backfill' [all] | 49.6 | **5.1** | 10x |
+| no match [all] | 826.7 | **78.6** | 11x |
 
-`mssql-base` calls `SqlFlowRunStore.BuildSearchRunsCommand`, which builds against the complete schema;
-after `mssql-migrate` it measures exactly what the store sends. Not measured at all yet: deep search
-through the token table **as composed by the store** (`SqlFlowRunStore.SearchRunsAsync` with the token
-index), the `TOP`-over-tokens shape for very common prefixes, and the orphan sweep at 16M token rows.
+The id-prefix seek itself is a few logical reads; an unwindowed id search costs what the unwindowed text
+statement next to it costs (a full scan of the 51 MB narrow index, ~80 ms), since a hex term may also be in a
+flow name or job id. The dashboard always windows text search (7 days by default): 7-8 ms.
 
-## Implementation (2.0, PostgreSQL) — what shipped and what is still to measure
+**Deep search** (p50 ms; n=3 rows: median)
 
-`PostgreSqlRunSearchCommandBuilder` follows the PostgreSQL recommendation above, with one deliberate
-difference from the measured candidate:
+| Scenario | before (1.x `LIKE`) | after (BIN2 `LIKE`, default) | after (`UseRunSearchIndex()`, back-filled) |
+|---|---|---|---|
+| output: invoice, 3d old [7d] | 14.7 s | **1,233** | **8.3** |
+| output: invoice, 60d old [7d] | 14.5 s | **1,289** | **7.5** |
+| output: orderId, 3d old [7d] | 14.5 s | **1,228** | **7.9** |
+| output: common 'express' [7d] | 5.36 | **1.57** | 7.5 (0 rows — prose is not tokenized) |
+| error: shipment, 3d old [7d] | 14.5 s | **1,253** | **6.7** |
+| error: 'deadlock victim' [7d] | 6,769 | **574** | **11.0** |
+| no match [7d] | 14.3 s | **1,074** | **7.3** |
+| output: invoice, 60d old [all] | 333.8 s | **98.1 s** (n=3) | **83.6** |
+| output: common 'express' [all] | 6.81 | **1.95** | 89.0 (0 rows) |
+| error: 'deadlock victim' [all] | 6,728 | **580** | **100.2** |
+| no match [all] | 311.6 s | **98.9 s** (n=3) | **79.7** |
+
+BIN2 is 11-12x in the window, as the candidate measured; without a window it is "only" 3.2x (334 → 98 s),
+because the unwindowed run is I/O on 11.3 GB of `FlowSteps`, not CPU. With the token index the token probe is
+~1 ms; the rest is the run-column statement next to it (7 ms windowed, 80 ms unwindowed).
+
+**Listing, paging, counts** (p50 ms): page 2,000 189 (OFFSET) → **32.8** (keyset); page 50 **2.5** keyset;
+`COUNT(*)` 11.0 → **1.16** capped at 10,001; full run id 0.93 → 0.59; status words unchanged (1.8-1.9).
+
+**Migration and write cost**
+
+| | measured |
+|---|---|
+| `mssql-migrate` on the loaded 200k-run database (Developer edition → online build) | startup blocked **0.22 s** (two computed columns + token tables); both indexes ready **0.92 s** later, in the background |
+| sizes | `IX_FlowRuns_IdText` 13.5 MB, `IX_FlowRuns_StartedAt_Search` 51.4 MB |
+| `StartRunAsync` / `CompleteRunAsync` (p50) | 7.72 / 6.23 before the migration → 6.54 / 5.51 after: **no measurable cost** of the two new indexes (run-to-run noise here ~1 ms; round trip 0.77 → 0.58) |
+| `RecordStepCompleteAsync` (p50) | 6.17 → 5.83 without the token index; **11.20 with `UseRunSearchIndex()`** (+5.4 ms ≈ one more commit per step) |
+| `StartRunAsync` with `UseRunSearchIndex()` | 6.54 → **11.94** (+5.4 ms, same reason) |
+| token back-fill, 200k runs, batch 500 | **7 min 58 s**, 14,368,824 rows (72 / run; no run-column tokens), **1,319 MB** as built (inserted in time order, clustered by token: page splits — the prototype's bulk load + rebuild was 944 MB for 16.1M rows) |
+
+Verdict on the token index: it does what was measured (14.5 s / 334 s → 8 / 84 ms) but **doubles the
+step-completion latency** on this commit-bound disk (the separate statement is a second log flush). It stays
+opt-in and experimental. Folding the insert into the step's transaction would remove the extra flush at the
+price of the lock coupling described above; worth measuring under concurrent fan-out before choosing.
+
+### PostgreSQL
+
+What shipped (`PostgreSqlRunSearchCommandBuilder`):
 
 | Shipped | Differs from the measured candidate | Why |
 |---|---|---|
-| Quick search: `lower(fr.id::text \|\| '\|' \|\| … ) LIKE @LowerLike` served by `ix_flow_runs_run_search_trgm`, a GIN trigram index **on that expression** | candidate `trgm-run` used a `STORED` generated column `search_text` + GIN on the column | same predicate and index structure, but no table rewrite: the generated column rewrites `flow_runs` under an `ACCESS EXCLUSIVE` lock (3.2 s at 200k runs, scales with the table), the expression index builds `CONCURRENTLY` in the background. The recheck evaluates the expression from the heap instead of reading a stored value — cheap for ~100-byte rows, **to be confirmed by the re-measurement** |
-| Run-id prefix: `fr.id BETWEEN @IdLow AND @IdHigh` as its own statement, merged in C# (bytewise uuid order); hyphens must sit at the canonical positions | measured as `uuid-range` inside `IN (… UNION …)` (~100 ms unwindowed) | the separate statement is the shape the doc recommended; canonical hyphens make it match SQL Server's `IdText LIKE 'prefix%'` exactly |
-| Deep search: `(run match OR EXISTS (SELECT 1 FROM flow_steps fs WHERE fs.run_id = fr.id AND (… ILIKE …)))` | same as `trgm-deep-windowed`, except the run part uses the new expression instead of five `COALESCE(…) ILIKE` | — |
-| `ix_flow_steps_output_json_trgm` and the other step trigram indexes | unchanged | measured: no p50 write cost, 200x deep search |
-| `ix_flow_runs_flow_name_trgm` / `ix_flow_runs_trigger_key_trgm` | still created | no longer used by FlowOrchestrator's queries; kept because a host query could use them (documented as droppable) |
-| Token table | not implemented on PostgreSQL; `UseRunSearchIndex()` logs warning 7214 | 2.2 GB per 200k runs for 0.8-4 ms against 18-75 ms |
+| Quick search: `lower(fr.id::text \|\| '\|' \|\| … ) LIKE @LowerLike` served by `ix_flow_runs_run_search_trgm`, a GIN trigram **expression** index, built `CONCURRENTLY` in the background, then `ANALYZE flow_runs` | candidate `trgm-run` used a `STORED` generated column + GIN on it | no table rewrite under `ACCESS EXCLUSIVE`; same speed once analyzed (below) |
+| Run-id prefix: `fr.id BETWEEN @IdLow AND @IdHigh`, own statement, merged in C# (bytewise uuid order); hyphens at canonical positions | `uuid-range` inside `IN (… UNION …)` | the separate statement is the recommended shape; canonical hyphens match SQL Server's `IdText LIKE` exactly |
+| Deep search: run match `OR EXISTS (SELECT 1 FROM flow_steps fs WHERE fs.run_id = fr.id AND (… ILIKE …))` | `trgm-deep-windowed`, with the new run expression | — |
+| `ix_flow_steps_output_json_trgm` and the other step trigram indexes; `ix_flow_runs_flow_name_trgm` / `trigger_key_trgm` | unchanged | the step indexes are what makes deep search fast; the two run-column indexes are unused by FlowOrchestrator now but kept (documented as droppable) |
+| Token table | not implemented; `UseRunSearchIndex()` logs warning 7214 | 2.2 GB per 200k runs for 0.8-4 ms against 18-75 ms |
 
-Still to measure (Docker), on the seeded `postgres:18` database after dropping the prototype objects
-(`DROP INDEX IF EXISTS ix_flow_runs_search_text_trgm; ALTER TABLE flow_runs DROP COLUMN IF EXISTS search_text;`):
+**Quick search** (p50 ms) — including the expression-index vs stored-column decision, measured on the same
+database in the same session:
 
-```bash
-dotnet run -c Release -- pg-migrate          # startup-blocked time + CONCURRENTLY build time of the expression index
-dotnet run -c Release -- pg-base quick       # AFTER: quick search incl. run-id prefix [7d] / [all]
-dotnet run -c Release -- pg-base deep        # AFTER: deep search with EXISTS
-dotnet run -c Release -- pg-write after 200  # per-step / per-run write cost with the expression index
-```
+| Scenario | before | after, index without statistics | **after (shipped: + `ANALYZE`)** | stored column (candidate) |
+|---|---|---|---|---|
+| runId prefix, recent [7d] | 21.3 | 1.28 | **1.64** | 0.99 |
+| runId prefix, 60 days old [7d] | 21.6 — not found | 0.93 | **1.25 — found** | 1.28 |
+| flow name, common 'Invoice' [7d] | 1.27 | 32.1 | **1.26** | 1.23 |
+| flow name, rare 'Gdpr' [7d] | 20.4 | 12.2 | **1.36** | 1.19 |
+| trigger key, common 'order-created' [7d] | 1.64 | 36.8 | **1.21** | 1.03 |
+| trigger key, rare 'backfill' [7d] | 16.0 | 2.55 | **3.49** | 2.20 |
+| no match [7d] | 22.0 | 1.07 | **1.05** | 0.75 |
+| runId prefix, recent [all] | 151.8 | 1.04 | **1.28** | 0.99 |
+| runId prefix, 60 days old [all] | 107.0 | 1.18 | **1.26** | 1.02 |
+| flow name, common 'Invoice' [all] | 7.27 | 33.6 | **1.43** | 0.89 |
+| flow name, rare 'Gdpr' [all] | 73.8 | 38.5 | **1.35** | 1.21 |
+| trigger key, common 'order-created' [all] | 7.57 | 39.8 | **1.05** | 0.89 |
+| trigger key, rare 'backfill' [all] | 21.8 | 2.37 | **2.78** | 2.17 |
+| no match [all] | 108.9 | 0.66 | **0.74** | 0.77 |
+
+The middle column is why the migrator now runs `ANALYZE flow_runs` after building the index: an expression
+index has no statistics until then, the planner estimated 20 matches for `%invoice%` (actual 28,604) and
+bitmap-scanned + sorted instead of walking `started_at` (plan in `pg-after-quick-explain.txt`). With
+statistics the expression index is within ~0.1-0.5 ms of the stored column everywhere — **decision: keep the
+expression index** (no table rewrite, concurrent build, no 18 MB of stored text).
+
+**Deep search** (p50 ms; n=3: median)
+
+| Scenario | before (`IN`) | after (`EXISTS`) |
+|---|---|---|
+| output: invoice, 3d old [7d] | 75.5 | **67.7** |
+| output: invoice, 60d old [7d] | 71.3 | **57.0** |
+| output: orderId, 3d old [7d] | 661.5 | **657.3** |
+| output: common 'express' [7d] | 33.3 s | **4.5** |
+| error: shipment, 3d old [7d] | 50.7 | **43.3** |
+| error: 'deadlock victim' [7d] | 18.5 | **19.6** |
+| no match [7d] | 25.4 | **19.8** |
+| output: invoice, 60d old [all] | 340.2 | **195.5** |
+| output: common 'express' [all] | 36.3 s | 34.6 s (n=3) |
+| error: 'deadlock victim' [all] | 19.2 | **18.3** |
+| no match [all] | 300.8 | **146.6** |
+
+As measured on the candidate: the common word goes from 33 s to 5 ms in the window, rare terms are unchanged
+or better (the run part now uses the trigram expression instead of five `COALESCE … ILIKE`), and the
+unwindowed common word is still mis-costed (34.6 s) — the dashboard's default window avoids it. The order id
+stays at ~660 ms (trigram false positives on `ORD-2026-…`, rechecked from TOAST).
+
+**Listing, paging, counts** (p50 ms): page 2,000 13.8-29 (OFFSET) → **0.95** (keyset); page 50 **0.96**;
+`COUNT(*)` 4.4 (the capped count stops at 10,001; not separately timed on PostgreSQL); full run id 0.42-0.67.
+
+**Migration and write cost**
+
+| | measured |
+|---|---|
+| `pg-migrate` on the loaded 200k-run database | startup blocked **0.16 s**; expression index ready **3.1 s** later, concurrently, in the background (before `ANALYZE` was added; `ANALYZE flow_runs` adds well under a second here) |
+| size | `ix_flow_runs_run_search_trgm` 44.7 MB; no heap growth (the stored-column candidate adds 18 MB of heap and rewrites the table) |
+| `StartRunAsync` / `RecordStepCompleteAsync` / `CompleteRunAsync` (p50) | 3.44 / 4.06 / 2.60 before → 3.46 / 4.06 / 2.63 after: **no measurable cost**; with the stored column instead: 3.43 / 4.05 / 2.65 |

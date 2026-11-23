@@ -1,0 +1,5 @@
+mssql	shipped-migrate(tokens=True)	0.2	0.9
+mssql	shipped-backfill(batch=500)	477.7	rows=14368824
+pg	migrator-indexes-after-load	186.9
+pg	shipped-migrate	0.2	3.1
+pg	trgm-run	5.5

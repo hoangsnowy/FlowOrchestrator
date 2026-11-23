@@ -24,18 +24,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed — run search is index-backed on SQL Server / Azure SQL and PostgreSQL
 
-Implements `docs/benchmarks/run-search-2026-11-23.md` (200k runs / 2M steps, measured on the
-prototypes; re-measurement of the shipped code is pending).
+Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-measured on the same
+200k-run / 2M-step data set (section "Implementation (2.0)", p50, default 7-day window):
 
-- **SQL Server / Azure SQL:** quick search **88-178 ms → 5-8 ms**, an 8-character run id from the run
-  list found **at any age** in one index seek, deep (step payload) search **14.5 s → ~1.4 s** with no
-  schema change, run-list page 2,000 **189 → 32 ms** with the new cursor, and the run-list total
-  **10.7 → 1.1 ms** when capped.
-- **PostgreSQL:** every quick search **~1 ms** (was 16-150 ms), windowed or not, including the run-id
+- **SQL Server / Azure SQL:** quick search **88-178 ms → 5-7 ms**; an 8-character run id from the run
+  list **67 ms → 7.8 ms, and found at any age** (before: not found outside the window); deep (step
+  payload) search **14.5 s → 1.2 s** with no schema change; run-list page 2,000 **189 → 33 ms** with the
+  new cursor; the run-list total **11.0 → 1.2 ms** when capped. No measurable write cost.
+- **PostgreSQL:** every quick search **~1-3.5 ms** (was 16-150 ms), windowed or not, including the run-id
   prefix at any age, through a trigram index on the lower-cased run search expression; deep search for a
-  common word **33 s → 5 ms** (correlated `EXISTS` instead of `IN`), rare terms unchanged (18-75 ms in
-  the default window, thanks to the `output_json` trigram index the migrator keeps creating); the run-id
-  prefix is a primary-key range in its own statement.
+  common word **33 s → 4.5 ms** (correlated `EXISTS` instead of `IN`), rare terms unchanged or faster
+  (19-68 ms, thanks to the `output_json` trigram index the migrator keeps creating); page 2,000
+  **14-29 → 1 ms** with the cursor. No measurable write cost.
 
 #### Read before upgrading
 
@@ -81,10 +81,11 @@ prototypes; re-measurement of the shipped code is pending).
   still works. `GET /api/runs` accepts `after=` and returns `nextCursor` / `totalCapped`; the SPA pages
   forward by cursor, so a page no longer shifts while new runs start.
 - **Experimental, opt-in, SQL Server only:** `options.UseRunSearchIndex()` — a token index for deep search on SQL Server
-  (`FlowRunSearchTokens`; the prototype measured 0.7-2.3 ms against 14.5 s / 334 s, ~943 MB per 200k
-  runs). Written in the run-start / step-completion round trip as a best-effort statement, back-filled
+  (`FlowRunSearchTokens`; measured deep search 8 ms against 1.2 s (7-day window) and 84 ms against 98 s
+  (no window), 1.3 GB and an 8-minute back-fill per 200k runs). Written in the run-start / step-completion round trip as a best-effort statement, back-filled
   newest-first in the background (resumable, one replica at a time); payload and error text match by
-  **token prefix** instead of substring. Its write-path cost is **not yet measured**; read
+  **token prefix** instead of substring. It **adds one commit per step completion and per run start**
+  (measured +5.4 ms p50, roughly doubling `RecordStepCompleteAsync`); read
   `RunSearchIndexOptions` before enabling it. Requires database compatibility level 130+, and must be
   enabled on every instance that writes runs. PostgreSQL ignores it and logs warning 7214: its trigram
   indexes already answer deep search, and the measured token table there is 2.2 GB per 200k runs (the key

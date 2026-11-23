@@ -52,7 +52,7 @@ switch (command)
         Console.WriteLine(string.Join(" ", set));
         break;
     }
-    case "mssql-seed": await MsSqlSeeder.SeedAsync(Arg(1, 200_000), withEvents: true); break;
+    case "mssql-seed": await MsSqlSeeder.SeedAsync(Arg(1, 200_000), withEvents: false); break;   // 2.0 has no events table
     case "mssql-base": await MsSqlBench.BaselineAsync(deep: SArg(1, "quick") == "deep", quick: SArg(1, "quick") == "quick"); break;
     case "mssql-setup": await MsSqlBench.SetupAsync(SArg(1, "")); break;
     case "mssql-tokens": await MsSqlBench.LoadTokensAsync(Arg(1, 200_000), includePayload: SArg(2, "payload") == "payload"); break;
@@ -68,7 +68,7 @@ switch (command)
         Console.WriteLine(await MsSqlBench.CaptureAsync(SArg(1, "adhoc"), SArg(2, "SELECT 1"), null));
         break;
     }
-    case "pg-seed": await PgBench.SeedAsync(Arg(1, 200_000), withEvents: true); break;
+    case "pg-seed": await PgBench.SeedAsync(Arg(1, 200_000), withEvents: false); break;   // 2.0 has no events table
     case "pg-base": await PgBench.BaselineAsync(deep: SArg(1, "quick") == "deep", quick: SArg(1, "quick") == "quick"); break;
     case "pg-setup": await PgBench.SetupAsync(SArg(1, "")); break;
     case "pg-tokens": await PgBench.LoadTokensAsync(Arg(1, 200_000), includePayload: SArg(2, "payload") == "payload"); break;

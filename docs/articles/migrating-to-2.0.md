@@ -591,8 +591,9 @@ removes it.
 `options.UseRunSearchIndex()` adds `FlowRunSearchTokens` and `FlowRunSearchIndexState` (created empty at
 startup) and turns deep search into a token-index seek. Existing runs are back-filled newest-first by a
 background service (log events 7301-7306); until it completes, deep search still scans the not-yet-indexed
-part of the window with `LIKE`, so results stay complete. Budget roughly 81 token rows / ~4.7 KB per run
-(943 MB per 200k runs measured on the prototype). Payload and error text then match by token prefix, not
+part of the window with `LIKE`, so results stay complete. Budget roughly 72 token rows / ~6.6 KB per run
+(1.3 GB and an 8-minute back-fill per 200k runs, measured), and one extra commit per step completion and
+per run start (+5.4 ms p50 on the benchmark disk). Payload and error text then match by token prefix, not
 substring. Enable it on **every** instance that writes runs; if you disable it later and enable it again,
 reset the back-fill so runs written in between are indexed:
 

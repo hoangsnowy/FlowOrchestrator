@@ -1,0 +1,234 @@
+32eb875ea31b221519192f0e941618b9bb933b3e86f898c62cb81d6373969c9d
+=== 18:52:59 pg-seed 200000
+  2,000 runs / 19,914 steps / 42 M chars / 0 events - 00:00
+  4,000 runs / 39,941 steps / 86 M chars / 0 events - 00:01
+  6,000 runs / 59,853 steps / 127 M chars / 0 events - 00:02
+  8,000 runs / 79,722 steps / 170 M chars / 0 events - 00:02
+  10,000 runs / 99,678 steps / 213 M chars / 0 events - 00:03
+  12,000 runs / 119,606 steps / 255 M chars / 0 events - 00:04
+  14,000 runs / 139,582 steps / 297 M chars / 0 events - 00:04
+  16,000 runs / 159,442 steps / 339 M chars / 0 events - 00:05
+  18,000 runs / 179,303 steps / 382 M chars / 0 events - 00:05
+  20,000 runs / 199,050 steps / 424 M chars / 0 events - 00:06
+  22,000 runs / 218,880 steps / 465 M chars / 0 events - 00:07
+  24,000 runs / 238,826 steps / 508 M chars / 0 events - 00:07
+  26,000 runs / 258,754 steps / 549 M chars / 0 events - 00:08
+  28,000 runs / 278,653 steps / 590 M chars / 0 events - 00:08
+  30,000 runs / 298,512 steps / 632 M chars / 0 events - 00:09
+  32,000 runs / 318,419 steps / 674 M chars / 0 events - 00:10
+  34,000 runs / 338,237 steps / 716 M chars / 0 events - 00:10
+  36,000 runs / 358,154 steps / 757 M chars / 0 events - 00:11
+  38,000 runs / 378,079 steps / 799 M chars / 0 events - 00:12
+  40,000 runs / 397,881 steps / 840 M chars / 0 events - 00:12
+  42,000 runs / 417,812 steps / 882 M chars / 0 events - 00:13
+  44,000 runs / 437,771 steps / 924 M chars / 0 events - 00:13
+  46,000 runs / 457,683 steps / 966 M chars / 0 events - 00:14
+  48,000 runs / 477,567 steps / 1,008 M chars / 0 events - 00:15
+  50,000 runs / 497,445 steps / 1,049 M chars / 0 events - 00:15
+  52,000 runs / 517,211 steps / 1,092 M chars / 0 events - 00:16
+  54,000 runs / 537,108 steps / 1,134 M chars / 0 events - 00:16
+  56,000 runs / 556,935 steps / 1,176 M chars / 0 events - 00:17
+  58,000 runs / 576,730 steps / 1,218 M chars / 0 events - 00:18
+  60,000 runs / 596,596 steps / 1,260 M chars / 0 events - 00:18
+  62,000 runs / 616,506 steps / 1,302 M chars / 0 events - 00:19
+  64,000 runs / 636,469 steps / 1,343 M chars / 0 events - 00:20
+  66,000 runs / 656,517 steps / 1,386 M chars / 0 events - 00:20
+  68,000 runs / 676,364 steps / 1,428 M chars / 0 events - 00:21
+  70,000 runs / 696,230 steps / 1,470 M chars / 0 events - 00:21
+  72,000 runs / 716,046 steps / 1,511 M chars / 0 events - 00:22
+  74,000 runs / 735,829 steps / 1,553 M chars / 0 events - 00:23
+  76,000 runs / 755,680 steps / 1,595 M chars / 0 events - 00:23
+  78,000 runs / 775,598 steps / 1,636 M chars / 0 events - 00:24
+  80,000 runs / 795,443 steps / 1,679 M chars / 0 events - 00:24
+  82,000 runs / 815,405 steps / 1,721 M chars / 0 events - 00:25
+  84,000 runs / 835,290 steps / 1,763 M chars / 0 events - 00:25
+  86,000 runs / 855,232 steps / 1,805 M chars / 0 events - 00:26
+  88,000 runs / 874,955 steps / 1,847 M chars / 0 events - 00:27
+  90,000 runs / 894,813 steps / 1,888 M chars / 0 events - 00:27
+  92,000 runs / 914,609 steps / 1,930 M chars / 0 events - 00:28
+  94,000 runs / 934,475 steps / 1,973 M chars / 0 events - 00:28
+  96,000 runs / 954,279 steps / 2,015 M chars / 0 events - 00:29
+  98,000 runs / 974,205 steps / 2,057 M chars / 0 events - 00:30
+  100,000 runs / 994,055 steps / 2,099 M chars / 0 events - 00:30
+  102,000 runs / 1,013,857 steps / 2,142 M chars / 0 events - 00:31
+  104,000 runs / 1,033,765 steps / 2,184 M chars / 0 events - 00:32
+  106,000 runs / 1,053,793 steps / 2,226 M chars / 0 events - 00:32
+  108,000 runs / 1,073,663 steps / 2,268 M chars / 0 events - 00:33
+  110,000 runs / 1,093,395 steps / 2,310 M chars / 0 events - 00:33
+  112,000 runs / 1,113,268 steps / 2,353 M chars / 0 events - 00:34
+  114,000 runs / 1,133,210 steps / 2,395 M chars / 0 events - 00:35
+  116,000 runs / 1,153,175 steps / 2,438 M chars / 0 events - 00:35
+  118,000 runs / 1,172,999 steps / 2,480 M chars / 0 events - 00:36
+  120,000 runs / 1,192,861 steps / 2,523 M chars / 0 events - 00:37
+  122,000 runs / 1,212,691 steps / 2,565 M chars / 0 events - 00:37
+  124,000 runs / 1,232,545 steps / 2,606 M chars / 0 events - 00:38
+  126,000 runs / 1,252,546 steps / 2,647 M chars / 0 events - 00:38
+  128,000 runs / 1,272,315 steps / 2,689 M chars / 0 events - 00:39
+  130,000 runs / 1,292,138 steps / 2,730 M chars / 0 events - 00:40
+  132,000 runs / 1,312,099 steps / 2,772 M chars / 0 events - 00:40
+  134,000 runs / 1,332,063 steps / 2,814 M chars / 0 events - 00:41
+  136,000 runs / 1,351,953 steps / 2,857 M chars / 0 events - 00:42
+  138,000 runs / 1,371,928 steps / 2,899 M chars / 0 events - 00:42
+  140,000 runs / 1,391,836 steps / 2,942 M chars / 0 events - 00:43
+  142,000 runs / 1,411,766 steps / 2,984 M chars / 0 events - 00:43
+  144,000 runs / 1,431,632 steps / 3,026 M chars / 0 events - 00:44
+  146,000 runs / 1,451,551 steps / 3,068 M chars / 0 events - 00:45
+  148,000 runs / 1,471,354 steps / 3,111 M chars / 0 events - 00:45
+  150,000 runs / 1,491,221 steps / 3,151 M chars / 0 events - 00:46
+  152,000 runs / 1,511,034 steps / 3,191 M chars / 0 events - 00:46
+  154,000 runs / 1,530,894 steps / 3,233 M chars / 0 events - 00:47
+  156,000 runs / 1,550,890 steps / 3,275 M chars / 0 events - 00:48
+  158,000 runs / 1,570,690 steps / 3,316 M chars / 0 events - 00:48
+  160,000 runs / 1,590,561 steps / 3,357 M chars / 0 events - 00:49
+  162,000 runs / 1,610,467 steps / 3,400 M chars / 0 events - 00:49
+  164,000 runs / 1,630,364 steps / 3,442 M chars / 0 events - 00:50
+  166,000 runs / 1,650,228 steps / 3,484 M chars / 0 events - 00:51
+  168,000 runs / 1,670,178 steps / 3,526 M chars / 0 events - 00:51
+  170,000 runs / 1,690,067 steps / 3,567 M chars / 0 events - 00:52
+  172,000 runs / 1,709,943 steps / 3,609 M chars / 0 events - 00:52
+  174,000 runs / 1,729,822 steps / 3,651 M chars / 0 events - 00:53
+  176,000 runs / 1,749,598 steps / 3,692 M chars / 0 events - 00:54
+  178,000 runs / 1,769,469 steps / 3,735 M chars / 0 events - 00:54
+  180,000 runs / 1,789,349 steps / 3,777 M chars / 0 events - 00:55
+  182,000 runs / 1,809,227 steps / 3,818 M chars / 0 events - 00:56
+  184,000 runs / 1,829,208 steps / 3,860 M chars / 0 events - 00:56
+  186,000 runs / 1,848,981 steps / 3,902 M chars / 0 events - 00:57
+  188,000 runs / 1,868,847 steps / 3,944 M chars / 0 events - 00:57
+  190,000 runs / 1,888,767 steps / 3,987 M chars / 0 events - 00:58
+  192,000 runs / 1,908,717 steps / 4,029 M chars / 0 events - 00:59
+  194,000 runs / 1,928,741 steps / 4,071 M chars / 0 events - 00:59
+  196,000 runs / 1,948,631 steps / 4,114 M chars / 0 events - 01:00
+  198,000 runs / 1,968,472 steps / 4,157 M chars / 0 events - 01:01
+  200,000 runs / 1,988,322 steps / 4,198 M chars / 0 events - 01:01
+copied 200,000 runs / 1,988,322 steps / 0 events in 00:01:01.6110395
+indexes (incl. pg_trgm GIN) rebuilt by the migrator in 00:03:06.9327827
+vacuum analyze in 00:00:03.2851756
+=== 18:57:11 pg-write pre-migrate 200
+--- pg pre-migrate 2026-11-23T18:57:48.9013808Z
+StartRunAsync                      n=  200 p50=   3.442 ms p95=   4.372 ms mean=   3.694 ms
+RTT SELECT 1                       n= 1907 p50=   0.326 ms p95=   0.502 ms mean=   0.351 ms
+TryRecordDispatchAsync             n= 1907 p50=   2.723 ms p95=   3.382 ms mean=   2.763 ms
+TryClaimStepAsync                  n= 1907 p50=   2.974 ms p95=   3.208 ms mean=   2.970 ms
+RecordStepStartAsync               n= 1907 p50=   4.079 ms p95=   5.308 ms mean=   4.374 ms
+SaveStepOutputAsync                n= 1907 p50=   3.016 ms p95=   3.946 ms mean=   3.053 ms
+RecordStepCompleteAsync            n= 1907 p50=   4.060 ms p95=   5.873 ms mean=   4.635 ms
+GetStepStatusesAsync               n= 1907 p50=   0.437 ms p95=   0.691 ms mean=   0.477 ms
+CompleteRunAsync                   n=  200 p50=   2.598 ms p95=   3.589 ms mean=   2.726 ms
+=== 18:57:48 pg-migrate
+pg migrate: startup blocked 00:00:00.1564558, search index ready after 00:00:03.1163000
+=== 18:57:52 pg-sizes
+flow_runs                flow_runs                                          74.5 MB
+flow_runs                flow_runs_pkey                                      8.4 MB
+flow_runs                ix_flow_runs_flow_id                                1.4 MB
+flow_runs                ix_flow_runs_flow_id_status_started_at             11.1 MB
+flow_runs                ix_flow_runs_flow_name_trgm                         7.6 MB
+flow_runs                ix_flow_runs_run_search_trgm                       42.5 MB
+flow_runs                ix_flow_runs_source_run_id                          0.0 MB
+flow_runs                ix_flow_runs_started_at                             4.3 MB
+flow_runs                ix_flow_runs_status                                 1.4 MB
+flow_runs                ix_flow_runs_trigger_key_trgm                       6.4 MB
+flow_steps               flow_steps                                      2,318.0 MB
+flow_steps               flow_steps_pkey                                   126.7 MB
+flow_steps               ix_flow_steps_error_message_trgm                   18.8 MB
+flow_steps               ix_flow_steps_output_json_trgm                  1,142.8 MB
+flow_steps               ix_flow_steps_run_id_started_at                   216.6 MB
+flow_steps               ix_flow_steps_step_key_run_id                      96.8 MB
+flow_steps               ix_flow_steps_step_key_trgm                        56.2 MB
+=== 18:57:52 pg-base quick
+pg-after       runId prefix, recent [7d]                                  n= 20 p50=      1.28 ms p95=      2.55 ms min=     0.86 rows=   2 
+pg-after       runId prefix, 60d old [7d]                                 n= 20 p50=      0.93 ms p95=      1.25 ms min=     0.87 rows=   1 
+pg-after       flow name, common 'Invoice' [7d]                           n= 20 p50=     32.11 ms p95=     34.76 ms min=    31.22 rows=  51 
+pg-after       flow name, rare 'Gdpr' [7d]                                n= 20 p50=     12.16 ms p95=     12.97 ms min=    11.35 rows=  16 
+pg-after       trigger key, common 'order-created' [7d]                   n= 20 p50=     36.77 ms p95=     38.23 ms min=    36.06 rows=  51 
+pg-after       trigger key, rare 'backfill' [7d]                          n= 20 p50=      2.55 ms p95=      3.39 ms min=     2.15 rows=  51 
+pg-after       no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      1.07 ms p95=      1.51 ms min=     0.79 rows=   0 
+pg-after       runId prefix, recent [all]                                 n= 20 p50=      1.04 ms p95=      2.07 ms min=     0.87 rows=   2 
+pg-after       runId prefix, 60d old [all]                                n= 20 p50=      1.18 ms p95=      1.33 ms min=     0.90 rows=   2 
+pg-after       flow name, common 'Invoice' [all]                          n= 20 p50=     33.60 ms p95=     35.38 ms min=    32.97 rows=  51 
+pg-after       flow name, rare 'Gdpr' [all]                               n= 20 p50=     38.53 ms p95=     39.89 ms min=    37.47 rows=  51 
+pg-after       trigger key, common 'order-created' [all]                  n= 20 p50=     39.77 ms p95=     45.22 ms min=    38.31 rows=  51 
+pg-after       trigger key, rare 'backfill' [all]                         n= 20 p50=      2.37 ms p95=      2.95 ms min=     2.11 rows=  51 
+pg-after       no match 'zq-nomatch-7731' [all]                           n= 20 p50=      0.66 ms p95=      0.88 ms min=     0.57 rows=   0 
+pg-after       status word 'Failed' (+total)                              n= 20 p50=      0.97 ms p95=      1.05 ms min=     0.85 rows=  51 
+pg-after       status word 'TimedOut' (+total)                            n= 20 p50=      0.95 ms p95=      1.42 ms min=     0.82 rows=  51 
+pg-after       full run id (old)                                          n= 20 p50=      0.42 ms p95=      0.54 ms min=     0.37 rows=   1 
+pg-after       unfiltered first page (+total)                             n= 20 p50=      4.64 ms p95=      4.99 ms min=     4.51 rows=  51 
+pg-after       unfiltered first page (no total)                           n= 20 p50=      0.55 ms p95=      1.44 ms min=     0.48 rows=  51 
+pg-after       unfiltered page 50 OFFSET (+total)                         n= 20 p50=      5.06 ms p95=      5.43 ms min=     4.74 rows=  51 
+pg-after       unfiltered page 2000 OFFSET                                n= 20 p50=     13.84 ms p95=     15.56 ms min=    12.92 rows=  51 
+=== 18:57:58 pg-base deep
+pg-after       deep output: invoice, 3d old [7d]                          n= 20 p50=     60.99 ms p95=     64.22 ms min=    59.31 rows=   1 
+pg-after       deep output: invoice, 60d old [7d]                         n= 20 p50=     56.12 ms p95=     60.09 ms min=    53.96 rows=   0 
+pg-after       deep output: orderId, 3d old [7d]                          n= 20 p50=    682.03 ms p95=    701.61 ms min=   651.01 rows=   1 
+pg-after       deep output: common 'express' [7d]                         n= 20 p50=      4.26 ms p95=      5.60 ms min=     3.81 rows=  51 
+pg-after       deep error: shipment, 3d old [7d]                          n= 20 p50=     40.65 ms p95=     45.42 ms min=    38.13 rows=   1 
+pg-after       deep error: 'deadlock victim' [7d]                         n= 20 p50=     15.24 ms p95=     22.29 ms min=    13.97 rows=  51 
+pg-after       deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=     17.34 ms p95=     21.99 ms min=    15.83 rows=   0 
+pg-after       deep output: invoice, 60d old [all]                        n= 20 p50=    193.81 ms p95=    211.33 ms min=   184.03 rows=   1 
+pg-after       deep output: common 'express' [all]                        n=  3 p50=  35011.32 ms p95=  37312.74 ms min= 34399.69 rows=  51 
+pg-after       deep error: 'deadlock victim' [all]                        n= 20 p50=     14.99 ms p95=     20.91 ms min=    13.79 rows=  51 
+pg-after       deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=    140.15 ms p95=    151.48 ms min=   137.40 rows=   0 
+=== 19:00:48 pg-keyset
+pg-keyset      unfiltered page 50 keyset                                  n= 20 p50=      0.96 ms p95=      1.66 ms min=     0.85 rows=  51 
+pg-keyset      unfiltered page 2000 keyset                                n= 20 p50=      0.95 ms p95=      1.12 ms min=     0.86 rows=  51 
+pg-count       COUNT(*) flow_runs                                         n= 20 p50=      4.40 ms p95=      5.18 ms min=     4.17 rows=   1 
+pg-count       COUNT(*) WHERE status='Failed'                             n= 20 p50=      0.76 ms p95=      0.88 ms min=     0.68 rows=   1 
+pg-count       reltuples estimate                                         n= 20 p50=      0.55 ms p95=      0.63 ms min=     0.45 rows=   1 
+=== 19:00:48 pg-write after 200
+--- pg after 2026-11-23T19:01:24.6945368Z
+StartRunAsync                      n=  200 p50=   3.461 ms p95=   4.421 ms mean=   3.739 ms
+RTT SELECT 1                       n= 1804 p50=   0.331 ms p95=   0.547 ms mean=   0.364 ms
+TryRecordDispatchAsync             n= 1804 p50=   2.832 ms p95=   3.381 ms mean=   2.766 ms
+TryClaimStepAsync                  n= 1804 p50=   2.983 ms p95=   3.238 ms mean=   2.971 ms
+RecordStepStartAsync               n= 1804 p50=   4.080 ms p95=   5.525 ms mean=   4.399 ms
+SaveStepOutputAsync                n= 1804 p50=   3.027 ms p95=   3.914 ms mean=   3.032 ms
+RecordStepCompleteAsync            n= 1804 p50=   4.055 ms p95=   5.384 ms mean=   5.007 ms
+GetStepStatusesAsync               n= 1804 p50=   0.445 ms p95=   0.716 ms mean=   0.485 ms
+CompleteRunAsync                   n=  200 p50=   2.627 ms p95=   3.582 ms mean=   2.763 ms
+=== 19:01:24 pg-setup trgm-run
+setup trgm-run: 00:00:05.4522082
+=== 19:01:30 pg-cand trgm-run
+pg-trgm-run    runId prefix, recent [7d]                                  n= 20 p50=      0.99 ms p95=      2.09 ms min=     0.88 rows=   1 
+pg-trgm-run    runId prefix, 60d old [7d]                                 n= 20 p50=      1.28 ms p95=      1.98 ms min=     0.95 rows=   1 
+pg-trgm-run    flow name, common 'Invoice' [7d]                           n= 20 p50=      1.23 ms p95=      1.53 ms min=     1.10 rows=  51 
+pg-trgm-run    flow name, rare 'Gdpr' [7d]                                n= 20 p50=      1.19 ms p95=      1.31 ms min=     1.09 rows=  16 
+pg-trgm-run    trigger key, common 'order-created' [7d]                   n= 20 p50=      1.03 ms p95=      1.53 ms min=     0.96 rows=  51 
+pg-trgm-run    trigger key, rare 'backfill' [7d]                          n= 20 p50=      2.20 ms p95=      2.77 ms min=     1.86 rows=  51 
+pg-trgm-run    no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      0.75 ms p95=      0.82 ms min=     0.72 rows=   0 
+pg-trgm-run    runId prefix, recent [all]                                 n= 20 p50=      0.99 ms p95=      1.23 ms min=     0.92 rows=   1 
+pg-trgm-run    runId prefix, 60d old [all]                                n= 20 p50=      1.02 ms p95=      1.74 ms min=     0.93 rows=   1 
+pg-trgm-run    flow name, common 'Invoice' [all]                          n= 20 p50=      0.89 ms p95=      1.15 ms min=     0.83 rows=  51 
+pg-trgm-run    flow name, rare 'Gdpr' [all]                               n= 20 p50=      1.21 ms p95=      1.51 ms min=     1.10 rows=  51 
+pg-trgm-run    trigger key, common 'order-created' [all]                  n= 20 p50=      0.89 ms p95=      0.96 ms min=     0.80 rows=  51 
+pg-trgm-run    trigger key, rare 'backfill' [all]                         n= 20 p50=      2.17 ms p95=      2.34 ms min=     1.92 rows=  51 
+pg-trgm-run    no match 'zq-nomatch-7731' [all]                           n= 20 p50=      0.77 ms p95=      0.86 ms min=     0.69 rows=   0 
+=== 19:01:31 pg-write with-stored-column 200
+--- pg with-stored-column 2026-11-23T19:02:06.8740650Z
+StartRunAsync                      n=  200 p50=   3.429 ms p95=   4.454 ms mean=   3.700 ms
+RTT SELECT 1                       n= 1789 p50=   0.331 ms p95=   0.577 ms mean=   0.370 ms
+TryRecordDispatchAsync             n= 1789 p50=   2.790 ms p95=   3.402 ms mean=   2.743 ms
+TryClaimStepAsync                  n= 1789 p50=   2.990 ms p95=   3.230 ms mean=   2.969 ms
+RecordStepStartAsync               n= 1789 p50=   4.085 ms p95=   5.868 ms mean=   4.464 ms
+SaveStepOutputAsync                n= 1789 p50=   3.030 ms p95=   3.945 ms mean=   3.110 ms
+RecordStepCompleteAsync            n= 1789 p50=   4.053 ms p95=   5.884 ms mean=   4.987 ms
+GetStepStatusesAsync               n= 1789 p50=   0.439 ms p95=   0.728 ms mean=   0.487 ms
+CompleteRunAsync                   n=  200 p50=   2.651 ms p95=   3.662 ms mean=   2.878 ms
+=== 19:02:06 pg-sizes
+flow_runs                flow_runs                                          92.6 MB
+flow_runs                flow_runs_pkey                                      6.0 MB
+flow_runs                ix_flow_runs_flow_id                                1.4 MB
+flow_runs                ix_flow_runs_flow_id_status_started_at             11.1 MB
+flow_runs                ix_flow_runs_flow_name_trgm                         7.9 MB
+flow_runs                ix_flow_runs_run_search_trgm                       44.7 MB
+flow_runs                ix_flow_runs_search_text_trgm                      44.7 MB
+flow_runs                ix_flow_runs_source_run_id                          0.0 MB
+flow_runs                ix_flow_runs_started_at                             4.3 MB
+flow_runs                ix_flow_runs_status                                 1.4 MB
+flow_runs                ix_flow_runs_trigger_key_trgm                       6.5 MB
+flow_steps               flow_steps                                      2,321.6 MB
+flow_steps               flow_steps_pkey                                   127.0 MB
+flow_steps               ix_flow_steps_error_message_trgm                   19.3 MB
+flow_steps               ix_flow_steps_output_json_trgm                  1,143.5 MB
+flow_steps               ix_flow_steps_run_id_started_at                   219.1 MB
+flow_steps               ix_flow_steps_step_key_run_id                      97.2 MB
+flow_steps               ix_flow_steps_step_key_trgm                        58.0 MB

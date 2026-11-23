@@ -34,7 +34,11 @@ public static class PgBench
             await admin.ExecuteAsync("CREATE DATABASE flowsearch;");
         }
 
-        await new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance).StartAsync(CancellationToken.None);
+        using (var first = new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance))
+        {
+            await first.StartAsync(CancellationToken.None);
+            await first.BackgroundIndexBuild;
+        }
 
         await using var conn = new NpgsqlConnection(Db);
         await conn.OpenAsync();
@@ -44,7 +48,7 @@ public static class PgBench
             DROP INDEX IF EXISTS ix_flow_runs_flow_name_trgm, ix_flow_runs_trigger_key_trgm, ix_flow_steps_step_key_trgm,
                 ix_flow_steps_error_message_trgm, ix_flow_steps_output_json_trgm, ix_flow_runs_flow_id, ix_flow_runs_status,
                 ix_flow_runs_started_at, ix_flow_runs_flow_id_status_started_at, ix_flow_steps_run_id_started_at,
-                ix_flow_steps_step_key_run_id, ix_flow_events_run_id_sequence;
+                ix_flow_steps_step_key_run_id, ix_flow_events_run_id_sequence, ix_flow_runs_run_search_trgm;
             """);
 
         var gen = new DataGenerator(runCount);
@@ -74,12 +78,18 @@ public static class PgBench
 
         sw.Restart();
         await conn.ExecuteAsync("SET maintenance_work_mem = '1GB';");
-        await new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance).StartAsync(CancellationToken.None);
+        using (var migrator = new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance))
+        {
+            await migrator.StartAsync(CancellationToken.None);
+            await migrator.BackgroundIndexBuild;
+        }
+        // Back to the 1.x index set: `pg-migrate` measures the 2.0 run-search index build on the loaded table.
+        await conn.ExecuteAsync("DROP INDEX IF EXISTS ix_flow_runs_run_search_trgm;");
         Console.WriteLine($"indexes (incl. pg_trgm GIN) rebuilt by the migrator in {sw.Elapsed}");
         await File.AppendAllTextAsync(Path.Combine(Directory.CreateDirectory(Measure.OutDir).FullName, "ddl.tsv"), $"pg\tmigrator-indexes-after-load\t{sw.Elapsed.TotalSeconds:F1}\n");
         sw.Restart();
         // VACUUM refuses to run inside a transaction block, and a multi-statement batch is one: one per call.
-        foreach (var table in new[] { "flow_runs", "flow_steps", "flow_events" })
+        foreach (var table in withEvents ? new[] { "flow_runs", "flow_steps", "flow_events" } : new[] { "flow_runs", "flow_steps" })
             await conn.ExecuteAsync($"VACUUM ANALYZE {table};", commandTimeout: 7_200);
         Console.WriteLine($"vacuum analyze in {sw.Elapsed}");
     }
@@ -170,7 +180,7 @@ public static class PgBench
             var t = await Measure.RunAsync(Environment.GetEnvironmentVariable("SB_SUITE") ?? "pg-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal), budget: TimeSpan.FromSeconds(deep ? 180 : 60));
             if (t.Min < 60_000) plans.Append(await ExplainAsync(name, cmd.Sql.Split(';')[0], cmd.Parameters));
         }
-        await Measure.WriteArtifactAsync($"pg-baseline-{(deep ? "deep" : "quick")}-explain.txt", plans.ToString());
+        await Measure.WriteArtifactAsync($"{Environment.GetEnvironmentVariable("SB_SUITE") ?? "pg-baseline"}-{(deep ? "deep" : "quick")}-explain.txt", plans.ToString());
     }
 
     private static async Task<int> RunBatchAsync(string sql, object parameters, bool countsTotal)
