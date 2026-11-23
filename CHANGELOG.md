@@ -6,6 +6,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+> **Upgrading from 1.x?** Follow [Migrating to 2.0](docs/articles/migrating-to-2.0.md): package
+> matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
+> verification and rollback.
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates

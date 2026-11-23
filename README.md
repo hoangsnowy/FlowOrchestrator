@@ -393,6 +393,8 @@ sample app exposes `--export-mermaid <flowId>` for CI integrations.
 
 ## Compatibility
 
+Upgrading from 1.x to 2.0: see the [migration guide](https://hoangsnowy.github.io/FlowOrchestrator/articles/migrating-to-2.0.html). Hosts that must stay on .NET 8 / 9 use 1.34.x.
+
 | Package | Target frameworks |
 |---|---|
 | `FlowOrchestrator.Core` | `net10.0` · `net11.0` |
