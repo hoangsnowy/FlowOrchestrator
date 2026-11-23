@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -541,6 +542,6 @@ public sealed class PendingPathClaimOrderingTests
             new FlowObservabilityOptions { EnableEventPersistence = true, EnableOpenTelemetry = enableOpenTelemetry },
             telemetry ?? new FlowOrchestratorTelemetry(),
             _logger,
-            eventNotifier: null,
+            eventNotifier: NoopFlowEventNotifier.Instance,
             signalStore: withSignalStore ? _signalStore : null);
 }

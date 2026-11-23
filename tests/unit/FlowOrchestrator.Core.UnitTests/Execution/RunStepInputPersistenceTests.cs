@@ -6,6 +6,7 @@ using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -113,5 +114,6 @@ public sealed class RunStepInputPersistenceTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            Substitute.For<ILogger<FlowOrchestratorEngine>>());
+            Substitute.For<ILogger<FlowOrchestratorEngine>>(),
+            NoopFlowEventNotifier.Instance);
 }

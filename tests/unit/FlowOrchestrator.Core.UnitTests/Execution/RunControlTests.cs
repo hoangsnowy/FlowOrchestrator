@@ -7,6 +7,7 @@ using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -45,7 +46,8 @@ public sealed class RunControlTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeSingleStepFlow(Guid flowId)
     {

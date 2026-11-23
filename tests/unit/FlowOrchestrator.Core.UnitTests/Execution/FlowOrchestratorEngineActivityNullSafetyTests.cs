@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -45,7 +46,8 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeFlow(params string[] stepKeys)
     {
@@ -111,7 +113,8 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
         // Act
         var ex = await Record.ExceptionAsync(async () => await engine.RunStepAsync(ctx, flow, step));

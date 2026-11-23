@@ -54,16 +54,15 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     /// <remarks>
-    /// <paramref name="eventNotifier"/> is optional with a default of <see langword="null"/> so
-    /// existing positional callers (notably unit tests built before the realtime layer landed)
-    /// continue to compile unchanged. When <see langword="null"/>, <see cref="NoopFlowEventNotifier.Instance"/>
-    /// is substituted and lifecycle events are silently discarded.
+    /// <paramref name="eventNotifier"/> is required: <c>AddFlowOrchestrator</c> registers
+    /// <see cref="NoopFlowEventNotifier"/> by default, and hand-built engines pass
+    /// <see cref="NoopFlowEventNotifier.Instance"/> when lifecycle events should be discarded.
     /// <para>
-    /// <paramref name="signalStore"/> is optional for the same reason. When supplied, a step that parks
-    /// in <see cref="StepStatus.Pending"/> re-reads its signal waiter after releasing its execution
-    /// claim and resumes itself if a payload landed while it held the claim — the delivery whose
-    /// resume nudge could only lose that claim (#190). Without it, such a delivery waits for the
-    /// step's safety-net invocation.
+    /// <paramref name="signalStore"/> is optional so hand-built engines without signal support compile
+    /// unchanged. When supplied, a step that parks in <see cref="StepStatus.Pending"/> re-reads its
+    /// signal waiter after releasing its execution claim and resumes itself if a payload landed while
+    /// it held the claim — the delivery whose resume nudge could only lose that claim (#190). Without
+    /// it, such a delivery waits for the step's safety-net invocation.
     /// </para>
     /// </remarks>
     public FlowOrchestratorEngine(
@@ -81,7 +80,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         FlowObservabilityOptions observabilityOptions,
         FlowOrchestratorTelemetry telemetry,
         ILogger<FlowOrchestratorEngine> logger,
-        IFlowEventNotifier? eventNotifier = null,
+        IFlowEventNotifier eventNotifier,
         IFlowSignalStore? signalStore = null)
     {
         _dispatcher = dispatcher;
@@ -98,7 +97,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _observabilityOptions = observabilityOptions;
         _telemetry = telemetry;
         _logger = logger;
-        _eventNotifier = eventNotifier ?? NoopFlowEventNotifier.Instance;
+        _eventNotifier = eventNotifier;
         _signalStore = signalStore;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
     }

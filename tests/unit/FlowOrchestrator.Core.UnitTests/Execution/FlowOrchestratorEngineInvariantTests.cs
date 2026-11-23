@@ -7,6 +7,7 @@ using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -58,7 +59,8 @@ public sealed class FlowOrchestratorEngineInvariantTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeFlow(params string[] stepKeys)
     {
@@ -482,7 +484,8 @@ public sealed class FlowOrchestratorEngineInvariantTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private FlowOrchestratorEngine CreateEngineWithStoreLists(
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
@@ -501,7 +504,8 @@ public sealed class FlowOrchestratorEngineInvariantTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private sealed class SingleRecordFlowStore : IFlowStore
     {

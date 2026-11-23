@@ -43,7 +43,7 @@ public sealed class RunTimeoutEnforcementTests
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
-            notifier);
+            notifier ?? NoopFlowEventNotifier.Instance);
 
     /// <summary>Counts published <see cref="RunCompletedEvent"/>s so tests can assert exactly-once completion.</summary>
     private sealed class CountingNotifier : IFlowEventNotifier

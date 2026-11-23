@@ -8,6 +8,7 @@ using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Observability;
 
@@ -57,7 +58,8 @@ public sealed class EngineSpanCoverageTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
             _telemetry,
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeFlow(Guid flowId, string stepKey, RunAfterCollection? runAfter = null)
     {

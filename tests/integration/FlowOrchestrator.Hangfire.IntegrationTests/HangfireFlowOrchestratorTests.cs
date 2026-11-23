@@ -8,6 +8,7 @@ using Hangfire;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Hangfire.Tests;
 
@@ -52,7 +53,8 @@ public class HangfireFlowOrchestratorTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
         return new HangfireFlowOrchestrator(engine, _flowRepo);
     }
 

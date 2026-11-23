@@ -40,7 +40,8 @@ public sealed class RunTimeoutSweepMatrixTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static async Task<(InMemoryFlowRunStore Store, Guid RunId)> StartRunAsync(DateTimeOffset? deadline)
     {

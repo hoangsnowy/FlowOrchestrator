@@ -8,6 +8,7 @@ using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Observability;
 
@@ -54,7 +55,8 @@ public sealed class EngineObservabilityTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
             telemetry ?? new FlowOrchestratorTelemetry(),
-            logger);
+            logger,
+            NoopFlowEventNotifier.Instance);
 
     /// <summary>The runtime-store view after the single step under test has finished.</summary>
     private static IReadOnlyDictionary<string, StepStatus> Statuses(string stepKey, StepStatus status) =>
