@@ -75,8 +75,7 @@ internal sealed class LoopBarrierEngineHarness
                 Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .Returns(call => new ValueTask<IStepResult>(resultForStep(call.Arg<IStepInstance>()!.Key)));
 
-        var flowRepo = FlowRegistry.Empty;
-        flowRepo = new FlowRegistry(new[] { flow });
+        var flowRepo = new FlowRegistry(new[] { flow });
         FlowRepository = flowRepo;
 
         Engine = new FlowOrchestratorEngine(

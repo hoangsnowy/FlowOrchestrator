@@ -111,8 +111,8 @@ public sealed class HangfireStepEnvelopeTests
         Assert.Equal(new object?[] { 1L, 2.5d, true, null }, Assert.IsType<List<object?>>(fromTrigger["list"]));
 
         Assert.Equal(42L, runStep.Inputs["orderId"]);
-        Assert.True(runStep.Inputs.ContainsKey("note"));
-        Assert.Null(runStep.Inputs["note"]);
+        Assert.True(runStep.Inputs.TryGetValue("note", out var note));
+        Assert.Null(note);
 
         // Trigger body and headers never enter the job payload — the engine reloads them from the store.
         Assert.DoesNotContain(TriggerSentinel, serializedArguments, StringComparison.Ordinal);

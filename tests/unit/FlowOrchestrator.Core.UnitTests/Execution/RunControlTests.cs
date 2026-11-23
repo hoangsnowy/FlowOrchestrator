@@ -25,7 +25,7 @@ public sealed class RunControlTests
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private FlowRegistry _flowRepo = FlowRegistry.Empty;
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 

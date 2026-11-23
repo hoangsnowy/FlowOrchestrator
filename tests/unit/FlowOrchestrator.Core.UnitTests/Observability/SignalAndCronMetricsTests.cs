@@ -64,8 +64,7 @@ public sealed class SignalAndCronMetricsTests
             StartedAt = DateTimeOffset.UtcNow,
         }));
 
-        var flowRepo = FlowRegistry.Empty;
-        flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
+        var flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         var dispatcher = new FlowSignalDispatcher(
             signalStore,
@@ -119,8 +118,7 @@ public sealed class SignalAndCronMetricsTests
             StartedAt = DateTimeOffset.UtcNow,
         }));
 
-        var flowRepo = FlowRegistry.Empty;
-        flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
+        var flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         var dispatcher = new FlowSignalDispatcher(
             signalStore,

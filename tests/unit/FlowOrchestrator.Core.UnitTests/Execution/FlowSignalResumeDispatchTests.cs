@@ -26,7 +26,7 @@ public sealed class FlowSignalResumeDispatchTests
     private readonly IStepDispatcher _stepDispatcher = Substitute.For<IStepDispatcher>();
     private readonly IFlowSignalStore _signalStore = Substitute.For<IFlowSignalStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
-    private FlowRegistry _flowRepository = FlowRegistry.Empty;
+    private readonly FlowRegistry _flowRepository;
     private readonly IOutputsRepository _outputsRepository = Substitute.For<IOutputsRepository>();
 
     /// <summary>Wires the happy-path substitutes shared by every case: a delivered signal on a resolvable run and flow.</summary>

@@ -29,7 +29,7 @@ public sealed class EngineObservabilityTests
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private FlowRegistry _flowRepo = FlowRegistry.Empty;
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
 
     public EngineObservabilityTests()
     {
