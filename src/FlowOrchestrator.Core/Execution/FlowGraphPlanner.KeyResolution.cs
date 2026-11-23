@@ -34,7 +34,7 @@ public sealed partial class FlowGraphPlanner
     /// no per-key allocation — the same order as reading the status map itself, which the caller has
     /// already paid. Each runtime key is walked once as spans; each distinct scope instance is
     /// expanded once (deduplicated through <see cref="StepKeySlice"/> views, so the prefix string is
-    /// never built); an expanded child is tested against the status map through the .NET 9+
+    /// never built); an expanded child is tested against the status map through the
     /// alternate lookup, so its string exists only when it is a candidate. Only the candidates are
     /// sorted. Sublinear needs a per-run incremental status cache — P0-1 of #189, out of scope here.
     /// </para>
@@ -76,11 +76,9 @@ public sealed partial class FlowGraphPlanner
             }
         }
 
-#if NET9_0_OR_GREATER
         Dictionary<string, StepStatus>.AlternateLookup<ReadOnlySpan<char>> statusLookup = default;
         var hasStatusLookup = statuses is Dictionary<string, StepStatus> statusDictionary
             && statusDictionary.TryGetAlternateLookup(out statusLookup);
-#endif
 
         HashSet<StepKeySlice>? expandedScopes = null;
         foreach (var runtimeKey in statuses.Keys)
@@ -102,11 +100,7 @@ public sealed partial class FlowGraphPlanner
                     expandedScopes ??= new HashSet<StepKeySlice>(StepKeySliceComparer.Instance);
                     if (expandedScopes.Add(prefixSlice))
                     {
-                        AddMissingChildren(prefixSlice, scopedMetadata, statuses, candidates
-#if NET9_0_OR_GREATER
-                            , hasStatusLookup, statusLookup
-#endif
-                            );
+                        AddMissingChildren(prefixSlice, scopedMetadata, statuses, candidates, hasStatusLookup, statusLookup);
                     }
                 }
 
@@ -135,11 +129,7 @@ public sealed partial class FlowGraphPlanner
                         expandedScopes ??= new HashSet<StepKeySlice>(StepKeySliceComparer.Instance);
                         if (expandedScopes.Add(prefixSlice))
                         {
-                            AddMissingChildren(prefixSlice, scoped, statuses, candidates
-#if NET9_0_OR_GREATER
-                                , hasStatusLookup, statusLookup
-#endif
-                                );
+                            AddMissingChildren(prefixSlice, scoped, statuses, candidates, hasStatusLookup, statusLookup);
                         }
                     }
 
@@ -214,33 +204,27 @@ public sealed partial class FlowGraphPlanner
 
     private static bool TryGetStep(StepCollection steps, ReadOnlySpan<char> segment, out StepMetadata? step)
     {
-#if NET9_0_OR_GREATER
         if (steps.TryGetAlternateLookup<ReadOnlySpan<char>>(out var lookup))
         {
             return lookup.TryGetValue(segment, out step);
         }
-#endif
         return steps.TryGetValue(segment.ToString(), out step);
     }
 
     /// <summary>
     /// Adds every child of the scope instance <paramref name="scopePrefix"/> that has no status row
     /// to <paramref name="candidates"/>. The composed <c>"{scope}.{child}"</c> string is built only
-    /// for a child that is actually missing; present children are tested as spans on .NET 9+.
+    /// for a child that is actually missing; present children are tested as spans.
     /// </summary>
     private static void AddMissingChildren(
         StepKeySlice scopePrefix,
         IScopedStep scope,
         IReadOnlyDictionary<string, StepStatus> statuses,
-        List<string> candidates
-#if NET9_0_OR_GREATER
-        , bool hasStatusLookup
-        , Dictionary<string, StepStatus>.AlternateLookup<ReadOnlySpan<char>> statusLookup
-#endif
-        )
+        List<string> candidates,
+        bool hasStatusLookup,
+        Dictionary<string, StepStatus>.AlternateLookup<ReadOnlySpan<char>> statusLookup)
     {
         var prefix = scopePrefix.Head.AsSpan(0, scopePrefix.HeadLength);
-#if NET9_0_OR_GREATER
         // "{prefix}." is written once; each child overwrites only the tail of the buffer.
         Span<char> buffer = stackalloc char[StackKeyBufferLength];
         var useBuffer = hasStatusLookup && prefix.Length + 1 < StackKeyBufferLength;
@@ -249,10 +233,8 @@ public sealed partial class FlowGraphPlanner
             prefix.CopyTo(buffer);
             buffer[prefix.Length] = '.';
         }
-#endif
         foreach (var child in scope.Steps.Keys)
         {
-#if NET9_0_OR_GREATER
             var length = prefix.Length + 1 + child.Length;
             if (useBuffer && length <= StackKeyBufferLength)
             {
@@ -265,7 +247,6 @@ public sealed partial class FlowGraphPlanner
 
                 continue;
             }
-#endif
             var key = string.Concat(prefix, ".", child);
             if (!statuses.ContainsKey(key))
             {
