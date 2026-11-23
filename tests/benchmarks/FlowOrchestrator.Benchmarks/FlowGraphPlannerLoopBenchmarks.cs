@@ -23,7 +23,7 @@ namespace FlowOrchestrator.Benchmarks;
 public class FlowGraphPlannerLoopBenchmarks
 {
     /// <summary>Iteration count the loop step fanned out to.</summary>
-    [Params(10, 100)]
+    [Params(10, 100, 500)]
     public int Iterations { get; set; }
 
     private const int ChildrenPerIteration = 3;
