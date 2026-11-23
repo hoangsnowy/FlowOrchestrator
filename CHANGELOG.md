@@ -10,6 +10,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Changed — dashboard UI
+
+- **Dashboard redesigned as a dense operator view.** Overview leads with a "Needs attention" list
+  (recent failures + in-flight runs) and a one-line counter strip whose cells open the filtered run
+  list; the decorative KPI cards and 30-day calendar are gone. Flows is a sortable-at-a-glance table
+  (failing flows first) instead of a card grid. Run detail shows the flow, status and every action in
+  one header row, puts the failing step and its error line above the tabs, lists steps before the
+  trigger payload, and collapses step I/O into panels that keep their open state across live updates.
+  One sans typeface (no serif headings), mono only for ids / JSON / times, dot-and-word status instead
+  of uppercase pills, and the DAG / Gantt colours now follow the dark theme. No API, route or JSON
+  change; new tokens are listed in `DESIGN.md` §10.
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates

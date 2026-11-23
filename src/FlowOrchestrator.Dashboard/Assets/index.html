@@ -46,7 +46,7 @@
     </button>
     <button type="button" class="nav-item" data-page="scheduled" onclick="navigate('scheduled')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-      Scheduled
+      Schedules
     </button>
     <button type="button" class="nav-item" data-page="webhooks" onclick="navigate('webhooks')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8a6 6 0 1 0-11.16 3.06A4 4 0 0 1 8 14H4a4 4 0 0 0 0 8h14a4 4 0 0 0 4-4 4 4 0 0 0-4-4h-1.5"/><circle cx="18" cy="8" r="3"/></svg>
@@ -57,15 +57,12 @@
     <div class="sidebar-user" id="sidebar-user" hidden></div>
     <div class="refresh-row">
       <span class="pulse-dot" id="refresh-pulse" aria-hidden="true"></span>
-      <span class="refresh-label">Live updates</span>
-    </div>
-    <div class="refresh-row">
+      <span class="refresh-status" id="refresh-status" aria-live="polite" title="Live = realtime SSE push. Polling = fallback when stream is unavailable.">Live</span>
       <label class="refresh-toggle" for="auto-refresh-enabled">
         <input id="auto-refresh-enabled" type="checkbox" checked onchange="onAutoRefreshEnabledChange()"/>
-        On
+        Auto-refresh
       </label>
     </div>
-    <div class="refresh-status" id="refresh-status" aria-live="polite" title="Live = realtime SSE push. Polling = fallback when stream is unavailable.">Live</div>
     <div class="sidebar-controls">
       <div class="icon-toggle-row">
         <button type="button" class="icon-btn" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" title="Toggle dark mode">
@@ -96,61 +93,44 @@
       </div>
     </header>
     <div class="page-content">
-      <div class="stats-grid stats-grid--5col">
-        <div class="stat-card"><div class="val" style="color:var(--accent)" id="ov-flows">-</div><div class="lbl">Registered Flows</div></div>
-        <div class="stat-card"><div class="val" style="color:var(--warn)" id="ov-active">-</div><div class="lbl">Active Runs</div></div>
-        <div class="stat-card"><div class="val" style="color:var(--success)" id="ov-done">-</div><div class="lbl">Completed Today</div></div>
-        <div class="stat-card"><div class="val" style="color:var(--danger)" id="ov-fail">-</div><div class="lbl">Failed Today</div></div>
-        <div class="stat-card"><div class="val" style="color:var(--fo-coral)" id="ov-scheduled">-</div><div class="lbl">Scheduled Jobs</div></div>
+      <!-- Operational counters. Each one opens the list it counts; failures turn red only when non-zero. -->
+      <div class="ov-stats" role="group" aria-label="Current state">
+        <button type="button" class="ov-stat" id="ov-stat-active" onclick="openRunsWithStatus('Running')"><span class="ov-stat-label">Running now</span><span class="ov-stat-val" id="ov-active">-</span></button>
+        <button type="button" class="ov-stat" id="ov-stat-fail" onclick="openRunsWithStatus('Failed')"><span class="ov-stat-label">Failed today</span><span class="ov-stat-val" id="ov-fail">-</span></button>
+        <button type="button" class="ov-stat" onclick="openRunsWithStatus('Succeeded')"><span class="ov-stat-label">Succeeded today</span><span class="ov-stat-val" id="ov-done">-</span></button>
+        <button type="button" class="ov-stat" onclick="navigate('flows')"><span class="ov-stat-label">Flows</span><span class="ov-stat-val" id="ov-flows">-</span></button>
+        <button type="button" class="ov-stat" onclick="navigate('scheduled')"><span class="ov-stat-label">Schedules</span><span class="ov-stat-val" id="ov-scheduled">-</span></button>
       </div>
-      <!-- 24h Activity heatmap — bar-per-hour, success/fail/skipped stacked -->
-      <div class="recent-section ov-heatmap-section">
+      <section class="panel" aria-labelledby="ov-attention-title">
         <div class="recent-header">
-          <span>Last 24 Hours</span>
-          <span class="recent-header-sub" id="ov-heatmap-summary">—</span>
+          <span id="ov-attention-title">Needs attention</span>
+          <span class="recent-header-sub" id="ov-attention-summary"></span>
         </div>
-        <div class="ov-heatmap" id="ov-heatmap" aria-label="Run activity over the last 24 hours"></div>
-        <div class="ov-heatmap-legend" aria-hidden="true">
-          <span><span class="legend-swatch success"></span>Succeeded</span>
-          <span><span class="legend-swatch failed"></span>Failed</span>
-          <span><span class="legend-swatch running"></span>Running</span>
-          <span><span class="legend-swatch skipped"></span>Cancelled</span>
-        </div>
-      </div>
-      <!-- 30-day calendar: GitHub-style activity grid keyed by run volume + failure share. -->
-      <div class="recent-section ov-calendar-section">
-        <div class="recent-header">
-          <span>Last 30 Days</span>
-          <span class="recent-header-sub" id="ov-calendar-summary">—</span>
-        </div>
-        <div class="ov-calendar-wrap">
-          <div class="ov-calendar-weekdays" aria-hidden="true">
-            <span>Mon</span><span>Wed</span><span>Fri</span>
+        <div id="ov-attention"></div>
+      </section>
+      <div class="ov-grid">
+        <section class="panel ov-heatmap-section" aria-labelledby="ov-heatmap-title">
+          <div class="recent-header">
+            <span id="ov-heatmap-title">Runs per hour, last 24 h</span>
+            <span class="recent-header-sub" id="ov-heatmap-summary">—</span>
           </div>
-          <div class="ov-calendar" id="ov-calendar" role="img" aria-label="Run activity over the last 30 days"></div>
-        </div>
-        <div class="ov-calendar-legend" aria-hidden="true">
-          <span class="legend-label">Less</span>
-          <span class="cal-cell cal-l0"></span>
-          <span class="cal-cell cal-l1"></span>
-          <span class="cal-cell cal-l2"></span>
-          <span class="cal-cell cal-l3"></span>
-          <span class="cal-cell cal-l4"></span>
-          <span class="legend-label">More</span>
-          <span class="legend-divider">·</span>
-          <span class="cal-cell cal-failure" title="Day with failures"></span>
-          <span class="legend-label">Failures</span>
-        </div>
-      </div>
-      <div class="stats-grid stats-grid--2col">
-        <div class="recent-section">
-          <div class="recent-header">Registered Flows</div>
-          <div id="ov-flows-table"></div>
-        </div>
-        <div class="recent-section">
-          <div class="recent-header">Recent Runs</div>
+          <div class="ov-heatmap" id="ov-heatmap" aria-label="Run activity over the last 24 hours"></div>
+          <div class="recent-header-sub ov-legend-row" aria-hidden="true">
+            <span class="ov-heatmap-legend">
+              <span><span class="legend-swatch success"></span>Succeeded</span>
+              <span><span class="legend-swatch failed"></span>Failed</span>
+              <span><span class="legend-swatch running"></span>Running</span>
+              <span><span class="legend-swatch skipped"></span>Cancelled</span>
+            </span>
+          </div>
+        </section>
+        <section class="panel" aria-labelledby="ov-runs-title">
+          <div class="recent-header">
+            <span id="ov-runs-title">Recent runs</span>
+            <button type="button" class="link-btn" onclick="navigate('runs')">All runs</button>
+          </div>
           <div id="ov-runs-table"></div>
-        </div>
+        </section>
       </div>
     </div>
   </section>
@@ -164,8 +144,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
           </button>
           <h2 class="page-title" id="page-flows-title">Flows</h2>
+          <span class="page-count" id="flow-count-label"><span class="num">0</span>flows</span>
         </div>
-        <div class="page-count" id="flow-count-label"><span class="num">0</span>flows</div>
+        
       </header>
       <div class="page-content">
         <div class="flows-grid" id="flows-grid"></div>
@@ -173,9 +154,11 @@
     </div>
     <div class="flow-detail-panel" id="flow-detail-panel" role="region" aria-label="Flow detail" tabindex="-1">
       <header class="page-header">
-        <div>
-          <button type="button" class="back-btn" onclick="closeFlowDetail()" aria-label="Back to flows list">&#8592; Back to Flows</button>
+        <div class="flow-detail-title">
+          <button type="button" class="back-btn" onclick="closeFlowDetail()" aria-label="Back to flows list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>Flows</button>
+          <span class="crumb-sep" aria-hidden="true">/</span>
           <h2 class="page-title" id="fd-name">Flow Name</h2>
+          <span class="badge" id="fd-status"></span>
         </div>
         <div class="flow-actions" id="fd-actions"></div>
       </header>
@@ -216,10 +199,10 @@
             Search step output / errors
           </label>
           <label class="visually-hidden" for="runs-filter-flow">Filter by flow</label>
-          <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()" aria-label="Filter by flow"><option value="">All Flows</option></select>
+          <select class="filter-select" id="runs-filter-flow" onchange="onRunsFilterChange()" aria-label="Filter by flow"><option value="">All flows</option></select>
           <label class="visually-hidden" for="runs-filter-status">Filter by status</label>
           <select class="filter-select" id="runs-filter-status" onchange="onRunsFilterChange()" aria-label="Filter by status">
-            <option value="">All Statuses</option>
+            <option value="">All statuses</option>
             <option value="Running">Running</option>
             <option value="Succeeded">Succeeded</option>
             <option value="Skipped">Blocked</option>
@@ -235,11 +218,8 @@
       <div class="runs-pagination" id="runs-pagination"></div>
     </div>
     <div id="runs-detail-panel" class="runs-detail-panel" role="region" aria-label="Run detail" tabindex="-1">
-      <div class="runs-detail-back">
-        <button type="button" class="back-btn" onclick="backToRunsList()" aria-label="Back to runs list">&#8592; Back to Runs</button>
-      </div>
       <div id="runs-detail">
-        <div class="detail-empty"><div class="icon" aria-hidden="true">&#x2B21;</div><div>Select a run to see its steps</div></div>
+        <div class="detail-empty">Select a run to see its steps.</div>
       </div>
     </div>
   </section>
@@ -251,9 +231,9 @@
         <button type="button" class="hamburger" id="hamburger-scheduled" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebar()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <h2 class="page-title" id="page-scheduled-title">Scheduled Jobs</h2>
+        <h2 class="page-title" id="page-scheduled-title">Schedules</h2>
+        <span class="page-count" id="scheduled-count-label"><span class="num">0</span>jobs</span>
       </div>
-      <div class="page-count" id="scheduled-count-label"><span class="num">0</span>jobs</div>
     </header>
     <div class="page-content">
       <div class="schedule-section">
