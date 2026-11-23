@@ -27,7 +27,7 @@ public class ServiceBusRoundTripTests : IAsyncLifetime
     }
 
     /// <inheritdoc/>
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         TestStepHandler.Reset();
         _host = Host.CreateDefaultBuilder()
@@ -54,7 +54,7 @@ public class ServiceBusRoundTripTests : IAsyncLifetime
     }
 
     /// <inheritdoc/>
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_host is not null)
         {

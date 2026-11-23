@@ -10,7 +10,6 @@ using FlowOrchestrator.Core.Storage;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;
 using Testcontainers.MsSql;
-using Xunit.Abstractions;
 
 namespace FlowOrchestrator.SqlServer.Tests;
 
@@ -270,7 +269,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         public Guid OldRunId { get; private set; }
         public int SucceededCount { get; private set; }
 
-        public async Task InitializeAsync()
+        public async ValueTask InitializeAsync()
         {
             await SqlServerStartHelper.StartWithRetryAsync(_container);
             await new FlowOrchestratorSqlMigrator(ConnectionString, NullLogger<FlowOrchestratorSqlMigrator>.Instance)
@@ -278,7 +277,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
             await SeedAsync();
         }
 
-        public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+        public ValueTask DisposeAsync() => _container.DisposeAsync();
 
         private async Task SeedAsync()
         {

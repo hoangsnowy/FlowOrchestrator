@@ -6,6 +6,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed — test suites run on xunit v3
+
+- Every test project (unit, integration, regression, `FlowOrchestrator.SampleApp.Tests`) moves from
+  xunit 2.9.3 to xunit v3 4.0.3. Test-only change: no shipped package references xunit.
+- The projects reference `xunit.v3.mtp-off`, not `xunit.v3`. `xunit.v3` 4.x brings in Microsoft
+  Testing Platform v2, which refuses to run under `dotnet test` in VSTest mode on the .NET 10+ SDK
+  ("Testing with VSTest target is no longer supported"). The `mtp-off` flavour keeps CI unchanged:
+  `dotnet test <filter>.slnx`, xunit.runner.visualstudio 4.0.1, Microsoft.NET.Test.Sdk and the
+  coverlet.collector "XPlat Code Coverage" data collector all work as before.
+- Test projects are now executables (`OutputType=Exe`, set by the package). `IAsyncLifetime`
+  fixtures return `ValueTask`; `ITestOutputHelper` comes from `Xunit` instead of
+  `Xunit.Abstractions`; the Service Bus suite's `CollectionBehavior(DisableTestParallelization)`
+  becomes `Parallelization(Mode = ParallelMode.None)`.
+- xunit v3's analyzer rule xUnit1051 (pass `TestContext.Current.CancellationToken`) is suppressed for
+  test projects in `Directory.Build.props`. Adopting it changes when calls get cancelled, so it is
+  left for a deliberate per-suite pass rather than folded into the migration.
+
 ### Changed — CI publishes to NuGet.org through Trusted Publishing
 
 - `publish.yml` no longer reads a long-lived `NUGET_API_KEY` secret. It exchanges the job's GitHub
