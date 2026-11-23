@@ -109,7 +109,7 @@ public static class FlowRunTimeline
                 Timestamp = completedAt,
                 Type = RunCompleted,
                 Message = $"Run completed with status {run.Status}."
-            }, 2, order++));
+            }, 2, order));   // last entry: nothing reads the counter after it
         }
 
         // Timestamp first; the rank pins run-level entries to the edges of a tie; the insertion
