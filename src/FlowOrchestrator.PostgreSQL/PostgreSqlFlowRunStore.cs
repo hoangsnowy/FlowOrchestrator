@@ -272,123 +272,44 @@ public sealed class PostgreSqlFlowRunStore :
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The batch comes from <see cref="PostgreSqlRunSearchCommandBuilder"/> (shape rules and measurements
+    /// there). It needs no optional schema to be correct: without <c>pg_trgm</c> or before the search
+    /// index exists, the same text runs as a sequential scan. A hex-shaped term also reads the run-id
+    /// prefix as a primary-key range at any age, matching the SQL Server provider.
+    /// </remarks>
     public async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var command = BuildSearchRunsCommand(query);
+        var command = PostgreSqlRunSearchCommandBuilder.Build(query);
+        var take = ClampTake(query.Take);
 
         await using var conn = new NpgsqlConnection(_connectionString);
         await using var grid = await conn.QueryMultipleAsync(new CommandDefinition(
-            command.Sql, command.Parameters, cancellationToken: cancellationToken));
-        var rows = (await grid.ReadAsync<FlowRunRecord>()).AsList();
-        int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>() : null;
+            command.Sql, command.Parameters, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        if (!command.Merge)
+        {
+            var rows = (await grid.ReadAsync<FlowRunRecord>().ConfigureAwait(false)).AsList();
+            int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>().ConfigureAwait(false) : null;
+            return RunSearchPage.FromRows(rows, take, total, query.EffectiveTotalCountCap);
+        }
 
-        return RunSearchPage.FromRows(rows, ClampTake(query.Take), total, query.EffectiveTotalCountCap);
+        var sets = new List<IReadOnlyList<FlowRunRecord>>(command.RowSets);
+        for (var i = 0; i < command.RowSets; i++)
+            sets.Add((await grid.ReadAsync<FlowRunRecord>().ConfigureAwait(false)).AsList());
+        return RunSearchPage.FromRows(PostgreSqlRunSearchCommandBuilder.Merge(sets, query.Skip, take), take, null, query.EffectiveTotalCountCap);
     }
 
     /// <summary>Clamps a page size to <c>[0, int.MaxValue - 1]</c> so <c>Take + 1</c> neither goes negative nor overflows.</summary>
     private static int ClampTake(int take) => Math.Clamp(take, 0, int.MaxValue - 1);
 
-    /// <summary>
-    /// Builds the SQL batch for <see cref="SearchRunsAsync"/>: the page query, followed by an exact
-    /// <c>COUNT(*)</c> only when <see cref="RunSearchQuery.CountsTotal"/> is set.
-    /// </summary>
+    /// <summary>The batch <see cref="SearchRunsAsync"/> sends — what benchmarks and I/O tests measure.</summary>
     /// <param name="query">The structured run query.</param>
-    /// <returns>The batch text, its parameters, and whether the batch returns a second (count) result set.</returns>
-    /// <remarks>
-    /// Same shape rules as the SQL Server store: a run id (or GUID-shaped text) compares
-    /// <c>fr.id</c> by equality instead of <c>fr.id::text ILIKE</c>; no <c>COUNT(*) OVER()</c>, the page
-    /// reads <c>Take + 1</c> rows; the exact count covers only the plain filters; the
-    /// <c>flow_steps</c> probe is added only for <see cref="RunSearchQuery.IncludeStepPayloads"/>, as the
-    /// de-correlated <c>IN</c> over bare columns that the pg_trgm GIN indexes can serve.
-    /// </remarks>
+    /// <returns>The batch text, its parameters, and whether a count result set follows the rows.</returns>
     internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query)
     {
-        var filters = new List<string>(4);
-        if (query.FlowId.HasValue)
-            filters.Add("fr.flow_id = @FlowId");
-        if (!string.IsNullOrWhiteSpace(query.Status))
-            filters.Add("fr.status = @Status");
-        if (query.StartedFrom.HasValue)
-            filters.Add("fr.started_at >= @StartedFrom");
-        if (query.StartedTo.HasValue)
-            filters.Add("fr.started_at <= @StartedTo");
-
-        var countsTotal = query.CountsTotal;
-        var countWhere = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
-
-        if (query.RunId.HasValue)
-            filters.Add("fr.id = @RunId");
-
-        // Keyset: rows after (StartedAt, Id) in the list order started_at DESC, id ASC. Not part of the
-        // count, which is the size of the whole filtered list.
-        if (query.After.HasValue)
-            filters.Add("(fr.started_at < @AfterStartedAt OR (fr.started_at = @AfterStartedAt AND fr.id > @AfterId))");
-
-        string? searchLike = null;
-        Guid? textId = null;
-        if (query.HasText)
-        {
-            var text = query.Text!.Trim();
-            searchLike = "%" + EscapeLikePattern(text) + "%";
-            textId = Guid.TryParse(text, out var parsed) ? parsed : null;
-            var idMatch = textId.HasValue ? "fr.id = @TextId" : "fr.id::text ILIKE @SearchLike";
-            var stepMatch = query.IncludeStepPayloads
-                ? """
-
-                        OR fr.id IN (
-                            SELECT fs.run_id
-                            FROM flow_steps AS fs
-                            WHERE fs.step_key ILIKE @SearchLike
-                               OR fs.error_message ILIKE @SearchLike
-                               OR fs.output_json ILIKE @SearchLike
-                        )
-                  """
-                : string.Empty;
-            filters.Add($"""
-                (
-                        {idMatch}
-                        OR COALESCE(fr.flow_name, '') ILIKE @SearchLike
-                        OR COALESCE(fr.trigger_key, '') ILIKE @SearchLike
-                        OR COALESCE(fr.status, '') ILIKE @SearchLike
-                        OR COALESCE(fr.background_job_id, '') ILIKE @SearchLike{stepMatch}
-                    )
-                """);
-        }
-
-        var where = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
-        var sql = """
-            SELECT fr.id AS "Id", fr.flow_id AS "FlowId", fr.flow_name AS "FlowName",
-                   fr.status AS "Status", fr.trigger_key AS "TriggerKey",
-                   fr.trigger_data_json AS "TriggerDataJson", fr.background_job_id AS "BackgroundJobId",
-                   fr.started_at AS "StartedAt", fr.completed_at AS "CompletedAt",
-                   fr.source_run_id AS "SourceRunId"
-            FROM flow_runs AS fr
-            """ + where + " ORDER BY fr.started_at DESC, fr.id LIMIT @TakePlusOne OFFSET @Skip;";
-        if (countsTotal)
-        {
-            // A capped count stops after cap + 1 rows instead of counting the whole retention.
-            sql += query.EffectiveTotalCountCap is null
-                ? " SELECT COUNT(*)::int FROM flow_runs AS fr" + countWhere + ";"
-                : " SELECT COUNT(*)::int FROM (SELECT 1 FROM flow_runs AS fr" + countWhere + " LIMIT @CountLimit) AS capped;";
-        }
-
-        var parameters = new
-        {
-            query.FlowId,
-            query.Status,
-            query.RunId,
-            TextId = textId,
-            SearchLike = searchLike,
-            StartedFrom = query.StartedFrom?.ToUniversalTime(),   // Npgsql rejects a non-zero offset for timestamptz
-            StartedTo = query.StartedTo?.ToUniversalTime(),
-            Skip = Math.Max(0, query.Skip),
-            TakePlusOne = ClampTake(query.Take) + 1,
-            AfterStartedAt = query.After?.StartedAt.ToUniversalTime(),
-            AfterId = query.After?.Id,
-            CountLimit = query.EffectiveTotalCountCap + 1,
-        };
-        return (sql, parameters, countsTotal);
+        var command = PostgreSqlRunSearchCommandBuilder.Build(query);
+        return (command.Sql, command.Parameters, command.CountsTotal);
     }
 
     /// <inheritdoc/>

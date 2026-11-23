@@ -30,11 +30,11 @@ public sealed record RunSearchQuery
     /// equality instead of a substring match.
     /// </summary>
     /// <remarks>
-    /// <para>On the SQL Server and in-memory providers, a term that looks like the start of a run id (see
+    /// <para>On the built-in providers (SQL Server, PostgreSQL, in-memory), a term that looks like the start of a run id (see
     /// <see cref="IsRunIdPrefix"/>, e.g. the eight characters the dashboard's run list shows) additionally
     /// matches every run whose id starts with it, <b>regardless of <see cref="StartedFrom"/> /
     /// <see cref="StartedTo"/></b>: an id prefix is an index seek, so an old run is found without widening
-    /// the window. Other providers match the id as a substring inside the window.</para>
+    /// the window. Third-party providers going through the default implementation match it inside the window.</para>
     /// <para>Case folding is ordinal (<c>ToLowerInvariant</c> on both sides). The SQL Server provider
     /// compares binary after lower-casing, so it is accent- and width-sensitive: <c>é</c> does not
     /// match <c>e</c> and <c>ß</c> does not match <c>ss</c>, unlike the database's linguistic

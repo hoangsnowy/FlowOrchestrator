@@ -513,3 +513,27 @@ dotnet run -c Release -- mssql-write tokens 200 shipped-tokens   # same with Use
 after `mssql-migrate` it measures exactly what the store sends. Not measured at all yet: deep search
 through the token table **as composed by the store** (`SqlFlowRunStore.SearchRunsAsync` with the token
 index), the `TOP`-over-tokens shape for very common prefixes, and the orphan sweep at 16M token rows.
+
+## Implementation (2.0, PostgreSQL) — what shipped and what is still to measure
+
+`PostgreSqlRunSearchCommandBuilder` follows the PostgreSQL recommendation above, with one deliberate
+difference from the measured candidate:
+
+| Shipped | Differs from the measured candidate | Why |
+|---|---|---|
+| Quick search: `lower(fr.id::text \|\| '\|' \|\| … ) LIKE @LowerLike` served by `ix_flow_runs_run_search_trgm`, a GIN trigram index **on that expression** | candidate `trgm-run` used a `STORED` generated column `search_text` + GIN on the column | same predicate and index structure, but no table rewrite: the generated column rewrites `flow_runs` under an `ACCESS EXCLUSIVE` lock (3.2 s at 200k runs, scales with the table), the expression index builds `CONCURRENTLY` in the background. The recheck evaluates the expression from the heap instead of reading a stored value — cheap for ~100-byte rows, **to be confirmed by the re-measurement** |
+| Run-id prefix: `fr.id BETWEEN @IdLow AND @IdHigh` as its own statement, merged in C# (bytewise uuid order); hyphens must sit at the canonical positions | measured as `uuid-range` inside `IN (… UNION …)` (~100 ms unwindowed) | the separate statement is the shape the doc recommended; canonical hyphens make it match SQL Server's `IdText LIKE 'prefix%'` exactly |
+| Deep search: `(run match OR EXISTS (SELECT 1 FROM flow_steps fs WHERE fs.run_id = fr.id AND (… ILIKE …)))` | same as `trgm-deep-windowed`, except the run part uses the new expression instead of five `COALESCE(…) ILIKE` | — |
+| `ix_flow_steps_output_json_trgm` and the other step trigram indexes | unchanged | measured: no p50 write cost, 200x deep search |
+| `ix_flow_runs_flow_name_trgm` / `ix_flow_runs_trigger_key_trgm` | still created | no longer used by FlowOrchestrator's queries; kept because a host query could use them (documented as droppable) |
+| Token table | not implemented on PostgreSQL; `UseRunSearchIndex()` logs warning 7214 | 2.2 GB per 200k runs for 0.8-4 ms against 18-75 ms |
+
+Still to measure (Docker), on the seeded `postgres:18` database after dropping the prototype objects
+(`DROP INDEX IF EXISTS ix_flow_runs_search_text_trgm; ALTER TABLE flow_runs DROP COLUMN IF EXISTS search_text;`):
+
+```bash
+dotnet run -c Release -- pg-migrate          # startup-blocked time + CONCURRENTLY build time of the expression index
+dotnet run -c Release -- pg-base quick       # AFTER: quick search incl. run-id prefix [7d] / [all]
+dotnet run -c Release -- pg-base deep        # AFTER: deep search with EXISTS
+dotnet run -c Release -- pg-write after 200  # per-step / per-run write cost with the expression index
+```

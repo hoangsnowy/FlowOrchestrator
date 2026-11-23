@@ -493,9 +493,8 @@ builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhook
 
 ## Step 8 — Database
 
-The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database the
-PostgreSQL migrator **changes nothing** and the SQL Server migrator only **adds** the run-search
-structures below; 1.34.3 keeps working against the upgraded database, which is what makes the
+The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database both
+only **add** the run-search indexes (and, on SQL Server, two computed columns) described below; 1.34.3 keeps working against the upgraded database, which is what makes the
 [rollback](#rollback) below possible.
 
 ### Run-search columns and indexes (SQL Server / Azure SQL)
@@ -546,7 +545,48 @@ ALTER TABLE [FlowRuns] DROP COLUMN [RunSearchText], [IdText];`
 - Custom `IFlowRunStore` implementations get `RunSearchQuery.After` / `TotalCountCap` through the default
   `SearchRunsAsync`; override it to page with a real keyset predicate.
 
-### Optional: the run-search token index (experimental)
+### Run-search index (PostgreSQL)
+
+| Object | What | Cost |
+|---|---|---|
+| `ix_flow_runs_run_search_trgm` | trigram GIN index on `lower(id::text \|\| '\|' \|\| flow_name \|\| … \|\| background_job_id)` — every quick search and the run-id prefix | ~47 MB per 200k runs |
+
+No column is added and `flow_runs` is not rewritten: the index is an expression index, built with
+`CREATE INDEX CONCURRENTLY` in the background after startup (log events 7211 / 7212; 7213 on failure,
+retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt.
+Until it exists, quick search runs the same SQL as a sequential scan.
+
+Like the trigram indexes 1.x already created, it needs the `pg_trgm` extension. On **Azure Database for
+PostgreSQL (Flexible Server)** allow-list it first (server parameter `azure.extensions` must include
+`PG_TRGM`); otherwise the migrator logs a warning, skips every trigram index, and search stays correct but
+scans. To build it ahead of the deployment:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_runs_run_search_trgm ON flow_runs USING gin ((
+  lower(id::text || '|' || coalesce(flow_name, '') || '|' || coalesce(trigger_key, '') || '|' || status || '|' || coalesce(background_job_id, ''))
+) gin_trgm_ops);
+```
+
+The expression must stay exactly as above: PostgreSQL only uses an expression index for a query that
+repeats it.
+
+Other PostgreSQL changes:
+
+- Deep search probes the step rows with a correlated `EXISTS` (was `IN`): common words 33 s → 5 ms in the
+  default window; rare terms unchanged.
+- `ix_flow_steps_output_json_trgm` stays and is still created on new databases: no measurable step write
+  cost, 200x faster deep search, but about half the size of `flow_steps`. A host that never uses the
+  "search step output / errors" box can drop it.
+- `ix_flow_runs_flow_name_trgm` and `ix_flow_runs_trigger_key_trgm` are no longer used by FlowOrchestrator's
+  queries (the new index covers both columns). They are left in place; drop them if nothing of yours uses
+  them: `DROP INDEX CONCURRENTLY IF EXISTS ix_flow_runs_flow_name_trgm;` (same for `trigger_key`).
+- `UseRunSearchIndex()` is ignored on PostgreSQL (warning 7214).
+
+**Rollback:** 1.34.x ignores the index; `DROP INDEX CONCURRENTLY IF EXISTS ix_flow_runs_run_search_trgm;`
+removes it.
+
+### Optional: the run-search token index (experimental, SQL Server)
 
 `options.UseRunSearchIndex()` adds `FlowRunSearchTokens` and `FlowRunSearchIndexState` (created empty at
 startup) and turns deep search into a token-index seek. Existing runs are back-filled newest-first by a
@@ -618,7 +658,7 @@ large tables, and how to run it ahead of the deployment.
 
 ## Rollback
 
-Because 2.0 only adds to an existing database (the SQL Server run-search columns and indexes, which 1.34.3
+Because 2.0 only adds to an existing database (the run-search columns and indexes, which 1.34.3
 ignores), rolling back to **1.34.3** is a redeploy:
 
 1. Pause cron triggers and hold webhook traffic.
@@ -650,9 +690,6 @@ each when it lands:
   backends will need changes; the built-in ones carry them.
 - **One input shape for untyped handlers.** Hangfire, InMemory and Service Bus will hand untyped
   handlers the same JSON-shaped values; typed handlers are unaffected.
-- **Run search on PostgreSQL.** The SQL Server part has landed (see [Step 8](#step-8--database)); the
-  PostgreSQL equivalent (generated search column + trigram index, uuid-range id prefix, token index)
-  follows once its measurements land.
 
 ---
 

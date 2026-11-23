@@ -77,8 +77,9 @@ switch (command)
     case "pg-exec": await PgBench.ExecAsync(SArg(1, "SELECT 1")); break;
     case "pg-sizes": await PgBench.SizesAsync(); break;
     case "pg-write": await WriteBench.PgAsync(SArg(1, "baseline"), Arg(2, 200), tokens: SArg(3, "") == "tokens"); break;
+    case "pg-migrate": await PgShipped.MigrateAsync(); break;
     default:
         Console.WriteLine("commands: stats | mssql-seed|mssql-base [quick|deep]|mssql-setup <c>|mssql-tokens|mssql-cand <c>|mssql-keyset|mssql-sizes|mssql-write <label> <runs> [tokens|shipped-tokens]|mssql-migrate [tokens]|mssql-backfill [batch]");
-        Console.WriteLine("          pg-seed|pg-base [quick|deep]|pg-setup <c>|pg-tokens|pg-cand <c>|pg-keyset|pg-sizes|pg-write <label> <runs> [tokens]");
+        Console.WriteLine("          pg-seed|pg-base [quick|deep]|pg-setup <c>|pg-tokens|pg-cand <c>|pg-keyset|pg-sizes|pg-write <label> <runs> [tokens]|pg-migrate");
         break;
 }

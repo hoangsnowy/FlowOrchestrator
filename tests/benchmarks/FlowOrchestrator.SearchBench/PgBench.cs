@@ -177,9 +177,11 @@ public static class PgBench
     {
         await using var conn = new NpgsqlConnection(Db);
         await using var grid = await conn.QueryMultipleAsync(new CommandDefinition(sql, parameters, commandTimeout: 1_800));
-        var rows = (await grid.ReadAsync()).Count();
-        if (countsTotal) await grid.ReadSingleAsync<int>();
-        return rows;
+        // Drain every result set: the shipped 2.0 batch may hold a run-id range statement too.
+        var rows = 0;
+        while (!grid.IsConsumed)
+            rows += (await grid.ReadAsync()).Count();
+        return countsTotal ? rows - 1 : rows;
     }
 
     private static async Task<int> RunAsync(string sql, object? parameters)

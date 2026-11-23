@@ -22,14 +22,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   of uppercase pills, and the DAG / Gantt colours now follow the dark theme. No API, route or JSON
   change; new tokens are listed in `DESIGN.md` §10.
 
-### Changed — run search is index-backed on SQL Server / Azure SQL
+### Changed — run search is index-backed on SQL Server / Azure SQL and PostgreSQL
 
-Implements the SQL Server part of `docs/benchmarks/run-search-2026-11-23.md` (200k runs / 2M steps,
-measured on the prototypes): quick search **88-178 ms → 5-8 ms**, an 8-character run id from the run list
-found **at any age** in one index seek, deep (step payload) search **14.5 s → ~1.4 s** with no schema
-change, run-list page 2,000 **189 → 32 ms** with the new cursor, and the run-list total **10.7 → 1.1 ms**
-when capped. Re-measurement of the shipped code is pending. PostgreSQL search is unchanged in this
-release (its measurements are pending); it implements the new cursor and cap.
+Implements `docs/benchmarks/run-search-2026-11-23.md` (200k runs / 2M steps, measured on the
+prototypes; re-measurement of the shipped code is pending).
+
+- **SQL Server / Azure SQL:** quick search **88-178 ms → 5-8 ms**, an 8-character run id from the run
+  list found **at any age** in one index seek, deep (step payload) search **14.5 s → ~1.4 s** with no
+  schema change, run-list page 2,000 **189 → 32 ms** with the new cursor, and the run-list total
+  **10.7 → 1.1 ms** when capped.
+- **PostgreSQL:** every quick search **~1 ms** (was 16-150 ms), windowed or not, including the run-id
+  prefix at any age, through a trigram index on the lower-cased run search expression; deep search for a
+  common word **33 s → 5 ms** (correlated `EXISTS` instead of `IN`), rare terms unchanged (18-75 ms in
+  the default window, thanks to the `output_json` trigram index the migrator keeps creating); the run-id
+  prefix is a primary-key range in its own statement.
 
 #### Read before upgrading
 
@@ -38,7 +44,7 @@ release (its measurements are pending); it implements the new cursor and cap.
   Linguistic equivalences of the database's `CI_AS` collation no longer apply: the search is **accent-
   and width-sensitive** (`é` ≠ `e`, `ß` ≠ `ss`, full-width ≠ half-width).
 - **A hex-shaped term (4-35 characters of `0-9a-f` and `-`) also matches run ids that start with it,
-  regardless of the search window** (SQL Server and in-memory). Searching `bbdafe3e` now finds that
+  regardless of the search window** (every built-in provider; hyphens only where the canonical id has them). Searching `bbdafe3e` now finds that
   60-day-old run instead of nothing. The window still bounds every other kind of match.
 - **Schema (SQL Server, additive):** two non-persisted computed columns on `FlowRuns` (`IdText`,
   `RunSearchText`, metadata-only) and two indexes (`IX_FlowRuns_IdText`,
@@ -52,6 +58,15 @@ release (its measurements are pending); it implements the new cursor and cap.
   `ANSI_PADDING`, `ANSI_WARNINGS`, `CONCAT_NULL_YIELDS_NULL` ON) on any connection that writes
   `FlowRuns`. SqlClient and SSMS set them; `sqlcmd` without `-I` does not — scripts that insert or update
   `FlowRuns` must run with `QUOTED_IDENTIFIER ON`.
+- **Schema (PostgreSQL, additive):** `ix_flow_runs_run_search_trgm`, a trigram GIN index on the
+  lower-cased run search expression (~47 MB per 200k runs), built `CREATE INDEX CONCURRENTLY` in the
+  background after startup — no table rewrite, writers not blocked; an `INVALID` leftover is rebuilt on the
+  next start. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
+  (Azure Database for PostgreSQL requires allow-listing it in `azure.extensions`) the migrator logs a
+  warning and search runs the same SQL as a scan. PostgreSQL run-column matching is now
+  `lower(...) LIKE lower(term)` instead of `ILIKE` per column: same results for ASCII and identifiers.
+  The older `ix_flow_runs_flow_name_trgm` / `ix_flow_runs_trigger_key_trgm` are no longer used by
+  FlowOrchestrator's queries; they are left in place (drop them if nothing of yours uses them).
 - **Run-list order gained a tie-break:** `StartedAt DESC, Id` on every provider (runs that started in the
   same tick are now in a stable order).
 - **Dashboard total is capped:** `FlowDashboardOptions.RunListTotalCountCap` (default 10,000; `0` counts
@@ -65,13 +80,15 @@ release (its measurements are pending); it implements the new cursor and cap.
   `RunSearchPage.TotalIsLowerBound`, `RunSearchPage.FromRows`, `RunSearchQuery.IsRunIdPrefix`. `Skip`
   still works. `GET /api/runs` accepts `after=` and returns `nextCursor` / `totalCapped`; the SPA pages
   forward by cursor, so a page no longer shifts while new runs start.
-- **Experimental, opt-in:** `options.UseRunSearchIndex()` — a token index for deep search on SQL Server
+- **Experimental, opt-in, SQL Server only:** `options.UseRunSearchIndex()` — a token index for deep search on SQL Server
   (`FlowRunSearchTokens`; the prototype measured 0.7-2.3 ms against 14.5 s / 334 s, ~943 MB per 200k
   runs). Written in the run-start / step-completion round trip as a best-effort statement, back-filled
   newest-first in the background (resumable, one replica at a time); payload and error text match by
   **token prefix** instead of substring. Its write-path cost is **not yet measured**; read
   `RunSearchIndexOptions` before enabling it. Requires database compatibility level 130+, and must be
-  enabled on every instance that writes runs.
+  enabled on every instance that writes runs. PostgreSQL ignores it and logs warning 7214: its trigram
+  indexes already answer deep search, and the measured token table there is 2.2 GB per 200k runs (the key
+  is stored twice) for 0.8-4 ms against 18-75 ms.
 - `IRunSearchIndex` (+ `RunSearchCapabilities`, `RunSearchIndexQuery`, `RunSearchDocument`,
   `StepSearchDocument`, `RunSearchTokenizer`): plug an external engine (Full-Text Search, Azure AI
   Search, Elasticsearch) into the SQL Server store's deep search. SQL Server Full-Text Search is **not**
