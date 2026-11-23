@@ -6,6 +6,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.3] - 2026-11-23
+
+Correctness release for the 1.34 line (.NET 8 / 9 / 10). Six storage fixes. Two matter for anyone on
+SQL Server or Azure SQL: a retried step could re-run an already-succeeded downstream step, and concurrent
+workers racing on a step could fail with a duplicate-key error. No API or behaviour changes beyond the
+fixes. 2.0 carries the same fixes.
+
 ### Fixed
 
 - **InMemory storage: retention never removed step outputs, trigger data or events.** `FlowRetention`
