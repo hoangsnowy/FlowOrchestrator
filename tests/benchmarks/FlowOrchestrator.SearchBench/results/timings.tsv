@@ -32,3 +32,83 @@
 2026-11-23T11:57:14.1319205Z	mssql-base	deep error: shipment, 3d old [7d]	13	14640.13	15524.74	14272.64	16660.52	1	
 2026-11-23T12:00:10.2249231Z	mssql-base	deep error: 'deadlock victim' [7d]	20	7106.77	8817.60	6682.89	10751.60	51	
 2026-11-23T12:04:02.3380354Z	mssql-base	deep no match 'zq-nomatch-7731' [7d]	12	15167.74	18477.94	14778.80	20277.62	0	
+2026-11-23T12:34:19.0749119Z	mssql-base	deep output: invoice, 3d old [7d]	3	14697.09	14920.94	14631.18	14945.82	1	
+2026-11-23T12:35:17.2986076Z	mssql-base	deep output: invoice, 60d old [7d]	3	14499.16	14546.15	14377.81	14551.37	0	
+2026-11-23T12:36:15.1149839Z	mssql-base	deep output: orderId, 3d old [7d]	3	14485.59	14556.25	14046.74	14564.11	1	
+2026-11-23T12:36:29.7678809Z	mssql-base	deep output: common 'express' [7d]	20	5.36	5.97	5.11	6.03	51	
+2026-11-23T12:37:13.1774147Z	mssql-base	deep error: shipment, 3d old [7d]	3	14476.62	14517.28	14400.57	14521.80	1	
+2026-11-23T12:39:56.2825360Z	mssql-base	deep error: 'deadlock victim' [7d]	20	6769.24	6885.08	6557.80	6939.51	51	
+2026-11-23T12:40:45.9271448Z	mssql-base	deep no match 'zq-nomatch-7731' [7d]	3	14311.62	14384.99	14200.84	14393.15	0	
+2026-11-23T12:58:40.0383703Z	mssql-base	deep output: invoice, 60d old [all]	3	333764.74	400476.12	318053.04	407888.50	1	
+2026-11-23T12:58:40.2092647Z	mssql-base	deep output: common 'express' [all]	20	6.81	7.45	5.55	7.63	51	
+2026-11-23T12:59:06.5248782Z	mssql-base	deep error: 'deadlock victim' [all]	3	6865.31	12124.98	6727.95	12709.39	51	
+2026-11-23T13:17:58.5607608Z	mssql-base	deep no match 'zq-nomatch-7731' [all]	3	311606.51	484069.06	310379.82	503231.56	0	
+2026-11-23T13:18:00.0451830Z	mssql-idtext	runId prefix, recent [7d]	20	23.89	25.94	22.60	25.98	1	
+2026-11-23T13:18:00.6281451Z	mssql-idtext	runId prefix, 60d old [7d]	20	23.46	27.98	22.29	37.39	1	
+2026-11-23T13:18:00.7818049Z	mssql-idtext	flow name, common 'Invoice' [7d]	20	4.42	4.92	4.03	4.94	51	
+2026-11-23T13:18:12.1075301Z	mssql-idtext	flow name, rare 'Gdpr' [7d]	20	505.01	527.79	493.85	536.65	16	
+2026-11-23T13:18:12.7621218Z	mssql-idtext	trigger key, common 'order-created' [7d]	20	4.80	5.00	4.62	5.30	51	
+2026-11-23T13:18:14.3943158Z	mssql-idtext	trigger key, rare 'backfill' [7d]	20	73.59	75.83	71.49	75.92	51	
+2026-11-23T13:18:25.7843605Z	mssql-idtext	no match 'zq-nomatch-7731' [7d]	20	513.08	538.20	496.26	546.39	0	
+2026-11-23T13:19:00.7543725Z	mssql-idtext	runId prefix, recent [all]	20	1558.30	1666.71	1492.49	1697.05	1	
+2026-11-23T13:19:50.9653720Z	mssql-idtext	runId prefix, 60d old [all]	20	1693.46	4340.20	1533.82	4468.27	1	
+2026-11-23T13:19:52.8017220Z	mssql-idtext	flow name, common 'Invoice' [all]	20	3.90	5.11	3.67	5.43	51	
+2026-11-23T13:20:01.0701057Z	mssql-idtext	flow name, rare 'Gdpr' [all]	20	372.37	406.69	349.43	429.90	51	
+2026-11-23T13:20:01.5414712Z	mssql-idtext	trigger key, common 'order-created' [all]	20	4.73	5.93	4.23	6.33	51	
+2026-11-23T13:20:03.2145039Z	mssql-idtext	trigger key, rare 'backfill' [all]	20	74.92	79.86	72.54	80.42	51	
+2026-11-23T13:27:05.8391396Z	mssql-tokens-quick	runId prefix, recent [7d]	20	1.27	1.50	0.95	1.55	1	
+2026-11-23T13:27:05.8904290Z	mssql-tokens-quick	runId prefix, 60d old [7d]	20	1.15	1.37	0.94	1.74	0	
+2026-11-23T13:27:07.9703370Z	mssql-tokens-quick	flow name, common 'Invoice' [7d]	20	89.67	132.91	76.77	146.50	51	
+2026-11-23T13:27:08.0611327Z	mssql-tokens-quick	flow name, rare 'Gdpr' [7d]	20	1.40	2.45	0.97	2.75	16	
+2026-11-23T13:27:08.6657520Z	mssql-tokens-quick	trigger key, common 'order-created' [7d]	20	26.67	30.19	22.17	30.38	51	
+2026-11-23T13:27:08.7398594Z	mssql-tokens-quick	trigger key, rare 'backfill' [7d]	20	2.25	3.55	1.54	3.70	51	
+2026-11-23T13:27:08.7642915Z	mssql-tokens-quick	no match 'zq-nomatch-7731' [7d]	20	0.85	1.04	0.70	1.11	0	
+2026-11-23T13:27:08.7966073Z	mssql-tokens-quick	runId prefix, recent [all]	20	0.98	1.42	0.76	1.52	1	
+2026-11-23T13:27:08.8224201Z	mssql-tokens-quick	runId prefix, 60d old [all]	20	0.86	1.00	0.71	1.73	1	
+2026-11-23T13:27:31.0883528Z	mssql-tokens-quick	flow name, common 'Invoice' [all]	20	997.53	1147.83	900.44	1174.76	51	
+2026-11-23T13:27:31.5410877Z	mssql-tokens-quick	flow name, rare 'Gdpr' [all]	20	4.97	6.67	4.41	7.38	51	
+2026-11-23T13:27:37.2325257Z	mssql-tokens-quick	trigger key, common 'order-created' [all]	20	253.71	290.49	236.71	295.80	51	
+2026-11-23T13:27:37.4989074Z	mssql-tokens-quick	trigger key, rare 'backfill' [all]	20	7.08	9.04	5.95	10.11	51	
+2026-11-23T13:27:37.5243781Z	mssql-tokens-quick	no match 'zq-nomatch-7731' [all]	20	0.68	0.81	0.57	0.81	0	
+2026-11-23T13:27:37.8990458Z	mssql-tokens	deep output: invoice, 3d old [7d]	20	0.87	1.07	0.63	1.09	1	
+2026-11-23T13:27:37.9415163Z	mssql-tokens	deep output: invoice, 60d old [7d]	20	0.71	1.09	0.64	1.18	0	
+2026-11-23T13:27:37.9658045Z	mssql-tokens	deep output: orderId, 3d old [7d]	20	0.75	0.94	0.61	0.98	1	
+2026-11-23T13:27:37.9853597Z	mssql-tokens	deep output: common 'express' [7d]	20	0.70	0.87	0.58	1.03	0	
+2026-11-23T13:27:38.0067387Z	mssql-tokens	deep error: shipment, 3d old [7d]	20	0.72	0.87	0.63	1.59	1	
+2026-11-23T13:27:38.0764122Z	mssql-tokens	deep error: 'deadlock victim' [7d]	20	2.28	3.34	2.12	3.44	51	
+2026-11-23T13:27:38.1003763Z	mssql-tokens	deep no match 'zq-nomatch-7731' [7d]	20	0.76	0.95	0.61	1.58	0	
+2026-11-23T13:27:38.1379824Z	mssql-tokens	deep output: invoice, 60d old [all]	20	1.22	2.41	0.87	2.50	1	
+2026-11-23T13:27:38.1640452Z	mssql-tokens	deep output: common 'express' [all]	20	0.87	1.20	0.74	1.36	0	
+2026-11-23T13:27:38.9085092Z	mssql-tokens	deep error: 'deadlock victim' [all]	20	32.03	42.74	25.80	42.84	51	
+2026-11-23T13:27:38.9500771Z	mssql-tokens	deep no match 'zq-nomatch-7731' [all]	20	0.79	0.86	0.67	0.92	0	
+2026-11-23T13:27:40.8538897Z	mssql-searchcol	runId prefix, recent [7d]	20	28.77	30.17	27.95	32.03	1	
+2026-11-23T13:27:41.5676287Z	mssql-searchcol	runId prefix, 60d old [7d]	20	29.66	32.42	27.94	32.82	1	
+2026-11-23T13:27:41.6380123Z	mssql-searchcol	flow name, common 'Invoice' [7d]	20	1.36	1.56	1.13	1.72	51	
+2026-11-23T13:27:41.8254858Z	mssql-searchcol	flow name, rare 'Gdpr' [7d]	20	8.41	9.75	6.11	9.87	16	
+2026-11-23T13:27:41.8861160Z	mssql-searchcol	trigger key, common 'order-created' [7d]	20	2.10	2.52	1.77	2.53	51	
+2026-11-23T13:27:42.0263740Z	mssql-searchcol	trigger key, rare 'backfill' [7d]	20	5.36	7.80	4.79	7.82	51	
+2026-11-23T13:27:42.1814233Z	mssql-searchcol	no match 'zq-nomatch-7731' [7d]	20	6.60	7.26	5.85	7.30	0	
+2026-11-23T13:27:44.5896809Z	mssql-searchcol	runId prefix, recent [all]	20	108.21	118.78	100.71	119.16	1	
+2026-11-23T13:27:47.0023438Z	mssql-searchcol	runId prefix, 60d old [all]	20	103.40	106.70	101.39	107.81	1	
+2026-11-23T13:27:47.1635902Z	mssql-searchcol	flow name, common 'Invoice' [all]	20	1.39	1.69	1.24	1.76	51	
+2026-11-23T13:27:47.7408333Z	mssql-searchcol	flow name, rare 'Gdpr' [all]	20	24.88	31.69	22.84	32.18	51	
+2026-11-23T13:27:47.8030884Z	mssql-searchcol	trigger key, common 'order-created' [all]	20	1.32	1.78	1.19	2.07	51	
+2026-11-23T13:27:47.9162044Z	mssql-searchcol	trigger key, rare 'backfill' [all]	20	4.77	5.26	4.54	5.68	51	
+2026-11-23T13:27:49.7038068Z	mssql-searchcol	no match 'zq-nomatch-7731' [all]	20	79.11	90.92	76.59	96.33	0	
+2026-11-23T13:37:34.3938824Z	mssql-fts	deep output: invoice, 3d old [7d]	3	849.52	12078.08	756.31	13325.70	1	
+2026-11-23T13:37:54.0912597Z	mssql-fts	deep output: invoice, 60d old [7d]	20	697.38	1966.78	666.82	2521.83	0	
+2026-11-23T13:38:43.9903640Z	mssql-fts	deep output: orderId, 3d old [7d]	20	2221.77	2302.15	2093.52	2322.81	1	
+2026-11-23T13:41:13.8020485Z	mssql-fts	deep output: common 'express' [7d]	20	6679.22	6906.14	6410.89	7367.11	51	
+2026-11-23T13:41:28.6712273Z	mssql-fts	deep error: shipment, 3d old [7d]	20	272.65	300.98	266.75	301.21	1	
+2026-11-23T13:44:26.8507414Z	mssql-fts	deep error: 'deadlock victim' [7d]	20	7467.07	10840.01	7073.43	11492.09	51	
+2026-11-23T13:44:40.7217188Z	mssql-fts	deep no match 'zq-nomatch-7731' [7d]	20	173.97	192.91	171.23	203.42	0	
+2026-11-23T13:47:05.0726097Z	mssql-fts	deep output: invoice, 60d old [all]	3	51921.61	59420.06	31977.89	60253.22	1	
+2026-11-23T13:50:02.5901926Z	mssql-fts	deep output: common 'express' [all]	20	6590.68	6898.52	6329.00	6967.28	51	
+2026-11-23T13:53:12.4116282Z	mssql-fts	deep error: 'deadlock victim' [all]	20	7551.52	12070.29	7166.21	12744.31	51	
+2026-11-23T13:55:39.0100124Z	mssql-fts	deep no match 'zq-nomatch-7731' [all]	20	5424.69	7966.94	4786.04	13564.18	0	
+2026-11-23T13:56:22.9994232Z	mssql-collate-deep	deep output: invoice, 3d old [7d]	20	1437.41	1552.94	1309.67	1628.26	1	
+2026-11-23T13:56:54.6129484Z	mssql-collate-deep	deep output: invoice, 60d old [7d]	20	1345.93	1457.81	1306.07	1481.59	0	
+2026-11-23T13:57:30.1714685Z	mssql-collate-deep	deep output: orderId, 3d old [7d]	20	1507.69	1644.42	1363.86	2121.04	1	
+2026-11-23T13:57:31.6377224Z	mssql-collate-deep	deep output: common 'express' [7d]	20	1.98	2.35	1.82	2.40	51	
+2026-11-23T13:58:01.8503954Z	mssql-collate-deep	deep error: shipment, 3d old [7d]	20	1363.10	1397.83	1342.29	1420.53	1	
+2026-11-23T13:58:18.1340141Z	mssql-collate-deep	deep error: 'deadlock victim' [7d]	20	627.78	976.03	596.74	1129.18	51	

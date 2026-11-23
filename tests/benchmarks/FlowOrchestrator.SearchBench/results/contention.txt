@@ -1,0 +1,2 @@
+CONTENTION-START 13:10:23 aspire e2e running in parallel
+CONTENTION-END 13:13:41 (coordinator: window ~13:10-13:20 UTC)

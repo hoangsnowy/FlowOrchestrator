@@ -63,7 +63,7 @@ public static class WriteBench
             typeof(SqlFlowRunStore).Assembly.GetType("FlowOrchestrator.SqlServer.SqlOutputsRepository", throwOnError: true)!,
             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, [db], null)!;
         var s = new Samples();
-        var gen = new DataGenerator(runs, seed: 777);
+        var gen = new DataGenerator(runs, seed: 777 + (int)(DateTime.UtcNow.Ticks % 1_000_000));   // fresh run ids per invocation
         var flowId = Guid.NewGuid();
         await using (var warm = new SqlConnection(db)) await warm.ExecuteScalarAsync<int>("SELECT 1");
 
@@ -99,7 +99,7 @@ public static class WriteBench
         var store = new PostgreSqlFlowRunStore(db);
         IOutputsRepository outputs = new PostgreSqlOutputsRepository(db);
         var s = new Samples();
-        var gen = new DataGenerator(runs, seed: 777);
+        var gen = new DataGenerator(runs, seed: 777 + (int)(DateTime.UtcNow.Ticks % 1_000_000));   // fresh run ids per invocation
         var flowId = Guid.NewGuid();
         await using (var warm = new NpgsqlConnection(db)) await warm.ExecuteScalarAsync<int>("SELECT 1");
 

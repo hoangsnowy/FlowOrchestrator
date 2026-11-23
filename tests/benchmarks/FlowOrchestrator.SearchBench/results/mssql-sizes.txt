@@ -10,3 +10,34 @@ FlowRuns               PK__FlowRuns__3214EC07A41DDFE8           rows=     200,00
 FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,988,322      508.8 MB
 FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,988,322      164.2 MB
 FlowSteps              PK_FlowSteps                             rows=   1,988,322   11,268.8 MB
+--- 2026-11-23T13:27:05.1840042Z
+FlowEvents             IX_FlowEvents_RunId_Sequence             rows=   4,308,728      273.0 MB
+FlowEvents             PK__FlowEven__D575BEB182E7404C           rows=   4,308,728      839.9 MB
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,200       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,200       60.3 MB
+FlowRuns               IX_FlowRuns_IdText                       rows=     200,200       13.0 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,200       39.7 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,200       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07A41DDFE8           rows=     200,200      199.4 MB
+FlowRunSearchTokens    PK_FlowRunSearchTokens                   rows=  16,142,837      943.6 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,990,257      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,990,257      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,990,257   11,269.1 MB
+--- 2026-11-23T13:37:18.9958015Z
+FlowEvents             IX_FlowEvents_RunId_Sequence             rows=   4,308,728      273.0 MB
+FlowEvents             PK__FlowEven__D575BEB182E7404C           rows=   4,308,728      839.9 MB
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,200       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,200       60.3 MB
+FlowRuns               IX_FlowRuns_IdText                       rows=     200,200       13.0 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,200       39.7 MB
+FlowRuns               IX_FlowRuns_StartedAt_Search             rows=     200,200       43.1 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,200       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07A41DDFE8           rows=     200,200      199.4 MB
+FlowRunSearchTokens    PK_FlowRunSearchTokens                   rows=  16,142,837      943.6 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,990,257      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,990,257      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,990,257   11,288.8 MB
+FlowSteps              UX_FlowSteps_SearchKey                   rows=   1,990,257      115.6 MB
+FTS catalog fo_search: 2393 MB, 1,990,257 items
