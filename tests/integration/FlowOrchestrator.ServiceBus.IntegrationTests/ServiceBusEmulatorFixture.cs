@@ -50,7 +50,7 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
     public string ConnectionString { get; private set; } = string.Empty;
 
     /// <inheritdoc/>
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _network = new NetworkBuilder().Build();
         await _network.CreateAsync();
@@ -95,7 +95,7 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
     }
 
     /// <inheritdoc/>
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_emulator is not null) await _emulator.DisposeAsync();
         if (_sqlEdge is not null) await _sqlEdge.DisposeAsync();

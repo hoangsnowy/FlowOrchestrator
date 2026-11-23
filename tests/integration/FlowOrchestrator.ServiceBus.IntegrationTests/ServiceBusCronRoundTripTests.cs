@@ -43,7 +43,7 @@ public class ServiceBusCronRoundTripTests : IAsyncLifetime
     }
 
     /// <inheritdoc/>
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         CronTickHandler.Reset();
 
@@ -72,7 +72,7 @@ public class ServiceBusCronRoundTripTests : IAsyncLifetime
     }
 
     /// <inheritdoc/>
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_host is not null)
         {
