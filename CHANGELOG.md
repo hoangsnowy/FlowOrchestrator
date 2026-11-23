@@ -6,6 +6,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Removed — **breaking:** legacy sequential execution path and its shims
+
+- The "no runtime store" fallback is gone. Before, a host without an `IFlowRunRuntimeStore` ran in
+  legacy sequential mode: it resolved one successor at a time, had no parallel fan-out and no step
+  claims, and skipped startup recovery. The engine now always evaluates the full DAG through
+  `IFlowGraphPlanner`. The EventId 9000 `LegacySequentialMode` debug log is gone with it.
+- `FlowOrchestratorEngine`, `FlowSignalDispatcher` and `FlowRunRecoveryHostedService` now require an
+  `IFlowRunRuntimeStore`, and the engine also requires an `IFlowRunControlStore`. Each constructor
+  throws `InvalidOperationException` when no store is registered, and the message names the
+  component and the missing store type. Startup fails instead of degrading silently.
+- `FlowSignalDispatcher`'s constructor takes `IEnumerable<IFlowRunRuntimeStore> runtimeStores` as a
+  required parameter before the optional `telemetry`. Callers that pass arguments by position must
+  reorder them.
+- Removed APIs, which only the sequential path used:
+  - `StepMetadata.ShouldExecute(string, StepStatus)`
+  - `StepCollection.FindNextStep(string)`
+  - `IFlowExecutor.GetNextStep(...)` and its `FlowExecutor` implementation. `IFlowExecutor` now only
+    bootstraps the run.
+- **Custom storage backends** must register `IFlowRunRuntimeStore` and `IFlowRunControlStore`
+  alongside `IFlowRunStore`. The built-in `UseSqlServer`, `UsePostgreSql` and `UseInMemory` already
+  do this, so they need no change.
+
 ### Changed — CI publishes to NuGet.org through Trusted Publishing
 
 - `publish.yml` no longer reads a long-lived `NUGET_API_KEY` secret. It exchanges the job's GitHub
