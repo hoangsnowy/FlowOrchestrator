@@ -1610,7 +1610,6 @@ function renderActivityHeatmap(buckets) {
   }
   // Summary footer.
   const total = buckets.reduce((a, b) => a + b.total, 0);
-  const success = buckets.reduce((a, b) => a + b.success, 0);
   const failed = buckets.reduce((a, b) => a + b.failed, 0);
   const summary = $('ov-heatmap-summary');
   if (summary) {
