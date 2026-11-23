@@ -44,6 +44,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   which failed the SqlServer integration suite on CI twice after a briefly-merged move to 2025.
 - CI runs the unit matrix on net10.0 + net11.0; `codeql-action` 4.39.3.
 
+### Performance
+
+- **Four superlinear terms from #189 removed** (`docs/benchmarks/issue-189-superlinear-terms-2026-11-23.md`).
+  - `RunTerminationClassifier` now classifies a run in one pass over a set of non-leaf keys. It used to
+    scan every status for every status, which was O(n²); it is now O(n). At a 500-iteration loop the
+    cost drops from 115 ms / 91.7 MB to 168 µs / 56 KB.
+  - `FlowGraphPlanner.Evaluate` no longer rebuilds and sorts a `SortedSet` of every runtime key on each
+    step completion. It classifies only the keys without a status row, and builds
+    `FlowGraphEvaluation.AllKnownStepKeys` lazily with identical contents. At 500 iterations the cost
+    drops from 238 µs / 304 KB to 81 µs / 34 KB.
+  - The `ForEach` admission gate now checks the dispatch ledger with point lookups through the new
+    `IFlowRunStore.IsStepDispatchedAsync`, instead of fetching the run's whole ledger on every pass.
+    The method has a default interface implementation, with indexed overrides in InMemory, SQL Server
+    and PostgreSQL.
+  - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
+    search over 10k runs drops from 1,016 KB to 79 KB.
+
 ## [1.34.1] - 2026-10-31
 
 > **`1.34.0` was tagged but never reached NuGet.org.** Its publish job failed at `Test (Unit)` on the

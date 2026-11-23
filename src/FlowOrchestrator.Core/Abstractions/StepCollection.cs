@@ -20,7 +20,7 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
     /// Hot path: called per status-map entry by <c>LoopBarrier.RunningLoopKeys</c> and per ready step by
     /// the continuation, i.e. on every step completion. Nested and runtime keys are walked as
     /// <see cref="ReadOnlySpan{T}"/> segments — no <see cref="string.Split(char, StringSplitOptions)"/>
-    /// array and, on .NET 9+, no per-segment string (the lookup goes through
+    /// array and no per-segment string (the lookup goes through
     /// <c>GetAlternateLookup&lt;ReadOnlySpan&lt;char&gt;&gt;</c>). Segment semantics are unchanged from the
     /// earlier <c>Split(RemoveEmptyEntries | TrimEntries)</c> form: segments are trimmed, empty ones are
     /// ignored, and a key with fewer than two segments that is not an exact top-level key resolves to
