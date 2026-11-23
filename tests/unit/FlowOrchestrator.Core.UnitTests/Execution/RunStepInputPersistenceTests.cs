@@ -99,7 +99,6 @@ public sealed class RunStepInputPersistenceTests
     private FlowOrchestratorEngine CreateEngine() =>
         new(
             Substitute.For<IStepDispatcher>(),
-            Substitute.For<IFlowExecutor>(),
             new FlowGraphPlanner(),
             _stepExecutor,
             Substitute.For<IFlowStore>(),

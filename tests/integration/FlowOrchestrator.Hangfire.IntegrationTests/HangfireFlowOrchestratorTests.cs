@@ -14,7 +14,6 @@ namespace FlowOrchestrator.Hangfire.Tests;
 public class HangfireFlowOrchestratorTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore;
@@ -41,7 +40,6 @@ public class HangfireFlowOrchestratorTests
 
         var engine = new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

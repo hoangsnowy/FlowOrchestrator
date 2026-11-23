@@ -2,7 +2,7 @@ namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Default mutable implementation of <see cref="IStepInstance"/>, constructed by
-/// <see cref="FlowExecutor"/> and <see cref="FlowGraphPlanner"/> when a step is ready to run.
+/// <see cref="FlowGraphPlanner"/> when a step is ready to run.
 /// </summary>
 public sealed class StepInstance : IStepInstance
 {

@@ -20,7 +20,6 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// </summary>
 public sealed class RetryStepCascadeAdvanceTests
 {
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -119,7 +118,6 @@ public sealed class RetryStepCascadeAdvanceTests
 
         var engine = new FlowOrchestratorEngine(
             dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

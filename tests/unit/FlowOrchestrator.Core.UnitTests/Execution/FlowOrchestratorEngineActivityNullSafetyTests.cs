@@ -21,7 +21,6 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 public sealed class FlowOrchestratorEngineActivityNullSafetyTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -34,7 +33,6 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
     private FlowOrchestratorEngine CreateEngineOtelDisabled() =>
         new(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -101,7 +99,6 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
 
         var engine = new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

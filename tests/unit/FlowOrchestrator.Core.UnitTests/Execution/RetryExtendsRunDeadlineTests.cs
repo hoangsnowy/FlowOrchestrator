@@ -18,7 +18,6 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// </summary>
 public sealed class RetryExtendsRunDeadlineTests
 {
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -46,7 +45,6 @@ public sealed class RetryExtendsRunDeadlineTests
 
         return new FlowOrchestratorEngine(
             dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

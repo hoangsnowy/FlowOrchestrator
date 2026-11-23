@@ -21,7 +21,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
     // ── Substitutes ───────────────────────────────────────────────────────────
 
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -47,7 +46,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
         IFlowRunControlStore? runControlStore = null) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -472,7 +470,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
     private FlowOrchestratorEngine CreateEngineWithStore(IFlowStore store) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             store,
@@ -492,7 +489,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
         IEnumerable<IFlowRunControlStore> runControlStores) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

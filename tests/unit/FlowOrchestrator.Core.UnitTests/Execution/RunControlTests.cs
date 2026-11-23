@@ -19,7 +19,6 @@ public sealed class RunControlTests
     // ── Substitutes ───────────────────────────────────────────────────────────
 
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -34,7 +33,6 @@ public sealed class RunControlTests
     private FlowOrchestratorEngine CreateEngine(InMemoryFlowRunStore store) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

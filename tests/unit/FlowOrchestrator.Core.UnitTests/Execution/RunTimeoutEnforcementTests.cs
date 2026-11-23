@@ -18,7 +18,6 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 public sealed class RunTimeoutEnforcementTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -31,7 +30,6 @@ public sealed class RunTimeoutEnforcementTests
     private FlowOrchestratorEngine CreateEngine(InMemoryFlowRunStore store, IFlowEventNotifier? notifier = null) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

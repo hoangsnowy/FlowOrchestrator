@@ -78,7 +78,6 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddHostedService<FlowRunRecoveryHostedService>();
         services.AddHostedService<FlowTimeoutEnforcementHostedService>();
 
-        services.AddTransient<IFlowExecutor, FlowExecutor>();
         services.AddSingleton<IFlowGraphPlanner, FlowGraphPlanner>();
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();
 

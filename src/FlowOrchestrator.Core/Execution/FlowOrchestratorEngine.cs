@@ -35,7 +35,6 @@ namespace FlowOrchestrator.Core.Execution;
 public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTimeoutEnforcer
 {
     private readonly IStepDispatcher _dispatcher;
-    private readonly IFlowExecutor _flowExecutor;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepExecutor _stepExecutor;
     private readonly IFlowStore _flowStore;
@@ -69,7 +68,6 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     /// </remarks>
     public FlowOrchestratorEngine(
         IStepDispatcher dispatcher,
-        IFlowExecutor flowExecutor,
         IFlowGraphPlanner graphPlanner,
         IStepExecutor stepExecutor,
         IFlowStore flowStore,
@@ -87,7 +85,6 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         IFlowSignalStore? signalStore = null)
     {
         _dispatcher = dispatcher;
-        _flowExecutor = flowExecutor;
         _graphPlanner = graphPlanner;
         _stepExecutor = stepExecutor;
         _flowStore = flowStore;

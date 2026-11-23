@@ -22,7 +22,6 @@ public sealed class EngineObservabilityTests
     // ── Substitutes shared across tests ───────────────────────────────────────
 
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -43,7 +42,6 @@ public sealed class EngineObservabilityTests
         IReadOnlyDictionary<string, StepStatus>? statuses = null) =>
         new(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,

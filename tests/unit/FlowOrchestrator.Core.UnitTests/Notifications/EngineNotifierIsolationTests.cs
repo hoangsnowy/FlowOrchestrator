@@ -19,7 +19,6 @@ namespace FlowOrchestrator.Core.Tests.Notifications;
 public sealed class EngineNotifierIsolationTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
@@ -31,7 +30,7 @@ public sealed class EngineNotifierIsolationTests
 
     private FlowOrchestratorEngine CreateEngine(IFlowEventNotifier notifier, bool enableEventPersistence = false) =>
         new FlowOrchestratorEngine(
-            _dispatcher, _flowExecutor, _graphPlanner, _stepExecutor,
+            _dispatcher, _graphPlanner, _stepExecutor,
             _flowStore, _runStore, _outputsRepo, _ctxAccessor, _flowRepo,
             [EngineTestStores.PermissiveRuntimeStore()], [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),

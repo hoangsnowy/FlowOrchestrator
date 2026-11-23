@@ -4,8 +4,8 @@ namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Combines <see cref="IExecutionContext"/> with the flow definition and the trigger event
-/// that started the run. Passed to <see cref="IFlowExecutor.TriggerFlow"/> and
-/// <see cref="IFlowGraphPlanner.CreateEntrySteps"/> to bootstrap execution.
+/// that started the run. Passed to <see cref="IFlowGraphPlanner.CreateEntrySteps"/> to bootstrap
+/// execution.
 /// </summary>
 /// <remarks>
 /// The runtime-specific job or message ID for the trigger is carried by <see cref="IExecutionContext.JobId"/>,

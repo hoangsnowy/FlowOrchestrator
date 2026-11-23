@@ -81,7 +81,6 @@ internal sealed class LoopBarrierEngineHarness
 
         Engine = new FlowOrchestratorEngine(
             dispatcher,
-            Substitute.For<IFlowExecutor>(),
             new FlowGraphPlanner(),
             stepExecutor,
             Substitute.For<IFlowStore>(),

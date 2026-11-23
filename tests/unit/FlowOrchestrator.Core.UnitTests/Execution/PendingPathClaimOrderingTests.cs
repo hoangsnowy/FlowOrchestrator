@@ -528,7 +528,6 @@ public sealed class PendingPathClaimOrderingTests
         IFlowRunRuntimeStore? runtimeStoreOverride = null) =>
         new(
             _dispatcher,
-            Substitute.For<IFlowExecutor>(),
             new FlowGraphPlanner(),
             _stepExecutor,
             Substitute.For<IFlowStore>(),
