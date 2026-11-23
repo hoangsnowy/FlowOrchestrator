@@ -111,12 +111,15 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
                 matchedPrevious |= CryptographicOperations.FixedTimeEquals(candidateBytes, previousDigest);
         }
 
-        if (matchedCurrent)
-            return WebhookSignatureResult.Success;
-        if (matchedPrevious)
-            return WebhookSignatureResult.SuccessWithRotation;
+        if (!matchedCurrent && !matchedPrevious)
+            return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.DigestMismatch);
 
-        return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.DigestMismatch);
+        // Only strategies whose signed payload includes the timestamp authenticate it. A timestamp that was
+        // merely required (RequireTimestamp) but is not part of the digest proves nothing about freshness.
+        var timestampIsSigned = spec.SignedPayloadStrategy is SignedPayloadStrategy.TimestampDotBody
+            or SignedPayloadStrategy.ColonDelimited;
+        var result = matchedCurrent ? WebhookSignatureResult.Success : WebhookSignatureResult.SuccessWithRotation;
+        return timestampIsSigned ? result with { AuthenticatedTimestamp = timestamp } : result;
     }
 
     private WebhookSignatureResult VerifyBodyResident(WebhookSignatureContext context, WebhookSignatureSpec spec)
@@ -152,9 +155,12 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
             var matchedPrevious = previousDigest is not null
                 && CryptographicOperations.FixedTimeEquals(candidateBytes, previousDigest);
 
-            if (matchedCurrent) return WebhookSignatureResult.Success;
-            if (matchedPrevious) return WebhookSignatureResult.SuccessWithRotation;
-            return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.DigestMismatch);
+            if (!matchedCurrent && !matchedPrevious)
+                return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.DigestMismatch);
+
+            // Mailgun signs timestamp + token (not the body): both are authenticated.
+            var verified = matchedCurrent ? WebhookSignatureResult.Success : WebhookSignatureResult.SuccessWithRotation;
+            return verified with { AuthenticatedTimestamp = timestamp, AuthenticatedNonce = token };
         }
         catch (JsonException)
         {

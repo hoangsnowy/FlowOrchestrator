@@ -6,6 +6,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+- **Webhook replay protection judges freshness from the signed timestamp**
+  ([GHSA-5mx6-chp3-36c4](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-5mx6-chp3-36c4)). For signature schemes that
+  sign their own timestamp (Stripe `t=`, Slack, Mailgun, and custom `TimestampDotBody` /
+  `ColonDelimited` specs), the replay gate read the unsigned `X-Webhook-Timestamp` header instead and
+  derived the replay key from it. Anyone holding a captured delivery could replay it indefinitely by
+  adding a fresh `X-Webhook-Timestamp`, and a genuine Stripe delivery — which never sends that header —
+  was rejected as `missing_timestamp` under `Enforce`. Once a signature is verified, the gate now uses
+  only signed material: the signed timestamp for the skew check, and a replay key built from the signed
+  timestamp and body (or the signed token for Mailgun). Unsigned timestamp and nonce headers are ignored.
+- Out-of-range timestamps (`X-Webhook-Timestamp: 99999999999999`) are rejected as `invalid_timestamp`
+  instead of failing the request with a 500.
+
+#### Read before upgrading
+
+- **Body-only signature schemes (GitHub, Bitbucket, Shopify, …) with replay protection** no longer use
+  an unsigned delivery-id header (`webhookNonceHeader`, e.g. `X-GitHub-Delivery`) as the replay key: the
+  key is the body hash, held for `2 × webhookReplayToleranceSeconds`. Two *different* deliveries with
+  byte-identical bodies inside that window are now treated as a replay (409). These schemes sign no
+  timestamp, so replay protection cannot reach beyond that window for them.
+- `WebhookSignatureResult` gains `AuthenticatedTimestamp` / `AuthenticatedNonce`, and
+  `ReplayProtectionGate` a `EvaluateAsync` overload taking them. Custom `IWebhookSignatureVerifier`
+  implementations that sign a timestamp should set `AuthenticatedTimestamp` on success; otherwise their
+  requests are treated like a body-only scheme.
+- Docs: `webhook-hardening.md` said `Off` mode still records violations; it records nothing (use
+  `Audit`). It also named a non-existent `AddFlowWebhookSecurity` method.
+
 ## [1.34.3] - 2026-11-23
 
 Correctness release for the 1.34 line (.NET 8 / 9 / 10). Six storage fixes. Two matter for anyone on

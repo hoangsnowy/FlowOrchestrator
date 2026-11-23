@@ -175,6 +175,9 @@ public sealed class WebhookSecurityPipeline
 
         // ── Signature gate ──
         var usedRotation = false;
+        var signatureVerified = false;
+        string? authenticatedTimestamp = null;
+        string? authenticatedNonce = null;
         if (spec is not null || customDispatch)
         {
             var (key, previous, conflicted) = ResolveHmacKeys(triggerInputs);
@@ -219,6 +222,9 @@ public sealed class WebhookSecurityPipeline
             if (sigResult.UsedRotationKey && _logger is not null)
                 WebhookLog.RotationUsedPreviousKey(_logger, flowId, triggerKey);
             usedRotation = sigResult.UsedRotationKey;
+            signatureVerified = true;
+            authenticatedTimestamp = sigResult.AuthenticatedTimestamp;
+            authenticatedNonce = sigResult.AuthenticatedNonce;
         }
 
         // ── Replay-protection gate ──
@@ -235,7 +241,8 @@ public sealed class WebhookSecurityPipeline
             if (tolerance > 0)
             {
                 var verdict = await _replayGate.EvaluateAsync(
-                    flowId, triggerKey, headers, bodyBytes, tolerance, tsHeader, nonceHeader, ct).ConfigureAwait(false);
+                    flowId, triggerKey, headers, bodyBytes, tolerance, tsHeader, nonceHeader,
+                    signatureVerified, authenticatedTimestamp, authenticatedNonce, ct).ConfigureAwait(false);
 
                 Activity.Current?.SetTag("flow.webhook.replay_skew_ms", verdict.Skew.TotalMilliseconds);
 
