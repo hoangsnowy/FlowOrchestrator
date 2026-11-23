@@ -6,6 +6,45 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Read before upgrading
+
+- **A dashboard with no authentication configured is now read-only outside the `Development`
+  environment.** When neither `FlowDashboard:BasicAuth` nor `FlowDashboard:Authorization` is set and the
+  host does not run in `Development`, anonymous callers are treated as viewers: trigger, re-run, retry,
+  cancel, signal, enable / disable and schedule changes answer `403`, and webhook secrets / HMAC keys in
+  manifests and secret-looking values in run payloads are masked. Configure Basic Auth or identity sign-in
+  (see [Securing the dashboard](docs/articles/dashboard-security.md)). If access is already restricted by
+  something in front of the dashboard and you want the previous behaviour, set
+  `FlowDashboard:AllowAnonymousOperators` to `true`. `Development` hosts are unchanged.
+
+### Security
+
+- **Dashboard: unauthenticated dashboards granted full operator access in every environment**
+  ([GHSA-g5jp-pqw5-wrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-g5jp-pqw5-wrmj)).
+  With no authentication configured, any caller who could reach the dashboard could start, re-run and
+  cancel runs, deliver signals, change schedules, and read webhook secrets from flow manifests. Outside
+  `Development` such a dashboard is now read-only with secrets masked; the new
+  `FlowDashboardOptions.AllowAnonymousOperators` (default `false`, bindable as
+  `FlowDashboard:AllowAnonymousOperators`) opts back in. At startup, EventId `4103` (Error) reports an
+  unprotected read-only dashboard outside `Development`, `4104` (Error) one opened to anonymous operators,
+  and `4105` (Warning) an unprotected dashboard in `Development`.
+- **Dashboard: values rendered into HTML attributes were not quote-encoded**
+  ([GHSA-358q-p9gq-3m6p](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-358q-p9gq-3m6p)).
+  The SPA's `esc()` helper did not encode `"` or `'`, but its output was also used inside attribute values,
+  including the Runs filter chips, which render a value taken from the URL. A crafted link could therefore
+  inject markup into the dashboard. `esc()` now encodes `& < > " '` for every caller, arguments of inline
+  handlers are JS-escaped and then HTML-encoded, SVG tooltips encode every interpolated value, and the
+  `status` filter read from the URL is limited to the known run statuses.
+- **Core: step input values substituted from the trigger were evaluated as `@steps()` expressions**
+  ([GHSA-8248-pg9c-cp7c](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-8248-pg9c-cp7c)).
+  Step inputs were resolved in two passes, and the second (`@steps('key').output|status|error`) also
+  evaluated strings produced by the first (`@triggerBody()` / `@triggerHeaders()`). A trigger payload or
+  header value that read like `@steps('x').output` was therefore resolved, exposing the output of any step
+  in the run to whoever supplied the trigger. Inputs are now resolved in a single walk: each value is
+  classified once, from the flow manifest's own text, and a substituted value — from the trigger or from a
+  step output — is passed to the handler verbatim, also when a `Pending` step is re-polled with its
+  already-resolved inputs. Expressions written in the manifest resolve exactly as before.
+
 ## [1.34.1] - 2026-10-31
 
 > **`1.34.0` was tagged but never reached NuGet.org.** Its publish job failed at `Test (Unit)` on the
