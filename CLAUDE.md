@@ -169,7 +169,11 @@ publish workflow packs and pushes packages, it never creates a GitHub Release.
 5. **Watch the tag's publish run to completion.** It re-runs build + unit + integration on the tag
    before `Pack (official)` → `Push to GitHub Packages` → `Push to NuGet.org`, so a failing test
    blocks the push while leaving the tag in place — the v1.32.0 state: tag and release exist, no
-   package. Treat a red publish run as a release that did not happen.
+   package. Treat a red publish run as a release that did not happen. The NuGet.org push uses
+   **Trusted Publishing** (`NuGet/login@v1`, OIDC, no stored API key): a failure at the
+   `NuGet login` step means the nuget.org policy (owner `thelastsnow`, repository
+   `hoangsnowy/FlowOrchestrator`, workflow `publish.yml`) is missing or inactive — fix it on
+   nuget.org, never by reintroducing a long-lived key.
 6. **Verify the package is actually live** before telling anyone it shipped:
    `curl -fsS https://api.nuget.org/v3-flatcontainer/floworchestrator.core/index.json | jq -r '.versions[-4:]'`.
    The GitHub Actions run being green is not the same claim.
