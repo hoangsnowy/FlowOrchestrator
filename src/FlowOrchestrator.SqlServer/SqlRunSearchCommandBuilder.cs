@@ -46,7 +46,7 @@ internal sealed record SqlRunSearchCommand(
 /// whose rows carry the clustered key — so a cursor is a range seek (page 2,000: 189 → 32 ms).</item>
 /// <item><b>Capped count.</b> <c>COUNT(*)</c> over <c>TOP (cap + 1)</c> (10.7 → 1.1 ms at 200k runs).</item>
 /// <item><b>Token table</b> (opt-in): deep search probes <c>FlowRunSearchTokens</c> by token prefix
-/// (0.7-2.3 ms) and keeps the <c>LIKE</c> probe only for runs the back-fill has not reached yet.</item>
+/// (token probe ~1 ms; 8 ms for the whole windowed deep search) and keeps the <c>LIKE</c> probe only for runs the back-fill has not reached yet.</item>
 /// </list>
 /// </remarks>
 internal static class SqlRunSearchCommandBuilder

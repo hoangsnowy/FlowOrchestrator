@@ -170,6 +170,16 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
                 await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            // An expression index has no statistics until ANALYZE: without them the planner estimates ~20
+            // matches for any term and bitmap-scans + sorts thousands of rows for a common one (measured
+            // 32-40 ms instead of ~1 ms). ANALYZE samples the table and blocks neither reads nor writes.
+            await using (var analyze = conn.CreateCommand())
+            {
+                analyze.CommandText = "ANALYZE flow_runs";
+                analyze.CommandTimeout = 0;
+                await analyze.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             LogRunSearchIndexBuilt();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

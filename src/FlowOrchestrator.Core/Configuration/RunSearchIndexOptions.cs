@@ -9,11 +9,12 @@ namespace FlowOrchestrator.Core.Configuration;
 /// <remarks>
 /// <para>The token index answers deep search ("find the run whose step output contains
 /// <c>INV-001353358</c>") with an index seek instead of a <c>LIKE</c> scan over step payloads: measured
-/// 0.7-2.3 ms against 14.5 s (7-day window) and 334 s (no window) at 200k runs / 2M steps on SQL Server.</para>
-/// <para>Costs: roughly 81 token rows per run (943 MB per 200k runs, about 8% of the step table), one
-/// extra statement per step completion and per run start, and a newest-first background back-fill of
-/// existing runs. The write-path cost has <b>not yet been measured</b>; see
-/// <c>docs/benchmarks/run-search-2026-11-23.md</c>.</para>
+/// on SQL Server at 200k runs / 2M steps, 8 ms against 1.2 s (7-day window) and 84 ms against 98 s (no
+/// window).</para>
+/// <para>Costs, measured there: about 72 token rows per run (1.3 GB per 200k runs, ~12% of the step
+/// table), an 8-minute newest-first background back-fill per 200k existing runs, and <b>one extra commit
+/// per step completion and per run start</b> (+5.4 ms p50 on a commit-bound disk, roughly doubling
+/// <c>RecordStepCompleteAsync</c>); see <c>docs/benchmarks/run-search-2026-11-23.md</c>.</para>
 /// <para>Semantics differ from the default deep search: payload and error text match by <b>token
 /// prefix</b>, not substring (see <see cref="RunSearchTokenizer"/>). The run's own columns still match
 /// as substrings.</para>
