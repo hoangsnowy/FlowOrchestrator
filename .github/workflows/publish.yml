@@ -93,7 +93,9 @@ jobs:
       # repository hoangsnowy/FlowOrchestrator, workflow file `publish.yml`.
       - name: NuGet login (OIDC -> temporary API key)
         id: nuget-login
-        uses: NuGet/login@v1
+        # Pinned to the v1.2.0 commit: this step mints the publish credential, so a moved tag
+        # must not be able to change what runs (CodeQL actions/unpinned-tag).
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: thelastsnow   # nuget.org profile name of the package owner, not an email
 
