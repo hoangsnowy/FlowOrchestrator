@@ -26,20 +26,37 @@ public static class Measure
     public static async Task<Timing> RunAsync(string suite, string name, Func<Task<int>> query, int iterations = 20, TimeSpan? budget = null, string? note = null)
     {
         budget ??= TimeSpan.FromSeconds(90);
+        // Probe run. A query slower than 10 s is a scan whose order of magnitude is the finding: it gets
+        // 3 timed runs (the probe counts; at that size the buffer pool cannot hold the scanned data anyway)
+        // and is reported as min / median / max with n=3. Anything faster gets a warm-up plus >= 20 runs.
+        var probe = Stopwatch.StartNew();
         var rows = await query();
-        var first = Stopwatch.StartNew();
-        rows = await query();
-        first.Stop();
+        probe.Stop();
         var samples = new List<double>(iterations);
-        var total = Stopwatch.StartNew();
-        for (var i = 0; i < iterations; i++)
+        var slow = probe.Elapsed > TimeSpan.FromSeconds(10);
+        if (slow)
         {
-            var sw = Stopwatch.StartNew();
+            samples.Add(probe.Elapsed.TotalMilliseconds);
+            for (var i = 0; i < 2; i++)
+            {
+                var sw = Stopwatch.StartNew();
+                rows = await query();
+                sw.Stop();
+                samples.Add(sw.Elapsed.TotalMilliseconds);
+            }
+        }
+        else
+        {
             rows = await query();
-            sw.Stop();
-            samples.Add(sw.Elapsed.TotalMilliseconds);
-            if (samples.Count >= 5 && total.Elapsed > budget) break;
-            if (samples.Count >= 3 && samples.Min() > 20_000) break;   // 20 s+ scans: 3 warm samples
+            var total = Stopwatch.StartNew();
+            for (var i = 0; i < iterations; i++)
+            {
+                var sw = Stopwatch.StartNew();
+                rows = await query();
+                sw.Stop();
+                samples.Add(sw.Elapsed.TotalMilliseconds);
+                if (samples.Count >= 20 && total.Elapsed > budget) break;
+            }
         }
         samples.Sort();
         var timing = new Timing(suite, name, samples.Count, Percentile(samples, 0.50), Percentile(samples, 0.95), samples[0], samples[^1], rows, note);
@@ -104,17 +121,20 @@ public static class Scenarios
         yield return ("unfiltered page 2000 OFFSET", new RunSearchQuery { Skip = 1999 * 50, Take = 50 });
     }
 
-    public static IEnumerable<(string Name, RunSearchQuery Query)> Deep(Needles n)
+    public static IEnumerable<(string Name, RunSearchQuery Query)> Deep(Needles n, bool includeUnwindowedFullScans = false)
     {
         foreach (var windowed in new[] { true, false })
         {
             var w = windowed ? " [7d]" : " [all]";
             DateTimeOffset? from = windowed ? Window7d : null;
-            yield return ("deep output: invoice, 3d old" + w, new RunSearchQuery { Text = n["invoiceRecent"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
+            // Without a window every rare term is the same full scan (only Take + 1 matches stop it early), so
+            // the unwindowed set keeps one rare output term, the no-match term and the two early-stop terms.
+            var all = windowed || includeUnwindowedFullScans;
+            if (all) yield return ("deep output: invoice, 3d old" + w, new RunSearchQuery { Text = n["invoiceRecent"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
             yield return ("deep output: invoice, 60d old" + w, new RunSearchQuery { Text = n["invoiceOld"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
-            yield return ("deep output: orderId, 3d old" + w, new RunSearchQuery { Text = n["orderIdRecent"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
+            if (all) yield return ("deep output: orderId, 3d old" + w, new RunSearchQuery { Text = n["orderIdRecent"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
             yield return ("deep output: common 'express'" + w, new RunSearchQuery { Text = "express", IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
-            yield return ("deep error: shipment, 3d old" + w, new RunSearchQuery { Text = n["errorShipmentRecent"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
+            if (all) yield return ("deep error: shipment, 3d old" + w, new RunSearchQuery { Text = n["errorShipmentRecent"], IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
             yield return ("deep error: 'deadlock victim'" + w, new RunSearchQuery { Text = "deadlock victim", IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
             yield return ("deep no match 'zq-nomatch-7731'" + w, new RunSearchQuery { Text = "zq-nomatch-7731", IncludeStepPayloads = true, StartedFrom = from, Take = 50 });
         }

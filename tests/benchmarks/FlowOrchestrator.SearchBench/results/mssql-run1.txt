@@ -1,0 +1,68 @@
+654a9e3497d70fac8ca95ebbde2cf0c7f481e4c1810bd8b949386de848444225
+=== 11:32:35 mssql-seed 200000
+seeded 200,000 runs / 1,988,322 steps / 4,198 M chars output / 4,304,458 events in 00:05:53.7483868
+statistics updated in 00:00:05.4365573
+=== 11:38:36 mssql-sizes
+FlowEvents             IX_FlowEvents_RunId_Sequence             rows=   4,304,458      272.9 MB
+FlowEvents             PK__FlowEven__D575BEB182E7404C           rows=   4,304,458      839.8 MB
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,000       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,000       60.3 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,000       39.7 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,000       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07A41DDFE8           rows=     200,000      199.4 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,988,322      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,988,322      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,988,322   11,268.8 MB
+=== 11:38:36 mssql-base quick
+mssql-base     runId prefix, recent [7d]                                  n= 20 p50=     67.67 ms p95=     69.38 ms min=    61.91 rows=   1 
+mssql-base     runId prefix, 60d old [7d]                                 n= 20 p50=     67.48 ms p95=     74.92 ms min=    60.78 rows=   0 
+mssql-base     flow name, common 'Invoice' [7d]                           n= 20 p50=      2.40 ms p95=      3.07 ms min=     2.20 rows=  51 
+mssql-base     flow name, rare 'Gdpr' [7d]                                n= 20 p50=     88.53 ms p95=    157.47 ms min=    61.53 rows=  16 
+mssql-base     trigger key, common 'order-created' [7d]                   n= 20 p50=      3.37 ms p95=      4.66 ms min=     3.14 rows=  51 
+mssql-base     trigger key, rare 'backfill' [7d]                          n= 20 p50=    130.18 ms p95=    228.65 ms min=    55.47 rows=  51 
+mssql-base     no match 'zq-nomatch-7731' [7d]                            n= 20 p50=    178.49 ms p95=    258.12 ms min=   110.08 rows=   0 
+mssql-base     runId prefix, recent [all]                                 n= 20 p50=    926.01 ms p95=   1482.70 ms min=   877.91 rows=   1 
+mssql-base     runId prefix, 60d old [all]                                n= 20 p50=    901.28 ms p95=   1572.43 ms min=   847.25 rows=   1 
+mssql-base     flow name, common 'Invoice' [all]                          n= 20 p50=      2.85 ms p95=      3.46 ms min=     2.49 rows=  51 
+mssql-base     flow name, rare 'Gdpr' [all]                               n= 20 p50=    235.48 ms p95=    267.09 ms min=   213.90 rows=  51 
+mssql-base     trigger key, common 'order-created' [all]                  n= 20 p50=      3.24 ms p95=      3.79 ms min=     2.91 rows=  51 
+mssql-base     trigger key, rare 'backfill' [all]                         n= 20 p50=     49.57 ms p95=     50.56 ms min=    44.98 rows=  51 
+mssql-base     no match 'zq-nomatch-7731' [all]                           n= 20 p50=    826.69 ms p95=    868.97 ms min=   780.76 rows=   0 
+mssql-base     status word 'Failed' (+total)                              n= 20 p50=      1.79 ms p95=      2.02 ms min=     1.67 rows=  51 
+mssql-base     status word 'TimedOut' (+total)                            n= 20 p50=      2.09 ms p95=      2.58 ms min=     1.75 rows=  51 
+mssql-base     full run id (old)                                          n= 20 p50=      0.93 ms p95=      1.15 ms min=     0.53 rows=   1 
+mssql-base     unfiltered first page (+total)                             n= 20 p50=     11.92 ms p95=     15.41 ms min=    10.87 rows=  51 
+mssql-base     unfiltered first page (no total)                           n= 20 p50=      1.17 ms p95=      1.49 ms min=     0.97 rows=  51 
+mssql-base     unfiltered page 50 OFFSET (+total)                         n= 20 p50=     18.58 ms p95=     20.06 ms min=    17.13 rows=  51 
+mssql-base     unfiltered page 2000 OFFSET                                n= 20 p50=    189.04 ms p95=    230.46 ms min=   178.51 rows=  51 
+=== 11:40:11 mssql-keyset
+mssql-keyset   unfiltered page 50 keyset                                  n= 20 p50=      2.36 ms p95=      3.01 ms min=     2.02 rows=  51 
+mssql-keyset   unfiltered page 2000 keyset                                n= 20 p50=     31.90 ms p95=     38.95 ms min=    28.89 rows=  51 
+mssql-count    COUNT(*) FlowRuns                                          n= 20 p50=     10.72 ms p95=     12.96 ms min=     9.57 rows=   1 
+mssql-count    COUNT(*) WHERE Status='Failed'                             n= 20 p50=      1.14 ms p95=      1.40 ms min=     0.91 rows=   1 
+mssql-count    capped COUNT (TOP 10001)                                   n= 20 p50=      1.13 ms p95=      1.31 ms min=     1.02 rows=   1 
+mssql-count    dm_db_partition_stats row_count                            n= 20 p50=      0.56 ms p95=      0.66 ms min=     0.51 rows=   1 
+=== 11:40:13 mssql-write baseline 200
+--- mssql baseline 2026-11-23T11:41:43.5037380Z
+StartRunAsync                      n=  200 p50=   6.640 ms p95=   9.312 ms mean=   6.950 ms
+event run.started                  n=  200 p50=   5.531 ms p95=   8.754 ms mean=   5.934 ms
+RTT SELECT 1                       n= 1935 p50=   0.733 ms p95=   1.427 ms mean=   0.802 ms
+TryRecordDispatchAsync             n= 1935 p50=   5.559 ms p95=   8.701 ms mean=   5.895 ms
+TryClaimStepAsync                  n= 1935 p50=   5.355 ms p95=   8.884 ms mean=   5.814 ms
+RecordStepStartAsync               n= 1935 p50=   5.895 ms p95=   9.028 ms mean=   6.368 ms
+event step.started                 n= 1935 p50=   5.462 ms p95=   8.574 ms mean=   5.828 ms
+SaveStepOutputAsync                n= 1935 p50=   5.874 ms p95=   9.163 ms mean=   6.067 ms
+RecordStepCompleteAsync            n= 1935 p50=   5.998 ms p95=   9.368 ms mean=   6.380 ms
+event step.completed               n= 1935 p50=   5.595 ms p95=   8.658 ms mean=   5.868 ms
+GetStepStatusesAsync               n= 1935 p50=   0.783 ms p95=   1.347 ms mean=   0.831 ms
+CompleteRunAsync                   n=  200 p50=   5.571 ms p95=   9.163 ms mean=   5.938 ms
+event run.completed                n=  200 p50=   5.326 ms p95=   8.388 ms mean=   5.821 ms
+=== 11:41:43 mssql-base deep
+mssql-base     deep output: invoice, 3d old [7d]                          n= 12 p50=  14786.40 ms p95=  17203.54 ms min= 14445.56 rows=   1 
+mssql-base     deep output: invoice, 60d old [7d]                         n= 13 p50=  14821.74 ms p95=  15486.70 ms min= 14500.84 rows=   0 
+mssql-base     deep output: orderId, 3d old [7d]                          n= 11 p50=  16444.05 ms p95=  18504.64 ms min= 14529.59 rows=   1 
+mssql-base     deep output: common 'express' [7d]                         n= 20 p50=      5.39 ms p95=      6.10 ms min=     4.99 rows=  51 
+mssql-base     deep error: shipment, 3d old [7d]                          n= 13 p50=  14640.13 ms p95=  15524.74 ms min= 14272.64 rows=   1 
+mssql-base     deep error: 'deadlock victim' [7d]                         n= 20 p50=   7106.77 ms p95=   8817.60 ms min=  6682.89 rows=  51 
+mssql-base     deep no match 'zq-nomatch-7731' [7d]                       n= 12 p50=  15167.74 ms p95=  18477.94 ms min= 14778.80 rows=   0 

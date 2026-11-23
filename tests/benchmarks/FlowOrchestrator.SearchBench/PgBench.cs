@@ -165,8 +165,8 @@ public static class PgBench
         foreach (var (name, query) in scenarios)
         {
             var cmd = Measure.ShippedCommand(typeof(PostgreSqlFlowRunStore), query);
-            await Measure.RunAsync("pg-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal), budget: TimeSpan.FromSeconds(deep ? 180 : 60));
-            plans.Append(await ExplainAsync(name, cmd.Sql.Split(';')[0], cmd.Parameters));
+            var t = await Measure.RunAsync("pg-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal), budget: TimeSpan.FromSeconds(deep ? 180 : 60));
+            if (t.Min < 60_000) plans.Append(await ExplainAsync(name, cmd.Sql.Split(';')[0], cmd.Parameters));
         }
         await Measure.WriteArtifactAsync($"pg-baseline-{(deep ? "deep" : "quick")}-explain.txt", plans.ToString());
     }
@@ -280,8 +280,8 @@ public static class PgBench
         foreach (var (name, q) in scenarios)
         {
             var (sql, p) = Build(candidate, q);
-            await Measure.RunAsync("pg-" + candidate, name, () => RunAsync(sql, p), budget: TimeSpan.FromSeconds(120));
-            plans.Append(await ExplainAsync(name, sql, p));
+            var t = await Measure.RunAsync("pg-" + candidate, name, () => RunAsync(sql, p), budget: TimeSpan.FromSeconds(120));
+            if (t.Min < 60_000) plans.Append(await ExplainAsync(name, sql, p));
         }
         await Measure.WriteArtifactAsync($"pg-{candidate}-explain.txt", plans.ToString());
     }

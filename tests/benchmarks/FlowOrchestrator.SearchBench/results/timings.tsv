@@ -1,0 +1,34 @@
+2026-11-23T11:38:38.7555910Z	mssql-base	runId prefix, recent [7d]	20	67.67	69.38	61.91	73.98	1	
+2026-11-23T11:38:40.3411446Z	mssql-base	runId prefix, 60d old [7d]	20	67.48	74.92	60.78	77.24	0	
+2026-11-23T11:38:40.4804247Z	mssql-base	flow name, common 'Invoice' [7d]	20	2.40	3.07	2.20	3.23	51	
+2026-11-23T11:38:42.6381778Z	mssql-base	flow name, rare 'Gdpr' [7d]	20	88.53	157.47	61.53	163.15	16	
+2026-11-23T11:38:42.8318786Z	mssql-base	trigger key, common 'order-created' [7d]	20	3.37	4.66	3.14	5.07	51	
+2026-11-23T11:38:45.6162532Z	mssql-base	trigger key, rare 'backfill' [7d]	20	130.18	228.65	55.47	259.29	51	
+2026-11-23T11:38:50.5412830Z	mssql-base	no match 'zq-nomatch-7731' [7d]	20	178.49	258.12	110.08	304.26	0	
+2026-11-23T11:39:15.8237918Z	mssql-base	runId prefix, recent [all]	20	926.01	1482.70	877.91	1992.97	1	
+2026-11-23T11:39:38.7400599Z	mssql-base	runId prefix, 60d old [all]	20	901.28	1572.43	847.25	2014.10	1	
+2026-11-23T11:39:39.6567860Z	mssql-base	flow name, common 'Invoice' [all]	20	2.85	3.46	2.49	3.54	51	
+2026-11-23T11:39:45.3687269Z	mssql-base	flow name, rare 'Gdpr' [all]	20	235.48	267.09	213.90	271.13	51	
+2026-11-23T11:39:45.6941735Z	mssql-base	trigger key, common 'order-created' [all]	20	3.24	3.79	2.91	3.94	51	
+2026-11-23T11:39:46.7768471Z	mssql-base	trigger key, rare 'backfill' [all]	20	49.57	50.56	44.98	51.15	51	
+2026-11-23T11:40:05.0846333Z	mssql-base	no match 'zq-nomatch-7731' [all]	20	826.69	868.97	780.76	882.62	0	
+2026-11-23T11:40:05.9253845Z	mssql-base	status word 'Failed' (+total)	20	1.79	2.02	1.67	2.15	51	
+2026-11-23T11:40:05.9883553Z	mssql-base	status word 'TimedOut' (+total)	20	2.09	2.58	1.75	2.86	51	
+2026-11-23T11:40:06.0181330Z	mssql-base	full run id (old)	20	0.93	1.15	0.53	1.19	1	
+2026-11-23T11:40:06.3060859Z	mssql-base	unfiltered first page (+total)	20	11.92	15.41	10.87	15.76	51	
+2026-11-23T11:40:06.3568398Z	mssql-base	unfiltered first page (no total)	20	1.17	1.49	0.97	3.05	51	
+2026-11-23T11:40:06.7904676Z	mssql-base	unfiltered page 50 OFFSET (+total)	20	18.58	20.06	17.13	21.03	51	
+2026-11-23T11:40:11.7319616Z	mssql-base	unfiltered page 2000 OFFSET	20	189.04	230.46	178.51	230.77	51	
+2026-11-23T11:40:12.3181014Z	mssql-keyset	unfiltered page 50 keyset	20	2.36	3.01	2.02	3.24	51	
+2026-11-23T11:40:13.0519290Z	mssql-keyset	unfiltered page 2000 keyset	20	31.90	38.95	28.89	39.96	51	
+2026-11-23T11:40:13.2983700Z	mssql-count	COUNT(*) FlowRuns	20	10.72	12.96	9.57	14.65	1	
+2026-11-23T11:40:13.3272555Z	mssql-count	COUNT(*) WHERE Status='Failed'	20	1.14	1.40	0.91	1.45	1	
+2026-11-23T11:40:13.3540531Z	mssql-count	capped COUNT (TOP 10001)	20	1.13	1.31	1.02	1.32	1	
+2026-11-23T11:40:13.3826771Z	mssql-count	dm_db_partition_stats row_count	20	0.56	0.66	0.51	0.81	1	
+2026-11-23T11:45:27.5842896Z	mssql-base	deep output: invoice, 3d old [7d]	12	14786.40	17203.54	14445.56	18804.56	1	
+2026-11-23T11:49:27.1520399Z	mssql-base	deep output: invoice, 60d old [7d]	13	14821.74	15486.70	14500.84	16074.43	0	
+2026-11-23T11:53:16.7313602Z	mssql-base	deep output: orderId, 3d old [7d]	11	16444.05	18504.64	14529.59	19503.63	1	
+2026-11-23T11:53:31.8374701Z	mssql-base	deep output: common 'express' [7d]	20	5.39	6.10	4.99	6.41	51	
+2026-11-23T11:57:14.1319205Z	mssql-base	deep error: shipment, 3d old [7d]	13	14640.13	15524.74	14272.64	16660.52	1	
+2026-11-23T12:00:10.2249231Z	mssql-base	deep error: 'deadlock victim' [7d]	20	7106.77	8817.60	6682.89	10751.60	51	
+2026-11-23T12:04:02.3380354Z	mssql-base	deep no match 'zq-nomatch-7731' [7d]	12	15167.74	18477.94	14778.80	20277.62	0	

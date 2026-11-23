@@ -29,9 +29,9 @@ public static partial class MsSqlBench
         foreach (var (name, query) in scenarios)
         {
             var cmd = Measure.ShippedCommand(typeof(SqlFlowRunStore), query);
-            await Measure.RunAsync("mssql-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal),
+            var t = await Measure.RunAsync("mssql-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal),
                 budget: TimeSpan.FromSeconds(deep ? 180 : 60));
-            plans.Append(await CaptureAsync(name, cmd.Sql, cmd.Parameters));
+            if (t.Min < 60_000) plans.Append(await CaptureAsync(name, cmd.Sql, cmd.Parameters));
         }
         await Measure.WriteArtifactAsync($"mssql-baseline-{(deep ? "deep" : "quick")}-io.txt", plans.ToString());
     }
@@ -249,8 +249,8 @@ public static partial class MsSqlBench
         foreach (var (name, q) in scenarios)
         {
             var (sql, p) = Build(candidate, q, n);
-            await Measure.RunAsync("mssql-" + candidate, name, () => RunAsync(sql, p), budget: TimeSpan.FromSeconds(120));
-            plans.Append(await CaptureAsync(name, sql, p));
+            var t = await Measure.RunAsync("mssql-" + candidate, name, () => RunAsync(sql, p), budget: TimeSpan.FromSeconds(120));
+            if (t.Min < 60_000) plans.Append(await CaptureAsync(name, sql, p));
         }
         await Measure.WriteArtifactAsync($"mssql-{candidate}-io.txt", plans.ToString());
     }

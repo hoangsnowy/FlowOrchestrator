@@ -6,12 +6,19 @@ export SEARCHBENCH_OUT=${2:-$PWD/results}
 mkdir -p "$SEARCHBENCH_OUT"
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN="dotnet $HERE/bin/Release/net11.0/FlowOrchestrator.SearchBench.dll"
-step() { echo "=== $(date -u +%H:%M:%S) $*"; $BIN "$@" || echo "!!! failed: $*"; }
+# FROM="<command> <arg>" resumes at that step against an already-seeded container (no docker run, no seed).
+FROM=${FROM:-}
+step() {
+  if [ -n "$FROM" ]; then [ "$*" = "$FROM" ] && FROM= || { echo "--- skip $*"; return; }; fi
+  echo "=== $(date -u +%H:%M:%S) $*"; $BIN "$@" || echo "!!! failed: $*"
+}
+if [ -z "$FROM" ]; then
 docker rm -f fo-search-mssql >/dev/null 2>&1
 docker run -d --name fo-search-mssql -m 10g -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=SearchBench!2026' \
   -e MSSQL_MEMORY_LIMIT_MB=8192 -p 14333:1433 "$IMAGE"
 for i in $(seq 1 60); do docker logs fo-search-mssql 2>&1 | grep -q "Recovery is complete" && break; sleep 5; done
 sleep 10
+fi
 step mssql-seed 200000
 step mssql-sizes
 step mssql-base quick
