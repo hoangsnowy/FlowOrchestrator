@@ -6,6 +6,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
+  on cascade reset, race-safe SQL Server gates, case-insensitive trigger headers, PostgreSQL timeseries /
+  synthetic-attempt trace, InMemory outputs retention.
+
 ### Security
 
 - Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):
@@ -106,6 +112,50 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.3] - 2026-11-23
+
+Correctness release for the 1.34 line (.NET 8 / 9 / 10). Six storage fixes. Two matter for anyone on
+SQL Server or Azure SQL: a retried step could re-run an already-succeeded downstream step, and concurrent
+workers racing on a step could fail with a duplicate-key error. No API or behaviour changes beyond the
+fixes. 2.0 carries the same fixes.
+
+### Fixed
+
+- **InMemory storage: retention never removed step outputs, trigger data or events.** `FlowRetention`
+  purged in-memory runs, but `InMemoryOutputsRepository` kept every run's trigger body, trigger headers,
+  step inputs / outputs and event log for the lifetime of the process. The repository is now an
+  `IFlowRetentionStore` registered by `UseInMemory()`: each sweep drops the outputs and events of the runs
+  the run store purged. Affects `UseInMemory()` storage only; SQL Server and PostgreSQL already deleted
+  these rows with their run.
+- **SQL Server / PostgreSQL: `@triggerHeaders()['name']` was case-sensitive after the first step.** The
+  entry step resolved headers case-insensitively, but every later step reads them back from storage, and
+  both SQL stores rebuilt them into a case-sensitive dictionary — so `@triggerHeaders()['x-request-id']`
+  for a request sent with `X-Request-Id` worked in the entry step and returned `null` in every step after
+  it (and in `When` clauses and `ForEach` sources). Stored headers are now rehydrated case-insensitively.
+  Affects SQL Server and PostgreSQL storage on every runtime; InMemory storage was not affected.
+- **SQL Server / PostgreSQL: retrying a step could run an already-succeeded downstream step again.**
+  Retrying a failed step reopens the downstream steps that had been skipped because of that failure. The
+  SQL stores reopened only those steps' status rows, but cleared the execute-once claim and dispatch record
+  of *every* downstream step — including ones that had already succeeded or were skipped by their `When`
+  condition — so a later continuation pass could dispatch and execute them a second time. Only the steps
+  that were actually reset now lose their claim and dispatch record. Affects SQL Server and PostgreSQL
+  storage on every runtime; InMemory storage already behaved correctly.
+- **SQL Server: concurrent step claims, dispatches, idempotency keys and webhook nonces could throw a
+  duplicate-key error.** These checks insert a row only if it is not already there, but the check and the
+  insert were not atomic, so when two workers (or two webhook deliveries) raced on the same key the loser
+  failed with a primary-key violation (`2627`) instead of being told "already taken". Under load this
+  surfaced as failed step jobs, failed triggers and `500`s on webhook replays. The checks now lock the key
+  for the duration of the insert (`UPDLOCK, HOLDLOCK`, as flow-definition saves already do) and treat a
+  duplicate-key error as a lost race. Affects SQL Server storage on every runtime. PostgreSQL was not
+  affected (`ON CONFLICT DO NOTHING`), nor was InMemory.
+- **PostgreSQL: the dashboard's run timeline returned `500` for a time window with a non-UTC offset.**
+  Npgsql only accepts UTC `DateTimeOffset` values for `timestamptz`, and the timeseries query passed the
+  window through as received. The window is now converted to UTC first. Affects PostgreSQL storage only.
+- **PostgreSQL: "Why skipped" was missing for steps without attempt history.** When run detail builds the
+  single attempt of a step that has no attempt rows, PostgreSQL dropped the step's `When`-clause evaluation
+  trace, so the dashboard showed no reason for the skip. The trace is now carried over, as on SQL Server.
+  Affects PostgreSQL storage only.
 
 ## [1.34.2] - 2026-11-23
 
