@@ -60,37 +60,6 @@ public static class PostgreSqlServiceCollectionExtensions
         return builder;
     }
 
-    /// <summary>
-    /// Registers PostgreSQL implementations directly on <see cref="IServiceCollection"/>,
-    /// for use outside the <c>AddFlowOrchestrator</c> builder pattern.
-    /// </summary>
-    /// <param name="services">The service collection to register into.</param>
-    /// <param name="connectionString">Npgsql connection string.</param>
-    public static IServiceCollection AddFlowOrchestratorPostgreSql(
-        this IServiceCollection services,
-        string connectionString)
-    {
-        services.AddSingleton<IFlowStore>(_ => new PostgreSqlFlowStore(connectionString));
-
-        services.AddSingleton<PostgreSqlFlowRunStore>(_ => new PostgreSqlFlowRunStore(connectionString));
-        services.AddSingleton<IFlowRunStore>(sp => sp.GetRequiredService<PostgreSqlFlowRunStore>());
-        services.AddSingleton<IFlowRunRuntimeStore>(sp => sp.GetRequiredService<PostgreSqlFlowRunStore>());
-        services.AddSingleton<IFlowRunControlStore>(sp => sp.GetRequiredService<PostgreSqlFlowRunStore>());
-        services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<PostgreSqlFlowRunStore>());
-
-        services.AddSingleton<PostgreSqlOutputsRepository>(_ => new PostgreSqlOutputsRepository(connectionString));
-        services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
-        services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<PostgreSqlOutputsRepository>());
-
-        services.AddSingleton<IFlowSignalStore>(_ => new PostgreSqlFlowSignalStore(connectionString));
-
-        services.AddSingleton<IFlowScheduleStateStore>(_ => new PostgreSqlFlowScheduleStateStore(connectionString));
-        services.AddHostedService(sp =>
-            new PostgreSqlFlowOrchestratorMigrator(connectionString, sp.GetRequiredService<ILogger<PostgreSqlFlowOrchestratorMigrator>>()));
-        RegisterFlowRepository(services);
-        return services;
-    }
-
     // IFlowRepository is the in-process registry of code-defined flow classes.
     // Each storage backend is responsible for registering it; AddFlowOrchestrator validates
     // a registration exists. Trivial private impl avoids cross-project deps.

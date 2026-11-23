@@ -1,3 +1,4 @@
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -7,12 +8,12 @@ namespace FlowOrchestrator.SqlServer.Tests;
 public sealed class SqlServerServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddFlowOrchestratorSqlServer_registers_IFlowStore_as_SqlFlowStore()
+    public void UseSqlServer_registers_IFlowStore_as_SqlFlowStore()
     {
         // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddFlowOrchestratorSqlServer("Server=.;Database=test;");
+        new FlowOrchestratorBuilder(services).UseSqlServer("Server=.;Database=test;");
 
         // Act
         var sp = services.BuildServiceProvider();
@@ -22,12 +23,12 @@ public sealed class SqlServerServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddFlowOrchestratorSqlServer_registers_IFlowRunStore_as_SqlFlowRunStore()
+    public void UseSqlServer_registers_IFlowRunStore_as_SqlFlowRunStore()
     {
         // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddFlowOrchestratorSqlServer("Server=.;Database=test;");
+        new FlowOrchestratorBuilder(services).UseSqlServer("Server=.;Database=test;");
 
         // Act
         var sp = services.BuildServiceProvider();
@@ -37,12 +38,12 @@ public sealed class SqlServerServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddFlowOrchestratorSqlServer_registers_IOutputsRepository_as_SqlOutputsRepository()
+    public void UseSqlServer_registers_IOutputsRepository_as_SqlOutputsRepository()
     {
         // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddFlowOrchestratorSqlServer("Server=.;Database=test;");
+        new FlowOrchestratorBuilder(services).UseSqlServer("Server=.;Database=test;");
 
         // Act
         var sp = services.BuildServiceProvider();
@@ -52,12 +53,12 @@ public sealed class SqlServerServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddFlowOrchestratorSqlServer_registers_migrator_as_IHostedService()
+    public void UseSqlServer_registers_migrator_as_IHostedService()
     {
         // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddFlowOrchestratorSqlServer("Server=.;Database=test;");
+        new FlowOrchestratorBuilder(services).UseSqlServer("Server=.;Database=test;");
 
         // Act
         var sp = services.BuildServiceProvider();

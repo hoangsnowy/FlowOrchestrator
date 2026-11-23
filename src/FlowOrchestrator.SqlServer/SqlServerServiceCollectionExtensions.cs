@@ -61,37 +61,6 @@ public static class SqlServerServiceCollectionExtensions
         return builder;
     }
 
-    /// <summary>
-    /// Registers SQL Server implementations directly on <see cref="IServiceCollection"/>,
-    /// for use outside the <c>AddFlowOrchestrator</c> builder pattern.
-    /// </summary>
-    /// <param name="services">The service collection to register into.</param>
-    /// <param name="connectionString">SQL Server connection string.</param>
-    public static IServiceCollection AddFlowOrchestratorSqlServer(
-        this IServiceCollection services,
-        string connectionString)
-    {
-        services.AddSingleton<IFlowStore>(_ => new SqlFlowStore(connectionString));
-
-        services.AddSingleton<SqlFlowRunStore>(_ => new SqlFlowRunStore(connectionString));
-        services.AddSingleton<IFlowRunStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
-        services.AddSingleton<IFlowRunRuntimeStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
-        services.AddSingleton<IFlowRunControlStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
-        services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
-
-        services.AddSingleton<SqlOutputsRepository>(_ => new SqlOutputsRepository(connectionString));
-        services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<SqlOutputsRepository>());
-        services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<SqlOutputsRepository>());
-
-        services.AddSingleton<IFlowSignalStore>(_ => new SqlFlowSignalStore(connectionString));
-
-        services.AddSingleton<IFlowScheduleStateStore>(_ => new SqlFlowScheduleStateStore(connectionString));
-        services.AddHostedService(sp =>
-            new FlowOrchestratorSqlMigrator(connectionString, sp.GetRequiredService<ILogger<FlowOrchestratorSqlMigrator>>()));
-        RegisterFlowRepository(services);
-        return services;
-    }
-
     // IFlowRepository is the in-process registry of code-defined flow classes.
     // Each storage backend is responsible for registering it; AddFlowOrchestrator validates
     // a registration exists. Trivial private impl avoids cross-project deps.
