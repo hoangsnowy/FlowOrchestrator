@@ -6,6 +6,52 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Removed — **breaking:** dead and duplicate public API
+
+Code that nothing called, or that duplicated another entry point, is deleted. Each item was
+re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before removal.
+
+- **`IFlowExecutor` and `FlowExecutor`**, plus the matching `FlowOrchestratorEngine` constructor
+  parameter. The engine stored the executor but never called it: entry steps come from
+  `IFlowGraphPlanner.CreateEntrySteps` and the engine persists trigger data itself. Hand-built
+  engines drop that argument.
+- **`FlowOrchestratorEngine`'s `eventNotifier` parameter is now required** (it was
+  `IFlowEventNotifier? eventNotifier = null`). `AddFlowOrchestrator` already registers
+  `NoopFlowEventNotifier`, so DI-built engines are unaffected; hand-built engines pass
+  `NoopFlowEventNotifier.Instance`.
+- **`FlowOrchestrator.Core.Configuration.FlowOrchestratorOptions`** (`ConnectionString`). Nothing read
+  or wrote it; storage backends take their connection string through `UseSqlServer` /
+  `UsePostgreSql`.
+- **`IOutputsRepository.EndScopeAsync`**. It had no callers and all three built-in implementations
+  were no-ops. Custom `IOutputsRepository` implementations delete their override.
+- **`IStepInstance.ScopeMoveNext`**. It was copied between step instances but never read; loop
+  iteration is driven by the DAG planner. Custom `IStepInstance` implementations delete the property.
+  Hangfire jobs queued by an older version still deserialise: the Newtonsoft settings ignore the
+  now-unknown member (the Service Bus envelope never carried it).
+- **`AddFlowOrchestratorSqlServer(IServiceCollection, string)` and
+  `AddFlowOrchestratorPostgreSql(IServiceCollection, string)`**. Both were verbatim copies of
+  `UseSqlServer` / `UsePostgreSql`. Use `AddFlowOrchestrator(o => o.UseSqlServer(cs))`, or
+  `new FlowOrchestratorBuilder(services).UseSqlServer(cs)` outside the builder callback.
+- **`FlowGraphEvaluation.AllKnownStepKeys`**. No engine path read it; it was still built (lazily) on
+  every `Evaluate` call.
+- **`StepCollection.FindParentStep(string)`**. Only its own unit tests called it.
+- **Top-level step keys that are empty or contain `'.'` are now rejected** by
+  `FlowGraphPlanner.Validate`, which `FlowSyncHostedService` runs at startup — such a flow now fails
+  startup with `Step key '…' contains '.', which is reserved as the runtime scope separator.` /
+  `Flow has a step with an empty key.` Runtime keys are `.`-joined scope paths (`loop.3.child`), so a
+  dotted top-level key was ambiguous with one; the planner kept a second, pre-#189 algorithm alive
+  just for that shape. That fallback is removed with the validation. Keys of steps nested inside a
+  loop are not checked by this rule.
+- `FlowOrchestrator.Hangfire` no longer references the OpenTelemetry SDK package, which it never
+  used (Core carries `OpenTelemetry.Api`; SDK wiring lives in `FlowOrchestrator.OpenTelemetry`).
+  Hosts that relied on it transitively for `Microsoft.Extensions.Logging` outside the generic host
+  (e.g. a bare `ServiceCollection().AddLogging()`) reference `Microsoft.Extensions.Logging`
+  directly.
+- Internal clean-up with no API change: the `FlowOrchestrator.Hangfire` "moved to Core" shim files
+  (`ForEachStepHandler.cs`, the project-local `IRecurringTriggerSync` global-using alias), and the
+  dead `is not null` guards on the engine's and signal dispatcher's always-present runtime and
+  run-control stores.
+
 ### Removed — **breaking:** legacy sequential execution path and its shims
 
 - The "no runtime store" fallback is gone. Before, a host without an `IFlowRunRuntimeStore` ran in
@@ -22,8 +68,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Removed APIs, which only the sequential path used:
   - `StepMetadata.ShouldExecute(string, StepStatus)`
   - `StepCollection.FindNextStep(string)`
-  - `IFlowExecutor.GetNextStep(...)` and its `FlowExecutor` implementation. `IFlowExecutor` now only
-    bootstraps the run.
+  - `IFlowExecutor.GetNextStep(...)` and its `FlowExecutor` implementation. `IFlowExecutor` itself is
+    now gone too — see "dead and duplicate public API" above.
 - **Custom storage backends** must register `IFlowRunRuntimeStore` and `IFlowRunControlStore`
   alongside `IFlowRunStore`. The built-in `UseSqlServer`, `UsePostgreSql` and `UseInMemory` already
   do this, so they need no change.
