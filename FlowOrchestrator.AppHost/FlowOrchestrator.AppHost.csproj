@@ -1,4 +1,4 @@
-﻿<Project Sdk="Aspire.AppHost.Sdk/13.3.2">
+﻿<Project Sdk="Aspire.AppHost.Sdk/13.6.5">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <UserSecretsId>floworchestrator-apphost</UserSecretsId>
     <IsPackable>false</IsPackable>
+    <!-- Aspire 13.6.5 (bumped from 13.3.2 for GHSA-4g86-54fm-h9h8 / GHSA-f7vh-h5g3-7jrh) warns that the
+         CLI bundle is off. This sample AppHost never used it; 2.0 moves to the Aspire 17 project model. -->
+    <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
   </PropertyGroup>
 
 
