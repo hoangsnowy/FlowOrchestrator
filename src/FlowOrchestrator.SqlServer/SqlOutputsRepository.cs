@@ -60,9 +60,41 @@ internal sealed class SqlOutputsRepository : IOutputsRepository
         if (element is null) return null;
 
         if (element is JsonElement je && je.ValueKind == JsonValueKind.Object)
-            return je.Deserialize<Dictionary<string, string>>(_webOptions);
+            return ToHeaderDictionary(je);
 
         return null;
+    }
+
+    /// <summary>
+    /// Rehydrates stored trigger headers into a case-insensitive dictionary.
+    /// </summary>
+    /// <remarks>
+    /// HTTP header names are case-insensitive, and the entry step resolves <c>@triggerHeaders()['name']</c>
+    /// against the trigger's own case-insensitive dictionary. Later steps read the headers back from
+    /// here, so a case-sensitive copy made <c>@triggerHeaders()['x-request-id']</c> resolve in the entry
+    /// step and return <see langword="null"/> afterwards. Indexer assignment (not <c>Add</c>) keeps a
+    /// payload carrying two casings of one name from throwing: the last one wins.
+    /// </remarks>
+    private static Dictionary<string, string> ToHeaderDictionary(JsonElement headers)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in headers.EnumerateObject())
+        {
+            switch (header.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    result[header.Name] = header.Value.GetString()!;
+                    break;
+                case JsonValueKind.Null:
+                case JsonValueKind.Undefined:
+                    break;
+                default:
+                    result[header.Name] = header.Value.GetRawText();
+                    break;
+            }
+        }
+
+        return result;
     }
 
     public async ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey)
