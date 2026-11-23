@@ -44,14 +44,15 @@ builder.Services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 > [!IMPORTANT]
 > **Manifest inputs alone enforce nothing.** `WebhookSecurityOptions.EnforcementMode` defaults to
 > `Off`, and every gate documented on this page — signature verification, replay protection, rate
-> limiting, IP allow/deny — is inert under `Off`. The pipeline still runs and still records each
-> violation to `/flows/api/webhooks/stats` and the DLQ, but the request is **accepted**. Nothing in
-> the response says so.
+> limiting, IP allow/deny — is inert under `Off`. The pipeline accepts the request before any gate
+> runs, so nothing is verified and **no violation is recorded** — not in `/flows/api/webhooks/stats`,
+> not in the DLQ. Use `Audit` to record violations while still accepting requests.
 >
 > Set the mode once in DI, then configure per flow:
 >
 > ```csharp
-> options.AddFlowWebhookSecurity(sec => sec.UseEnforcementMode(WebhookEnforcementMode.Enforce));
+> builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhookSecurity(sec =>
+>     sec.UseEnforcementMode(WebhookEnforcementMode.Enforce)));
 > ```
 >
 > `Audit` is the safe rollout step: it logs and counts violations while still accepting, so you can
