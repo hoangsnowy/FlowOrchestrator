@@ -172,7 +172,20 @@ function fmt(iso) { if (!iso) return '\u2014'; return new Date(iso).toLocaleTime
 function fmtDate(iso) { if (!iso) return '\u2014'; const d=new Date(iso); return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour12:false}); }
 function duration(s,e) { if(!s) return ''; const ms=(e?new Date(e):new Date())-new Date(s); return ms<1000?ms+'ms':(ms/1000).toFixed(1)+'s'; }
 function fmtDurationMs(ms) { if (ms == null) return '—'; if (ms < 1000) return Math.round(ms) + 'ms'; if (ms < 60000) return (ms/1000).toFixed(1) + 's'; return Math.round(ms/60000) + 'm'; }
-function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+// HTML-encode for BOTH text and attribute context: & < > " ' are all encoded, so every esc()
+// result is safe inside a quoted attribute value as well as between tags. Falsy input
+// (including 0) renders as '' — the historical contract every caller relies on.
+function esc(s) { return s ? escapeHtml(s) : ''; }
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
+  });
+}
+// A value passed as a single-quoted string argument of an inline handler attribute, e.g.
+// onclick="fn('...')": JS-escape first (the browser HTML-decodes the attribute before the
+// script runs), then HTML-encode so the value cannot close the attribute either.
+function escJsAttr(s) { return escapeHtml(escJsString(s)); }
 function prettyJson(raw) {
   if (raw === null || raw === undefined) return '\u2014';
   if (typeof raw === 'object') return esc(JSON.stringify(raw, null, 2));
@@ -1272,15 +1285,15 @@ function renderRunDAG(steps, manifest, selectedKey) {
     const p = positions[key];
     const status = statusMap[key] || 'Pending';
     const ns = nodeStyle(status);
-    const safeKey = escJsString(key);
+    const safeKey = escJsAttr(key);
     const runtimeStep = stepMap[key];
     const attemptCount = runtimeStep ? getStepAttemptCount(runtimeStep) : 1;
     const dur = runtimeStep && runtimeStep.startedAt ? duration(runtimeStep.startedAt, runtimeStep.completedAt) : '\u2014';
     const metaText = dur + (attemptCount > 1 ? '  \u00b7  \u00d7'+attemptCount+' attempts' : '');
     const classList = [ns.cls, selectedKey===key ? 'dag-node-selected' : '', status==='Skipped' ? 'dag-node-blocked' : ''].filter(Boolean).join(' ');
     const blockedOn = status==='Skipped' ? blockedReason(key) : null;
-    const tooltip = esc(key)+'\n'+(step.type||'')+(attemptCount>1?'\n\u00d7'+attemptCount+' attempts':'')
-      + (blockedOn ? '\nBlocked because "'+blockedOn+'" did not succeed.' : '');
+    const tooltip = esc(key)+'\n'+esc(step.type||'')+(attemptCount>1?'\n\u00d7'+attemptCount+' attempts':'')
+      + (blockedOn ? '\nBlocked because "'+esc(blockedOn)+'" did not succeed.' : '');
     svg += '<g class="'+classList+'" transform="translate('+p.x+','+p.y+')"'
       +' onclick="selectStep(\''+safeKey+'\')"'
       +' style="cursor:pointer">'
@@ -1688,7 +1701,7 @@ function clearAllRunsFilters() {
 }
 
 function scrollToStep(stepKey) {
-  const node = document.querySelector('.step-node[data-step-key="'+stepKey.replace(/"/g, '&quot;')+'"]');
+  const node = document.querySelector('.step-node[data-step-key="'+CSS.escape(stepKey)+'"]');
   if (!node) return;
   const card = node.querySelector('.step-card');
   if (card) card.classList.add('step-target');
@@ -2020,13 +2033,13 @@ function renderGantt(steps, manifest, selectedKey) {
     if (s.status === 'Pending' || s.status === 'Skipped') { x = gutterW; w = Math.max(chartW * 0.02, 6); }
     if (s.status === 'Running') fill = 'url(#gantt-running-hatch)';
     const selected = s.stepKey === selectedKey;
-    const safeKey = escJsString(s.stepKey);
+    const safeKey = escJsAttr(s.stepKey);
     svg += '<g onclick="selectStep(\''+safeKey+'\')" style="cursor:pointer">'
       +'<text class="gantt-gutter-label" x="10" y="'+(y+rowH*0.65)+'">'+esc(s.stepKey)+'</text>'
       +'<rect class="gantt-bar'+(selected?' gantt-bar-selected':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+rowH+'"'
       +' rx="4" fill="'+fill+'" opacity="'+opacity+'"'
       +(selected?'':' stroke="rgba(0,0,0,0.04)"')+'>'
-      +'<title>'+esc(s.stepKey)+' \u2014 '+stepStatusLabel(s.status)+' \u00b7 '+duration(s.startedAt, s.completedAt)+'</title>'
+      +'<title>'+esc(s.stepKey)+' \u2014 '+esc(stepStatusLabel(s.status))+' \u00b7 '+duration(s.startedAt, s.completedAt)+'</title>'
       +'</rect>'
       +'<text class="gantt-duration" x="'+(x+w+6)+'" y="'+(y+rowH*0.65)+'">'+duration(s.startedAt, s.completedAt)+'</text>'
       +'</g>';
@@ -2435,9 +2448,9 @@ function renderTimeline(steps, runId) {
       +'<div class="step-card-header"><div><div class="step-key">'+esc(s.stepKey)+'</div>'+(s.status!=='Skipped'?'<div class="step-type">'+esc(s.stepType)+'</div>':'')+'</div>'
       +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+stepStatusLabel(s.status)+'</span>'
       +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
-      +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+runId+'\',\''+esc(s.stepKey)+'\', event)">&#8635; Retry</button>':'')
-      +(s.status==='Pending' && s.stepType==='WaitForSignal'?'<button class="btn-retry" onclick="sendSignal(\''+runId+'\',\''+esc(s.stepKey)+'\', event)">Send Signal</button>':'')
-      +(s.status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+runId+'\',\''+esc(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>':'')
+      +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">&#8635; Retry</button>':'')
+      +(s.status==='Pending' && s.stepType==='WaitForSignal'?'<button class="btn-retry" onclick="sendSignal(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">Send Signal</button>':'')
+      +(s.status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>':'')
       +'</div></div>'
       +(s.status==='Skipped'?'':('<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'))
       +renderStepDebugPanels(s)
@@ -2529,10 +2542,10 @@ function renderScheduleTable(jobs, forFlow) {
       +'<td style="font-size:12px;color:var(--text-dim)">'+fmtDate(j.lastExecution)+'</td>'
       +'<td>'+scheduleBadge(j.lastJobState)+'</td>'
       +'<td><div class="schedule-actions">'
-      +'<button class="btn-sm btn-sm-trigger" onclick="triggerScheduledJob(\''+esc(j.jobId)+'\', event)" title="Trigger now">&#9889;</button>'
+      +'<button class="btn-sm btn-sm-trigger" onclick="triggerScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Trigger now">&#9889;</button>'
       +(j.paused
-        ?'<button class="btn-sm btn-sm-success" onclick="resumeScheduledJob(\''+esc(j.jobId)+'\', event)" title="Resume">&#9654;</button>'
-        :'<button class="btn-sm btn-sm-warning" onclick="pauseScheduledJob(\''+esc(j.jobId)+'\', event)" title="Pause">&#10074;&#10074;</button>')
+        ?'<button class="btn-sm btn-sm-success" onclick="resumeScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Resume">&#9654;</button>'
+        :'<button class="btn-sm btn-sm-warning" onclick="pauseScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Pause">&#10074;&#10074;</button>')
       +'</div></td></tr>';
   }
   return html + '</tbody></table>';
@@ -2850,13 +2863,6 @@ function formatTimestamp(ts) {
   try { return new Date(ts).toLocaleString(); } catch { return String(ts); }
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, function(c) {
-    return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
-  });
-}
-
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     // Drop the SSE connection while the tab is hidden — no point keeping a server
@@ -2898,6 +2904,10 @@ const Router = (function () {
   // (CodeQL js/remote-property-injection). Add a key here when a page starts
   // persisting new state in the hash.
   const PARAM_KEYS = ['flow', 'status', 'q', 'deep', 'page', 'size', 'view'];
+  // The run statuses the Runs filter offers (index.html #runs-filter-status). A `status` read
+  // from a shared link is dropped unless it is one of these, so the hash can only ever select a
+  // known filter and never carries arbitrary text into the page.
+  const RUN_STATUS_FILTERS = ['Running', 'Succeeded', 'Skipped', 'Failed', 'Cancelled', 'TimedOut'];
 
   function parse() {
     const hash = location.hash || '';
@@ -2914,6 +2924,7 @@ const Router = (function () {
       const v = sp.get(key);
       if (v !== null) params[key] = v;
     }
+    if (params.status !== undefined && !RUN_STATUS_FILTERS.includes(params.status)) delete params.status;
     let view = null;
     if (['timeline','dag','gantt','events'].includes(params.view)) view = params.view;
     const parts = path.split('/');
