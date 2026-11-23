@@ -130,21 +130,6 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
     }
 
     /// <summary>
-    /// Returns the first top-level step whose <see cref="StepMetadata.RunAfter"/> references
-    /// <paramref name="currentKey"/>, effectively finding the immediate successor in a linear chain.
-    /// </summary>
-    /// <param name="currentKey">The key of the step that just completed.</param>
-    /// <returns>The next step, or <see langword="null"/> if none declares <paramref name="currentKey"/> as a dependency.</returns>
-    public StepMetadata? FindNextStep(string currentKey)
-    {
-        return this.Values
-            .Where(metadata => !ReferenceEquals(metadata, null))
-            .FirstOrDefault(metadata =>
-                metadata.RunAfter.TryGetValue(currentKey, out var condition)
-                && condition?.Statuses is { Length: > 0 });
-    }
-
-    /// <summary>
     /// Finds the scoped parent step (e.g. a <see cref="LoopStepMetadata"/>) that contains
     /// the step identified by <paramref name="key"/>.
     /// </summary>

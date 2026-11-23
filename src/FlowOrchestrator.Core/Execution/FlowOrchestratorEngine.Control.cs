@@ -105,11 +105,6 @@ public sealed partial class FlowOrchestratorEngine
     /// </summary>
     private async Task<bool> HasInFlightWorkAsync(Guid runId)
     {
-        if (_runtimeStore is null)
-        {
-            return false;
-        }
-
         var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
         if (statuses.Values.Any(IsInFlight))
         {
@@ -192,11 +187,6 @@ public sealed partial class FlowOrchestratorEngine
 
     private async Task<string?> ResolveTerminationStatusAsync(Guid runId)
     {
-        if (_runControlStore is null)
-        {
-            return null;
-        }
-
         var control = await _runControlStore.GetRunControlAsync(runId).ConfigureAwait(false);
         if (control is null)
         {
@@ -229,11 +219,6 @@ public sealed partial class FlowOrchestratorEngine
     /// <inheritdoc/>
     public async Task EnforceDueTimeoutsAsync(CancellationToken cancellationToken = default)
     {
-        if (_runControlStore is null)
-        {
-            return;
-        }
-
         var activeRuns = await _runStore.GetActiveRunsAsync().ConfigureAwait(false);
         if (activeRuns.Count == 0)
         {
@@ -355,11 +340,6 @@ public sealed partial class FlowOrchestratorEngine
     /// </remarks>
     private async Task<bool> TryForceCloseParkedRunAsync(FlowRunRecord run, string terminalStatus)
     {
-        if (_runtimeStore is null)
-        {
-            return false;
-        }
-
         var statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
         if (statuses.Count == 0)
         {

@@ -119,7 +119,16 @@
     -->
     <PackageVersion Include="SSH.NET" Version="2026.0.1" />
     <PackageVersion Include="coverlet.collector" Version="10.1.1" />
-    <PackageVersion Include="xunit" Version="2.9.3" />
+    <!--
+      xunit v3, VSTest flavour. `xunit.v3` 4.x pulls in Microsoft Testing Platform v2, which no
+      longer runs under `dotnet test` in VSTest mode on the .NET 10+ SDK. CI drives every suite
+      through VSTest (`dotnet test <filter>.slnx` plus the "XPlat Code Coverage" collector from
+      coverlet.collector), so the test projects reference `xunit.v3.mtp-off` — the same framework,
+      assertions and analyzers with MTP switched off — and keep xunit.runner.visualstudio +
+      Microsoft.NET.Test.Sdk as the VSTest adapter. Moving to MTP means switching global.json's
+      `test.runner` and coverlet.collector to coverlet.MTP in one go.
+    -->
+    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>
 

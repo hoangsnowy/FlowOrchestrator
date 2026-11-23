@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Hangfire.Telemetry;
@@ -72,13 +73,24 @@ public sealed class TraceContextPropagationTests : IDisposable
     [Fact]
     public async Task EnqueueAndExecute_RestoresParentTraceContextOnTheWorker()
     {
-        // Arrange
-        var captured = new List<Activity>();
+        // Arrange — the wrapper activity is stopped by the filter's OnPerformed, which runs on the
+        // worker AFTER TestJob.Run() signals completion. Waiting on the job alone races that stop,
+        // so the test waits on the wrapper's own ActivityStopped event. The collection is written
+        // from the worker thread, hence a concurrent queue.
+        var captured = new ConcurrentQueue<Activity>();
+        var wrapperStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var listener = new ActivityListener
         {
             ShouldListenTo = src => src.Name == FlowOrchestratorTelemetry.SourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = captured.Add,
+            ActivityStopped = a =>
+            {
+                captured.Enqueue(a);
+                if (a.OperationName == "flow.runtime.execute")
+                {
+                    wrapperStopped.TrySetResult();
+                }
+            },
         };
         ActivitySource.AddActivityListener(listener);
 
@@ -101,8 +113,12 @@ public sealed class TraceContextPropagationTests : IDisposable
             client.Enqueue<TestJob>(j => j.Run());
         }
 
-        // Act — wait for the worker to pick up + run + finish
+        // Act — wait for the worker to pick up + run + finish, then for the filter to stop the wrapper
         var ran = await TestJob.WaitForCompletionAsync(TimeSpan.FromSeconds(30));
+        if (ran)
+        {
+            await wrapperStopped.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
 
         // Assert
         Assert.True(ran, "TestJob did not run within 30s — Hangfire server may not have started.");

@@ -10,33 +10,15 @@ using FlowOrchestrator.Core.Storage;
 namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
-/// DAG-continuation partial of <see cref="FlowOrchestratorEngine"/>: legacy sequential
-/// next-step resolution, full-graph evaluation with When-skip propagation, and the
+/// DAG-continuation partial of <see cref="FlowOrchestratorEngine"/>: full-graph
+/// evaluation with When-skip propagation, and the
 /// terminal-status decision via <see cref="RunTerminationClassifier"/>.
 /// </summary>
 public sealed partial class FlowOrchestratorEngine
 {
-    private async Task RunLegacySequentialContinuationAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, IStepResult result)
-    {
-        var next = await _flowExecutor.GetNextStep(ctx, flow, step, result).ConfigureAwait(false);
-        if (next is not null)
-        {
-            await TryScheduleStepAsync(ctx, flow, next, result.DelayNextStep).ConfigureAwait(false);
-            return;
-        }
-
-        await _runStore.CompleteRunAsync(ctx.RunId, result.Status.ToString()).ConfigureAwait(false);
-        await RecordEventAsync(
-            ctx,
-            flow,
-            step,
-            "run.completed",
-            $"Run completed with status {result.Status}.").ConfigureAwait(false);
-    }
-
     private async Task RunGraphContinuationAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, IStepResult result)
     {
-        var statuses = await _runtimeStore!.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+        var statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
         var evaluation = _graphPlanner.Evaluate(flow, statuses);
 
         // Tracks whether this pass actually wrote a status row. The re-read below exists to observe
@@ -219,7 +201,7 @@ public sealed partial class FlowOrchestratorEngine
         // Re-read only when admission changed something: the admitted steps hold dispatch rows the
         // settle pass never looks at, but an admitted-and-already-executed step would.
         var settleView = admitted > 0
-            ? await _runtimeStore!.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false)
+            ? await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false)
             : statuses;
 
         var settled = await SettleEnclosingLoopsAsync(ctx, flow, step, settleView).ConfigureAwait(false);
@@ -252,11 +234,6 @@ public sealed partial class FlowOrchestratorEngine
         IFlowDefinition flow,
         IReadOnlyDictionary<string, StepStatus> statuses)
     {
-        if (_runtimeStore is null)
-        {
-            return 0;
-        }
-
         var candidates = LoopBarrier.RunningLoopKeys(flow, statuses);
         if (candidates.Count == 0)
         {
@@ -433,11 +410,6 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         if (trace is null)
-        {
-            return false;
-        }
-
-        if (_runtimeStore is null)
         {
             return false;
         }

@@ -6,6 +6,45 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Removed — **breaking:** legacy sequential execution path and its shims
+
+- The "no runtime store" fallback is gone. Before, a host without an `IFlowRunRuntimeStore` ran in
+  legacy sequential mode: it resolved one successor at a time, had no parallel fan-out and no step
+  claims, and skipped startup recovery. The engine now always evaluates the full DAG through
+  `IFlowGraphPlanner`. The EventId 9000 `LegacySequentialMode` debug log is gone with it.
+- `FlowOrchestratorEngine`, `FlowSignalDispatcher` and `FlowRunRecoveryHostedService` now require an
+  `IFlowRunRuntimeStore`, and the engine also requires an `IFlowRunControlStore`. Each constructor
+  throws `InvalidOperationException` when no store is registered, and the message names the
+  component and the missing store type. Startup fails instead of degrading silently.
+- `FlowSignalDispatcher`'s constructor takes `IEnumerable<IFlowRunRuntimeStore> runtimeStores` as a
+  required parameter before the optional `telemetry`. Callers that pass arguments by position must
+  reorder them.
+- Removed APIs, which only the sequential path used:
+  - `StepMetadata.ShouldExecute(string, StepStatus)`
+  - `StepCollection.FindNextStep(string)`
+  - `IFlowExecutor.GetNextStep(...)` and its `FlowExecutor` implementation. `IFlowExecutor` now only
+    bootstraps the run.
+- **Custom storage backends** must register `IFlowRunRuntimeStore` and `IFlowRunControlStore`
+  alongside `IFlowRunStore`. The built-in `UseSqlServer`, `UsePostgreSql` and `UseInMemory` already
+  do this, so they need no change.
+
+### Changed — test suites run on xunit v3
+
+- Every test project (unit, integration, regression, `FlowOrchestrator.SampleApp.Tests`) moves from
+  xunit 2.9.3 to xunit v3 4.0.3. Test-only change: no shipped package references xunit.
+- The projects reference `xunit.v3.mtp-off`, not `xunit.v3`. `xunit.v3` 4.x brings in Microsoft
+  Testing Platform v2, which refuses to run under `dotnet test` in VSTest mode on the .NET 10+ SDK
+  ("Testing with VSTest target is no longer supported"). The `mtp-off` flavour keeps CI unchanged:
+  `dotnet test <filter>.slnx`, xunit.runner.visualstudio 4.0.1, Microsoft.NET.Test.Sdk and the
+  coverlet.collector "XPlat Code Coverage" data collector all work as before.
+- Test projects are now executables (`OutputType=Exe`, set by the package). `IAsyncLifetime`
+  fixtures return `ValueTask`; `ITestOutputHelper` comes from `Xunit` instead of
+  `Xunit.Abstractions`; the Service Bus suite's `CollectionBehavior(DisableTestParallelization)`
+  becomes `Parallelization(Mode = ParallelMode.None)`.
+- xunit v3's analyzer rule xUnit1051 (pass `TestContext.Current.CancellationToken`) is suppressed for
+  test projects in `Directory.Build.props`. Adopting it changes when calls get cancelled, so it is
+  left for a deliberate per-suite pass rather than folded into the migration.
+
 ### Changed — CI publishes to NuGet.org through Trusted Publishing
 
 - `publish.yml` no longer reads a long-lived `NUGET_API_KEY` secret. It exchanges the job's GitHub

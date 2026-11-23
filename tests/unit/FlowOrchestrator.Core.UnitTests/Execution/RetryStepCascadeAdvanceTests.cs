@@ -128,7 +128,7 @@ public sealed class RetryStepCascadeAdvanceTests
             _ctxAccessor,
             _flowRepo,
             [store],
-            [],
+            [store],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),

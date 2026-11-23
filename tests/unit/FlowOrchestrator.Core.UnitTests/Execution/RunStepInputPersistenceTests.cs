@@ -107,8 +107,10 @@ public sealed class RunStepInputPersistenceTests
             _outputs,
             Substitute.For<IExecutionContextAccessor>(),
             Substitute.For<IFlowRepository>(),
-            [],
-            [],
+            // Every test runs the single step "a" with a succeeding executor.
+            [EngineTestStores.PermissiveRuntimeStore(
+                new Dictionary<string, StepStatus>(StringComparer.Ordinal) { ["a"] = StepStatus.Succeeded })],
+            [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),

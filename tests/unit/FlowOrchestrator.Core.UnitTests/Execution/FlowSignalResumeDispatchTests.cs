@@ -121,22 +121,25 @@ public sealed class FlowSignalResumeDispatchTests
     }
 
     [Fact]
-    public async Task Resume_enqueues_immediately_when_no_runtime_store_is_registered()
+    public void Constructor_without_a_runtime_store_fails_fast_naming_the_dispatcher_and_the_store()
     {
-        // Arrange — no runtime store means FlowOrchestratorEngine.RunStepAsync skips its claim guard
-        // entirely (it is guarded by the same `is not null` check), so there is no TryClaimStepAsync
-        // for the resume to lose. The immediate path is provably safe here, and delaying would impose
-        // the scheduled-set penalty on precisely the configuration that cannot race.
-        var dispatcher = CreateDispatcher(runtimeStore: null);
+        // Arrange — v2.0 removed the no-runtime-store fallback that enqueued every resume
+        // immediately; without a store the dispatcher cannot tell whether the parking invocation
+        // still holds the claim, so construction must fail instead of guessing.
+        var noStores = Array.Empty<IFlowRunRuntimeStore>();
 
         // Act
-        await dispatcher.DispatchAsync(_runId, SignalName, "{}");
+        var ex = Assert.Throws<InvalidOperationException>(() => new FlowSignalDispatcher(
+            _signalStore,
+            _runStore,
+            _flowRepository,
+            _stepDispatcher,
+            _outputsRepository,
+            noStores));
 
         // Assert
-        await _stepDispatcher.Received(1).EnqueueStepAsync(
-            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
-        await _stepDispatcher.DidNotReceive().ScheduleStepAsync(
-            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        Assert.Contains(nameof(FlowSignalDispatcher), ex.Message);
+        Assert.Contains(nameof(IFlowRunRuntimeStore), ex.Message);
     }
 
     [Fact]
@@ -252,13 +255,13 @@ public sealed class FlowSignalResumeDispatchTests
     }
 
     /// <summary>Builds the subject under test with the shared substitutes and the supplied runtime store.</summary>
-    private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore? runtimeStore) => new(
+    private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore runtimeStore) => new(
         _signalStore,
         _runStore,
         _flowRepository,
         _stepDispatcher,
         _outputsRepository,
+        runtimeStores: new[] { runtimeStore },
         telemetry: null,
-        runtimeStores: runtimeStore is null ? Array.Empty<IFlowRunRuntimeStore>() : new[] { runtimeStore },
         logger: null);
 }

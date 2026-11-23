@@ -213,7 +213,7 @@ For a 5-step flow with retries off and event persistence on, that is ~40 rows pe
 > [#188](https://github.com/hoangsnowy/FlowOrchestrator/issues/188) and grew without bound. If you
 > have been running retention, rows belonging to already-purged runs are orphaned and the sweep
 > cannot reach them — see the one-time cleanup in
-> [Observability — Retention](observability.md#retention).
+> [Observability — Retention](observability.md#data-retention).
 
 ### Retention
 

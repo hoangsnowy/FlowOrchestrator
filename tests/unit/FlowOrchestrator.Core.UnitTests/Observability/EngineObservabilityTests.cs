@@ -4,6 +4,7 @@ using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
@@ -36,7 +37,10 @@ public sealed class EngineObservabilityTests
             .ReturnsForAnyArgs(Task.FromResult(true));
     }
 
-    private FlowOrchestratorEngine CreateEngine(ILogger<FlowOrchestratorEngine> logger, FlowOrchestratorTelemetry? telemetry = null) =>
+    private FlowOrchestratorEngine CreateEngine(
+        ILogger<FlowOrchestratorEngine> logger,
+        FlowOrchestratorTelemetry? telemetry = null,
+        IReadOnlyDictionary<string, StepStatus>? statuses = null) =>
         new(
             _dispatcher,
             _flowExecutor,
@@ -47,12 +51,16 @@ public sealed class EngineObservabilityTests
             _outputsRepo,
             _ctxAccessor,
             _flowRepo,
-            [],
-            [],
+            [EngineTestStores.PermissiveRuntimeStore(statuses)],
+            [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
             telemetry ?? new FlowOrchestratorTelemetry(),
             logger);
+
+    /// <summary>The runtime-store view after the single step under test has finished.</summary>
+    private static IReadOnlyDictionary<string, StepStatus> Statuses(string stepKey, StepStatus status) =>
+        new Dictionary<string, StepStatus>(StringComparer.Ordinal) { [stepKey] = status };
 
     private static IFlowDefinition MakeFlow(string stepKey)
     {
@@ -95,7 +103,7 @@ public sealed class EngineObservabilityTests
 
         var logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
         var telemetry = new FlowOrchestratorTelemetry();
-        var engine = CreateEngine(logger, telemetry);
+        var engine = CreateEngine(logger, telemetry, Statuses("step1", StepStatus.Failed));
 
         var runId = Guid.NewGuid();
         var flow = MakeFlow("step1");
@@ -168,7 +176,7 @@ public sealed class EngineObservabilityTests
             }));
 
         var logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
-        var engine = CreateEngine(logger);
+        var engine = CreateEngine(logger, statuses: Statuses("step1", StepStatus.Succeeded));
 
         var runId = Guid.NewGuid();
         var flow = MakeFlow("step1");
@@ -211,7 +219,7 @@ public sealed class EngineObservabilityTests
     {
         // Arrange
         var logger = new RecordingLogger<FlowOrchestratorEngine>();
-        var engine = CreateEngine(logger);
+        var engine = CreateEngine(logger, statuses: Statuses("step1", StepStatus.Succeeded));
 
         _stepExecutor.ExecuteAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .ReturnsForAnyArgs(new ValueTask<IStepResult>(new StepResult

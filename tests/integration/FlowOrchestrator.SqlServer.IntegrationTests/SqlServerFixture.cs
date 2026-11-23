@@ -14,7 +14,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
     public string ConnectionString => _container.GetConnectionString();
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         await SqlServerStartHelper.StartWithRetryAsync(_container);
         var migrator = new FlowOrchestratorSqlMigrator(
@@ -23,7 +23,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         await migrator.StartAsync(CancellationToken.None);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _container.DisposeAsync();
     }

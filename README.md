@@ -7,7 +7,7 @@
 [![Tests](https://img.shields.io/badge/tests-1722%20unit%20%C2%B7%201170%20integration%20%C2%B7%20168%20regression%20%C2%B7%2036%20e2e-brightgreen)](https://github.com/hoangsnowy/FlowOrchestrator/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Core?label=NuGet)](https://www.nuget.org/packages/FlowOrchestrator.Core)
 [![Downloads](https://img.shields.io/nuget/dt/FlowOrchestrator.Core)](https://www.nuget.org/packages/FlowOrchestrator.Core)
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-10.0%20%7C%2011.0-512BD4)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/github/license/hoangsnowy/FlowOrchestrator)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/hoangsnowy/FlowOrchestrator)](https://github.com/hoangsnowy/FlowOrchestrator/commits/main)
 [![Stars](https://img.shields.io/github/stars/hoangsnowy/FlowOrchestrator?style=social)](https://github.com/hoangsnowy/FlowOrchestrator)

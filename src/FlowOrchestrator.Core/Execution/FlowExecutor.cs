@@ -5,12 +5,11 @@ namespace FlowOrchestrator.Core.Execution;
 
 /// <summary>
 /// Default <see cref="IFlowExecutor"/> implementation.
-/// Persists trigger data via <see cref="IOutputsRepository"/> and resolves the
-/// entry and successor steps based on linear <c>runAfter</c> relationships.
+/// Persists trigger data via <see cref="IOutputsRepository"/> and resolves the run's entry step.
 /// </summary>
 /// <remarks>
-/// This implementation handles simple linear flows. Complex parallel/loop graphs are
-/// driven by <see cref="FlowGraphPlanner"/> in the Hangfire layer.
+/// Successor steps are never resolved here: after every step completion the engine evaluates the
+/// full DAG through <see cref="FlowGraphPlanner"/>.
 /// </remarks>
 public sealed class FlowExecutor : IFlowExecutor
 {
@@ -50,35 +49,5 @@ public sealed class FlowExecutor : IFlowExecutor
         };
 
         return instance;
-    }
-
-    /// <inheritdoc/>
-    public ValueTask<IStepInstance?> GetNextStep(IExecutionContext context, IFlowDefinition flow, IStepInstance currentStep, IStepResult result)
-    {
-        var steps = flow.Manifest.Steps;
-
-        var nextMetadata = steps.FindNextStep(currentStep.Key);
-        if (nextMetadata is null)
-        {
-            return ValueTask.FromResult<IStepInstance?>(null);
-        }
-
-        var nextKey = steps.First(kvp => ReferenceEquals(kvp.Value, nextMetadata)).Key;
-        if (!nextMetadata.ShouldExecute(currentStep.Key, result.Status))
-        {
-            return ValueTask.FromResult<IStepInstance?>(null);
-        }
-
-        var instance = new StepInstance(nextKey, nextMetadata.Type)
-        {
-            RunId = context.RunId,
-            PrincipalId = context.PrincipalId,
-            TriggerData = context.TriggerData,
-            TriggerHeaders = context.TriggerHeaders,
-            ScheduledTime = DateTimeOffset.UtcNow,
-            Inputs = new Dictionary<string, object?>(nextMetadata.Inputs)
-        };
-
-        return ValueTask.FromResult<IStepInstance?>(instance);
     }
 }

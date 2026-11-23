@@ -34,6 +34,11 @@ public class HangfireFlowOrchestratorTests
 
     private HangfireFlowOrchestrator CreateSut(IFlowRunRuntimeStore? runtimeStore = null, IFlowRunControlStore? runControlStore = null)
     {
+        // 2.0: the engine requires a runtime store and a control store (RequiredStore throws on
+        // none), so tests that do not care get permissive defaults instead of an empty list.
+        runtimeStore ??= DefaultRuntimeStore();
+        runControlStore ??= Substitute.For<IFlowRunControlStore>();
+
         var engine = new FlowOrchestratorEngine(
             _dispatcher,
             _flowExecutor,
@@ -44,13 +49,29 @@ public class HangfireFlowOrchestratorTests
             _outputsRepo,
             _ctxAccessor,
             _flowRepo,
-            runtimeStore is not null ? [runtimeStore] : [],
-            runControlStore is not null ? [runControlStore] : [],
+            [runtimeStore],
+            [runControlStore],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger);
         return new HangfireFlowOrchestrator(engine, _flowRepo);
+    }
+
+    /// <summary>
+    /// A runtime store that lets every step claim and reports the given step statuses
+    /// (none by default), for tests that do not exercise the claim guard or the graph.
+    /// </summary>
+    private static IFlowRunRuntimeStore DefaultRuntimeStore(IReadOnlyDictionary<string, StepStatus>? statuses = null)
+    {
+        var store = Substitute.For<IFlowRunRuntimeStore>();
+        store.GetStepStatusesAsync(Arg.Any<Guid>())
+            .Returns(statuses ?? new Dictionary<string, StepStatus>());
+        store.GetClaimedStepKeysAsync(Arg.Any<Guid>())
+            .Returns((IReadOnlyCollection<string>)Array.Empty<string>());
+        store.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>()).Returns(true);
+        store.GetRunStatusAsync(Arg.Any<Guid>()).Returns(default(string?));
+        return store;
     }
 
     private IFlowDefinition CreateFlow()
@@ -163,15 +184,15 @@ public class HangfireFlowOrchestratorTests
     [Fact]
     public async Task RunStepAsync_ExecutesStepAndSavesOutput()
     {
-        // Arrange
-        var sut = CreateSut();
+        // Arrange — the store already holds step1 as Succeeded by the time the
+        // graph continuation reads it, so the continuation must not re-dispatch it.
+        var sut = CreateSut(DefaultRuntimeStore(new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Succeeded }));
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
         var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded, Result = "ok" };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
@@ -207,37 +228,35 @@ public class HangfireFlowOrchestratorTests
     }
 
     [Fact]
-    public async Task RunStepAsync_CompletesRunWhenNoNextStep_LegacyPath()
+    public async Task RunStepAsync_CompletesRunWhenNoStepRemains()
     {
-        // Arrange
-        var sut = CreateSut();
+        // Arrange — single-step flow; once step1 has Succeeded the graph has nothing left to run.
+        var sut = CreateSut(DefaultRuntimeStore(new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Succeeded }));
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
         var stepResult = new StepResult { Key = "step1", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         // Act
         await sut.RunStepAsync(ctx, flow.Id, step);
 
         // Assert
-        await _runStore.Received(1).CompleteRunAsync(ctx.RunId, "Succeeded");
+        await _runStore.Received(1).CompleteRunIfActiveAsync(ctx.RunId, "Succeeded");
     }
 
     [Fact]
     public async Task RunStepAsync_ReThrowTrue_ThrowsException()
     {
-        // Arrange
-        var sut = CreateSut();
+        // Arrange — step1 is recorded Failed before the continuation reads the graph.
+        var sut = CreateSut(DefaultRuntimeStore(new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Failed }));
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
 
         var stepResult = new StepResult { Key = "step1", Status = StepStatus.Failed, ReThrow = true, FailedReason = "critical" };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         // Act
         var act = () => sut.RunStepAsync(ctx, flow.Id, step).AsTask();
@@ -424,7 +443,6 @@ public class HangfireFlowOrchestratorTests
 
         var succeededResult = new StepResult { Key = "step_c", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(succeededResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).Returns(default(IStepInstance?));
 
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
@@ -483,7 +501,6 @@ public class HangfireFlowOrchestratorTests
 
         var succeededResult = new StepResult { Key = "happy_path", Status = StepStatus.Succeeded };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(succeededResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, succeededResult).Returns(default(IStepInstance?));
 
         IReadOnlyDictionary<string, StepStatus> statuses = new Dictionary<string, StepStatus>
         {
@@ -509,7 +526,9 @@ public class HangfireFlowOrchestratorTests
     public async Task RunStepAsync_WithDispatchHint_Spawn_DispatchesChildren()
     {
         // Arrange: step returns a DispatchHint with two dynamic children (ForEach-style fan-out).
-        var sut = CreateSut();
+        // The static DAG's only step has already run, so the graph continuation has nothing of
+        // its own to dispatch and every dispatcher call below comes from the hint.
+        var sut = CreateSut(DefaultRuntimeStore(new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Succeeded }));
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("loop1", "ForEach") { RunId = ctx.RunId };
@@ -522,7 +541,6 @@ public class HangfireFlowOrchestratorTests
 
         var stepResult = new StepResult { Key = "loop1", Status = StepStatus.Succeeded, DispatchHint = hint };
         _stepExecutor.ExecuteAsync(ctx, flow, step).Returns(stepResult);
-        _flowExecutor.GetNextStep(ctx, flow, step, stepResult).Returns(default(IStepInstance?));
 
         await sut.RunStepAsync(ctx, flow.Id, step);
 

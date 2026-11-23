@@ -1,5 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Hosting.Internal;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Hosting;
@@ -24,8 +25,7 @@ namespace FlowOrchestrator.Core.Hosting;
 /// </list>
 /// </para>
 /// <para>
-/// Requires <see cref="IFlowRunRuntimeStore"/> to evaluate step statuses.
-/// When no runtime store is registered (legacy sequential mode) recovery is skipped.
+/// Requires <see cref="IFlowRunRuntimeStore"/> to evaluate step statuses; construction fails without one.
 /// </para>
 /// <para>
 /// Per-run recovery is delegated to <see cref="RunRecoverer"/>; this class owns only the
@@ -35,7 +35,7 @@ namespace FlowOrchestrator.Core.Hosting;
 public sealed class FlowRunRecoveryHostedService : IHostedService
 {
     private readonly IFlowRunStore _runStore;
-    private readonly IFlowRunRuntimeStore? _runtimeStore;
+    private readonly IFlowRunRuntimeStore _runtimeStore;
     private readonly IFlowRepository _flowRepository;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepDispatcher _dispatcher;
@@ -53,7 +53,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         ILogger<FlowRunRecoveryHostedService> logger)
     {
         _runStore = runStore;
-        _runtimeStore = runtimeStores.FirstOrDefault();
+        _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowRunRecoveryHostedService));
         _flowRepository = flowRepository;
         _graphPlanner = graphPlanner;
         _dispatcher = dispatcher;
@@ -64,13 +64,6 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
     /// <summary>Scans active runs and re-dispatches any orphaned steps.</summary>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (_runtimeStore is null)
-        {
-            _logger.LogDebug(
-                "FlowRunRecoveryHostedService: no IFlowRunRuntimeStore registered — recovery skipped in legacy sequential mode.");
-            return;
-        }
-
         IReadOnlyList<FlowRunRecord> activeRuns;
         try
         {

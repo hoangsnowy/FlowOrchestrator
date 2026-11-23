@@ -367,14 +367,7 @@ public sealed partial class FlowOrchestratorEngine
                 }
             }
 
-            if (_runtimeStore is null)
-            {
-                await RunLegacySequentialContinuationAsync(ctx, flow, step, result).ConfigureAwait(false);
-            }
-            else
-            {
-                await RunGraphContinuationAsync(ctx, flow, step, result).ConfigureAwait(false);
-            }
+            await RunGraphContinuationAsync(ctx, flow, step, result).ConfigureAwait(false);
 
             if (result.ReThrow)
             {
@@ -574,11 +567,6 @@ public sealed partial class FlowOrchestratorEngine
     /// </remarks>
     private async Task ReleaseClaimAfterFailedHandOffAsync(Guid runId, string stepKey)
     {
-        if (_runtimeStore is null)
-        {
-            return;
-        }
-
         try
         {
             await _runtimeStore.ReleaseStepClaimAsync(runId, stepKey).ConfigureAwait(false);
@@ -616,17 +604,15 @@ public sealed partial class FlowOrchestratorEngine
     /// it propagates exactly as it does from <c>FlowSignalDispatcher</c>.
     /// </para>
     /// <para>
-    /// Gated to the built-in <c>WaitForSignal</c> step type with a claim guard in play. Without a
-    /// runtime store there is no claim for a nudge to lose, so a re-check would only add a duplicate
-    /// execution. And a custom handler that parks while a delivered waiter exists for its key would be
-    /// resumed on every attempt — an unbounded hot loop — whereas the built-in handler completes as soon
-    /// as it sees a delivered waiter. The gate also spares every polling step the point read.
+    /// Gated to the built-in <c>WaitForSignal</c> step type: a custom handler that parks while a
+    /// delivered waiter exists for its key would be resumed on every attempt — an unbounded hot loop —
+    /// whereas the built-in handler completes as soon as it sees a delivered waiter. The gate also
+    /// spares every polling step the point read.
     /// </para>
     /// </remarks>
     private async Task ResumeIfSignalLandedWhileClaimedAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
     {
         if (_signalStore is null
-            || _runtimeStore is null
             || !string.Equals(step.Type, WaitForSignalHandler.StepTypeName, StringComparison.OrdinalIgnoreCase))
         {
             return;
@@ -702,11 +688,6 @@ public sealed partial class FlowOrchestratorEngine
         IStepInstance step,
         string terminalStatus)
     {
-        if (_runtimeStore is null)
-        {
-            return;
-        }
-
         var enclosing = LoopBarrier.EnclosingLoopKeys(step.Key);
         if (enclosing.Count == 0)
         {
