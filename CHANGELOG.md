@@ -31,8 +31,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Microsoft.NET.Test.Sdk 18.12.0, coverlet 10.1.1, xunit.runner.visualstudio 4.0.1,
   Microsoft.Extensions.TimeProvider.Testing 11.0.1. The `MessagePack` transitive pin is gone: Aspire
   17 no longer pulls the vulnerable version.
-- Integration-test images: PostgreSQL 16 → 18, SQL Server 2022 → 2025. The Service Bus emulator's
-  metadata store moves from the retired Azure SQL Edge image to SQL Server 2025.
+- Integration-test images: PostgreSQL 16 → 18. The Service Bus emulator's metadata store moves from
+  the retired Azure SQL Edge image to SQL Server 2022. SQL Server stays on 2022 for now: the 2025
+  images through CU11 crash intermittently on startup (microsoft/mssql-docker#974, fixed in CU12),
+  which failed the SqlServer integration suite on CI twice after a briefly-merged move to 2025.
 - CI runs the unit matrix on net10.0 + net11.0; `codeql-action` 4.39.3.
 
 ## [1.34.1] - 2026-10-31
