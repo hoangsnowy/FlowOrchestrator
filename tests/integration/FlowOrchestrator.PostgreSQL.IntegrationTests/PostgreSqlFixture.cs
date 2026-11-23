@@ -10,7 +10,7 @@ namespace FlowOrchestrator.PostgreSQL.Tests;
 /// </summary>
 public sealed class PostgreSqlFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine")
+    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:18-alpine")
         .Build();
 
     public string ConnectionString => _container.GetConnectionString();

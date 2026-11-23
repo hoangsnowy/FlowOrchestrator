@@ -23,7 +23,7 @@ dotnet test FlowOrchestrator.UnitTests.slnx
 dotnet run --project ./FlowOrchestrator.AppHost/FlowOrchestrator.AppHost.csproj
 ```
 
-Libraries target `net8.0`, `net9.0`, and `net10.0`. The sample app and AppHost target the latest SDK.
+Libraries target `net10.0` and `net11.0`. The sample app and AppHost target `net11.0`. `global.json` pins the .NET 11 SDK (`11.0.100`, rolling forward to the latest feature band).
 
 ---
 

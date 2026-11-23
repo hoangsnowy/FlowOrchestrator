@@ -104,7 +104,7 @@ For local development, the included Aspire AppHost wires the official Microsoft 
 emulator via `AddAzureServiceBus("servicebus").RunAsEmulator()` — see
 [`FlowOrchestrator.AppHost/Program.cs`](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/FlowOrchestrator.AppHost/Program.cs)
 for the wiring; run `dotnet run --project ./FlowOrchestrator.AppHost` and the
-`flow-servicebus` instance comes up on port 5104. Note: Aspire 13.2's emulator integration
+`flow-servicebus` instance comes up on port 5104. Note: Aspire's emulator integration
 cannot yet declare SQL filters on subscriptions ([dotnet/aspire#11708](https://github.com/dotnet/aspire/issues/11708)),
 so dev-mode topic broadcast is mitigated by an in-process dedup map in the SB processor —
 production with `AutoCreateTopology = true` uses real filtered subscriptions and has no

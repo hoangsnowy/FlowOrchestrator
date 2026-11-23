@@ -121,13 +121,11 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
 
     private static bool TryGetSegment(IDictionary<string, StepMetadata> steps, ReadOnlySpan<char> segment, out StepMetadata? step)
     {
-#if NET9_0_OR_GREATER
         if (steps is Dictionary<string, StepMetadata> dictionary
             && dictionary.TryGetAlternateLookup<ReadOnlySpan<char>>(out var lookup))
         {
             return lookup.TryGetValue(segment, out step);
         }
-#endif
         return steps.TryGetValue(segment.ToString(), out step);
     }
 

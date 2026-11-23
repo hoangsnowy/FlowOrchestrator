@@ -1,5 +1,8 @@
-﻿<Project Sdk="Aspire.AppHost.Sdk/13.3.2">
+<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Aspire 17: Aspire.AppHost.Sdk is obsolete (ASPIRE012). A C# AppHost is a plain console
+       project referencing Aspire.Hosting.AppHost; projects are registered by path through
+       AddDotnetProject (Aspire.Hosting.Dotnet) instead of the generated Projects.* types. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>$(FlowOrchestratorSampleTargetFramework)</TargetFramework>
@@ -9,15 +12,17 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
-
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Dotnet" />
     <PackageReference Include="Aspire.Hosting.SqlServer" />
     <PackageReference Include="Aspire.Hosting.PostgreSQL" />
     <PackageReference Include="Aspire.Hosting.Azure.ServiceBus" />
   </ItemGroup>
 
+  <!-- Build-order only: the sample is launched by path, never loaded into the AppHost. -->
   <ItemGroup>
-    <ProjectReference Include="..\\samples\\FlowOrchestrator.SampleApp\\FlowOrchestrator.SampleApp.csproj" />
+    <ProjectReference Include="..\samples\FlowOrchestrator.SampleApp\FlowOrchestrator.SampleApp.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

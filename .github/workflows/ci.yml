@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tfm: [net8.0, net9.0, net10.0]
+        tfm: [net10.0, net11.0]
 
     steps:
       - uses: actions/checkout@v7
@@ -32,9 +32,8 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
-            9.0.x
             10.0.x
+            11.0.x
 
       - name: Restore
         run: dotnet restore FlowOrchestrator.UnitTests.slnx
@@ -66,9 +65,8 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
-            9.0.x
             10.0.x
+            11.0.x
 
       - name: Restore
         run: dotnet restore FlowOrchestrator.IntegrationTests.slnx
@@ -106,9 +104,8 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
-            9.0.x
             10.0.x
+            11.0.x
 
       - name: Restore
         run: dotnet restore FlowOrchestrator.RegressionTests.slnx

@@ -55,7 +55,9 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
         _network = new NetworkBuilder().Build();
         await _network.CreateAsync();
 
-        _sqlEdge = new ContainerBuilder("mcr.microsoft.com/azure-sql-edge:latest")
+        // Azure SQL Edge was retired in September 2025 and no longer receives security fixes;
+        // the emulator accepts any SQL Server engine as its metadata store.
+        _sqlEdge = new ContainerBuilder("mcr.microsoft.com/mssql/server:2025-latest")
             .WithEnvironment("ACCEPT_EULA", "Y")
             .WithEnvironment("MSSQL_SA_PASSWORD", SqlPassword)
             .WithNetwork(_network)

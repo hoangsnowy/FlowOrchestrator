@@ -102,24 +102,23 @@ Hot path = per step, per step-input, per expression, per dispatched message, per
 
 ### Use the newest runtime the TFM allows
 
-`Directory.Build.props` targets `net8.0;net9.0;net10.0`. Write the best code each runtime allows and guard the newer path:
+`Directory.Build.props` targets `net10.0;net11.0`. The floor is net10, so every API listed below is available unconditionally — no `#if` needed. Anything that only exists on net11 is guarded, with a net10 fallback:
 
 ```csharp
-#if NET9_0_OR_GREATER
-    var lookup = dictionary.GetAlternateLookup<ReadOnlySpan<char>>();
-    if (lookup.ContainsKey(stackBuffer)) { … }      // zero allocation
+#if NET11_0_OR_GREATER
+    // net11-only API here
 #else
-    if (dictionary.ContainsKey(new string(stackBuffer))) { … }
+    // net10 fallback
 #endif
 ```
 
-Worth reaching for, by floor version:
+Worth reaching for (all available on the net10 floor):
 
-| Floor | Feature | Use it for |
+| Since | Feature | Use it for |
 |---|---|---|
 | net8 | `ReadOnlySpan<char>` overloads across BCL + `System.Text.Json` | all path/expression parsing |
 | net8 | `FrozenDictionary` / `FrozenSet` | startup-built, read-only lookup tables |
-| net8 | `SearchValues<char>` | multi-delimiter scanning in expression parsing |
+| net8 | `SearchValues<char>` / `SearchValues<string>` | multi-delimiter / multi-needle scanning |
 | net8 | `[LoggerMessage]` source generation | every `ILogger` call — already mandatory here |
 | net8 | `TimeProvider` | anything clock-dependent, for testability |
 | net9 | `Dictionary`/`HashSet`.`GetAlternateLookup<ReadOnlySpan<char>>()` | keyed lookups where the key is composed (`"loop.3.child"`) — the composed string never has to exist |
@@ -128,7 +127,9 @@ Worth reaching for, by floor version:
 | net9 | `Task.WhenEach` | fan-out that should process results as they land |
 | net10 | C# 14 `field` keyword, extension members | property backing fields, cleaner APIs |
 
-**When a TFM is dropped from `Directory.Build.props`, delete the corresponding `#if` fallbacks in the same PR.** Leaving dead legacy branches behind is how the "we still target net8" excuse outlives net8. When `net11.0` is added, re-audit this table and the `#if` sites rather than inheriting them unchanged.
+Before adopting a net11-only API, measure it on both TFMs and record the numbers — a guarded path is only worth its `#if` when the net11 column is measurably better.
+
+**When a TFM is dropped from `Directory.Build.props`, delete the corresponding `#if` fallbacks in the same PR.** Leaving dead legacy branches behind is how the "we still target net8" excuse outlives net8 (net8/net9 were dropped in 2.0 and their fallbacks deleted with them). When `net12.0` is added, re-audit this table and the `#if` sites rather than inheriting them unchanged.
 
 ### Measure — do not assert
 
@@ -204,7 +205,7 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory ./test-results
 dotnet run --project ./FlowOrchestrator.AppHost/FlowOrchestrator.AppHost.csproj
 ```
 
-Libraries target `net8.0`, `net9.0`, and `net10.0` (set in `Directory.Build.props`). Sample projects target the latest SDK available.
+Libraries target `net10.0` and `net11.0` (set in `Directory.Build.props`). Sample projects and the AppHost target `net11.0`. `global.json` requires the .NET 11 SDK.
 
 ## Architecture
 

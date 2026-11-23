@@ -13,7 +13,7 @@
       "disableDefaultFilter": false,
       "filter": "filterConfig.yml",
       "properties": {
-        "TargetFramework": "net8.0"
+        "TargetFramework": "net10.0"
       }
     }
   ],

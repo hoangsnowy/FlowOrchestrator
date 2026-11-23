@@ -31,10 +31,8 @@ internal static class ManifestSecretRedactor
         "connectionstring", "credential", "authorization", "bearer", "cookie", "signature",
     ];
 
-#if NET9_0_OR_GREATER
     private static readonly System.Buffers.SearchValues<string> SecretNameSearch =
         System.Buffers.SearchValues.Create(SecretNameFragments, StringComparison.OrdinalIgnoreCase);
-#endif
 
     // /api/flows is polled by the overview; viewers would otherwise re-parse every manifest on every poll.
     // Keyed by flow id + manifest content; bounded by clearing once it outgrows any realistic flow count.
@@ -232,16 +230,7 @@ internal static class ManifestSecretRedactor
         var text = json.AsSpan();
         if (text.IndexOf(@"\u", StringComparison.Ordinal) >= 0)
             return true;
-#if NET9_0_OR_GREATER
         return text.IndexOfAny(SecretNameSearch) >= 0;
-#else
-        foreach (var fragment in SecretNameFragments)
-        {
-            if (text.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-        }
-        return false;
-#endif
     }
 
     /// <summary><see langword="true"/> when a property or header name looks like it carries a secret.</summary>

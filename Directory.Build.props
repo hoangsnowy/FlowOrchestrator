@@ -11,15 +11,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- MSBuildVersion is available at Directory.Build.props evaluation time (unlike NETCoreSdkVersion).
-         SDK 8 → MSBuild < 17.12 | SDK 9 → 17.12–17.x | SDK 10 → MSBuild 18+ -->
-    <FlowOrchestratorTargetFrameworks>net8.0;net9.0;net10.0</FlowOrchestratorTargetFrameworks>
-    <FlowOrchestratorTargetFrameworks Condition="$([MSBuild]::VersionLessThan('$(MSBuildVersion)', '17.12'))">net8.0</FlowOrchestratorTargetFrameworks>
-    <FlowOrchestratorTargetFrameworks Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(MSBuildVersion)', '17.12')) and $([MSBuild]::VersionLessThan('$(MSBuildVersion)', '18.0'))">net8.0;net9.0</FlowOrchestratorTargetFrameworks>
-
-    <FlowOrchestratorSampleTargetFramework>net10.0</FlowOrchestratorSampleTargetFramework>
-    <FlowOrchestratorSampleTargetFramework Condition="$([MSBuild]::VersionLessThan('$(MSBuildVersion)', '17.12'))">net8.0</FlowOrchestratorSampleTargetFramework>
-    <FlowOrchestratorSampleTargetFramework Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(MSBuildVersion)', '17.12')) and $([MSBuild]::VersionLessThan('$(MSBuildVersion)', '18.0'))">net9.0</FlowOrchestratorSampleTargetFramework>
+    <!-- Supported runtimes: .NET 10 (LTS) and .NET 11 (STS). .NET 8 and .NET 9 reached end of
+         support on 2026-11-10 and were dropped in 2.0. global.json pins the SDK to 11.0.x, which
+         is the only SDK that can build net11.0, so there is no per-SDK fallback any more. -->
+    <FlowOrchestratorTargetFrameworks>net10.0;net11.0</FlowOrchestratorTargetFrameworks>
+    <FlowOrchestratorSampleTargetFramework>net11.0</FlowOrchestratorSampleTargetFramework>
 
     <DefaultItemExcludes>$(DefaultItemExcludes);**/artifacts/**</DefaultItemExcludes>
   </PropertyGroup>

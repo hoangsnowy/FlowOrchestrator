@@ -16,7 +16,6 @@
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <PackageReference Include="System.Text.Json" />
     <!-- Newtonsoft.Json: version pinned centrally in Directory.Packages.props.
          Core uses it ONLY to carry the [Newtonsoft.Json.JsonConverter] attribute
          on RunAfterCondition — the most reliable way to override Newtonsoft's

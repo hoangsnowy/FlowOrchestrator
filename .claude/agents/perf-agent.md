@@ -81,7 +81,7 @@ cd tests/benchmarks/FlowOrchestrator.Benchmarks/bin/Release/net10.0
 
 # E. Project Conventions (binding — see `CLAUDE.md`)
 
-- **Library targets**: `net8.0;net9.0;net10.0`. Optimisation must work on all three TFMs (no `Span<char>.SequenceEqual` if API isn't in net8). Test by running benchmarks under each TFM if the patch is allocation-sensitive.
+- **Library targets**: `net10.0;net11.0`. Optimisation must work on both TFMs (anything newer than net10 needs an `#if NET11_0_OR_GREATER` guard with a net10 fallback). Test by running benchmarks under each TFM if the patch is allocation-sensitive.
 - **No new dependencies** without strong justification. `Microsoft.IO.RecyclableMemoryStream`, `Microsoft.Extensions.ObjectPool`, etc. are NOT free — adds NuGet surface, breaks AOT in subtle ways. Prefer in-tree solutions where the win is < 100 ns / call.
 - **`ValueTask` throughout** is already a project standard. Don't regress to `Task`.
 - **No allocation churn measurement without `[MemoryDiagnoser]`** — every benchmark must include it.

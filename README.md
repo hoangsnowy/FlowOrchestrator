@@ -390,15 +390,15 @@ sample app exposes `--export-mermaid <flowId>` for CI integrations.
 
 | Package | Target frameworks |
 |---|---|
-| `FlowOrchestrator.Core` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.Hangfire` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.InMemory` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.ServiceBus` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.SqlServer` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.PostgreSQL` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.Dashboard` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.Testing` | `net8.0` · `net9.0` · `net10.0` |
-| `FlowOrchestrator.OpenTelemetry` | `net8.0` · `net9.0` · `net10.0` |
+| `FlowOrchestrator.Core` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.Hangfire` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.InMemory` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.ServiceBus` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.SqlServer` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.PostgreSQL` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.Dashboard` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.Testing` | `net10.0` · `net11.0` |
+| `FlowOrchestrator.OpenTelemetry` | `net10.0` · `net11.0` |
 
 ---
 

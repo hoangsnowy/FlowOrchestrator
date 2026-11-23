@@ -78,7 +78,7 @@ Layers and their responsibilities:
 - **No test should take longer than 5 seconds**. Use `CancellationToken` timeouts and tight polling intervals.
 - **Tests that need real time** (cron, polling reschedule observation) must use generous wait windows — 10–15 s — to absorb CI CPU contention. Annotate with a comment explaining why.
 - **Test method naming**: `MethodName_Scenario_ExpectedOutcome` is preferred but not enforced. Be readable.
-- **Multi-target**: libraries target `net8.0;net9.0;net10.0`. Test projects inherit this via `$(FlowOrchestratorTargetFrameworks)`.
+- **Multi-target**: libraries target `net10.0;net11.0`. Test projects inherit this via `$(FlowOrchestratorTargetFrameworks)`.
 - **Never amend commits**; create new ones.
 
 # D. Current Test Inventory (refresh with Bash before quoting numbers)
