@@ -351,7 +351,7 @@ app.UseHangfireDashboard("/hangfire");   // Hangfire runtime only
 app.MapFlowDashboard("/flows");
 ```
 
-To swap storage, implement `IFlowStore`, `IFlowRunStore`, and `IOutputsRepository` and register directly on `options.Services` instead of calling `UseSqlServer()`.
+To swap storage, implement `IFlowStore`, `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore` and `IOutputsRepository` and register them directly on `options.Services` instead of calling `UseSqlServer()` — the engine fails at startup without the runtime and control stores.
 
 ## Dashboard UI Standards
 

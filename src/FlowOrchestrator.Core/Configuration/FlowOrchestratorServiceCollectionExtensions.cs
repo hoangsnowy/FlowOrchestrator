@@ -70,15 +70,16 @@ public static class FlowOrchestratorServiceCollectionExtensions
                 "No FlowOrchestrator runtime registered. Call options.UseHangfire() (package FlowOrchestrator.Hangfire), " +
                 "options.UseInMemoryRuntime() (package FlowOrchestrator.InMemory), or " +
                 "options.UseAzureServiceBusRuntime(...) (package FlowOrchestrator.ServiceBus) " +
-                "inside AddFlowOrchestrator(options => ...), or register a custom IStepDispatcher.");
+                "inside AddFlowOrchestrator(options => ...). A custom IStepDispatcher must be registered before this " +
+                "check runs: on options.Services inside the callback, or on the service collection before AddFlowOrchestrator().");
         }
 
         if (!IsRegistered<IRecurringTriggerDispatcher>(services))
         {
             throw new InvalidOperationException(
                 "The configured FlowOrchestrator runtime registered an IStepDispatcher but no IRecurringTriggerDispatcher. " +
-                "A custom runtime must register IRecurringTriggerDispatcher and IRecurringTriggerInspector as well; " +
-                "cron triggers are synchronised through them at startup.");
+                "A custom runtime must register IRecurringTriggerDispatcher and IRecurringTriggerInspector as well " +
+                "(inside the callback or before AddFlowOrchestrator()); cron triggers are synchronised through them at startup.");
         }
 
         services.AddScoped<IExecutionContextAccessor, ExecutionContextAccessor>();

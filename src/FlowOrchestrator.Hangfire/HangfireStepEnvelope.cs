@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using FlowOrchestrator.Core.Execution;
 
 namespace FlowOrchestrator.Hangfire;
@@ -124,6 +126,13 @@ public sealed class HangfireStepEnvelope
         return step;
     }
 
+    // NaN / ±Infinity are written as JSON strings ("NaN") instead of throwing: the envelope is built after
+    // the dispatch ledger row is recorded, so a throw here must never be the reason a step cannot run.
+    private static readonly JsonSerializerOptions InputSerializerOptions = new(JsonSerializerDefaults.General)
+    {
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+    };
+
     private static string? SerializeInputs(IDictionary<string, object?>? inputs)
     {
         if (inputs is null || inputs.Count == 0)
@@ -138,12 +147,37 @@ public sealed class HangfireStepEnvelope
             foreach (var (key, value) in inputs)
             {
                 writer.WritePropertyName(key);
-                JsonSerializer.Serialize(writer, value);
+                JsonSerializer.Serialize(writer, value, InputSerializerOptions);
             }
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+    }
+
+    // long when the number is integral and fits; otherwise double — unless double would drop digits the
+    // payload carried (a decimal amount with 17+ significant digits, an integer beyond long.MaxValue), in
+    // which case the exact decimal is returned. "Would drop digits" = the double's shortest round-trip text
+    // parses to a different decimal than the payload's; (decimal)double cannot be used for this test because
+    // it rounds to 15 digits and would misclassify ordinary doubles such as 0.1 + 0.2. Allocation-free.
+    private static object MaterializeNumber(JsonElement element)
+    {
+        if (element.TryGetInt64(out var integer))
+        {
+            return integer;
+        }
+
+        var real = element.GetDouble();
+        Span<char> buffer = stackalloc char[32];
+        if (element.TryGetDecimal(out var exact)
+            && real.TryFormat(buffer, out var written, "R", CultureInfo.InvariantCulture)
+            && decimal.TryParse(buffer[..written], NumberStyles.Float, CultureInfo.InvariantCulture, out var viaDouble)
+            && viaDouble != exact)
+        {
+            return exact;
+        }
+
+        return real;
     }
 
     // Same value shapes ForEachSourceResolver produces for loop items, so a handler sees identical
@@ -155,8 +189,7 @@ public sealed class HangfireStepEnvelope
             case JsonValueKind.String:
                 return element.GetString();
             case JsonValueKind.Number:
-                // Cast keeps long vs double; a bare ternary would unify both arms to double.
-                return element.TryGetInt64(out var integer) ? integer : (object)element.GetDouble();
+                return MaterializeNumber(element);
             case JsonValueKind.True:
                 return true;
             case JsonValueKind.False:

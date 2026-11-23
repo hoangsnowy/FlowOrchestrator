@@ -94,7 +94,9 @@ public sealed class RecurringTriggerSync : IRecurringTriggerSync
                 : persisted.CronOverride;
 
             _dispatcher.RegisterOrUpdate(jobId, flow.Id, triggerKey, effectiveCron);
-            HostingLog.RecurringJobSynced(_logger, jobId, effectiveCron);
+            // A dashboard-persisted override is user input: strip line breaks before it reaches the log.
+            // Cold path (startup and schedule edits only), so the chained Replace is fine here.
+            HostingLog.RecurringJobSynced(_logger, jobId, effectiveCron.Replace('\r', '_').Replace('\n', '_'));
         }
     }
 }

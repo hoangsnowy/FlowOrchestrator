@@ -20,7 +20,7 @@ Hangfire queue across, which new startup checks may stop the app, and how to ver
 | 5 | **Dashboard is read-only without authentication outside `Development`** (shipped in 1.34.2) | Hosts that never configured dashboard auth | Configure auth or opt in |
 | 6 | **Step inputs resolved in a single pass** — substituted trigger / step values are never re-evaluated (shipped in 1.34.2) | Practically no one (it was a vulnerability) | None |
 | 7 | **Removed APIs**: `IFlowRepository`, `IFlowExecutor`, legacy sequential mode, … | Custom storage backends, hand-built engines, custom `IStepInstance` / `IOutputsRepository` | Code changes |
-| 8 | Untyped handlers on Hangfire receive JSON-shaped values | Hangfire hosts with untyped (`IStepHandler` without `<TInput>`) handlers | Check casts |
+| 8 | Untyped handlers on Hangfire no longer get Newtonsoft-restored POCOs | Hangfire hosts with untyped (`IStepHandler` without `<TInput>`) handlers that cast inputs to POCOs | Check casts |
 
 If you only use the built-in pieces (a flow manifest, `IStepHandler<TInput>` handlers, one of the
 built-in storage backends and runtimes, the dashboard), most of 2.0 is **items 1–3 plus a configuration
@@ -126,7 +126,8 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 <PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.3" />
 <PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.3" />
 
-<!-- 2.0: add Core explicitly (it used to arrive through Hangfire), keep Hangfire -->
+<!-- 2.0: keep Hangfire; referencing Core explicitly is optional (Hangfire still depends on it) but
+     makes the AddFlowOrchestrator() origin visible -->
 <PackageReference Include="FlowOrchestrator.Core"      Version="2.0.0" />
 <PackageReference Include="FlowOrchestrator.Hangfire"  Version="2.0.0" />
 <PackageReference Include="FlowOrchestrator.SqlServer" Version="2.0.0" />
@@ -268,7 +269,7 @@ re-checks), or re-trigger those runs after the upgrade.
    gateway (or accept that callers retry).
 2. Wait until the Hangfire dashboard shows **0 Enqueued and 0 Processing** for the FlowOrchestrator
    queues. Scheduled jobs (polling re-checks, delays) may remain: they are 1.17+ jobs and a 2.0 worker
-   runs them.
+   runs them (verify with the query in 4.1 that none is ≤ 1.16).
 3. **Stop every 1.x instance.**
 4. Deploy 2.0 to every instance and start them.
 5. Resume cron triggers and webhook traffic.
@@ -278,35 +279,52 @@ schema, `HangFire2`, or a separate database for Hangfire only — the FlowOrches
 switch triggers and webhooks to it, and let the 1.x deployment drain its own queue before you retire it.
 Runs started on 1.x finish on 1.x; new runs start on 2.0.
 
+**Cron triggers fire once per deployment** while both are up: each deployment registers the recurring
+jobs in its own Hangfire storage, and both read the same FlowOrchestrator tables. Before you start the
+2.0 deployment, stop the 1.x side from firing schedules — run its Hangfire server without the recurring
+job scheduler, or delete its `flow-*` recurring jobs from the 1.x Hangfire dashboard. Do **not** pause
+the flows from either FlowOrchestrator dashboard for this: pause state lives in the shared database, so
+it pauses the schedule in both deployments.
+
 **Do not** do a rolling deployment that leaves 1.x and 2.0 instances consuming the **same** Hangfire
 storage: a 1.x worker that picks up a 2.0 job fails it.
 
 ### 4.3 Inputs of untyped handlers
 
-Step inputs now travel as JSON and reach handlers as JSON-shaped CLR values: `string`, `long`,
-`double`, `bool`, `Dictionary<string, object?>`, `List<object?>`. Typed handlers
-(`IStepHandler<TInput>`) bind exactly as before. **Untyped** handlers
-(`ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance step)`) that cast
-`step.Inputs["x"]` to a specific type (e.g. `(int)`, `(DateTime)`, a POCO) need to convert
-instead:
+Step inputs now travel in the Hangfire job as JSON and reach handlers as JSON-shaped CLR values:
+`string`, `long`, `double` (or `decimal` when `double` would drop digits the payload carried), `bool`,
+`Dictionary<string, object?>`, `List<object?>`. Typed handlers (`IStepHandler<TInput>`) bind exactly as
+before.
+
+What changes for **untyped** handlers
+(`ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance step)`) is objects: 1.x
+Hangfire jobs serialised inputs with Newtonsoft `TypeNameHandling`, so a POCO or typed collection placed
+in the inputs came back as that type. In 2.0 it arrives as a `Dictionary<string, object?>`:
 
 ```csharp
-// before (worked only because Newtonsoft restored the CLR type into the Hangfire job)
-var count = (int)step.Inputs["count"]!;
+// before (Hangfire 1.x restored the POCO from "$type")
+var address = (Address)step.Inputs["address"]!;
 
-// after: convert from the JSON shape, or move the handler to IStepHandler<TInput>
-var count = Convert.ToInt32(step.Inputs["count"], CultureInfo.InvariantCulture);
+// after: bind it yourself, or move the handler to IStepHandler<TInput>
+var address = JsonSerializer.Deserialize<Address>(JsonSerializer.Serialize(step.Inputs["address"]))!;
 ```
 
-The InMemory and Service Bus runtimes already behaved this way, so only Hangfire hosts are affected.
+Numbers are unaffected: Hangfire 1.x already returned JSON integers as `long` and reals as `double`.
+
+> The three runtimes do not hand untyped handlers the same shapes today: InMemory passes the original
+> CLR objects, Service Bus passes `JsonElement`, Hangfire passes the shapes above. A handler that must
+> run on more than one runtime should be typed (`IStepHandler<TInput>`), which binds the same way on all
+> three. Unifying the untyped shape is planned for 2.0 GA — see
+> [Still landing before 2.0 GA](#still-landing-before-20-ga).
 
 ---
 
 ## Step 5 — Fix what the new startup checks report
 
-1.x quietly degraded in several situations; 2.0 refuses to start instead. Each check runs when the
-container is built or when a hosted service starts, so a misconfigured deployment fails its
-health check instead of misbehaving later. Message texts are quoted exactly so you can search logs.
+1.x quietly degraded in several situations; 2.0 refuses to start instead. The runtime and storage
+checks throw from the `AddFlowOrchestrator(...)` call itself; the store checks throw when the engine is
+first resolved; the step-key and flow-id checks throw when the flow-sync hosted service starts. Either
+way a misconfigured deployment fails at startup instead of misbehaving later. Message texts are quoted exactly so you can search logs.
 
 | You see at startup | Cause | Fix |
 |---|---|---|
@@ -349,7 +367,7 @@ Skip this step if the [Step 0 inventory](#step-0--before-you-start) found nothin
 | `StepCollection.FindParentStep` | removed | Walk `IScopedStep.Steps` yourself if you need it |
 | `FlowGraphEvaluation.AllKnownStepKeys` | removed | Use `ReadyStepKeys` / `BlockedStepKeys` / `WaitingStepKeys` |
 | `IHangfireStepRunner.RunStepAsync(ctx, IFlowDefinition, step)` | removed (≤ 1.16 jobs) | See [Step 4](#step-4--move-the-hangfire-queue-across-hangfire-hosts-only) |
-| `FlowSyncHostedService`, `FlowRetentionHostedService` (public, in Hangfire) | internal, in `FlowOrchestrator.Core.Hosting` | Registered by `AddFlowOrchestrator()`; do not register them yourself |
+| `FlowSyncHostedService`, `FlowRetentionHostedService` (internal, in the Hangfire package) | internal, in `FlowOrchestrator.Core.Hosting` | Registered by `AddFlowOrchestrator()`; do not register them yourself |
 
 ### Custom storage backend
 
@@ -437,7 +455,7 @@ expressions — the vulnerability fixed by GHSA-8248-pg9c-cp7c.
   transitively. Hosts on the generic host are unaffected; a bare `new ServiceCollection().AddLogging()`
   needs a direct `Microsoft.Extensions.Logging` reference.
 - New hosting log events 5000–5005 (flow sync, cron sync, retention). The Hangfire recurring dispatcher
-  logs register / remove as 3100 / 3101, like the other runtimes. Update alert rules that matched old
+  logs register / remove as EventIds 3100 / 3101. Update alert rules that matched old
   messages.
 
 ---
@@ -504,6 +522,8 @@ each when it lands:
   consolidated into an engine store and a dashboard query store, without default interface methods, and
   with an incremental status read that removes the remaining per-step full-status fetch. Custom storage
   backends will need changes; the built-in ones carry them.
+- **One input shape for untyped handlers.** Hangfire, InMemory and Service Bus will hand untyped
+  handlers the same JSON-shaped values; typed handlers are unaffected.
 - **Run search.** A faster search for the dashboard (full-text / trigram backed on Azure SQL /
   PostgreSQL), based on measurements in progress.
 
@@ -516,6 +536,7 @@ No. Hangfire is a permanent, first-class runtime. 2.0 only stops forcing it on h
 
 **Can I run 1.x and 2.0 side by side during the rollout?**
 Against the same FlowOrchestrator database, yes, as long as they do not share a **Hangfire storage**
+and only one side fires cron schedules
 ([Step 4](#step-4--move-the-hangfire-queue-across-hangfire-hosts-only)). With InMemory there is nothing
 to share; with Service Bus, drain the step topic subscriptions before switching versions to be safe.
 

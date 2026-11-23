@@ -207,4 +207,57 @@ public sealed class HangfireStepEnvelopeTests
         Assert.Same(_flow, runFlow);
         Assert.Same(step, runStep);
     }
+    [Fact]
+    public void Numbers_RoundTrip_WithoutLosingDigits()
+    {
+        // Arrange
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("pay", "Pay")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["count"] = 5,
+                ["ratio"] = 1.5,
+                ["sum"] = 0.1 + 0.2,
+                ["tiny"] = 1e-300,
+                ["amount"] = 12345678901234567.891m,
+                ["huge"] = ulong.MaxValue,
+            },
+        };
+
+        // Act
+        var inputs = HangfireStepEnvelope.From(ctx, _flow.Id, step).ToStepInstance().Inputs;
+
+        // Assert — long and double keep their usual shape; values double would round come back as decimal.
+        Assert.Equal(5L, inputs["count"]);
+        Assert.Equal(1.5d, inputs["ratio"]);
+        Assert.Equal(0.1 + 0.2, Assert.IsType<double>(inputs["sum"]));   // 17-digit double stays double
+        Assert.Equal(1e-300, Assert.IsType<double>(inputs["tiny"]));     // below decimal's range stays double
+        Assert.Equal(12345678901234567.891m, inputs["amount"]);
+        Assert.Equal(18446744073709551615m, inputs["huge"]);
+    }
+
+    [Fact]
+    public void NonFiniteDoubles_DoNotThrow_AndArriveAsTheirJsonLiteral()
+    {
+        // Arrange — the envelope is built after the dispatch ledger row is recorded, so it must not throw.
+        var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
+        var step = new StepInstance("calc", "Calc")
+        {
+            RunId = ctx.RunId,
+            Inputs = new Dictionary<string, object?>
+            {
+                ["nan"] = double.NaN,
+                ["inf"] = double.PositiveInfinity,
+            },
+        };
+
+        // Act
+        var inputs = HangfireStepEnvelope.From(ctx, _flow.Id, step).ToStepInstance().Inputs;
+
+        // Assert
+        Assert.Equal("NaN", inputs["nan"]);
+        Assert.Equal("Infinity", inputs["inf"]);
+    }
 }

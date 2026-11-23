@@ -196,6 +196,50 @@ public sealed class PendingPathClaimOrderingTests
         Assert.DoesNotContain("read-waiter", _calls);
     }
 
+    [Fact]
+    public async Task Dispatcher_failure_releases_the_ledger_row_it_reserved_before_propagating()
+    {
+        // Arrange — a dispatch that never reached the runtime must not leave a ledger row claiming an
+        // attempt is queued: recovery skips ledgered keys, so the step would never run again.
+        _dispatcher.ScheduleStepAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(),
+                Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns<ValueTask<string?>>(_ => throw new InvalidOperationException("broker down"));
+        var engine = CreateEngine();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => RunStepAsync(engine));
+
+        // Assert — the shared dispatch helper releases its reservation, then the Pending path re-asserts
+        // it so the runtime's job retry can re-claim (ordering pinned by the test above).
+        Assert.IsType<InvalidOperationException>(ex);
+        var pendingTail = _calls.SkipWhile(c => c != "release-dispatch").ToList();
+        Assert.Equal(["release-dispatch", "record-dispatch", "release-claim", "release-dispatch", "record-dispatch"], pendingTail);
+    }
+
+    [Fact]
+    public async Task Dispatcher_failure_surfaces_the_dispatch_error_when_the_ledger_release_also_fails()
+    {
+        // Arrange
+        _dispatcher.ScheduleStepAsync(
+                Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(),
+                Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns<ValueTask<string?>>(_ => throw new InvalidOperationException("broker down"));
+        var releases = 0;
+        _runStore.ReleaseDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ++releases == 1 ? Task.CompletedTask : Task.FromException(new TimeoutException("db down")));
+        var engine = CreateEngine();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => RunStepAsync(engine));
+
+        // Assert — the original dispatch failure wins; the release failure is logged as EventId 3011.
+        Assert.Equal("broker down", Assert.IsType<InvalidOperationException>(ex).Message);
+        Assert.Contains(_logger.ReceivedCalls(), c =>
+            c.GetMethodInfo().Name == nameof(ILogger.Log)
+            && c.GetArguments()[1] is EventId { Id: 3011 });
+    }
+
     // ── Race 1: post-release signal-waiter re-check ─────────────────────────────
 
     [Fact]

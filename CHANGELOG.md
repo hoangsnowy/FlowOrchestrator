@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
   on cascade reset, race-safe SQL Server gates, case-insensitive trigger headers, PostgreSQL timeseries /
   synthetic-attempt trace, InMemory outputs retention.
+- **A failed dispatch no longer strands the step.** The engine records the dispatch-ledger row before
+  handing the step to the runtime; when the runtime call threw (broker or Hangfire storage blip), the row
+  stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
+  before rethrowing (EventId 3011 if that release also fails). The `Pending` re-poll path still re-asserts
+  it afterwards so the runtime's job retry can re-claim.
+- Dashboard-persisted cron overrides are stripped of line breaks before they are logged by the cron sync.
 
 ### Security
 
@@ -51,15 +57,20 @@ dependency graph of hosts that choose it.
   `IHangfireStepRunner.RunStepAsync(IExecutionContext, IFlowDefinition, IStepInstance, …)`, which is
   removed (with the `RunAfterConditionNewtonsoftConverter` that existed only to deserialise them).
   Jobs enqueued by 1.17 – 1.x keep running: their `RunStepAsync(IExecutionContext, Guid, IStepInstance, …)`
-  overload is kept, `[Obsolete]`, for one major version.
+  overload is kept, `[Obsolete]`, for one major version. Most of those jobs carry the run's
+  `TriggerContext`, whose `Flow` embeds the whole manifest; `TriggerContext.Flow` is now
+  `[IgnoreDataMember]`, so Newtonsoft skips it (the overload resolves the flow from `FlowRegistry` by id)
+  instead of failing on the manifest's `RunAfter` conditions.
 - **New Hangfire step-job shape.** Step jobs now carry one `HangfireStepEnvelope` (flow id, run id,
   principal, step key/type/index, scheduled time, and the inputs as a single System.Text.Json
   string). Trigger body and headers are no longer copied into every job — the engine already
   re-reads them from the run's stored trigger data — so job payloads shrink and user payload keys
   such as `"$type"` can no longer be interpreted by Hangfire's Newtonsoft.Json `TypeNameHandling`;
   they arrive as plain data. Step inputs reach handlers as JSON-shaped CLR values (`string`, `long`,
-  `double`, `bool`, `Dictionary<string, object?>`, `List<object?>`) — the shape the ForEach planner
-  already produced; typed (`IStepHandler<TInput>`) handlers bind exactly as before. A 2.0 job cannot
+  `double` — or `decimal` when `double` would drop digits the payload carried —, `bool`,
+  `Dictionary<string, object?>`, `List<object?>`) — the shape the ForEach planner already produced;
+  typed (`IStepHandler<TInput>`) handlers bind exactly as before. `NaN` / `±Infinity` inputs are written
+  as their JSON string literal instead of failing the dispatch. A 2.0 job cannot
   be run by a 1.x worker, so do not run 1.x and 2.0 workers against the same Hangfire storage.
 - **`AddFlowOrchestrator()` fails fast without a runtime.** It throws `InvalidOperationException`
   when no `IStepDispatcher` (call `UseHangfire()`, `UseInMemoryRuntime()` or
@@ -96,7 +107,7 @@ dependency graph of hosts that choose it.
   same name now lives in Core.
 - `FlowSyncHostedService` and `FlowRetentionHostedService` move to `FlowOrchestrator.Core.Hosting`
   (both internal). New hosting log events 5000–5005 (flow sync, cron sync, retention); the Hangfire
-  recurring dispatcher now logs register/remove as 3100/3101, like the other runtimes.
+  recurring dispatcher now logs register/remove as EventIds 3100/3101.
 
 ### Removed — **breaking:** dead and duplicate public API
 
