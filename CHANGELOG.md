@@ -6,6 +6,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.2] - 2026-11-23
+
+Security patch release for the 1.34 line (.NET 8 / 9 / 10). It fixes three vulnerabilities; every 1.x
+user should upgrade. 2.0 (.NET 10 / 11) carries the same fixes.
+
 ### Read before upgrading
 
 - **A dashboard with no authentication configured is now read-only outside the `Development`
@@ -44,6 +49,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   classified once, from the flow manifest's own text, and a substituted value — from the trigger or from a
   step output — is passed to the handler verbatim, also when a `Pending` step is re-polled with its
   already-resolved inputs. Expressions written in the manifest resolve exactly as before.
+
+### Changed
+
+- `Microsoft.Extensions.*` and `System.Text.Json` dependencies move to the `10.0.15` servicing release
+  (were `10.0.8`–`10.0.13`).
+- Packages publish through NuGet.org Trusted Publishing (OIDC); no long-lived API key is stored.
+- Sample AppHost: Aspire `13.3.2` → `13.6.5` (GHSA-4g86-54fm-h9h8, GHSA-f7vh-h5g3-7jrh). Sample only — no
+  shipped package depends on Aspire.
 
 ## [1.34.1] - 2026-10-31
 
