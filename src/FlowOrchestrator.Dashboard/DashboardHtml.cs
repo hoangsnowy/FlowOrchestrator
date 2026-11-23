@@ -130,27 +130,35 @@ internal static class DashboardHtml
         return new PrecompressedDashboardPage(Render(basePath, branding));
     }
 
+    // Default brand mark: three connected nodes (a flow), inline SVG per the dashboard icon rules
+    // (stroke-width 2, currentColor), replacing the 1.x lightning-bolt emoji.
+    private const string DefaultLogoSvg =
+        "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" " +
+        "stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">" +
+        "<circle cx=\"5\" cy=\"6\" r=\"2.5\"/><circle cx=\"5\" cy=\"18\" r=\"2.5\"/><circle cx=\"19\" cy=\"12\" r=\"2.5\"/>" +
+        "<path d=\"M7.5 6H11a3 3 0 0 1 3 3v3m-6.5 6H11a3 3 0 0 0 3-3v-3m0 0h2.5\"/></svg>";
+
     /// <summary>
-    /// Builds the logo HTML fragment, defaulting to a lightning-bolt entity
+    /// Builds the logo HTML fragment, defaulting to an inline SVG flow mark
     /// when the URL is missing, malformed, or uses a non-http(s) scheme.
     /// </summary>
     /// <param name="logoUrl">A user-supplied absolute or relative URL, or <see langword="null"/>.</param>
     /// <remarks>
     /// <c>javascript:</c> URLs are rejected unconditionally. Non-http(s)
     /// absolute URLs are rejected to prevent embedding e.g. <c>data:</c> or
-    /// <c>file:</c> sources from branding configuration.
+    /// <c>file:</c> sources from branding configuration. A custom image that fails to load is hidden.
     /// </remarks>
     private static string BuildLogoHtml(string? logoUrl)
     {
         if (string.IsNullOrWhiteSpace(logoUrl))
         {
-            return "&#9889;";
+            return DefaultLogoSvg;
         }
 
         var value = logoUrl.Trim();
         if (value.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
         {
-            return "&#9889;";
+            return DefaultLogoSvg;
         }
 
         if (Uri.TryCreate(value, UriKind.Absolute, out var absoluteUri))
@@ -159,15 +167,15 @@ internal static class DashboardHtml
                 || string.Equals(absoluteUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
             if (!allowed)
             {
-                return "&#9889;";
+                return DefaultLogoSvg;
             }
         }
         else if (!Uri.TryCreate(value, UriKind.Relative, out _))
         {
-            return "&#9889;";
+            return DefaultLogoSvg;
         }
 
-        return $"<img src=\"{WebUtility.HtmlEncode(value)}\" alt=\"logo\" onerror=\"this.onerror=null;this.parentElement.innerHTML='&#9889;';\" />";
+        return $"<img src=\"{WebUtility.HtmlEncode(value)}\" alt=\"logo\" onerror=\"this.onerror=null;this.style.display='none';\" />";
     }
 
     /// <summary>

@@ -1936,7 +1936,7 @@ async function loadEventsIntoDrawer(runId) {
   try {
     const events = await fetchJSON(BASE+'/runs/'+encodeURIComponent(runId)+'/events?take=500');
     if (!events || events.length === 0) {
-      body.innerHTML = '<div class="step-inspector-empty">Event stream not enabled on this backend. Configure <code>IFlowEventReader</code> to see the raw event log.</div>';
+      body.innerHTML = '<div class="step-inspector-empty">No timeline for this run yet.</div>';
       return;
     }
     const filtered = selectedStepKey ? events.filter(e => e.stepKey === selectedStepKey) : events;
