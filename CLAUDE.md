@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Always check PR status + comments after opening or pushing** — every `gh pr create` / `git push` to a PR branch must be followed by `gh pr checks <n>` and `gh pr view <n> --json statusCheckRollup,reviewDecision,comments,reviews`. Inspect every failing check, every reviewer comment (human + bot — Dependabot, CodeQL/GitHub Advanced Security, etc.), and every requested change. Iterate until checks are green AND no actionable bot/reviewer comment is open. Do not report a PR as "done" while CodeQL alerts on the diff exist (use `gh api repos/<owner>/<repo>/code-scanning/alerts?ref=refs/pull/<n>/merge` to enumerate). Fake suppression patterns (e.g. inline `// codeql[...]` comments, made-up `// lgtm[...]` markers) are NOT supported by GitHub CodeQL — only real fixes, narrowed exception types / filters that satisfy the rule, or explicit API dismissals (`gh api -X PATCH .../code-scanning/alerts/{n} -f state=dismissed -f dismissed_reason=...`) count. If a CodeQL bot review says "found N potential problems", that is a blocker.
 - **Always run the e2e smoke after a PR lands** — invoke the `e2e` skill (`.claude/skills/e2e/SKILL.md`) once `dotnet build` is clean and unit tests pass, on every PR that touches `src/FlowOrchestrator.{Core,Hangfire,InMemory,ServiceBus,SqlServer,PostgreSQL,Dashboard}` or `samples/FlowOrchestrator.SampleApp`. The skill starts the Aspire AppHost (Docker required), waits for all four sample instances (`flow-sqlserver` / `flow-postgresql` / `flow-inmemory` / `flow-servicebus`) to become ready, exercises the full feature matrix per instance via HTTP, and tears the host down. Treat its `RESULT: N/N passed` line as the merge gate. **Skip only for** documentation-only, dashboard CSS-only, or test-only PRs. Both the main thread and the `qa-agent` follow this rule — when `qa-agent` ships test additions that touch runtime behaviour (e.g. a new step handler, a storage migration) it must invoke the `e2e` skill before reporting completion. Docker Desktop must be running before invocation — if it's not, ask the user to start it instead of trying to start it yourself.
 - **Pre-release gate — `e2e` must pass `RESULT: N/N` before tagging** — any version bump in `Directory.Build.props` (`VersionPrefix` change), CHANGELOG release section, or `git tag v*` requires a clean `e2e` run on the **release candidate commit**. Partial passes (timeouts, ✗, ⏱) block the release until the failure is reproduced, root-caused, and either fixed or explicitly waived in writing in the release notes. Run order: (1) full unit suite green; (2) full integration suite green; (3) regression suite green; (4) `e2e` skill `RESULT: N/N passed`. Skipping any of these four for a release is forbidden — there is no "small enough to skip" carve-out for releases. The full sequence from merged fix to published release is in the Release Process section below.
-- **Always close the loop on the reporter's issue** — when a fix ships, or when a release that was announced as shipped turns out not to have published, comment on the GitHub issue that reported it. Say what changed, whether it affects that reporter's setup (runtime + storage combination), and the **exact installable version id** — a `<version>-preview.<run_number>` build is a legitimate stop-gap, and `gh run view <id> --json number,headSha` maps a run number back to the commit it was built from. Verify the version resolves on nuget.org before naming it. `1.32.0` was announced on #188 as shipped while its publish job had failed, leaving the reporter with a version that does not resolve — that is the failure this rule exists to prevent.
+- **Always close the loop on the reporter's issue** — when a fix ships, or when a release that was announced as shipped turns out not to have published, comment on the GitHub issue that reported it. Say what changed, whether it affects that reporter's setup (runtime + storage combination), and the **exact installable version id** — a `<version>-alpha.<run_number>` main build is a legitimate stop-gap, and `gh run view <id> --json number,headSha` maps a run number back to the commit it was built from. Verify the version resolves on nuget.org before naming it. `1.32.0` was announced on #188 as shipped while its publish job had failed, leaving the reporter with a version that does not resolve — that is the failure this rule exists to prevent.
 
 ## Testing
 
@@ -161,8 +161,10 @@ publish workflow packs and pushes packages, it never creates a GitHub Release.
 3. **Release commit** — `chore(release): <version>`, containing exactly two edits:
    `Directory.Build.props` `<VersionPrefix>`, and `CHANGELOG.md` with `## [Unreleased]` left empty
    above a new `## [<version>] - <YYYY-MM-DD>` section. Justify major/minor/patch in the message
-   body. Push to `main`; the main-push publish run stamps a `<version>-preview.<run_number>`
-   package, which is a usable artifact and worth naming when someone is blocked.
+   body. If `<VersionPrefix>` already equals `<version>` (it is bumped at the start of each cycle,
+   see step 9), the release commit only edits `CHANGELOG.md`. Push to `main`; the main-push publish
+   run stamps a `<version>-alpha.<run_number>` package, which is a usable artifact and worth naming
+   when someone is blocked.
 4. **Tag** — `git tag -a v<version> -m "v<version>" && git push origin v<version>`. Tags in this
    repo are annotated. **Pushing the tag publishes to NuGet.org and cannot be undone**, so it needs
    explicit human go-ahead every time, even inside an already-approved release.
@@ -183,6 +185,11 @@ publish workflow packs and pushes packages, it never creates a GitHub Release.
    changes observable behaviour, needs a manual migration, or adds API surface, then `## Also fixed`.
 8. **Close the loop on any issue the release touches.** See the Workflow Rules entry on reporter
    issues: comment the version, whether it affects their setup, and the exact installable id.
+9. **Open the next cycle** — right after the release is live, bump `<VersionPrefix>` on `main` to
+   the next planned version (`chore: start <next> development`). Main builds are pre-releases of
+   the NEXT version; leaving the prefix on the shipped version publishes `<shipped>-alpha.N`, which
+   SemVer sorts *below* the release it postdates — how `1.34.1-preview.201…206` (already 2.0 code,
+   net10/net11 only) ended up on nuget.org.
 
 ## Commands
 
