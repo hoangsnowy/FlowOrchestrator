@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PROTOTYPE / INVESTIGATION HARNESS — not part of any solution filter, not run in CI.
+    Seeds a production-shape data set (200k runs, ~2M step rows) into a SQL Server and a
+    PostgreSQL container, measures the shipped run-search SQL, and measures the candidate
+    search designs from docs/benchmarks/run-search-2026-11-23.md against the same data.
+    See README.md next to this file for the run order.
+  -->
+  <PropertyGroup>
+    <TargetFramework>$(FlowOrchestratorSampleTargetFramework)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <!-- Investigation harness: public surface is a console entry point, not an API. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.SqlServer\FlowOrchestrator.SqlServer.csproj" />
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.PostgreSQL\FlowOrchestrator.PostgreSQL.csproj" />
+  </ItemGroup>
+
+</Project>
