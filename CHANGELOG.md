@@ -6,6 +6,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.4] - 2026-11-23
+
+Security release for the 1.34 line (.NET 8 / 9 / 10). Webhook replay protection trusted an unsigned
+timestamp header for signature schemes that sign their own timestamp (Stripe, Slack, Mailgun), so a captured
+delivery could be replayed indefinitely. Only hosts that run the webhook pipeline in `Enforce` or `Audit`
+with replay protection enabled are affected.
+
 ### Security
 
 - **Webhook replay protection judges freshness from the signed timestamp**
