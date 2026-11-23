@@ -87,16 +87,41 @@ public sealed class InMemoryStepDispatcherTests
     [Fact]
     public async Task ScheduleStepAsync_swallows_ChannelClosedException_on_host_shutdown()
     {
-        // Arrange
-        var (sut, channel) = CreateSut();
+        // Arrange — a writer that behaves like a channel closed by host shutdown and signals when
+        // the deferred write reaches it, so the test waits on that event instead of a sleep.
+        var writer = new ClosedChannelWriter();
+        var sut = new InMemoryStepDispatcher(writer);
         var (ctx, flow, step) = CreateFixtures();
-        channel.Writer.Complete(); // simulate host shutdown closing the channel
 
-        // Act / Assert — must not throw even though the deferred WriteAsync will fail
+        // Act — must not throw even though the deferred WriteAsync will fail
         var jobId = await sut.ScheduleStepAsync(ctx, flow, step, TimeSpan.FromMilliseconds(20));
-        Assert.NotNull(jobId);
+        await writer.WriteAttempted.WaitAsync(TimeSpan.FromSeconds(30));
 
-        // Give the background task a moment to attempt the write and catch the exception.
-        await Task.Delay(100);
+        // Assert
+        Assert.NotNull(jobId);
+        Assert.True(writer.WriteAttempted.IsCompletedSuccessfully);
+    }
+
+    /// <summary>
+    /// A <see cref="ChannelWriter{T}"/> whose channel is already closed: every write fails with
+    /// <see cref="ChannelClosedException"/>, and the first attempt completes <see cref="WriteAttempted"/>.
+    /// </summary>
+    private sealed class ClosedChannelWriter : ChannelWriter<InMemoryStepEnvelope>
+    {
+        private readonly TaskCompletionSource _writeAttempted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when the dispatcher first tries to write to the closed channel.</summary>
+        public Task WriteAttempted => _writeAttempted.Task;
+
+        public override bool TryWrite(InMemoryStepEnvelope item) => false;
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(false);
+
+        public override ValueTask WriteAsync(InMemoryStepEnvelope item, CancellationToken cancellationToken = default)
+        {
+            _writeAttempted.TrySetResult();
+            return ValueTask.FromException(new ChannelClosedException());
+        }
     }
 }
