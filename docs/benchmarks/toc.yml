@@ -30,3 +30,6 @@
 
 - name: InMemoryFlowRunStore — run-history scaling (2026-05-02)
   href: inmemory-store-runscale-2026-05-02.md
+
+- name: Run search at production scale + FlowEvents cost (2026-11-23)
+  href: run-search-2026-11-23.md

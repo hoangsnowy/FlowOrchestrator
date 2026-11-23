@@ -1,0 +1,126 @@
+### runId prefix, recent [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 2, logical reads 1801, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 28 ms,  elapsed time = 28 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Concatenation[FlowRuns.] > Index Scan[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### runId prefix, 60d old [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 2, logical reads 1797, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 27 ms,  elapsed time = 28 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Concatenation[FlowRuns.] > Index Scan[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### flow name, common 'Invoice' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 179, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 1 ms,  elapsed time = 1 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### flow name, rare 'Gdpr' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 477, physical reads 0, page server reads 0, read-ahead reads 27, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 6 ms,  elapsed time = 9 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### trigger key, common 'order-created' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 182, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 1 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### trigger key, rare 'backfill' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 446, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 5 ms,  elapsed time = 5 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### no match 'zq-nomatch-7731' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 422, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 6 ms,  elapsed time = 6 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### runId prefix, recent [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 2, logical reads 6714, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 112 ms,  elapsed time = 113 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Concatenation[FlowRuns.] > Index Scan[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### runId prefix, 60d old [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 2, logical reads 6714, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 120 ms,  elapsed time = 120 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Concatenation[FlowRuns.] > Index Scan[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### flow name, common 'Invoice' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 205, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 1 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### flow name, rare 'Gdpr' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 1627, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 24 ms,  elapsed time = 24 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### trigger key, common 'order-created' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 208, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 1 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### trigger key, rare 'backfill' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 475, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 3 ms,  elapsed time = 5 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+
+### no match 'zq-nomatch-7731' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'Worktable'. Scan count 0, logical reads 0, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 5335, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 87 ms,  elapsed time = 89 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Sort[FlowRuns.] > Nested Loops[FlowRuns.] > Top[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.]
+

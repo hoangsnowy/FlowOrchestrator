@@ -1,0 +1,6 @@
+mssql	idtext	0.5
+mssql	tokens	0.2
+mssql	tokens-backfill(payload=True)	400.7	rows=16142837
+mssql	searchcol	0.4
+mssql	fts	28.2
+mssql	fts-populated	568.4
