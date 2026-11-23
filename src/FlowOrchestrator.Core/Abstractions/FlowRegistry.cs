@@ -13,8 +13,10 @@ namespace FlowOrchestrator.Core.Abstractions;
 /// Lookups by id are O(1) against a <see cref="FrozenDictionary{TKey,TValue}"/>; the old
 /// interface forced every hot-path caller to fetch the whole list and scan it linearly.
 /// <para>
-/// When two registrations share an <see cref="IFlowDefinition.Id"/>, the first one wins — for both
-/// <see cref="TryGetFlow"/> and <see cref="Flows"/> — which matches the 1.x first-match scan.
+/// Registering the same flow type twice (e.g. calling <c>AddFlow&lt;TFlow&gt;()</c> twice) is harmless:
+/// the first registration is kept. Two <i>different</i> flow types that share an
+/// <see cref="IFlowDefinition.Id"/> are a configuration error — runs, schedules and step jobs are keyed by
+/// that id, so one flow would silently shadow the other — and fail at container resolution.
 /// </para>
 /// </remarks>
 public sealed class FlowRegistry
@@ -26,9 +28,11 @@ public sealed class FlowRegistry
 
     /// <summary>Builds the registry from the registered flow definitions.</summary>
     /// <param name="flows">
-    /// The flows to index, in registration order. Duplicated ids keep the first occurrence.
+    /// The flows to index, in registration order. A repeated registration of the same flow type keeps
+    /// the first occurrence.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="flows"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">Two different flow types share an id.</exception>
     public FlowRegistry(IEnumerable<IFlowDefinition> flows)
     {
         ArgumentNullException.ThrowIfNull(flows);
@@ -40,6 +44,15 @@ public sealed class FlowRegistry
             if (byId.TryAdd(flow.Id, flow))
             {
                 ordered.Add(flow);
+                continue;
+            }
+
+            var existing = byId[flow.Id];
+            if (existing.GetType() != flow.GetType())
+            {
+                throw new InvalidOperationException(
+                    $"Flows '{existing.GetType().FullName}' and '{flow.GetType().FullName}' are both registered with id " +
+                    $"'{flow.Id}'. Flow ids must be unique: runs, schedules and step jobs are keyed by them.");
             }
         }
 

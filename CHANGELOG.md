@@ -68,8 +68,10 @@ dependency graph of hosts that choose it.
 - **`IFlowRepository`**, `FlowRepositoryExtensions.FindById`, `FlowOrchestrator.InMemory.InMemoryFlowRepository`
   and the private SQL Server / PostgreSQL registries are replaced by one **`FlowRegistry`**
   (`FlowOrchestrator.Core.Abstractions`): built once from the `AddFlow<T>()` registrations, O(1)
-  `TryGetFlow` / `Find` over a `FrozenDictionary`, `Flows` in registration order (first
-  registration wins on a duplicate id). Step execution, retries, cron fires, signal delivery,
+  `TryGetFlow` / `Find` over a `FrozenDictionary`, `Flows` in registration order. **Two different
+  flow types registered with the same id now fail at startup** (`InvalidOperationException` naming both
+  types) instead of one silently shadowing the other; registering the same type twice stays harmless.
+  Step execution, retries, cron fires, signal delivery,
   recovery and the dashboard no longer fetch and scan the whole flow list. `FlowOrchestratorEngine`,
   `FlowSignalDispatcher`, `FlowRunRecoveryHostedService` and `HangfireFlowOrchestrator` take a
   `FlowRegistry` where they took an `IFlowRepository`. Custom storage backends no longer register a

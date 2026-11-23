@@ -63,19 +63,49 @@ public sealed class FlowRegistryTests
     }
 
     [Fact]
-    public void DuplicateIds_FirstRegistrationWins_ForLookupAndEnumeration()
+    public void SameFlowTypeRegisteredTwice_KeepsTheFirstRegistration()
     {
-        // Arrange — matches the 1.x first-match linear scan.
+        // Arrange — AddFlow<TFlow>() called twice yields two instances of one type.
         var id = Guid.NewGuid();
-        var first = Flow(id);
-        var duplicate = Flow(id);
+        var first = new FlowA(id);
+        var repeat = new FlowA(id);
 
         // Act
-        var registry = new FlowRegistry([first, duplicate]);
+        var registry = new FlowRegistry([first, repeat]);
 
         // Assert
         Assert.Same(first, registry.Find(id));
         Assert.Same(first, Assert.Single(registry.Flows));
+    }
+
+    [Fact]
+    public void DifferentFlowTypesSharingAnId_FailFast_NamingBothTypesAndTheId()
+    {
+        // Arrange
+        var id = Guid.NewGuid();
+        IFlowDefinition[] flows = [new FlowA(id), new FlowB(id)];
+
+        // Act
+        var ex = Assert.Throws<InvalidOperationException>(() => new FlowRegistry(flows));
+
+        // Assert
+        Assert.Contains(typeof(FlowA).FullName!, ex.Message);
+        Assert.Contains(typeof(FlowB).FullName!, ex.Message);
+        Assert.Contains(id.ToString(), ex.Message);
+    }
+
+    private sealed class FlowA(Guid id) : IFlowDefinition
+    {
+        public Guid Id { get; } = id;
+        public string Version => "1.0";
+        public FlowManifest Manifest { get; set; } = new();
+    }
+
+    private sealed class FlowB(Guid id) : IFlowDefinition
+    {
+        public Guid Id { get; } = id;
+        public string Version => "1.0";
+        public FlowManifest Manifest { get; set; } = new();
     }
 
     [Fact]
