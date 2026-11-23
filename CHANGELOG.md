@@ -6,6 +6,79 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed — **breaking:** Hangfire is an opt-in runtime, no longer a dependency of everything
+
+Hangfire remains a first-class, fully supported runtime. What changes is that it is now only in the
+dependency graph of hosts that choose it.
+
+#### Read before upgrading
+
+- **Package matrix.** `AddFlowOrchestrator()` moves from `FlowOrchestrator.Hangfire` to
+  `FlowOrchestrator.Core`, in the `Microsoft.Extensions.DependencyInjection` namespace (in scope
+  without a `using`). What a host references:
+
+  | Runtime | Packages | Hangfire / Newtonsoft.Json in the graph |
+  |---|---|---|
+  | Hangfire | `Core` + `Hangfire` + a storage backend, plus Hangfire's own `Hangfire.AspNetCore` and a Hangfire storage package | Yes (Newtonsoft.Json via `Hangfire.Core`, pinned to 13.0.4) |
+  | InMemory | `Core` + `InMemory`, optionally `SqlServer` / `PostgreSQL` storage | No |
+  | Azure Service Bus | `Core` + `ServiceBus` + a storage backend | No |
+
+  `FlowOrchestrator.SqlServer`, `.PostgreSQL`, `.ServiceBus` and `.Testing` no longer depend on
+  `FlowOrchestrator.Hangfire`, and `FlowOrchestrator.Core` no longer depends on Newtonsoft.Json.
+- **Hangfire hosts:** no code change. Keep the `FlowOrchestrator.Hangfire` package and
+  `using FlowOrchestrator.Hangfire;`; `options.UseHangfire()` is now an extension method in that
+  package instead of a flag on the builder. **InMemory / Service Bus hosts** can drop the
+  `FlowOrchestrator.Hangfire` package reference, together with any `using FlowOrchestrator.Hangfire;`
+  and any `AddHangfire(...)` call that was only there to satisfy 1.x wiring.
+- **Drain Hangfire queues enqueued by FlowOrchestrator ≤ 1.16 before upgrading.** Those jobs target
+  `IHangfireStepRunner.RunStepAsync(IExecutionContext, IFlowDefinition, IStepInstance, …)`, which is
+  removed (with the `RunAfterConditionNewtonsoftConverter` that existed only to deserialise them).
+  Jobs enqueued by 1.17 – 1.x keep running: their `RunStepAsync(IExecutionContext, Guid, IStepInstance, …)`
+  overload is kept, `[Obsolete]`, for one major version.
+- **New Hangfire step-job shape.** Step jobs now carry one `HangfireStepEnvelope` (flow id, run id,
+  principal, step key/type/index, scheduled time, and the inputs as a single System.Text.Json
+  string). Trigger body and headers are no longer copied into every job — the engine already
+  re-reads them from the run's stored trigger data — so job payloads shrink and user payload keys
+  such as `"$type"` can no longer be interpreted by Hangfire's Newtonsoft.Json `TypeNameHandling`;
+  they arrive as plain data. Step inputs reach handlers as JSON-shaped CLR values (`string`, `long`,
+  `double`, `bool`, `Dictionary<string, object?>`, `List<object?>`) — the shape the ForEach planner
+  already produced; typed (`IStepHandler<TInput>`) handlers bind exactly as before. A 2.0 job cannot
+  be run by a 1.x worker, so do not run 1.x and 2.0 workers against the same Hangfire storage.
+- **`AddFlowOrchestrator()` fails fast without a runtime.** It throws `InvalidOperationException`
+  when no `IStepDispatcher` (call `UseHangfire()`, `UseInMemoryRuntime()` or
+  `UseAzureServiceBusRuntime(...)`) or no `IRecurringTriggerDispatcher` is registered. 1.x silently
+  registered a Hangfire dispatcher whose jobs could not be activated without `UseHangfire()`.
+  Runtime registrations use `TryAdd`, so the first runtime selected in the callback wins.
+
+#### Removed / changed API
+
+- **`IFlowRepository`**, `FlowRepositoryExtensions.FindById`, `FlowOrchestrator.InMemory.InMemoryFlowRepository`
+  and the private SQL Server / PostgreSQL registries are replaced by one **`FlowRegistry`**
+  (`FlowOrchestrator.Core.Abstractions`): built once from the `AddFlow<T>()` registrations, O(1)
+  `TryGetFlow` / `Find` over a `FrozenDictionary`, `Flows` in registration order (first
+  registration wins on a duplicate id). Step execution, retries, cron fires, signal delivery,
+  recovery and the dashboard no longer fetch and scan the whole flow list. `FlowOrchestratorEngine`,
+  `FlowSignalDispatcher`, `FlowRunRecoveryHostedService` and `HangfireFlowOrchestrator` take a
+  `FlowRegistry` where they took an `IFlowRepository`. Custom storage backends no longer register a
+  flow repository.
+- **`IRecurringTriggerSync.SyncTriggers(Guid, bool)` → `SyncTriggersAsync(Guid, bool, CancellationToken)`.**
+  One Core implementation, **`RecurringTriggerSync`**, resolves the effective cron (enabled flag,
+  dashboard pause, persisted override, manifest cron) for every runtime and drives the runtime's
+  `IRecurringTriggerDispatcher`; the Hangfire, in-memory and Service Bus copies — each blocking on
+  the async schedule-state store — are deleted. **`RecurringTriggerJobId`** builds and parses the
+  persisted `flow-{flowId}-{triggerKey}` job id.
+- **`InMemoryFlowScheduleStateStore`** moves from `FlowOrchestrator.InMemory` to
+  `FlowOrchestrator.Core.Storage` and is the one process-local default for `AddFlowOrchestrator` and
+  `AddFlowDashboard` (replacing the Hangfire package's `EphemeralFlowScheduleStateStore` and the
+  dashboard's private copy). It now stores and returns copies.
+- `FlowOrchestratorBuilder.HangfireEnabled` and the instance `FlowOrchestratorBuilder.UseHangfire()`
+  are removed (`UseHangfire()` is the `HangfireFlowOrchestratorBuilderExtensions` extension).
+  `FlowOrchestrator.Hangfire.FlowOrchestratorServiceCollectionExtensions` is gone; the class of the
+  same name now lives in Core.
+- `FlowSyncHostedService` and `FlowRetentionHostedService` move to `FlowOrchestrator.Core.Hosting`
+  (both internal). New hosting log events 5000–5005 (flow sync, cron sync, retention); the Hangfire
+  recurring dispatcher now logs register/remove as 3100/3101, like the other runtimes.
+
 ### Removed — **breaking:** dead and duplicate public API
 
 Code that nothing called, or that duplicated another entry point, is deleted. Each item was

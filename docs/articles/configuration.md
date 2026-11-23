@@ -2,6 +2,10 @@
 
 Complete reference for all options available on `FlowOrchestratorBuilder` and `FlowDashboardOptions`.
 
+`services.AddFlowOrchestrator(options => ...)` ships in `FlowOrchestrator.Core` (namespace
+`Microsoft.Extensions.DependencyInjection`, so no `using` is needed). Storage backends and runtimes
+are extension methods on the `options` builder, each from its own package.
+
 ## FlowOrchestratorBuilder
 
 ### Storage
@@ -12,7 +16,7 @@ Complete reference for all options available on `FlowOrchestratorBuilder` and `F
 | `options.UsePostgreSql(string connStr)` | Configure PostgreSQL persistence (Npgsql) |
 | `options.UseInMemory()` | Configure in-process storage (no persistence) |
 
-Exactly one of these **must** be called. Omitting all three throws `InvalidOperationException` on startup.
+Exactly one of these **must** be called. Omitting all three throws `InvalidOperationException` from `AddFlowOrchestrator()`.
 
 ### Flows
 
@@ -24,7 +28,22 @@ Registers a flow class. `TFlow` must implement `IFlowDefinition` and have a publ
 
 ### Runtime Adapter
 
-Choose exactly one runtime adapter and select it **inside** the `AddFlowOrchestrator()` callback (`options.UseHangfire()`, `options.UseInMemoryRuntime()`, or `options.UseAzureServiceBusRuntime(...)`). Only when using the Hangfire runtime must Hangfire's own services (`AddHangfire` / `AddHangfireServer`) be registered **before** `AddFlowOrchestrator()`:
+Choose exactly one runtime adapter and select it **inside** the `AddFlowOrchestrator()` callback:
+
+| Method | Package | Notes |
+|---|---|---|
+| `options.UseHangfire()` | `FlowOrchestrator.Hangfire` | Steps run as Hangfire background jobs, cron triggers as Hangfire recurring jobs. Register Hangfire itself (`AddHangfire` / `AddHangfireServer`). |
+| `options.UseInMemoryRuntime()` | `FlowOrchestrator.InMemory` | `Channel<T>` dispatcher + `PeriodicTimer` cron, single process. |
+| `options.UseAzureServiceBusRuntime(...)` | `FlowOrchestrator.ServiceBus` | Topic + subscription-per-flow, self-perpetuating cron messages. |
+
+Omitting the runtime throws `InvalidOperationException` from `AddFlowOrchestrator()` (1.x silently
+registered a Hangfire dispatcher whose jobs could not run without `UseHangfire()`). A custom runtime
+may instead register its own `IStepDispatcher`, `IRecurringTriggerDispatcher` and
+`IRecurringTriggerInspector`; the effective-cron logic (dashboard pause / override, enabled flag) is
+Core's `RecurringTriggerSync` and is shared by every runtime. Runtime registrations use `TryAdd`, so
+the first runtime selected inside the callback wins.
+
+Only when using the Hangfire runtime must Hangfire's own services (`AddHangfire` / `AddHangfireServer`) be registered **before** `AddFlowOrchestrator()`:
 
 **Hangfire runtime** (SQL Server or PostgreSQL persistence, distributed workers):
 
@@ -35,12 +54,12 @@ builder.Services.AddHangfireServer();
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseSqlServer(connStr);  // or UsePostgreSql(...)
-    options.UseHangfire();           // wires HangfireStepDispatcher
+    options.UseHangfire();           // FlowOrchestrator.Hangfire — wires the Hangfire runtime
     options.AddFlow<MyFlow>();
 });
 ```
 
-**InMemory runtime** (no Hangfire server required — `Channel<T>` step dispatcher + `PeriodicTimer` cron):
+**InMemory runtime** (no Hangfire at all — `Channel<T>` step dispatcher + `PeriodicTimer` cron):
 
 ```csharp
 builder.Services.AddFlowOrchestrator(options =>
@@ -52,7 +71,7 @@ builder.Services.AddFlowOrchestrator(options =>
 ```
 
 > [!NOTE]
-> When using the InMemory runtime you do not call `AddHangfire()` / `AddHangfireServer()` and do not need a Hangfire storage package (`Hangfire.SqlServer`, `Hangfire.InMemory`). The `FlowOrchestrator.Hangfire` package itself is still required — it hosts the `AddFlowOrchestrator` extension method — and pulls in `Hangfire.Core` transitively. Cron parsing is handled by [Cronos](https://github.com/HangfireIO/Cronos).
+> The InMemory and Service Bus runtimes need no Hangfire package of any kind: since 2.0 `AddFlowOrchestrator()` lives in `FlowOrchestrator.Core`, so neither `FlowOrchestrator.Hangfire` nor `Hangfire.Core` is in their dependency graph. Cron parsing is handled by [Cronos](https://github.com/HangfireIO/Cronos).
 
 > [!TIP]
 > Storage and runtime are independent. `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but durable run state.
@@ -316,7 +335,7 @@ app.UseHangfireDashboard("/hangfire");
 app.MapFlowDashboard("/flows");
 ```
 
-### InMemory Runtime (Dev / Testing — no Hangfire server required)
+### InMemory Runtime (Dev / Testing — no Hangfire package required)
 
 ```csharp
 builder.Services.AddFlowOrchestrator(options =>

@@ -188,30 +188,36 @@ Storage is independent — InMemory storage works only for dev / tests, while SQ
 ## Install
 
 ```bash
-dotnet add package FlowOrchestrator.Core
-dotnet add package FlowOrchestrator.Hangfire     # always required — see note below
+dotnet add package FlowOrchestrator.Core          # engine + AddFlowOrchestrator() — always
 
 # Runtime adapter — pick one
-#   Hangfire   → already installed above; call options.UseHangfire()
-dotnet add package FlowOrchestrator.InMemory     # In-process Channel<T> (dev / testing / single-node)
-dotnet add package FlowOrchestrator.ServiceBus   # Azure Service Bus (cloud-native multi-instance)
+dotnet add package FlowOrchestrator.Hangfire      # Hangfire jobs + recurring jobs → options.UseHangfire()
+dotnet add package FlowOrchestrator.InMemory      # In-process Channel<T> (dev / testing / single-node)
+dotnet add package FlowOrchestrator.ServiceBus    # Azure Service Bus (cloud-native multi-instance)
 
 # Storage backend — pick one
-dotnet add package FlowOrchestrator.SqlServer    # or FlowOrchestrator.PostgreSQL
-                                                  # FlowOrchestrator.InMemory ships its own storage too
+dotnet add package FlowOrchestrator.SqlServer     # or FlowOrchestrator.PostgreSQL
+                                                   # FlowOrchestrator.InMemory ships its own storage too
 
 # Optional
-dotnet add package FlowOrchestrator.Dashboard    # REST API + SPA dashboard
-dotnet add package FlowOrchestrator.Testing      # FlowTestHost — in-process integration test helper
-dotnet add package FlowOrchestrator.OpenTelemetry  # one-call OTel: traces + metrics + logs over OTLP
+dotnet add package FlowOrchestrator.Dashboard     # REST API + SPA dashboard
+dotnet add package FlowOrchestrator.Testing       # FlowTestHost — in-process integration test helper
+dotnet add package FlowOrchestrator.OpenTelemetry # one-call OTel: traces + metrics + logs over OTLP
 ```
 
-> **`FlowOrchestrator.Hangfire` is required for every runtime.** The
-> `AddFlowOrchestrator(...)` DI entry point ships in that package, so you reference it even
-> for the InMemory and Service Bus runtimes. What is *optional* is Hangfire itself — unless
-> you call `options.UseHangfire()`, you never call `AddHangfire` / `AddHangfireServer`, and
-> no Hangfire server, storage, or dashboard runs. The "zero infrastructure" claim is about
-> deployed infrastructure, not about the package graph.
+Which packages a host references, by runtime:
+
+| Runtime | Packages | Hangfire in the dependency graph? |
+|---|---|---|
+| Hangfire | `Core` + `Hangfire` + a storage backend (`SqlServer` / `PostgreSQL` / `InMemory`), plus Hangfire's own `Hangfire.AspNetCore` and a Hangfire storage package | Yes — it is the runtime |
+| InMemory | `Core` + `InMemory` (runtime **and** storage), or `InMemory` runtime + `SqlServer` / `PostgreSQL` storage | No |
+| Azure Service Bus | `Core` + `ServiceBus` + a storage backend | No |
+
+> **2.0 change:** `AddFlowOrchestrator(...)` now ships in `FlowOrchestrator.Core` (namespace
+> `Microsoft.Extensions.DependencyInjection`, so no extra `using` is needed). In 1.x it lived in
+> `FlowOrchestrator.Hangfire`, which forced that package — and `Hangfire.Core` — onto InMemory
+> and Service Bus hosts. Hangfire users keep referencing `FlowOrchestrator.Hangfire` exactly as
+> before and keep calling `options.UseHangfire()`; it remains a fully supported runtime.
 
 ---
 
@@ -272,8 +278,7 @@ Open `http://localhost:5000/flows` — trigger the flow, watch steps execute in 
 For local development, prototypes, and single-node side projects — no Hangfire server, no database:
 
 ```csharp
-// Program.cs — needs the FlowOrchestrator.Hangfire package for AddFlowOrchestrator,
-// but no AddHangfire / AddHangfireServer call and no Hangfire storage.
+// Program.cs — packages: FlowOrchestrator.Core + FlowOrchestrator.InMemory. No Hangfire anywhere.
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();           // storage in-process

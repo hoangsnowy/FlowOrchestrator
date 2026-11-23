@@ -1,6 +1,6 @@
 # Storage Backends
 
-FlowOrchestrator's persistence layer is built on four core interfaces. The package you install provides an implementation; you can also swap in your own.
+FlowOrchestrator's persistence layer is built on three core interfaces. The package you install provides an implementation; you can also swap in your own.
 
 ## Core Interfaces
 
@@ -9,9 +9,8 @@ FlowOrchestrator's persistence layer is built on four core interfaces. The packa
 | `IFlowStore` | Flow definitions and enabled/disabled state |
 | `IFlowRunStore` | Run records and step status tracking |
 | `IOutputsRepository` | Step input/output blobs keyed by `(RunId, StepKey)` |
-| `IFlowRepository` | In-process registry of the code-defined `IFlowDefinition` classes; validated by `AddFlowOrchestrator` at startup |
 
-These four interfaces are the **minimum required** to replace the built-in backends — `AddFlowOrchestrator` throws at startup if either `IFlowStore` or `IFlowRepository` is missing.
+These three interfaces are the **minimum required** to replace the built-in backends — `AddFlowOrchestrator` throws if `IFlowStore` is missing. The code-defined flows themselves are not a storage concern: Core builds one `FlowRegistry` from your `AddFlow<T>()` registrations (2.0 removed the per-backend `IFlowRepository`).
 
 ## SQL Server
 
@@ -152,13 +151,12 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ## Custom Backend
 
-Implement the four core interfaces:
+Implement the three core interfaces:
 
 ```csharp
 public sealed class RedisFlowStore : IFlowStore { ... }
 public sealed class RedisFlowRunStore : IFlowRunStore { ... }
 public sealed class RedisOutputsRepository : IOutputsRepository { ... }
-public sealed class RedisFlowRepository : IFlowRepository { ... }
 ```
 
 Register them directly on `options.Services`:
@@ -169,8 +167,7 @@ builder.Services.AddFlowOrchestrator(options =>
     options.Services.AddSingleton<IFlowStore, RedisFlowStore>();
     options.Services.AddSingleton<IFlowRunStore, RedisFlowRunStore>();
     options.Services.AddSingleton<IOutputsRepository, RedisOutputsRepository>();
-    options.Services.AddSingleton<IFlowRepository, RedisFlowRepository>();
-    options.UseHangfire();
+    options.UseHangfire();      // or UseInMemoryRuntime() / UseAzureServiceBusRuntime(...)
 });
 ```
 
