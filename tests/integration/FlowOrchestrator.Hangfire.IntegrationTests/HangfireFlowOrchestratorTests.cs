@@ -184,8 +184,9 @@ public class HangfireFlowOrchestratorTests
     [Fact]
     public async Task RunStepAsync_ExecutesStepAndSavesOutput()
     {
-        // Arrange
-        var sut = CreateSut();
+        // Arrange — the store already holds step1 as Succeeded by the time the
+        // graph continuation reads it, so the continuation must not re-dispatch it.
+        var sut = CreateSut(DefaultRuntimeStore(new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Succeeded }));
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
@@ -248,8 +249,8 @@ public class HangfireFlowOrchestratorTests
     [Fact]
     public async Task RunStepAsync_ReThrowTrue_ThrowsException()
     {
-        // Arrange
-        var sut = CreateSut();
+        // Arrange — step1 is recorded Failed before the continuation reads the graph.
+        var sut = CreateSut(DefaultRuntimeStore(new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Failed }));
         var flow = CreateFlow();
         var ctx = new Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
         var step = new StepInstance("step1", "LogMessage") { RunId = ctx.RunId };
