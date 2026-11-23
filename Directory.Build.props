@@ -11,9 +11,8 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Supported runtimes: .NET 10 (LTS) and .NET 11 (STS). .NET 8 and .NET 9 reached end of
-         support on 2026-11-10 and were dropped in 2.0. global.json pins the SDK to 11.0.x, which
-         is the only SDK that can build net11.0, so there is no per-SDK fallback any more. -->
+    <!-- Supported runtimes: .NET 10 (LTS) and .NET 11 (STS). global.json pins the SDK to 11.0.x,
+         the only SDK that can build net11.0. -->
     <FlowOrchestratorTargetFrameworks>net10.0;net11.0</FlowOrchestratorTargetFrameworks>
     <FlowOrchestratorSampleTargetFramework>net11.0</FlowOrchestratorSampleTargetFramework>
 
@@ -29,7 +28,7 @@
                                        compiler skips XML doc validation entirely.
        4. CS1591 (missing XML doc on public member) is INTENTIONALLY noWarn'd here — CLAUDE.md
           requires doc on new files only; backfilling is opt-in per project. Promote to error
-          on a per-project basis when its docs are 100% covered (Core / Testing already do).
+          on a per-project basis once its docs are 100% covered.
        NU1903/NU1902 are NuGet audit warnings handled by the dedicated audit pipeline; they
        must not break local builds because they fire on transitive dependencies we cannot fix
        without an upstream release.
@@ -41,13 +40,6 @@
     <WarningsNotAsErrors>$(WarningsNotAsErrors);CS1591;NU1903;NU1902</WarningsNotAsErrors>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
-
-  <!--
-    Newtonsoft.Json pin moved to Directory.Packages.props as a GlobalPackageReference
-    so Central Package Management owns every version. The reason we still ship it at
-    all (despite being on STJ): Hangfire.Core pulls in 11.0.1, which has a known
-    high-severity ReDoS vulnerability — pinning to 13.0.4 forces a safe transitive.
-  -->
 
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Visible="false" />
