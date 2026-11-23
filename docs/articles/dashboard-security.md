@@ -18,6 +18,38 @@ breaking automation.
 Webhook receive endpoints (`POST /flows/api/webhook/{slug}`) are **never** challenged by either; they keep
 their webhook secret / HMAC protection ([Webhook hardening](webhook-hardening.md)).
 
+## No authentication configured
+
+With neither Basic Auth nor identity sign-in configured, what an anonymous caller may do depends on the
+host environment:
+
+| Host environment | Anonymous callers | Startup log |
+|---|---|---|
+| `Development` | full operator access (read + change), secrets shown | Warning, EventId `4105` |
+| anything else (`Production`, `Staging`, …) | **read-only**: state-changing calls answer `403`, secrets masked as for a viewer | Error, EventId `4103` |
+| anything else, with `AllowAnonymousOperators: true` | full operator access, secrets shown | Error, EventId `4104` |
+
+Read-only means exactly what a signed-in `flow-viewer` gets: trigger, rerun, retry, cancel, signal,
+enable / disable and schedule changes are refused with `403`, and flow manifests, run trigger bodies and
+step inputs / outputs are returned with secret-looking values (webhook secrets, HMAC keys, …) masked. The
+page shows an **Anonymous · View only** badge and hides the state-changing buttons.
+
+```json
+"FlowDashboard": {
+  "AllowAnonymousOperators": true
+}
+```
+
+> [!WARNING]
+> `AllowAnonymousOperators` gives **everyone who can reach the dashboard** operator rights: they can start,
+> rerun and cancel flows, deliver signals, change schedules and read webhook secrets. Only set it when
+> access is already restricted in front of the dashboard (a private network, an authenticating reverse
+> proxy, host-level authorization on the mapped endpoints). Configuring Basic Auth or identity sign-in is
+> the better fix.
+
+The environment is read from the host's `IHostEnvironment` (`ASPNETCORE_ENVIRONMENT` /
+`DOTNET_ENVIRONMENT`); a host that registers none is treated as non-`Development`.
+
 ## Keycloak (OpenID Connect)
 
 The dashboard does not register an authentication handler. You register cookie + OIDC in the host and tell
