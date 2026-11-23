@@ -29,28 +29,37 @@ public sealed class SqlWebhookReplayStore : IWebhookReplayStore
         DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
-        // INSERT … WHERE NOT EXISTS — primary key collision returns 0 rows on replay.
-        // The PK on (FlowId, TriggerKey, Nonce) makes the insert atomic so two
-        // concurrent inserters race correctly: at most one wins.
+        // INSERT … WHERE NOT EXISTS returns 0 rows on a replay. Without a lock on the probe two
+        // concurrent deliveries of one nonce both pass NOT EXISTS and the loser throws a PK
+        // violation (a 500 to the webhook caller instead of the replay verdict). UPDLOCK, HOLDLOCK
+        // makes the second inserter block until the first commits and then see the row; a
+        // duplicate-key error that still slips through is reported as "already seen".
         await using var conn = new SqlConnection(_connectionString);
-        var inserted = await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO [WebhookReplayNonces] ([FlowId], [TriggerKey], [Nonce], [ExpiresAt])
-            SELECT @FlowId, @TriggerKey, @Nonce, @ExpiresAt
-            WHERE NOT EXISTS (
-                SELECT 1 FROM [WebhookReplayNonces]
-                WHERE [FlowId] = @FlowId AND [TriggerKey] = @TriggerKey AND [Nonce] = @Nonce
-            );
-            """,
-            new
-            {
-                FlowId = flowId,
-                TriggerKey = triggerKey,
-                Nonce = nonce,
-                ExpiresAt = expiresAt,
-            },
-            cancellationToken: ct));
-        return inserted == 1;
+        try
+        {
+            var inserted = await conn.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO [WebhookReplayNonces] ([FlowId], [TriggerKey], [Nonce], [ExpiresAt])
+                SELECT @FlowId, @TriggerKey, @Nonce, @ExpiresAt
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM [WebhookReplayNonces] WITH (UPDLOCK, HOLDLOCK)
+                    WHERE [FlowId] = @FlowId AND [TriggerKey] = @TriggerKey AND [Nonce] = @Nonce
+                );
+                """,
+                new
+                {
+                    FlowId = flowId,
+                    TriggerKey = triggerKey,
+                    Nonce = nonce,
+                    ExpiresAt = expiresAt,
+                },
+                cancellationToken: ct));
+            return inserted == 1;
+        }
+        catch (SqlException ex) when (SqlUniqueViolation.Matches(ex))
+        {
+            return false;
+        }
     }
 
     /// <inheritdoc/>
