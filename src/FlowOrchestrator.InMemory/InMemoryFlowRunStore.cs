@@ -251,6 +251,8 @@ public sealed class InMemoryFlowRunStore :
         var idPrefix = text is not null && textId is null && RunSearchQuery.IsRunIdPrefix(text) ? text : null;
 
         var matches = new List<FlowRunRecord>();
+        // foreach, not .Where(): the predicate captures text/textId/idPrefix/query, so a lambda allocates a
+        // closure per search over every stored run; CLAUDE.md hot-path rule (no LINQ with a closure in a loop).
         foreach (var run in candidates)
         {
             if (!MatchesNonWindowFilters(run, query))

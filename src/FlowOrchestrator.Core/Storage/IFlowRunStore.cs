@@ -145,6 +145,8 @@ public interface IFlowRunStore
             query.IncludeStepPayloads, query.StartedFrom, startedTo).ConfigureAwait(false);
 
         var rows = new List<FlowRunRecord>(Math.Min(runs.Count, take + 1));
+        // foreach, not .Where(): two captured filters (runId, cursor position) would allocate a closure on
+        // every search call through this default implementation; CLAUDE.md prefers the loop.
         foreach (var run in runs)
         {
             if (query.RunId is { } runId && run.Id != runId)

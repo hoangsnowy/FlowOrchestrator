@@ -184,6 +184,8 @@ internal sealed partial class SqlRunSearchIndexBackfillService : BackgroundServi
                 tokens += Write(writer, set, RunSearchTokenSource.Trigger, run.Id, run.StartedAt);
             }
 
+            // foreach, not .Where(): the guard also yields startedAt (TryGetValue out value) that the body
+            // needs; a Where + second lookup would hash every key twice per row of the backfill batch.
             foreach (var step in steps)
             {
                 if (!startedAtById.TryGetValue(step.RunId, out var startedAt))

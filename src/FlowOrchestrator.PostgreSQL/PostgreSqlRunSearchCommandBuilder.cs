@@ -117,17 +117,12 @@ internal static class PostgreSqlRunSearchCommandBuilder
         }
 
         // 2. Run columns (substring, inside the window), plus the correlated step probe for deep search.
-        string runMatch;
-        if (text.Contains('|', StringComparison.Ordinal))
-        {
-            // The expression joins the columns with '|': match column by column so a term cannot span two.
-            runMatch = "(lower(fr.id::text) LIKE @LowerLike OR lower(fr.flow_name) LIKE @LowerLike OR lower(fr.trigger_key) LIKE @LowerLike"
-                + " OR lower(fr.status) LIKE @LowerLike OR lower(fr.background_job_id) LIKE @LowerLike)";
-        }
-        else
-        {
-            runMatch = RunSearchExpression("fr.") + " LIKE @LowerLike";
-        }
+        // The expression joins the columns with '|': a term containing '|' is matched column by column so it
+        // cannot span two columns.
+        var runMatch = text.Contains('|', StringComparison.Ordinal)
+            ? "(lower(fr.id::text) LIKE @LowerLike OR lower(fr.flow_name) LIKE @LowerLike OR lower(fr.trigger_key) LIKE @LowerLike"
+                + " OR lower(fr.status) LIKE @LowerLike OR lower(fr.background_job_id) LIKE @LowerLike)"
+            : RunSearchExpression("fr.") + " LIKE @LowerLike";
 
         var match = runMatch;
         if (query.IncludeStepPayloads)
@@ -204,6 +199,8 @@ internal static class PostgreSqlRunSearchCommandBuilder
         foreach (var set in rowSets) capacity += set.Count;
         var seen = new HashSet<Guid>(capacity);
         var all = new List<FlowRunRecord>(capacity);
+        // foreach, not .Where(): the filter is a HashSet.Add side effect (first occurrence wins across the
+        // id-prefix and text row sets), which a lambda would hide; CLAUDE.md prefers the loop here.
         foreach (var set in rowSets)
         {
             foreach (var run in set)

@@ -241,6 +241,8 @@ internal static class SqlRunSearchCommandBuilder
         foreach (var set in rowSets) capacity += set.Count;
         var seen = new HashSet<Guid>(capacity);
         var all = new List<FlowRunRecord>(capacity);
+        // foreach, not .Where(): the filter is a HashSet.Add side effect (first occurrence wins across the
+        // id-prefix and text row sets), which a lambda would hide; CLAUDE.md prefers the loop here.
         foreach (var set in rowSets)
         {
             foreach (var run in set)
