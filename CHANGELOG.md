@@ -22,6 +22,62 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   of uppercase pills, and the DAG / Gantt colours now follow the dark theme. No API, route or JSON
   change; new tokens are listed in `DESIGN.md` §10.
 
+### Changed — run search is index-backed on SQL Server / Azure SQL
+
+Implements the SQL Server part of `docs/benchmarks/run-search-2026-11-23.md` (200k runs / 2M steps,
+measured on the prototypes): quick search **88-178 ms → 5-8 ms**, an 8-character run id from the run list
+found **at any age** in one index seek, deep (step payload) search **14.5 s → ~1.4 s** with no schema
+change, run-list page 2,000 **189 → 32 ms** with the new cursor, and the run-list total **10.7 → 1.1 ms**
+when capped. Re-measurement of the shipped code is pending. PostgreSQL search is unchanged in this
+release (its measurements are pending); it implements the new cursor and cap.
+
+#### Read before upgrading
+
+- **Case-insensitive matching is now binary after lower-casing on SQL Server** (`LOWER(col) COLLATE
+  Latin1_General_100_BIN2 LIKE @lowerTerm`). Identifiers, codes and ASCII text match exactly as before.
+  Linguistic equivalences of the database's `CI_AS` collation no longer apply: the search is **accent-
+  and width-sensitive** (`é` ≠ `e`, `ß` ≠ `ss`, full-width ≠ half-width).
+- **A hex-shaped term (4-35 characters of `0-9a-f` and `-`) also matches run ids that start with it,
+  regardless of the search window** (SQL Server and in-memory). Searching `bbdafe3e` now finds that
+  60-day-old run instead of nothing. The window still bounds every other kind of match.
+- **Schema (SQL Server, additive):** two non-persisted computed columns on `FlowRuns` (`IdText`,
+  `RunSearchText`, metadata-only) and two indexes (`IX_FlowRuns_IdText`,
+  `IX_FlowRuns_StartedAt_Search`, ~56 MB per 200k runs). On Azure SQL Database, Managed Instance and
+  Enterprise/Developer the indexes build **online in the background** after startup; on other editions
+  they build at startup while `FlowRuns` has at most 2M rows, and above that a warning names the two
+  statements to run in a maintenance window. Search works (more slowly) until they exist. 1.34.x keeps
+  working against the upgraded database. See
+  [Migrating to 2.0 → Database](docs/articles/migrating-to-2.0.md#step-8--database).
+- **Indexed computed columns need the standard `SET` options** (`QUOTED_IDENTIFIER`, `ANSI_NULLS`,
+  `ANSI_PADDING`, `ANSI_WARNINGS`, `CONCAT_NULL_YIELDS_NULL` ON) on any connection that writes
+  `FlowRuns`. SqlClient and SSMS set them; `sqlcmd` without `-I` does not — scripts that insert or update
+  `FlowRuns` must run with `QUOTED_IDENTIFIER ON`.
+- **Run-list order gained a tie-break:** `StartedAt DESC, Id` on every provider (runs that started in the
+  same tick are now in a stable order).
+- **Dashboard total is capped:** `FlowDashboardOptions.RunListTotalCountCap` (default 10,000; `0` counts
+  exactly). Above it `/api/runs` returns `total: 10000, totalCapped: true` and the run list shows
+  "10,000+".
+
+#### Added
+
+- `RunSearchQuery.After` (`RunSearchCursor`: `StartedAt` + `Id`, opaque base64url `Encode()` /
+  `TryParse()`), `RunSearchQuery.TotalCountCap`, `RunSearchPage.NextCursor`,
+  `RunSearchPage.TotalIsLowerBound`, `RunSearchPage.FromRows`, `RunSearchQuery.IsRunIdPrefix`. `Skip`
+  still works. `GET /api/runs` accepts `after=` and returns `nextCursor` / `totalCapped`; the SPA pages
+  forward by cursor, so a page no longer shifts while new runs start.
+- **Experimental, opt-in:** `options.UseRunSearchIndex()` — a token index for deep search on SQL Server
+  (`FlowRunSearchTokens`; the prototype measured 0.7-2.3 ms against 14.5 s / 334 s, ~943 MB per 200k
+  runs). Written in the run-start / step-completion round trip as a best-effort statement, back-filled
+  newest-first in the background (resumable, one replica at a time); payload and error text match by
+  **token prefix** instead of substring. Its write-path cost is **not yet measured**; read
+  `RunSearchIndexOptions` before enabling it. Requires database compatibility level 130+, and must be
+  enabled on every instance that writes runs.
+- `IRunSearchIndex` (+ `RunSearchCapabilities`, `RunSearchIndexQuery`, `RunSearchDocument`,
+  `StepSearchDocument`, `RunSearchTokenizer`): plug an external engine (Full-Text Search, Azure AI
+  Search, Elasticsearch) into the SQL Server store's deep search. SQL Server Full-Text Search is **not**
+  built in (22% extra storage, asynchronous indexing, hyphenated ids split into common words — see the
+  benchmark doc).
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates

@@ -351,3 +351,40 @@ retention. `SearchRunsAsync` hydrates the page with a primary-key `IN`. Built-in
 
 See `tests/benchmarks/FlowOrchestrator.SearchBench/README.md`; `tables.py results/timings.tsv` regenerates the
 tables above.
+
+## Implementation (2.0, SQL Server) — what shipped and what is still to measure
+
+Branch `perf/2.0-run-search`. Everything above was measured on **prototype** query text
+(`MsSqlBench.Build`). The shipped text (`SqlRunSearchCommandBuilder`) follows the winning candidates,
+with these differences — each needs the re-measurement listed below before its number is quoted as
+"after":
+
+| Shipped | Differs from the measured candidate | Why |
+|---|---|---|
+| Every `LIKE` is `LOWER(col) COLLATE Latin1_General_100_BIN2 LIKE @LowerLike` (run columns, step columns, legacy `GetRunsPageAsync`) | candidate `collate-deep` rewrote only the step predicates | one semantic everywhere |
+| `IX_FlowRuns_StartedAt_Search (StartedAt DESC) INCLUDE (RunSearchText, FlowId, Status)` | candidate included `RunSearchText` only | the index is hinted, so a flow / status filter must not cost a key lookup per scanned row |
+| Id prefix: own statement first, merged in C# (`SqlGuid` order) | measured as the seek alone (6 logical reads), not as a two-statement batch | the measured `IN (… UNION …)` shape regressed rare terms 88 → 505 ms |
+| `@IdPrefix` sent as `VARCHAR` | prototype sent `NVARCHAR` | `IdText` is `CHAR(36)`; an `NVARCHAR` parameter converts the column and can turn the seek into a scan under a `SQL_*` collation |
+| Keyset `ORDER BY StartedAt DESC, Id` with the `OR` predicate | same as measured (`mssql-keyset`) | — |
+| Capped count `COUNT(*)` over `TOP (cap + 1)` | same as measured | — |
+| Token table: no `Source = Run` rows (run columns are matched by `RunSearchText`) | prototype stored 9 run tokens per run | saves ~11% of the table; quick search keeps substring semantics |
+| Token insert: separate statement **after** the step's `COMMIT`, same round trip, `sp_executesql` in `TRY…CATCH` | doc proposed folding it into the step transaction | with `IGNORE_DUP_KEY`, concurrent steps of one run inserting the same token wait on each other's key locks; inside the step transaction that wait would hold the step's row locks. Cost: one extra log flush per step completion, **not measured** |
+| Deep search with tokens: run columns by substring **plus** token probe; `LIKE` probe kept for runs at or before the back-fill cursor | prototype was token-only | results stay a superset of quick search and complete while the back-fill runs |
+
+### Still to measure (needs Docker; harness commands)
+
+```bash
+cd tests/benchmarks/FlowOrchestrator.SearchBench
+dotnet run -c Release -- mssql-seed 200000                  # if the container is new; BEFORE = the "shipped" columns above
+dotnet run -c Release -- mssql-migrate tokens               # shipped migrator: startup-blocked time + online index build time
+dotnet run -c Release -- mssql-base quick                   # AFTER: quick search, id prefix, capped count (keyset text = mssql-keyset)
+dotnet run -c Release -- mssql-base deep                    # AFTER: deep search with BIN2 LIKE (token index not used by this path)
+dotnet run -c Release -- mssql-backfill 500                 # shipped back-fill duration + token rows at 200k runs
+dotnet run -c Release -- mssql-write baseline 200           # per-step write cost without the token index
+dotnet run -c Release -- mssql-write tokens 200 shipped-tokens   # same with UseRunSearchIndex(): compare StartRunAsync / RecordStepCompleteAsync
+```
+
+`mssql-base` calls `SqlFlowRunStore.BuildSearchRunsCommand`, which builds against the complete schema;
+after `mssql-migrate` it measures exactly what the store sends. Not measured at all yet: deep search
+through the token table **as composed by the store** (`SqlFlowRunStore.SearchRunsAsync` with the token
+index), the `TOP`-over-tokens shape for very common prefixes, and the orphan sweep at 16M token rows.
