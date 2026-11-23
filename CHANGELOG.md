@@ -14,6 +14,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `IFlowRetentionStore` registered by `UseInMemory()`: each sweep drops the outputs and events of the runs
   the run store purged. Affects `UseInMemory()` storage only; SQL Server and PostgreSQL already deleted
   these rows with their run.
+- **SQL Server / PostgreSQL: `@triggerHeaders()['name']` was case-sensitive after the first step.** The
+  entry step resolved headers case-insensitively, but every later step reads them back from storage, and
+  both SQL stores rebuilt them into a case-sensitive dictionary — so `@triggerHeaders()['x-request-id']`
+  for a request sent with `X-Request-Id` worked in the entry step and returned `null` in every step after
+  it (and in `When` clauses and `ForEach` sources). Stored headers are now rehydrated case-insensitively.
+  Affects SQL Server and PostgreSQL storage on every runtime; InMemory storage was not affected.
 
 ## [1.34.2] - 2026-11-23
 
