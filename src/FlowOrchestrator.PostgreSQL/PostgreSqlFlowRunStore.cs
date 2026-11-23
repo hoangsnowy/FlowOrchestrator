@@ -480,6 +480,12 @@ public sealed class PostgreSqlFlowRunStore :
         DateTimeOffset until,
         Guid? flowId = null)
     {
+        // Npgsql binds DateTimeOffset to timestamptz only at offset 0 and throws otherwise; the
+        // dashboard forwards whatever offset the caller sent, which surfaced as a 500. Same instant,
+        // normalised to UTC, as SearchRunsAsync already does for its window.
+        since = since.ToUniversalTime();
+        until = until.ToUniversalTime();
+
         await using var conn = new NpgsqlConnection(_connectionString);
         var rows = (await conn.QueryAsync<(DateTimeOffset StartedAt, string Status, double? DurationMs)>(
             $@"SELECT started_at AS ""StartedAt"", status AS ""Status"",
@@ -1012,7 +1018,10 @@ public sealed class PostgreSqlFlowRunStore :
             ErrorMessage = step.ErrorMessage,
             JobId = step.JobId,
             StartedAt = step.StartedAt,
-            CompletedAt = step.CompletedAt
+            CompletedAt = step.CompletedAt,
+            // Carry the When-clause trace too, so a skipped step without attempt history still shows
+            // "Why skipped" in run detail — matching the SQL Server backend.
+            EvaluationTraceJson = step.EvaluationTraceJson
         };
     }
 
