@@ -414,7 +414,6 @@ public sealed partial class FlowOrchestratorEngine
             return false;
         }
 
-
         if (!await _runtimeStore.TryClaimStepAsync(ctx.RunId, stepKey).ConfigureAwait(false))
         {
             return false;
