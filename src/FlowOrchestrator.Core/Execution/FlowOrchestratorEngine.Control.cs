@@ -382,6 +382,7 @@ public sealed partial class FlowOrchestratorEngine
 
         if (runningKeys is not null)
         {
+            // O(1): FrozenDictionary lookup (1.x fetched every registered flow and scanned it).
             if (!_flows.TryGetFlow(run.FlowId, out var flow))
             {
                 return false;
