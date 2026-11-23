@@ -24,6 +24,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
+- Includes the fix released in 1.34.4 (see the `[1.34.4]` section below): GHSA-5mx6-chp3-36c4, webhook
+  replay protection judges freshness from the signed timestamp. Its "Read before upgrading" notes apply.
 - Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):
   GHSA-g5jp-pqw5-wrmj (unauthenticated dashboards are read-only outside `Development`),
   GHSA-358q-p9gq-3m6p (dashboard attribute encoding) and GHSA-8248-pg9c-cp7c (step inputs resolved in a
@@ -248,6 +250,41 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.4] - 2026-11-23
+
+Security release for the 1.34 line (.NET 8 / 9 / 10). Webhook replay protection trusted an unsigned
+timestamp header for signature schemes that sign their own timestamp (Stripe, Slack, Mailgun), so a captured
+delivery could be replayed indefinitely. Only hosts that run the webhook pipeline in `Enforce` or `Audit`
+with replay protection enabled are affected.
+
+### Security
+
+- **Webhook replay protection judges freshness from the signed timestamp**
+  ([GHSA-5mx6-chp3-36c4](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-5mx6-chp3-36c4)). For signature schemes that
+  sign their own timestamp (Stripe `t=`, Slack, Mailgun, and custom `TimestampDotBody` /
+  `ColonDelimited` specs), the replay gate read the unsigned `X-Webhook-Timestamp` header instead and
+  derived the replay key from it. Anyone holding a captured delivery could replay it indefinitely by
+  adding a fresh `X-Webhook-Timestamp`, and a genuine Stripe delivery — which never sends that header —
+  was rejected as `missing_timestamp` under `Enforce`. Once a signature is verified, the gate now uses
+  only signed material: the signed timestamp for the skew check, and a replay key built from the signed
+  timestamp and body (or the signed token for Mailgun). Unsigned timestamp and nonce headers are ignored.
+- Out-of-range timestamps (`X-Webhook-Timestamp: 99999999999999`) are rejected as `invalid_timestamp`
+  instead of failing the request with a 500.
+
+#### Read before upgrading
+
+- **Body-only signature schemes (GitHub, Bitbucket, Shopify, …) with replay protection** no longer use
+  an unsigned delivery-id header (`webhookNonceHeader`, e.g. `X-GitHub-Delivery`) as the replay key: the
+  key is the body hash, held for `2 × webhookReplayToleranceSeconds`. Two *different* deliveries with
+  byte-identical bodies inside that window are now treated as a replay (409). These schemes sign no
+  timestamp, so replay protection cannot reach beyond that window for them.
+- `WebhookSignatureResult` gains `AuthenticatedTimestamp` / `AuthenticatedNonce`, and
+  `ReplayProtectionGate` a `EvaluateAsync` overload taking them. Custom `IWebhookSignatureVerifier`
+  implementations that sign a timestamp should set `AuthenticatedTimestamp` on success; otherwise their
+  requests are treated like a body-only scheme.
+- Docs: `webhook-hardening.md` said `Off` mode still records violations; it records nothing (use
+  `Audit`). It also named a non-existent `AddFlowWebhookSecurity` method.
 
 ## [1.34.3] - 2026-11-23
 
