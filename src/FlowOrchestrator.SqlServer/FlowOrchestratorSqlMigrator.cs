@@ -10,39 +10,269 @@ namespace FlowOrchestrator.SqlServer;
 /// <c>FlowStepAttempts</c>, <c>FlowOutputs</c>, and related tables if they do not already exist.
 /// Safe to run on every startup — all statements use <c>IF NOT EXISTS</c> guards.
 /// </summary>
-public sealed class FlowOrchestratorSqlMigrator : IHostedService
+/// <remarks>
+/// <para><b>Run-search structures (2.0).</b> Two non-persisted computed columns on <c>FlowRuns</c>
+/// (<c>IdText</c>, <c>RunSearchText</c>) are added synchronously — a metadata-only change, no row is
+/// rewritten. Their two indexes (<c>IX_FlowRuns_IdText</c>, <c>IX_FlowRuns_StartedAt_Search</c>, about
+/// 56 MB per 200k runs, 0.9 s to build measured) are built:</para>
+/// <list type="bullet">
+/// <item>in the background with <c>ONLINE = ON</c> on editions that support it (Azure SQL Database,
+/// Managed Instance, Enterprise / Developer) — startup is not delayed and writers are not blocked;</item>
+/// <item>synchronously (offline) on other editions while <c>FlowRuns</c> has at most
+/// <see cref="OfflineIndexBuildRowLimit"/> rows;</item>
+/// <item>not at all above that on editions without online builds: a warning names the two statements to
+/// run in a maintenance window.</item>
+/// </list>
+/// <para>Until an index exists, <see cref="SqlFlowRunStore"/> uses query shapes that do not need it, so
+/// search stays correct, only slower.</para>
+/// <para>With <c>UseRunSearchIndex()</c> the token tables are created as well (empty; the back-fill runs
+/// in the background).</para>
+/// </remarks>
+public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDisposable
 {
+    /// <summary>
+    /// Largest <c>FlowRuns</c> row count for which the search indexes are built synchronously and offline
+    /// on an edition without online index builds (roughly ten seconds of startup on such a table).
+    /// </summary>
+    public const long OfflineIndexBuildRowLimit = 2_000_000;
+
     private readonly string _connectionString;
     private readonly ILogger<FlowOrchestratorSqlMigrator> _logger;
+    private readonly bool _runSearchIndexEnabled;
+    private readonly CancellationTokenSource _stopping = new();
+    private Task _backgroundIndexBuild = Task.CompletedTask;
 
+    /// <summary>Creates the migrator without the opt-in run-search token tables.</summary>
+    /// <param name="connectionString">The FlowOrchestrator database.</param>
+    /// <param name="logger">Logger.</param>
     public FlowOrchestratorSqlMigrator(string connectionString, ILogger<FlowOrchestratorSqlMigrator> logger)
+        : this(connectionString, logger, runSearchIndexEnabled: false)
+    {
+    }
+
+    /// <summary>Creates the migrator.</summary>
+    /// <param name="connectionString">The FlowOrchestrator database.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="runSearchIndexEnabled">Also create the run-search token tables (<c>UseRunSearchIndex()</c>).</param>
+    public FlowOrchestratorSqlMigrator(string connectionString, ILogger<FlowOrchestratorSqlMigrator> logger, bool runSearchIndexEnabled)
     {
         _connectionString = connectionString;
         _logger = logger;
+        _runSearchIndexEnabled = runSearchIndexEnabled;
     }
 
+    /// <summary>The background build of the run-search indexes, if one was started; completes when it ends.</summary>
+    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
+
+    /// <summary>Applies the schema; starts the background index build where supported.</summary>
+    /// <param name="cancellationToken">Host start-up cancellation.</param>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Running FlowOrchestrator SQL migrations...");
+        LogMigrationsStarting();
         try
         {
             await using var conn = new SqlConnection(_connectionString);
             await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = MigrationSql;
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = MigrationSql;
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-            _logger.LogInformation("FlowOrchestrator SQL migrations completed.");
+            // Separate batch: the computed columns reference FlowRuns columns, which must exist when it compiles.
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = RunSearchColumnsSql + (_runSearchIndexEnabled ? RunSearchTokenTablesSql : string.Empty);
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await EnsureRunSearchIndexesAsync(conn, cancellationToken).ConfigureAwait(false);
+            LogMigrationsCompleted();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "FlowOrchestrator SQL migration failed.");
+            LogMigrationsFailed(ex);
             throw;
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    /// <summary>Cancels a background index build that is still running (SQL Server rolls it back; the next start retries).</summary>
+    /// <param name="cancellationToken">Host shutdown budget.</param>
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopping.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await _backgroundIndexBuild.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown budget exhausted: the server rolls the build back on its own.
+        }
+    }
+
+    private async Task EnsureRunSearchIndexesAsync(SqlConnection conn, CancellationToken cancellationToken)
+    {
+        await using var probe = conn.CreateCommand();
+        probe.CommandText = RunSearchIndexProbeSql;
+        int edition, compatibility;
+        long rows;
+        bool missing;
+        await using (var reader = await probe.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            edition = reader.GetInt32(0);
+            rows = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+            missing = reader.GetInt32(2) > 0;
+            compatibility = reader.GetInt32(3);
+        }
+
+        if (_runSearchIndexEnabled && compatibility < 130)
+            LogTokenIndexNeedsCompatibilityLevel(compatibility);
+
+        if (!missing)
+            return;
+
+        if (SupportsOnlineIndexBuild(edition))
+        {
+            LogBuildingIndexesOnline(rows);
+            _backgroundIndexBuild = Task.Run(() => BuildIndexesInBackgroundAsync(_stopping.Token), CancellationToken.None);
+            return;
+        }
+
+        if (rows <= OfflineIndexBuildRowLimit)
+        {
+            await using var build = conn.CreateCommand();
+            build.CommandText = BuildRunSearchIndexesSql(online: false);
+            build.CommandTimeout = 600;
+            await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        LogIndexesSkipped(rows, BuildRunSearchIndexesSql(online: false));
+    }
+
+    private async Task BuildIndexesInBackgroundAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var build = conn.CreateCommand();
+            build.CommandText = BuildRunSearchIndexesSql(online: true);
+            build.CommandTimeout = 0;
+            await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            LogIndexesBuilt();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host stopping: retried on the next start.
+        }
+        catch (SqlException ex)
+        {
+            // Another replica building the same index, or a transient failure: search keeps its fallback
+            // shapes, and the next start retries.
+            LogIndexBuildFailed(ex);
+        }
+    }
+
+    /// <inheritdoc/>
+    public void Dispose() => _stopping.Dispose();
+
+    /// <summary>Azure SQL Database (5), Managed Instance (8) and Enterprise / Developer / Evaluation (3) build indexes online.</summary>
+    internal static bool SupportsOnlineIndexBuild(int engineEdition) => engineEdition is 3 or 5 or 8;
+
+    /// <summary>The DDL for the run-search indexes, each guarded so a partial earlier build is completed.</summary>
+    internal static string BuildRunSearchIndexesSql(bool online)
+    {
+        var with = online ? " WITH (ONLINE = ON)" : string.Empty;
+        return $"""
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowRuns_IdText' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+                CREATE INDEX [IX_FlowRuns_IdText] ON [FlowRuns]([IdText]){with};
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowRuns_StartedAt_Search' AND object_id = OBJECT_ID(N'[FlowRuns]'))
+                CREATE INDEX [IX_FlowRuns_StartedAt_Search] ON [FlowRuns]([StartedAt] DESC)
+                INCLUDE ([RunSearchText], [FlowId], [Status]){with};
+            """;
+    }
+
+    private const string RunSearchIndexProbeSql = """
+        SELECT
+            CAST(SERVERPROPERTY('EngineEdition') AS INT),
+            (SELECT CAST(SUM(p.rows) AS BIGINT) FROM sys.partitions AS p WHERE p.object_id = OBJECT_ID(N'[FlowRuns]') AND p.index_id IN (0, 1)),
+            (SELECT COUNT(*) FROM (VALUES (N'IX_FlowRuns_IdText'), (N'IX_FlowRuns_StartedAt_Search')) AS wanted(name)
+             WHERE NOT EXISTS (SELECT 1 FROM sys.indexes AS i WHERE i.name = wanted.name AND i.object_id = OBJECT_ID(N'[FlowRuns]'))),
+            (SELECT CAST(compatibility_level AS INT) FROM sys.databases WHERE database_id = DB_ID());
+        """;
+
+    /// <summary>
+    /// The run-search computed columns. Non-persisted: adding them changes metadata only. <c>RunSearchText</c>
+    /// is lower-cased and binary-collated so a <c>%term%</c> match is one binary compare per row.
+    /// </summary>
+    private const string RunSearchColumnsSql = """
+        IF COL_LENGTH(N'FlowRuns', N'IdText') IS NULL
+            ALTER TABLE [FlowRuns] ADD [IdText] AS CONVERT(CHAR(36), [Id]);
+
+        IF COL_LENGTH(N'FlowRuns', N'RunSearchText') IS NULL
+            ALTER TABLE [FlowRuns] ADD [RunSearchText] AS
+                CAST(LOWER(CONCAT(CONVERT(CHAR(36), [Id]), N'|', [FlowName], N'|', [TriggerKey], N'|', [Status], N'|', [BackgroundJobId])) AS NVARCHAR(800))
+                COLLATE Latin1_General_100_BIN2;
+
+        """;
+
+    /// <summary>The opt-in token table and its back-fill state (one row).</summary>
+    private const string RunSearchTokenTablesSql = """
+        IF OBJECT_ID(N'FlowRunSearchTokens') IS NULL
+            CREATE TABLE [FlowRunSearchTokens] (
+                [Token]     NVARCHAR(64) COLLATE Latin1_General_100_BIN2 NOT NULL,
+                [StartedAt] DATETIMEOFFSET   NOT NULL,
+                [RunId]     UNIQUEIDENTIFIER NOT NULL,
+                [Source]    TINYINT          NOT NULL,
+                CONSTRAINT [PK_FlowRunSearchTokens] PRIMARY KEY CLUSTERED ([Token], [StartedAt] DESC, [RunId], [Source])
+                    WITH (IGNORE_DUP_KEY = ON)
+            );
+
+        IF OBJECT_ID(N'FlowRunSearchIndexState') IS NULL
+            CREATE TABLE [FlowRunSearchIndexState] (
+                [Id]                     TINYINT          NOT NULL CONSTRAINT [PK_FlowRunSearchIndexState] PRIMARY KEY CHECK ([Id] = 1),
+                [EnabledAt]              DATETIMEOFFSET   NOT NULL,
+                [BackfillAfterStartedAt] DATETIMEOFFSET   NULL,
+                [BackfillAfterId]        UNIQUEIDENTIFIER NULL,
+                [BackfillCompletedAt]    DATETIMEOFFSET   NULL
+            );
+
+        BEGIN TRY
+            IF NOT EXISTS (SELECT 1 FROM [FlowRunSearchIndexState] WHERE [Id] = 1)
+                INSERT INTO [FlowRunSearchIndexState] ([Id], [EnabledAt]) VALUES (1, SYSDATETIMEOFFSET());
+        END TRY
+        BEGIN CATCH
+            IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;   -- another replica inserted it first
+        END CATCH
+        """;
+
+    [LoggerMessage(EventId = 7201, Level = LogLevel.Information, Message = "Running FlowOrchestrator SQL migrations...")]
+    private partial void LogMigrationsStarting();
+
+    [LoggerMessage(EventId = 7202, Level = LogLevel.Information, Message = "FlowOrchestrator SQL migrations completed.")]
+    private partial void LogMigrationsCompleted();
+
+    [LoggerMessage(EventId = 7203, Level = LogLevel.Error, Message = "FlowOrchestrator SQL migration failed.")]
+    private partial void LogMigrationsFailed(Exception exception);
+
+    [LoggerMessage(EventId = 7204, Level = LogLevel.Information, Message = "Building the run-search indexes online in the background ({Rows} runs); search uses fallback query shapes until they exist.")]
+    private partial void LogBuildingIndexesOnline(long rows);
+
+    [LoggerMessage(EventId = 7205, Level = LogLevel.Information, Message = "Run-search indexes built.")]
+    private partial void LogIndexesBuilt();
+
+    [LoggerMessage(EventId = 7206, Level = LogLevel.Warning, Message = "Run-search index build failed; search keeps its fallback query shapes and the next start retries.")]
+    private partial void LogIndexBuildFailed(Exception exception);
+
+    [LoggerMessage(EventId = 7207, Level = LogLevel.Warning, Message = "FlowRuns has {Rows} rows and this SQL Server edition cannot build indexes online, so the run-search indexes were not built at startup. Run search works but is slower until you run, in a maintenance window: {Ddl}")]
+    private partial void LogIndexesSkipped(long rows, string ddl);
+
+    [LoggerMessage(EventId = 7208, Level = LogLevel.Warning, Message = "UseRunSearchIndex() needs database compatibility level 130 or later (this database: {CompatibilityLevel}); the token index stays unused and deep search uses LIKE.")]
+    private partial void LogTokenIndexNeedsCompatibilityLevel(int compatibilityLevel);
 
     private const string MigrationSql = """
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowDefinitions')

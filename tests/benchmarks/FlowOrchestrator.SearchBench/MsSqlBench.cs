@@ -46,9 +46,11 @@ public static partial class MsSqlBench
     {
         await using var conn = new SqlConnection(Db);
         using var grid = await conn.QueryMultipleAsync(new CommandDefinition(sql, parameters, commandTimeout: 900));
-        var rows = (await grid.ReadAsync()).Count();
-        if (countsTotal) await grid.ReadSingleAsync<int>();
-        return rows;
+        // Drain every result set: the shipped 2.0 batch may hold an id-prefix and a token statement too.
+        var rows = 0;
+        while (!grid.IsConsumed)
+            rows += (await grid.ReadAsync()).Count();
+        return countsTotal ? rows - 1 : rows;
     }
 
     private static async Task<int> RunAsync(string sql, object? parameters)

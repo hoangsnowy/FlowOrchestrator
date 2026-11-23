@@ -59,7 +59,9 @@ switch (command)
     case "mssql-cand": await MsSqlBench.CandidateAsync(SArg(1, "")); break;
     case "mssql-keyset": await MsSqlBench.KeysetAsync(); break;
     case "mssql-sizes": await MsSqlBench.SizesAsync(); break;
-    case "mssql-write": await WriteBench.MsSqlAsync(SArg(1, "baseline"), Arg(2, 200), tokens: SArg(3, "") == "tokens"); break;
+    case "mssql-write": await WriteBench.MsSqlAsync(SArg(1, "baseline"), Arg(2, 200), tokens: SArg(3, "") == "tokens", shippedTokens: SArg(3, "") == "shipped-tokens"); break;
+    case "mssql-migrate": await MsSqlShipped.MigrateAsync(tokens: SArg(1, "") == "tokens"); break;
+    case "mssql-backfill": await MsSqlShipped.BackfillAsync(Arg(1, 500)); break;
     case "mssql-sql":
     {
         // Ad-hoc capture: mssql-sql "<name>" "<sql>"
@@ -75,7 +77,7 @@ switch (command)
     case "pg-sizes": await PgBench.SizesAsync(); break;
     case "pg-write": await WriteBench.PgAsync(SArg(1, "baseline"), Arg(2, 200), tokens: SArg(3, "") == "tokens"); break;
     default:
-        Console.WriteLine("commands: stats | mssql-seed|mssql-base [quick|deep]|mssql-setup <c>|mssql-tokens|mssql-cand <c>|mssql-keyset|mssql-sizes|mssql-write <label> <runs> [tokens]");
+        Console.WriteLine("commands: stats | mssql-seed|mssql-base [quick|deep]|mssql-setup <c>|mssql-tokens|mssql-cand <c>|mssql-keyset|mssql-sizes|mssql-write <label> <runs> [tokens|shipped-tokens]|mssql-migrate [tokens]|mssql-backfill [batch]");
         Console.WriteLine("          pg-seed|pg-base [quick|deep]|pg-setup <c>|pg-tokens|pg-cand <c>|pg-keyset|pg-sizes|pg-write <label> <runs> [tokens]");
         break;
 }
