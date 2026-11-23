@@ -1,0 +1,247 @@
+### deep output: invoice, 3d old [7d]
+Limit  (cost=5366.33..5377.35 rows=51 width=354) (actual time=62.553..76.389 rows=1.00 loops=1)
+  Buffers: shared hit=1345
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=5366.33..7021.80 rows=7663 width=354) (actual time=62.552..76.386 rows=1.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%INV-001353358%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%INV-001353358%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%INV-001353358%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%INV-001353358%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%INV-001353358%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 16852
+        Index Searches: 1
+        Buffers: shared hit=1345
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=593.04..5362.78 rows=1253 width=16) (actual time=50.142..50.143 rows=1.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''inv'':* <-> ''-001353358'':*'::tsquery)
+                Heap Blocks: exact=1
+                Buffers: shared hit=247
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..592.73 rows=1253 width=0) (actual time=50.052..50.052 rows=1.00 loops=1)
+                      Index Cond: (search_tsv @@ '''inv'':* <-> ''-001353358'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=242
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.223 ms
+Execution Time: 77.842 ms
+
+### deep output: invoice, 60d old [7d]
+Limit  (cost=5366.33..5377.35 rows=51 width=354) (actual time=74.348..74.351 rows=0.00 loops=1)
+  Buffers: shared hit=1342
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=5366.33..7021.80 rows=7663 width=354) (actual time=74.347..74.349 rows=0.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%INV-000466682%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%INV-000466682%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 16853
+        Index Searches: 1
+        Buffers: shared hit=1342
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=593.04..5362.78 rows=1253 width=16) (actual time=47.888..47.891 rows=2.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''inv'':* <-> ''-000466682'':*'::tsquery)
+                Heap Blocks: exact=2
+                Buffers: shared hit=244
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..592.73 rows=1253 width=0) (actual time=47.834..47.834 rows=2.00 loops=1)
+                      Index Cond: (search_tsv @@ '''inv'':* <-> ''-000466682'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=242
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.204 ms
+Execution Time: 75.557 ms
+
+### deep output: orderId, 3d old [7d]
+Limit  (cost=17071.36..17082.38 rows=51 width=354) (actual time=258.164..271.477 rows=1.00 loops=1)
+  Buffers: shared hit=1990
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=17071.36..18726.82 rows=7663 width=354) (actual time=258.163..271.474 rows=1.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 16852
+        Index Searches: 1
+        Buffers: shared hit=1990
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=652.85..17059.56 rows=4552 width=16) (actual time=245.941..246.014 rows=7.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''ord'':* <-> ''-2026'':* <-> ''-0193334'':*'::tsquery)
+                Heap Blocks: exact=1
+                Buffers: shared hit=892
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..651.71 rows=4552 width=0) (actual time=245.778..245.778 rows=7.00 loops=1)
+                      Index Cond: (search_tsv @@ '''ord'':* <-> ''-2026'':* <-> ''-0193334'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=866
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.203 ms
+Execution Time: 275.925 ms
+
+### deep output: common 'express' [7d]
+Limit  (cost=309653.13..309664.15 rows=51 width=354) (actual time=17819.669..17819.808 rows=51.00 loops=1)
+  Buffers: shared hit=3869877 read=760845
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=309653.13..311308.59 rows=7663 width=354) (actual time=17813.560..17813.695 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%express%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%express%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 7
+        Index Searches: 1
+        Buffers: shared hit=3869877 read=760845
+        SubPlan 1
+          ->  Seq Scan on flow_steps fs  (cost=0.00..307068.99 rows=1033489 width=16) (actual time=0.634..17349.201 rows=1037052.00 loops=1)
+                Filter: (search_tsv @@ '''express'':*'::tsquery)
+                Rows Removed by Filter: 963538
+                Buffers: shared hit=3869876 read=760838
+Planning:
+  Buffers: shared read=2
+Planning Time: 0.308 ms
+JIT:
+  Functions: 22
+  Options: Inlining false, Optimization false, Expressions true, Deforming true
+  Timing: Generation 0.864 ms (Deform 0.372 ms), Inlining 0.000 ms, Optimization 0.382 ms, Emission 6.926 ms, Total 8.172 ms
+Execution Time: 17824.629 ms
+
+### deep error: shipment, 3d old [7d]
+Limit  (cost=21825.53..21836.55 rows=51 width=354) (actual time=12.611..26.512 rows=1.00 loops=1)
+  Buffers: shared hit=1221
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=21825.53..23480.99 rows=7663 width=354) (actual time=12.610..26.509 rows=1.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 16852
+        Index Searches: 1
+        Buffers: shared hit=1221
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=587.83..21810.12 rows=5995 width=16) (actual time=0.245..0.246 rows=1.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''shp0000580067'':*'::tsquery)
+                Heap Blocks: exact=1
+                Buffers: shared hit=123
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..586.33 rows=5995 width=0) (actual time=0.237..0.237 rows=1.00 loops=1)
+                      Index Cond: (search_tsv @@ '''shp0000580067'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=122
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.166 ms
+Execution Time: 26.627 ms
+
+### deep error: 'deadlock victim' [7d]
+Limit  (cost=658.82..669.84 rows=51 width=354) (actual time=5.588..17.623 rows=51.00 loops=1)
+  Buffers: shared hit=2372
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=658.82..2314.28 rows=7663 width=354) (actual time=5.586..17.615 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%deadlock victim%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%deadlock victim%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 6894
+        Index Searches: 1
+        Buffers: shared hit=2372
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=586.56..658.35 rows=18 width=16) (actual time=1.755..5.033 rows=1763.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''deadlock'':* & ''victim'':*'::tsquery)
+                Heap Blocks: exact=1756
+                Buffers: shared hit=1885
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..586.55 rows=18 width=0) (actual time=1.581..1.581 rows=1763.00 loops=1)
+                      Index Cond: (search_tsv @@ '''deadlock'':* & ''victim'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=129
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.194 ms
+Execution Time: 17.834 ms
+
+### deep no match 'zq-nomatch-7731' [7d]
+Limit  (cost=675.99..687.01 rows=51 width=354) (actual time=40.562..40.566 rows=0.00 loops=1)
+  Buffers: shared hit=1233
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=675.99..2331.45 rows=7663 width=354) (actual time=40.559..40.562 rows=0.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 16853
+        Index Searches: 1
+        Buffers: shared hit=1233
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=671.56..675.57 rows=1 width=16) (actual time=0.410..0.412 rows=0.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''zq-nomatch'':* <-> ''zq'':* <-> ''nomatch'':* <-> ''7731'':*'::tsquery)
+                Buffers: shared hit=135
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..671.56 rows=1 width=0) (actual time=0.405..0.405 rows=0.00 loops=1)
+                      Index Cond: (search_tsv @@ '''zq-nomatch'':* <-> ''zq'':* <-> ''nomatch'':* <-> ''7731'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=135
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.212 ms
+Execution Time: 40.725 ms
+
+### deep output: invoice, 60d old [all]
+Limit  (cost=5366.33..5377.07 rows=51 width=354) (actual time=516.302..684.804 rows=1.00 loops=1)
+  Buffers: shared hit=12711
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=5366.33..26484.70 rows=100341 width=354) (actual time=516.298..684.798 rows=1.00 loops=1)
+        Filter: (((id)::text ~~* '%INV-000466682%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%INV-000466682%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 201296
+        Index Searches: 1
+        Buffers: shared hit=12711
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=593.04..5362.78 rows=1253 width=16) (actual time=134.230..134.234 rows=2.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''inv'':* <-> ''-000466682'':*'::tsquery)
+                Heap Blocks: exact=2
+                Buffers: shared hit=244
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..592.73 rows=1253 width=0) (actual time=134.187..134.187 rows=2.00 loops=1)
+                      Index Cond: (search_tsv @@ '''inv'':* <-> ''-000466682'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=242
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.215 ms
+Execution Time: 686.202 ms
+
+### deep output: common 'express' [all]
+Limit  (cost=309653.13..309663.86 rows=51 width=354) (actual time=12386.614..12386.724 rows=51.00 loops=1)
+  Buffers: shared hit=3869877 read=760845
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=309653.13..330771.50 rows=100341 width=354) (actual time=12380.976..12381.083 rows=51.00 loops=1)
+        Filter: (((id)::text ~~* '%express%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%express%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 7
+        Index Searches: 1
+        Buffers: shared hit=3869877 read=760845
+        SubPlan 1
+          ->  Seq Scan on flow_steps fs  (cost=0.00..307068.99 rows=1033489 width=16) (actual time=0.445..12053.898 rows=1037052.00 loops=1)
+                Filter: (search_tsv @@ '''express'':*'::tsquery)
+                Rows Removed by Filter: 963538
+                Buffers: shared hit=3869876 read=760838
+Planning:
+  Buffers: shared read=2
+Planning Time: 0.183 ms
+JIT:
+  Functions: 20
+  Options: Inlining false, Optimization false, Expressions true, Deforming true
+  Timing: Generation 0.874 ms (Deform 0.353 ms), Inlining 0.000 ms, Optimization 0.418 ms, Emission 6.504 ms, Total 7.796 ms
+Execution Time: 12390.643 ms
+
+### deep error: 'deadlock victim' [all]
+Limit  (cost=658.82..669.55 rows=51 width=354) (actual time=2.961..13.024 rows=51.00 loops=1)
+  Buffers: shared hit=2372
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=658.82..21777.19 rows=100341 width=354) (actual time=2.960..13.020 rows=51.00 loops=1)
+        Filter: (((id)::text ~~* '%deadlock victim%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%deadlock victim%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 6894
+        Index Searches: 1
+        Buffers: shared hit=2372
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=586.56..658.35 rows=18 width=16) (actual time=1.218..2.605 rows=1763.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''deadlock'':* & ''victim'':*'::tsquery)
+                Heap Blocks: exact=1756
+                Buffers: shared hit=1885
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..586.55 rows=18 width=0) (actual time=1.100..1.100 rows=1763.00 loops=1)
+                      Index Cond: (search_tsv @@ '''deadlock'':* & ''victim'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=129
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.119 ms
+Execution Time: 13.115 ms
+
+### deep no match 'zq-nomatch-7731' [all]
+Limit  (cost=675.99..686.72 rows=51 width=354) (actual time=298.839..298.841 rows=0.00 loops=1)
+  Buffers: shared hit=12602
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=675.99..21794.36 rows=100341 width=354) (actual time=298.837..298.839 rows=0.00 loops=1)
+        Filter: (((id)::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR (ANY (id = (hashed SubPlan 1).col1)))
+        Rows Removed by Filter: 201297
+        Index Searches: 1
+        Buffers: shared hit=12602
+        SubPlan 1
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=671.56..675.57 rows=1 width=16) (actual time=0.364..0.365 rows=0.00 loops=1)
+                Recheck Cond: (search_tsv @@ '''zq-nomatch'':* <-> ''zq'':* <-> ''nomatch'':* <-> ''7731'':*'::tsquery)
+                Buffers: shared hit=135
+                ->  Bitmap Index Scan on ix_flow_steps_search_tsv  (cost=0.00..671.56 rows=1 width=0) (actual time=0.358..0.359 rows=0.00 loops=1)
+                      Index Cond: (search_tsv @@ '''zq-nomatch'':* <-> ''zq'':* <-> ''nomatch'':* <-> ''7731'':*'::tsquery)
+                      Index Searches: 1
+                      Buffers: shared hit=135
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.174 ms
+Execution Time: 298.921 ms
+

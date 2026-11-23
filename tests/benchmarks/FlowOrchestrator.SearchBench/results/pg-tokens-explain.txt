@@ -1,0 +1,327 @@
+### deep output: invoice, 3d old [7d]
+Limit  (cost=483.90..484.03 rows=51 width=354) (actual time=0.039..0.040 rows=1.00 loops=1)
+  Buffers: shared hit=9
+  ->  Sort  (cost=483.90..484.04 rows=57 width=354) (actual time=0.038..0.039 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=9.15..482.24 rows=57 width=354) (actual time=0.032..0.033 rows=1.00 loops=1)
+              Buffers: shared hit=9
+              ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.021..0.022 rows=1.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 32kB
+                    Buffers: shared hit=5
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.018..0.019 rows=1.00 loops=1)
+                          Index Cond: ((token >= 'inv-001353358'::text) AND (token < 'inv-001353359'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'inv-001353358%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=5
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (actual time=0.009..0.009 rows=1.00 loops=1)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.229 ms
+Execution Time: 0.092 ms
+
+### deep output: invoice, 60d old [7d]
+Limit  (cost=483.90..484.03 rows=51 width=354) (actual time=0.032..0.033 rows=0.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=483.90..484.04 rows=57 width=354) (actual time=0.031..0.032 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=9.15..482.24 rows=57 width=354) (actual time=0.024..0.024 rows=0.00 loops=1)
+              Buffers: shared hit=4
+              ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.023..0.023 rows=0.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 32kB
+                    Buffers: shared hit=4
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.022..0.022 rows=0.00 loops=1)
+                          Index Cond: ((token >= 'inv-000466682'::text) AND (token < 'inv-000466683'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'inv-000466682%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=4
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (never executed)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 0
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.259 ms
+Execution Time: 0.094 ms
+
+### deep output: orderId, 3d old [7d]
+Limit  (cost=483.90..484.03 rows=51 width=354) (actual time=0.048..0.048 rows=1.00 loops=1)
+  Buffers: shared hit=9
+  ->  Sort  (cost=483.90..484.04 rows=57 width=354) (actual time=0.047..0.048 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=9.15..482.24 rows=57 width=354) (actual time=0.040..0.041 rows=1.00 loops=1)
+              Buffers: shared hit=9
+              ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.027..0.028 rows=1.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 32kB
+                    Buffers: shared hit=5
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.023..0.024 rows=2.00 loops=1)
+                          Index Cond: ((token >= 'ord-2026-0193334'::text) AND (token < 'ord-2026-0193335'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'ord-2026-0193334%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=5
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (actual time=0.011..0.011 rows=1.00 loops=1)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.242 ms
+Execution Time: 0.115 ms
+
+### deep output: common 'express' [7d]
+Limit  (cost=483.90..484.03 rows=51 width=354) (actual time=0.021..0.022 rows=0.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=483.90..484.04 rows=57 width=354) (actual time=0.021..0.021 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=9.15..482.24 rows=57 width=354) (actual time=0.015..0.016 rows=0.00 loops=1)
+              Buffers: shared hit=4
+              ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.015..0.015 rows=0.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 32kB
+                    Buffers: shared hit=4
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.014..0.014 rows=0.00 loops=1)
+                          Index Cond: ((token >= 'express'::text) AND (token < 'exprest'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'express%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=4
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (never executed)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 0
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.229 ms
+Execution Time: 0.067 ms
+
+### deep error: shipment, 3d old [7d]
+Limit  (cost=483.90..484.03 rows=51 width=354) (actual time=0.034..0.034 rows=1.00 loops=1)
+  Buffers: shared hit=9
+  ->  Sort  (cost=483.90..484.04 rows=57 width=354) (actual time=0.033..0.034 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=9.15..482.24 rows=57 width=354) (actual time=0.027..0.027 rows=1.00 loops=1)
+              Buffers: shared hit=9
+              ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.017..0.017 rows=1.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 32kB
+                    Buffers: shared hit=5
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.015..0.016 rows=1.00 loops=1)
+                          Index Cond: ((token >= 'shp0000580067'::text) AND (token < 'shp0000580068'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'shp0000580067%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=5
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (actual time=0.009..0.009 rows=1.00 loops=1)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.191 ms
+Execution Time: 0.084 ms
+
+### deep error: 'deadlock victim' [7d]
+Limit  (cost=491.70..491.70 rows=1 width=354) (actual time=0.397..0.401 rows=51.00 loops=1)
+  Buffers: shared hit=490
+  ->  Sort  (cost=491.70..491.70 rows=1 width=354) (actual time=0.397..0.399 rows=51.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: top-N heapsort  Memory: 68kB
+        Buffers: shared hit=490
+        ->  Hash Semi Join  (cost=18.44..491.69 rows=1 width=354) (actual time=0.134..0.333 rows=118.00 loops=1)
+              Hash Cond: (fr.id = t_1.run_id)
+              Buffers: shared hit=490
+              ->  Nested Loop  (cost=9.15..482.24 rows=57 width=370) (actual time=0.079..0.267 rows=118.00 loops=1)
+                    Buffers: shared hit=484
+                    ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.069..0.075 rows=118.00 loops=1)
+                          Group Key: t.run_id
+                          Batches: 1  Memory Usage: 40kB
+                          Buffers: shared hit=12
+                          ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.020..0.043 rows=236.00 loops=1)
+                                Index Cond: ((token >= 'deadlock'::text) AND (token < 'deadlocl'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                                Filter: (token ~~ 'deadlock%'::text)
+                                Heap Fetches: 0
+                                Index Searches: 2
+                                Buffers: shared hit=12
+                    ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (actual time=0.001..0.001 rows=1.00 loops=118)
+                          Index Cond: (id = t.run_id)
+                          Index Searches: 118
+                          Buffers: shared hit=472
+              ->  Hash  (cost=8.58..8.58 rows=57 width=16) (actual time=0.046..0.046 rows=118.00 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 14kB
+                    Buffers: shared hit=6
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t_1  (cost=0.56..8.58 rows=57 width=16) (actual time=0.020..0.031 rows=118.00 loops=1)
+                          Index Cond: ((token >= 'victim'::text) AND (token < 'victin'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'victim%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=6
+Planning:
+  Buffers: shared hit=27
+Planning Time: 0.373 ms
+Execution Time: 0.492 ms
+
+### deep no match 'zq-nomatch-7731' [7d]
+Limit  (cost=483.90..484.03 rows=51 width=354) (actual time=0.019..0.020 rows=0.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=483.90..484.04 rows=57 width=354) (actual time=0.019..0.019 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=9.15..482.24 rows=57 width=354) (actual time=0.014..0.014 rows=0.00 loops=1)
+              Buffers: shared hit=4
+              ->  HashAggregate  (cost=8.73..9.30 rows=57 width=16) (actual time=0.014..0.014 rows=0.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 32kB
+                    Buffers: shared hit=4
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=57 width=16) (actual time=0.013..0.013 rows=0.00 loops=1)
+                          Index Cond: ((token >= 'zq-nomatch-7731'::text) AND (token < 'zq-nomatch-7732'::text) AND (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone))
+                          Filter: (token ~~ 'zq-nomatch-7731%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=4
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.30 rows=1 width=354) (never executed)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 0
+Planning:
+  Buffers: shared hit=19
+Planning Time: 0.230 ms
+Execution Time: 0.061 ms
+
+### deep output: invoice, 60d old [all]
+Limit  (cost=5209.80..5209.93 rows=51 width=354) (actual time=0.061..0.062 rows=1.00 loops=1)
+  Buffers: shared hit=9
+  ->  Sort  (cost=5209.80..5211.66 rows=743 width=354) (actual time=0.061..0.061 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=10.86..5185.02 rows=743 width=354) (actual time=0.054..0.055 rows=1.00 loops=1)
+              Buffers: shared hit=9
+              ->  HashAggregate  (cost=10.44..17.82 rows=738 width=16) (actual time=0.039..0.040 rows=1.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 49kB
+                    Buffers: shared hit=5
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=743 width=16) (actual time=0.035..0.035 rows=1.00 loops=1)
+                          Index Cond: ((token >= 'inv-000466682'::text) AND (token < 'inv-000466683'::text))
+                          Filter: (token ~~ 'inv-000466682%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=5
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..7.03 rows=1 width=354) (actual time=0.013..0.013 rows=1.00 loops=1)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.196 ms
+Execution Time: 0.126 ms
+
+### deep output: common 'express' [all]
+Limit  (cost=5209.80..5209.93 rows=51 width=354) (actual time=0.016..0.016 rows=0.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=5209.80..5211.66 rows=743 width=354) (actual time=0.015..0.016 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=10.86..5185.02 rows=743 width=354) (actual time=0.012..0.012 rows=0.00 loops=1)
+              Buffers: shared hit=4
+              ->  HashAggregate  (cost=10.44..17.82 rows=738 width=16) (actual time=0.011..0.012 rows=0.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 49kB
+                    Buffers: shared hit=4
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=743 width=16) (actual time=0.010..0.010 rows=0.00 loops=1)
+                          Index Cond: ((token >= 'express'::text) AND (token < 'exprest'::text))
+                          Filter: (token ~~ 'express%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=4
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..7.03 rows=1 width=354) (never executed)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 0
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.178 ms
+Execution Time: 0.068 ms
+
+### deep error: 'deadlock victim' [all]
+Limit  (cost=5207.68..5207.68 rows=3 width=354) (actual time=4.390..4.396 rows=51.00 loops=1)
+  Buffers: shared hit=7065
+  ->  Sort  (cost=5207.68..5207.68 rows=3 width=354) (actual time=4.390..4.393 rows=51.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: top-N heapsort  Memory: 70kB
+        Buffers: shared hit=7065
+        ->  Hash Semi Join  (cost=28.73..5207.65 rows=3 width=354) (actual time=0.846..4.066 rows=1750.00 loops=1)
+              Hash Cond: (fr.id = t_1.run_id)
+              Buffers: shared hit=7065
+              ->  Nested Loop  (cost=10.86..5185.02 rows=743 width=370) (actual time=0.571..3.597 rows=1750.00 loops=1)
+                    Buffers: shared hit=7043
+                    ->  HashAggregate  (cost=10.44..17.82 rows=738 width=16) (actual time=0.560..0.642 rows=1750.00 loops=1)
+                          Group Key: t.run_id
+                          Batches: 1  Memory Usage: 121kB
+                          Buffers: shared hit=43
+                          ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=743 width=16) (actual time=0.010..0.245 rows=3500.00 loops=1)
+                                Index Cond: ((token >= 'deadlock'::text) AND (token < 'deadlocl'::text))
+                                Filter: (token ~~ 'deadlock%'::text)
+                                Heap Fetches: 0
+                                Index Searches: 1
+                                Buffers: shared hit=43
+                    ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..7.03 rows=1 width=354) (actual time=0.001..0.001 rows=1.00 loops=1750)
+                          Index Cond: (id = t.run_id)
+                          Index Searches: 1750
+                          Buffers: shared hit=7000
+              ->  Hash  (cost=8.58..8.58 rows=743 width=16) (actual time=0.270..0.270 rows=1750.00 loops=1)
+                    Buckets: 2048 (originally 1024)  Batches: 1 (originally 1)  Memory Usage: 99kB
+                    Buffers: shared hit=22
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t_1  (cost=0.56..8.58 rows=743 width=16) (actual time=0.014..0.137 rows=1750.00 loops=1)
+                          Index Cond: ((token >= 'victim'::text) AND (token < 'victin'::text))
+                          Filter: (token ~~ 'victim%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=22
+Planning:
+  Buffers: shared hit=27
+Planning Time: 0.434 ms
+Execution Time: 4.533 ms
+
+### deep no match 'zq-nomatch-7731' [all]
+Limit  (cost=5209.80..5209.93 rows=51 width=354) (actual time=0.019..0.020 rows=0.00 loops=1)
+  Buffers: shared hit=4
+  ->  Sort  (cost=5209.80..5211.66 rows=743 width=354) (actual time=0.019..0.020 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=10.86..5185.02 rows=743 width=354) (actual time=0.013..0.013 rows=0.00 loops=1)
+              Buffers: shared hit=4
+              ->  HashAggregate  (cost=10.44..17.82 rows=738 width=16) (actual time=0.013..0.013 rows=0.00 loops=1)
+                    Group Key: t.run_id
+                    Batches: 1  Memory Usage: 49kB
+                    Buffers: shared hit=4
+                    ->  Index Only Scan using flow_run_search_tokens_pkey on flow_run_search_tokens t  (cost=0.56..8.58 rows=743 width=16) (actual time=0.012..0.012 rows=0.00 loops=1)
+                          Index Cond: ((token >= 'zq-nomatch-7731'::text) AND (token < 'zq-nomatch-7732'::text))
+                          Filter: (token ~~ 'zq-nomatch-7731%'::text)
+                          Heap Fetches: 0
+                          Index Searches: 1
+                          Buffers: shared hit=4
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..7.03 rows=1 width=354) (never executed)
+                    Index Cond: (id = t.run_id)
+                    Index Searches: 0
+Planning:
+  Buffers: shared hit=19
+Planning Time: 0.225 ms
+Execution Time: 0.078 ms
+

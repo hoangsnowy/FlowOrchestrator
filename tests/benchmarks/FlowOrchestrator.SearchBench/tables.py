@@ -61,4 +61,4 @@ for backend in ("mssql", "pg"):
         table("PostgreSQL — quick search", quick,
               [("shipped", "pg-base"), ("uuid range", "pg-uuid-range"), ("trigram search column", "pg-trgm-run"), ("token table", "pg-tokens-quick")])
         table("PostgreSQL — deep search", deep,
-              [("shipped", "pg-base"), ("windowed EXISTS", "pg-trgm-deep-windowed"), ("tsvector", "pg-tsv"), ("token table", "pg-tokens")])
+              [("shipped (with output trigram)", "pg-base"), ("shipped, output trigram dropped", "pg-base-no-output-trgm"), ("windowed EXISTS", "pg-trgm-deep-windowed"), ("tsvector", "pg-tsv"), ("token table", "pg-tokens")])
