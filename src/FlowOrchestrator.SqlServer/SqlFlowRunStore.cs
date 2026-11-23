@@ -477,19 +477,37 @@ public sealed class SqlFlowRunStore :
         // attempt stays as audit history for the dashboard. Only the latest-status row
         // (FlowSteps) and the gate rows (Claims / Dispatches) are cleared so the engine
         // re-evaluates the step on the next continuation pass.
+        //
+        // The engine passes EVERY transitive descendant of the retried step, including ones that
+        // already Succeeded or were When-skipped. The gate rows must therefore be cleared only for
+        // the keys whose FlowSteps row was actually the PrerequisitesUnmet skip being reset — the
+        // OUTPUT clause captures exactly those. Clearing the claim of a Succeeded descendant would
+        // let it be claimed and executed a second time, breaking "execute once".
         await conn.ExecuteAsync(
             """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
+            DECLARE @Reset TABLE (StepKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+
             DELETE FROM FlowSteps
+            OUTPUT deleted.StepKey INTO @Reset (StepKey)
             WHERE RunId = @RunId
               AND StepKey IN @StepKeys
               AND Status = 'Skipped'
               AND ErrorMessage = @Reason;
 
-            DELETE FROM FlowStepClaims
-            WHERE RunId = @RunId AND StepKey IN @StepKeys;
+            DELETE fsc
+            FROM FlowStepClaims AS fsc
+            INNER JOIN @Reset AS r ON r.StepKey = fsc.StepKey
+            WHERE fsc.RunId = @RunId;
 
-            DELETE FROM FlowStepDispatches
-            WHERE RunId = @RunId AND StepKey IN @StepKeys;
+            DELETE fsd
+            FROM FlowStepDispatches AS fsd
+            INNER JOIN @Reset AS r ON r.StepKey = fsd.StepKey
+            WHERE fsd.RunId = @RunId;
+
+            COMMIT TRANSACTION;
             """,
             new { RunId = runId, StepKeys = stepKeys, Reason = StepSkipReasons.PrerequisitesUnmet }).ConfigureAwait(false);
     }
