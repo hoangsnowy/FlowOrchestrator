@@ -129,6 +129,37 @@ public sealed class DashboardSecurityTests
         Assert.Equal(mutating, result);
     }
 
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, false, false)]
+    public void Anonymous_callers_operate_only_in_development_or_when_opted_in(bool isDevelopment, bool allowAnonymousOperators, bool canOperate)
+    {
+        // Arrange
+        var options = new FlowDashboardOptions { AllowAnonymousOperators = allowAnonymousOperators };
+
+        // Act
+        var access = DashboardAccess.ForAnonymous(options, isDevelopment);
+
+        // Assert
+        Assert.Equal("none", access.Method);
+        Assert.Null(access.UserName);
+        Assert.Equal(canOperate, access.CanOperate);
+    }
+
+    [Fact]
+    public void Anonymous_operators_are_off_by_default()
+    {
+        // Arrange
+
+        // Act
+        var options = new FlowDashboardOptions();
+
+        // Assert
+        Assert.False(options.AllowAnonymousOperators);
+    }
+
     [Fact]
     public void Role_defaults_apply_only_when_not_configured()
     {

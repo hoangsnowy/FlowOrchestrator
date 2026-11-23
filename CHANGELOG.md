@@ -6,6 +6,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+- Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):
+  GHSA-g5jp-pqw5-wrmj (unauthenticated dashboards are read-only outside `Development`),
+  GHSA-358q-p9gq-3m6p (dashboard attribute encoding) and GHSA-8248-pg9c-cp7c (step inputs resolved in a
+  single pass). The behaviour change is described there.
+
 ### Changed — **breaking:** Hangfire is an opt-in runtime, no longer a dependency of everything
 
 Hangfire remains a first-class, fully supported runtime. What changes is that it is now only in the
@@ -218,6 +225,58 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.2] - 2026-11-23
+
+Security patch release for the 1.34 line (.NET 8 / 9 / 10). It fixes three vulnerabilities; every 1.x
+user should upgrade. 2.0 (.NET 10 / 11) carries the same fixes.
+
+### Read before upgrading
+
+- **A dashboard with no authentication configured is now read-only outside the `Development`
+  environment.** When neither `FlowDashboard:BasicAuth` nor `FlowDashboard:Authorization` is set and the
+  host does not run in `Development`, anonymous callers are treated as viewers: trigger, re-run, retry,
+  cancel, signal, enable / disable and schedule changes answer `403`, and webhook secrets / HMAC keys in
+  manifests and secret-looking values in run payloads are masked. Configure Basic Auth or identity sign-in
+  (see [Securing the dashboard](docs/articles/dashboard-security.md)). If access is already restricted by
+  something in front of the dashboard and you want the previous behaviour, set
+  `FlowDashboard:AllowAnonymousOperators` to `true`. `Development` hosts are unchanged.
+
+### Security
+
+- **Dashboard: unauthenticated dashboards granted full operator access in every environment**
+  ([GHSA-g5jp-pqw5-wrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-g5jp-pqw5-wrmj)).
+  With no authentication configured, any caller who could reach the dashboard could start, re-run and
+  cancel runs, deliver signals, change schedules, and read webhook secrets from flow manifests. Outside
+  `Development` such a dashboard is now read-only with secrets masked; the new
+  `FlowDashboardOptions.AllowAnonymousOperators` (default `false`, bindable as
+  `FlowDashboard:AllowAnonymousOperators`) opts back in. At startup, EventId `4103` (Error) reports an
+  unprotected read-only dashboard outside `Development`, `4104` (Error) one opened to anonymous operators,
+  and `4105` (Warning) an unprotected dashboard in `Development`.
+- **Dashboard: values rendered into HTML attributes were not quote-encoded**
+  ([GHSA-358q-p9gq-3m6p](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-358q-p9gq-3m6p)).
+  The SPA's `esc()` helper did not encode `"` or `'`, but its output was also used inside attribute values,
+  including the Runs filter chips, which render a value taken from the URL. A crafted link could therefore
+  inject markup into the dashboard. `esc()` now encodes `& < > " '` for every caller, arguments of inline
+  handlers are JS-escaped and then HTML-encoded, SVG tooltips encode every interpolated value, and the
+  `status` filter read from the URL is limited to the known run statuses.
+- **Core: step input values substituted from the trigger were evaluated as `@steps()` expressions**
+  ([GHSA-8248-pg9c-cp7c](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-8248-pg9c-cp7c)).
+  Step inputs were resolved in two passes, and the second (`@steps('key').output|status|error`) also
+  evaluated strings produced by the first (`@triggerBody()` / `@triggerHeaders()`). A trigger payload or
+  header value that read like `@steps('x').output` was therefore resolved, exposing the output of any step
+  in the run to whoever supplied the trigger. Inputs are now resolved in a single walk: each value is
+  classified once, from the flow manifest's own text, and a substituted value — from the trigger or from a
+  step output — is passed to the handler verbatim, also when a `Pending` step is re-polled with its
+  already-resolved inputs. Expressions written in the manifest resolve exactly as before.
+
+### Changed
+
+- `Microsoft.Extensions.*` and `System.Text.Json` dependencies move to the `10.0.15` servicing release
+  (were `10.0.8`–`10.0.13`).
+- Packages publish through NuGet.org Trusted Publishing (OIDC); no long-lived API key is stored.
+- Sample AppHost: Aspire `13.3.2` → `13.6.5` (GHSA-4g86-54fm-h9h8, GHSA-f7vh-h5g3-7jrh). Sample only — no
+  shipped package depends on Aspire.
 
 ## [1.34.1] - 2026-10-31
 
