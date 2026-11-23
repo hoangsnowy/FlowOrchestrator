@@ -74,7 +74,7 @@ public sealed class WebhookReplaySignedTimestampE2ETests
         // Build the flow substitute before configuring another one: nesting it inside .Returns(...) breaks
         // NSubstitute's last-call tracking.
         var flow = MakeStripeFlow(id);
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        server.Flows = new FlowRegistry(new[] { flow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         return (server, server.CreateClient());
     }
