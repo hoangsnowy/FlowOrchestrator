@@ -963,8 +963,13 @@ public sealed class InMemoryFlowRunStore :
         }
 
         Span<char> buffer = stackalloc char[GuidDFormatLength];
-        return id.TryFormat(buffer, out var written)
-            && ((ReadOnlySpan<char>)buffer[..written]).Contains(search.AsSpan(), StringComparison.OrdinalIgnoreCase);
+        if (!id.TryFormat(buffer, out var written))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> formatted = buffer[..written];
+        return formatted.Contains(search.AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

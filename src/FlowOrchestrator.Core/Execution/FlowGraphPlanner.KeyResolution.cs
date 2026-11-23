@@ -68,6 +68,9 @@ public sealed partial class FlowGraphPlanner
         }
 
         var candidates = new List<string>();
+        // foreach rather than SortedKeys.Where(k => !statuses.ContainsKey(k)), despite CodeQL's
+        // cs/linq/missed-where: the lambda captures `statuses` and would allocate a closure plus an
+        // iterator on every Evaluate call, i.e. on every step completion (CLAUDE.md hot-path rule).
         foreach (var manifestKey in cache.SortedKeys)
         {
             if (!statuses.ContainsKey(manifestKey))
