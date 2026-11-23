@@ -43,7 +43,6 @@ builder.Services.AddFlowOrchestrator(options =>
 | `FlowStepClaims` | Exclusive execution claim per step (the *Execute once* half) |
 | `FlowRunControls` | Cancellation, timeout, and idempotency key records |
 | `FlowIdempotencyKeys` | Trigger-time idempotency dedupe |
-| `FlowEvents` | Event stream records (when `EnableEventPersistence = true`) |
 | `FlowSignalWaiters` | Parked `WaitForSignal` step state (see [WaitForSignal](wait-for-signal.md)) |
 | `FlowScheduleStates` | Cron override storage (when `Scheduler.PersistOverrides = true`) |
 | `WebhookReplayNonces` | Replay-attack nonce ledger for the dashboard webhook hardening pipeline (v1.25; opt-in) |
@@ -178,13 +177,12 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ### Advanced Contracts
 
-For full feature parity (schedule overrides, run control, event stream, retention, and concurrency safety), implement these additional interfaces:
+For full feature parity (schedule overrides, run control, retention, and concurrency safety), implement these additional interfaces:
 
 | Interface | Feature |
 |---|---|
 | `IFlowScheduleStateStore` | Persistent cron overrides (`Scheduler.PersistOverrides`) |
 | `IFlowRunControlStore` | Cancel, timeout, and idempotency key state. The engine checks this on every `TriggerAsync` to deduplicate runs and on every `RunStepAsync` to honour cancellation. **Required since 2.0**: the engine fails fast at construction without one. |
-| `IFlowEventReader` | Run event stream (`GET /flows/api/runs/{runId}/events`) |
 | `IFlowRetentionStore` | Background retention sweep. Nothing cascades — every per-run table must be deleted explicitly, including `FlowStepDispatches` and `FlowSignalWaiters`, which carry no foreign key to `FlowRuns`. See [Observability — Retention](observability.md#data-retention) for the full table list. |
 | `IFlowSignalStore` | Parked `WaitForSignal` waiter state. Required if you want to use the [`WaitForSignal`](wait-for-signal.md) built-in step on a custom backend. |
 | `IFlowRunRuntimeStore` | Step claim/dispatch ledger per run. Implements `TryRecordDispatchAsync` (idempotent INSERT — prevents duplicate dispatch) and `TryClaimStepAsync` (claim exclusion — ensures a step is executed by at most one worker). **Required since 2.0** for every runtime: the engine, the signal dispatcher and the recovery service fail fast at construction when none is registered. |

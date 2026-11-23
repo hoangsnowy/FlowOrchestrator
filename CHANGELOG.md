@@ -10,6 +10,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Changed — dashboard UI
+
+- **Dashboard redesigned as a dense operator view.** Overview leads with a "Needs attention" list
+  (recent failures + in-flight runs) and a one-line counter strip whose cells open the filtered run
+  list; the decorative KPI cards and 30-day calendar are gone. Flows is a sortable-at-a-glance table
+  (failing flows first) instead of a card grid. Run detail shows the flow, status and every action in
+  one header row, puts the failing step and its error line above the tabs, lists steps before the
+  trigger payload, and collapses step I/O into panels that keep their open state across live updates.
+  One sans typeface (no serif headings), mono only for ids / JSON / times, dot-and-word status instead
+  of uppercase pills, and the DAG / Gantt colours now follow the dark theme. No API, route or JSON
+  change; new tokens are listed in `DESIGN.md` §10.
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
@@ -24,10 +36,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
+- Includes the fix released in 1.34.4 (see the `[1.34.4]` section below): GHSA-5mx6-chp3-36c4, webhook
+  replay protection judges freshness from the signed timestamp. Its "Read before upgrading" notes apply.
 - Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):
   GHSA-g5jp-pqw5-wrmj (unauthenticated dashboards are read-only outside `Development`),
   GHSA-358q-p9gq-3m6p (dashboard attribute encoding) and GHSA-8248-pg9c-cp7c (step inputs resolved in a
   single pass). The behaviour change is described there.
+
+### Changed — **breaking:** webhook security defaults to `Enforce`
+
+- `WebhookSecurityOptions.EnforcementMode` now defaults to `WebhookEnforcementMode.Enforce` (was `Off`).
+  Under `Off` the pipeline accepted every request before any gate ran, so a trigger that declared
+  `webhookSignatureScheme` + `webhookHmacKey`, IP lists, a rate limit or a replay tolerance was silently
+  not protected. Triggers that declare none of these are unaffected. Hosts whose publishers are not yet
+  signing correctly set `UseWebhookSecurity(s => s.UseEnforcementMode(WebhookEnforcementMode.Audit))` while
+  they fix them; `Off` remains available as an explicit choice.
+
+### Removed — **breaking:** persisted run events
+
+The `FlowEvents` table (`flow_events` on PostgreSQL) and everything that wrote or read it are gone.
+Measured on SQL Server at 200k runs (`docs/benchmarks/run-search-2026-11-23.md`, search investigation),
+the log cost **2 extra awaited commits per step** on the step's critical path (`step.started` before the
+handler, `step.completed` before the continuation) plus 2 per run — **~37 % of per-step storage time** —
+and **1.1 GB / 4.3 M rows**, 3.4x the whole `FlowRuns` table. Everything it recorded is already kept
+elsewhere: run start / end / status on `FlowRuns`, one `FlowStepAttempts` row per execution (start,
+end, status, error), the skip reason and `When` evaluation trace on the step rows, and OpenTelemetry spans.
+
+#### Read before upgrading
+
+- **Removed API:** `FlowObservabilityOptions.EnableEventPersistence`, `IOutputsRepository.RecordEventAsync`,
+  `IFlowEventReader` (and its `GetRunEventsAsync`), `FlowOrchestrator.Core.Storage.FlowEvent`,
+  `LogEvents.EventPersistenceFailed` (EventId **3002** is retired, not reused). Delete any
+  `options.Observability.EnableEventPersistence = …` line.
+- **Custom storage backends:** delete your `RecordEventAsync` implementation and your `IFlowEventReader`
+  implementation / registration, and stop deleting event rows in `CleanupAsync`.
+- **What replaces each reader:**
+  - The dashboard *Events* drawer keeps working unchanged: `GET {base}/api/runs/{runId}/events` keeps its
+    URL, paging (`skip` / `take`) and JSON shape, and now returns a timeline built on read from the run
+    and its step attempts (`run.started`, per attempt `step.started` + `step.completed` / `step.failed` /
+    `step.pending`, `step.skipped` with the recorded reason, `run.completed`).
+  - `FlowTestRunResult.Events` (`FlowOrchestrator.Testing`) keeps its type (`FlowEventRecord`) and is now
+    always populated from the same derived timeline, with no option to set.
+  - Both use the new `FlowRunTimeline.Build(FlowRunRecord)` in `FlowOrchestrator.Core.Storage`, which you
+    can call on a `GetRunDetailAsync` result yourself.
+  - The live dashboard stream (`IFlowEventNotifier` / SSE) is a separate, non-persisted channel and is
+    unchanged.
+- **Database:** the migrators no longer create the table on a new database, and **never drop it** on an
+  existing one, so a rollback to 1.34.x can still read its history. Retention no longer touches it, so
+  on an upgraded database it stops growing but is not emptied. Once you no longer need a rollback, drop
+  it by hand — SQL Server: `DROP TABLE IF EXISTS [FlowEvents];`, PostgreSQL:
+  `DROP TABLE IF EXISTS flow_events;` (see [Migrating to 2.0](docs/articles/migrating-to-2.0.md)).
 
 ### Changed — **breaking:** Hangfire is an opt-in runtime, no longer a dependency of everything
 
@@ -248,6 +306,41 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.4] - 2026-11-23
+
+Security release for the 1.34 line (.NET 8 / 9 / 10). Webhook replay protection trusted an unsigned
+timestamp header for signature schemes that sign their own timestamp (Stripe, Slack, Mailgun), so a captured
+delivery could be replayed indefinitely. Only hosts that run the webhook pipeline in `Enforce` or `Audit`
+with replay protection enabled are affected.
+
+### Security
+
+- **Webhook replay protection judges freshness from the signed timestamp**
+  ([GHSA-5mx6-chp3-36c4](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-5mx6-chp3-36c4)). For signature schemes that
+  sign their own timestamp (Stripe `t=`, Slack, Mailgun, and custom `TimestampDotBody` /
+  `ColonDelimited` specs), the replay gate read the unsigned `X-Webhook-Timestamp` header instead and
+  derived the replay key from it. Anyone holding a captured delivery could replay it indefinitely by
+  adding a fresh `X-Webhook-Timestamp`, and a genuine Stripe delivery — which never sends that header —
+  was rejected as `missing_timestamp` under `Enforce`. Once a signature is verified, the gate now uses
+  only signed material: the signed timestamp for the skew check, and a replay key built from the signed
+  timestamp and body (or the signed token for Mailgun). Unsigned timestamp and nonce headers are ignored.
+- Out-of-range timestamps (`X-Webhook-Timestamp: 99999999999999`) are rejected as `invalid_timestamp`
+  instead of failing the request with a 500.
+
+#### Read before upgrading
+
+- **Body-only signature schemes (GitHub, Bitbucket, Shopify, …) with replay protection** no longer use
+  an unsigned delivery-id header (`webhookNonceHeader`, e.g. `X-GitHub-Delivery`) as the replay key: the
+  key is the body hash, held for `2 × webhookReplayToleranceSeconds`. Two *different* deliveries with
+  byte-identical bodies inside that window are now treated as a replay (409). These schemes sign no
+  timestamp, so replay protection cannot reach beyond that window for them.
+- `WebhookSignatureResult` gains `AuthenticatedTimestamp` / `AuthenticatedNonce`, and
+  `ReplayProtectionGate` a `EvaluateAsync` overload taking them. Custom `IWebhookSignatureVerifier`
+  implementations that sign a timestamp should set `AuthenticatedTimestamp` on success; otherwise their
+  requests are treated like a body-only scheme.
+- Docs: `webhook-hardening.md` said `Off` mode still records violations; it records nothing (use
+  `Audit`). It also named a non-existent `AddFlowWebhookSecurity` method.
 
 ## [1.34.3] - 2026-11-23
 

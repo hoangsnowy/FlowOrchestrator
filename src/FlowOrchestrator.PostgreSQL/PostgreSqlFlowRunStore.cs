@@ -945,12 +945,6 @@ public sealed class PostgreSqlFlowRunStore :
               AND fr.completed_at IS NOT NULL
               AND fr.completed_at < @CutoffUtc;
 
-            DELETE FROM flow_events fe
-            USING flow_runs fr
-            WHERE fr.id = fe.run_id
-              AND fr.completed_at IS NOT NULL
-              AND fr.completed_at < @CutoffUtc;
-
             DELETE FROM flow_step_attempts fsa
             USING flow_runs fr
             WHERE fr.id = fsa.run_id

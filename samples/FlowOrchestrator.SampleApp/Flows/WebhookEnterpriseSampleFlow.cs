@@ -17,9 +17,8 @@ namespace FlowOrchestrator.SampleApp.Flows;
 ///   -H 'Content-Type: application/json' \
 ///   --data '{"hello":"world"}'
 /// </code>
-/// Set <c>FlowDashboardOptions.UseWebhookSecurity(...)</c> to enable enforcement; with the
-/// default <c>EnforcementMode.Off</c> the gates are skipped and the sample stays compatible
-/// with hosts that have not opted in.
+/// The gates are enforced under the 2.0 default <c>EnforcementMode.Enforce</c>; the sample host runs in
+/// <c>Audit</c> (see <c>Program.cs</c>) so violations are recorded but still accepted.
 /// </remarks>
 public sealed class WebhookEnterpriseSampleFlow : IFlowDefinition
 {

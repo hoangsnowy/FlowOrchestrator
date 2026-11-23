@@ -56,7 +56,7 @@ public class HangfireFlowOrchestratorTests
             [runtimeStore],
             [runControlStore],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             NoopFlowEventNotifier.Instance);

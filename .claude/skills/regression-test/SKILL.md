@@ -27,9 +27,9 @@ These cover existing contracts that must NOT regress:
 16. **Run cancel** — `POST /flows/api/runs/{runId}/cancel` marks run as cancelling; new step enqueues are blocked; in-flight step allowed to finish
 17. **Run timeout** — run with configured deadline that expires: execution stops, run marked with timed-out terminal state
 18. **Idempotency trigger** — two triggers with same `Idempotency-Key` header within the same flow+trigger scope return the same `runId`; second call does not create a new run
-19. **Event stream** — `RecordEventAsync` persists events in order; `GET /flows/api/runs/{runId}/events` returns events with correct pagination and filter
+19. **Run timeline** — `GET /flows/api/runs/{runId}/events` returns the timeline derived from the run and its step attempts (`FlowRunTimeline.Build`), in chronological order, with correct `skip`/`take` pagination
 20. **OpenTelemetry** — `ActivitySource` traces span run start→end; `Meter` counters increment for success/failure/step-latency
-21. **Retention cleanup** — cleanup job deletes runs/steps/events older than configured TTL; query performance does not degrade after bulk insert + cleanup cycle
+21. **Retention cleanup** — cleanup job deletes runs/steps/attempts/outputs older than configured TTL; query performance does not degrade after bulk insert + cleanup cycle
 
 ## Execution protocol
 

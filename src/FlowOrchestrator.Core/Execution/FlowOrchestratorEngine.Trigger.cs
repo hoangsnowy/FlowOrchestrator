@@ -140,7 +140,7 @@ public sealed partial class FlowOrchestratorEngine
                 await RunGraphContinuationAsync(
                     triggerContext,
                     triggerContext.Flow,
-                    CreateRunEventStep(triggerContext.RunId),
+                    CreateRunLevelStep(triggerContext.RunId),
                     new StepResult { Key = "__entry_skipped", Status = StepStatus.Skipped }).ConfigureAwait(false);
             }
 
@@ -151,13 +151,6 @@ public sealed partial class FlowOrchestratorEngine
                     new KeyValuePair<string, object?>("flow_id", triggerContext.Flow.Id.ToString()),
                     new KeyValuePair<string, object?>("trigger_key", triggerContext.Trigger.Key));
             }
-
-            await RecordEventAsync(
-                triggerContext,
-                triggerContext.Flow,
-                CreateRunEventStep(triggerContext.RunId),
-                "run.started",
-                $"Flow run started via trigger '{triggerContext.Trigger.Key}'.").ConfigureAwait(false);
 
             await PublishEventSafelyAsync(new RunStartedEvent
             {

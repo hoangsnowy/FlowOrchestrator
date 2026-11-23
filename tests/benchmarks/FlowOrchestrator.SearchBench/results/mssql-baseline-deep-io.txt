@@ -1,0 +1,81 @@
+### deep output: invoice, 3d old [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 15756, logical reads 150228, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 159195, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 48595, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 14769 ms,  elapsed time = 14776 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep output: invoice, 60d old [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 15756, logical reads 150230, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 159195, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 48595, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 14703 ms,  elapsed time = 14712 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep output: orderId, 3d old [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 15756, logical reads 150226, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 159182, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 48595, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 14518 ms,  elapsed time = 14527 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep output: common 'express' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 59, logical reads 300, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 14, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 196, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 2 ms,  elapsed time = 5 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep error: shipment, 3d old [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 15756, logical reads 150227, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 159195, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 48595, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 14521 ms,  elapsed time = 14529 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep error: 'deadlock victim' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 7457, logical reads 70944, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 75517, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 23007, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 6729 ms,  elapsed time = 6732 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep no match 'zq-nomatch-7731' [7d]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 15756, logical reads 150230, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 159195, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 48595, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 14392 ms,  elapsed time = 14400 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Seek[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep output: common 'express' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 59, logical reads 300, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 14, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 227, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 4 ms,  elapsed time = 6 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+
+### deep error: 'deadlock victim' [all]
+  SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.
+  Table 'FlowSteps'. Scan count 7457, logical reads 70944, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 75517, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  Table 'FlowRuns'. Scan count 1, logical reads 23038, physical reads 0, page server reads 0, read-ahead reads 0, page server read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob page server reads 0, lob read-ahead reads 0, lob page server read-ahead reads 0.
+  SQL Server Execution Times:    CPU time = 6813 ms,  elapsed time = 6818 ms.
+  SQL Server parse and compile time:     CPU time = 0 ms, elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.   SQL Server Execution Times:    CPU time = 0 ms,  elapsed time = 0 ms.
+  ops: Top[FlowRuns.] > Nested Loops[FlowRuns.] > Nested Loops[FlowRuns.] > Index Scan[FlowRuns.] > Clustered Index Seek[FlowRuns.] > Concatenation > Filter > Constant Scan[FlowRuns.] > Filter[FlowSteps.] > Clustered Index Seek[FlowSteps.]
+

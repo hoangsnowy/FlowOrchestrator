@@ -202,23 +202,51 @@ function prettyJson(raw) {
     return esc(text);
   }
 }
-function renderDetailPanel(title, raw, openByDefault, variant) {
+// Shared inline icons (stroke-width 2, sized by CSS).
+const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_LINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+const ICON_RETRY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>';
+const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="8" y1="5" x2="8" y2="19"/><line x1="16" y1="5" x2="16" y2="19"/></svg>';
+const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const ICON_BACK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>';
+const ICON_SEND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+// Step status glyphs drawn inside .step-circle.
+const STEP_ICONS = {
+  Succeeded: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
+  Failed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  Running: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>',
+  Skipped: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="12" x2="18" y2="12"/></svg>'
+};
+
+// Open/closed state of every collapsible I/O panel, keyed by run + step + panel title.
+// The run detail is re-rendered on every live update; without this a panel the operator
+// just expanded would snap shut on the next SSE tick.
+const _panelOpenState = new Map();
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d && d.tagName === 'DETAILS' && d.dataset && d.dataset.pk) _panelOpenState.set(d.dataset.pk, d.open);
+}, true);
+
+function renderDetailPanel(title, raw, openByDefault, variant, panelKey) {
   if (raw === null || raw === undefined) return '';
   if (typeof raw === 'string' && !raw.trim()) return '';
   if (typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length === 0) return '';
 
   const cssClass = variant ? ' step-detail-' + variant : '';
-  return '<div class="step-detail' + cssClass + '">'
-    + '<div class="step-detail-title"><span>' + esc(title) + '</span><button class="copy-panel-btn" onclick="copyPanelContent(this)" title="Copy to clipboard"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>'
+  const pk = (selectedRunId || '') + '|' + (panelKey || '') + '|' + title;
+  const open = _panelOpenState.has(pk) ? _panelOpenState.get(pk) : !!openByDefault;
+  return '<details class="step-detail' + cssClass + '" data-pk="' + esc(pk) + '"' + (open ? ' open' : '') + '>'
+    + '<summary class="step-detail-title"><span>' + esc(title) + '</span><button type="button" class="copy-panel-btn" onclick="event.preventDefault();event.stopPropagation();copyPanelContent(this)" title="Copy to clipboard" aria-label="Copy ' + esc(title) + '">' + ICON_COPY + '</button></summary>'
     + '<div class="step-detail-body">' + prettyJson(raw) + '</div>'
-    + '</div>';
+    + '</details>';
 }
 function renderRunTriggerPanels(run) {
-  const dataPanel = renderDetailPanel('Trigger Data', run.triggerDataJson, false, null);
-  const headersPanel = renderDetailPanel('Trigger Headers', run.triggerHeaders, false, null);
+  const dataPanel = renderDetailPanel('Trigger data', run.triggerDataJson, false, null, '$run');
+  const headersPanel = renderDetailPanel('Trigger headers', run.triggerHeaders, false, null, '$run');
   if (!dataPanel && !headersPanel) return '';
 
-  return '<div style="margin-bottom:10px">' + dataPanel + headersPanel + '</div>';
+  return '<div class="trigger-panels">' + dataPanel + headersPanel + '</div>';
 }
 function getStepAttemptCount(step) {
   if (typeof step.attemptCount === 'number' && Number.isFinite(step.attemptCount) && step.attemptCount > 0) {
@@ -231,27 +259,30 @@ function getStepAttemptCount(step) {
 
   return 1;
 }
-function renderStepDebugPanels(step) {
+// `expanded` opens Input / Output by default — used by the DAG / Gantt inspector, which
+// shows a single step the operator explicitly picked.
+function renderStepDebugPanels(step, expanded) {
+  const key = step.stepKey;
   // Blocked steps never executed — no input/output/error panels to show
   if (step.status === 'Skipped') {
     const tracePanel = renderWhyWhenSkippedPanel(step);
     if (tracePanel) return tracePanel;
     // Surface the skip reason carried on errorMessage (handler-provided message or the
     // prerequisite-cascade reason). Falls back to the generic hint only when no reason exists.
-    const reasonPanel = renderDetailPanel('Skip reason', step.errorMessage, true, 'skip');
-    if (reasonPanel) return reasonPanel;
-    return '<div style="margin-top:5px;font-size:11px;color:var(--skip-text);font-style:italic">'
-      + 'Not executed \u2014 retry the failed step above to resume this flow.'
-      + '</div>';
+    if (step.errorMessage && String(step.errorMessage).trim()) {
+      return '<div class="step-note">' + esc(step.errorMessage) + '</div>';
+    }
+    return '<div class="step-note">Not executed — retry the failed step to resume this flow.</div>';
   }
   const attemptCount = getStepAttemptCount(step);
   const attemptsPanel = attemptCount > 1
-    ? renderDetailPanel('Step Attempts', step.attempts, false, null)
+    ? renderDetailPanel('Attempts (' + attemptCount + ')', step.attempts, false, null, key)
     : '';
-  const inputPanel = renderDetailPanel('Step Input', step.inputJson, false, null);
-  const outputPanel = renderDetailPanel('Step Output', step.outputJson, false, null);
-  const errorPanel = renderDetailPanel('Step Error', step.errorMessage, step.status === 'Failed', 'error');
-  return attemptsPanel + inputPanel + outputPanel + errorPanel;
+  const errorPanel = renderDetailPanel('Error', step.errorMessage, step.status === 'Failed', 'error', key);
+  const inputPanel = renderDetailPanel('Input', step.inputJson, !!expanded, null, key);
+  const outputPanel = renderDetailPanel('Output', step.outputJson, !!expanded, null, key);
+  const panels = errorPanel + inputPanel + outputPanel + attemptsPanel;
+  return panels ? '<div class="step-panels">' + panels + '</div>' : '';
 }
 function renderWhyWhenSkippedPanel(step) {
   const traceJson = step && step.evaluationTraceJson;
@@ -262,18 +293,33 @@ function renderWhyWhenSkippedPanel(step) {
   const expression = esc(trace.expression);
   const resolved = esc(trace.resolved || '');
   const result = trace.result === true ? 'true' : 'false';
-  return '<div class="step-detail">'
+  return '<div class="step-panels"><div class="step-detail">'
     + '<div class="step-detail-title"><span>Why skipped</span></div>'
-    + '<div class="step-detail-body" style="font-family:var(--font-mono);font-size:12px;line-height:1.6">'
-    +   '<div style="color:var(--text-muted)">Expression</div>'
-    +   '<div style="margin-bottom:6px">' + expression + '</div>'
-    +   '<div style="color:var(--text-muted)">Resolved</div>'
-    +   '<div>' + resolved + ' \u2192 <strong style="color:var(--error-text)">' + result + '</strong></div>'
-    + '</div>'
-    + '</div>';
+    + '<dl class="step-detail-body why-skipped">'
+    +   '<dt>Expression</dt><dd>' + expression + '</dd>'
+    +   '<dt>Resolved</dt><dd>' + resolved + ' → <strong>' + result + '</strong></dd>'
+    + '</dl>'
+    + '</div></div>';
 }
-function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s; }
-function statusBadge(s) { const label = s === 'Skipped' ? 'Blocked' : s; return '<span class="badge badge-'+s.toLowerCase()+'">'+label+'</span>'; }
+function stepStatusLabel(s) { return s === 'Skipped' ? 'Blocked' : s === 'TimedOut' ? 'Timed out' : s; }
+// Status as dot + word. `s` is a server enum, but it is still escaped — never trust a wire value.
+function statusBadge(s) {
+  const v = String(s || 'Pending');
+  return '<span class="badge badge-'+esc(v.toLowerCase())+'">'+esc(stepStatusLabel(v))+'</span>';
+}
+// Opens the Runs list filtered to one status (the value is always a literal from this file).
+function openRunsWithStatus(status) {
+  location.hash = '#/runs' + (status ? '?status=' + encodeURIComponent(status) : '');
+}
+function openRun(runId) {
+  location.hash = '#/runs/' + encodeURIComponent(runId);
+}
+// First line of an error message — the exception type + message, without the stack trace.
+function firstLine(text) {
+  const s = String(text || '').trim();
+  const nl = s.indexOf('\n');
+  return (nl >= 0 ? s.slice(0, nl) : s).trim();
+}
 
 function readAutoRefreshEnabled() {
   try {
@@ -494,7 +540,6 @@ function applyTheme(theme) {
 function toggleTheme() {
   const next = _currentTheme() === 'dark' ? 'light' : 'dark';
   applyTheme(next);
-  showToast(next === 'dark' ? 'Dark mode' : 'Light mode', 'info');
 }
 
 function setDensity(density) {
@@ -593,7 +638,8 @@ function _cmdkBuildItems() {
   items.push({ kind: 'action', label: 'Go to Overview', sub: 'Navigation', action: () => { closeCmdK(); navigate('overview'); } });
   items.push({ kind: 'action', label: 'Go to Flows', sub: 'Navigation', action: () => { closeCmdK(); navigate('flows'); } });
   items.push({ kind: 'action', label: 'Go to Runs', sub: 'Navigation', action: () => { closeCmdK(); navigate('runs'); } });
-  items.push({ kind: 'action', label: 'Go to Scheduled', sub: 'Navigation', action: () => { closeCmdK(); navigate('scheduled'); } });
+  items.push({ kind: 'action', label: 'Go to Schedules', sub: 'Navigation', action: () => { closeCmdK(); navigate('scheduled'); } });
+  items.push({ kind: 'action', label: 'Go to Webhooks', sub: 'Navigation', action: () => { closeCmdK(); navigate('webhooks'); } });
   return items;
 }
 
@@ -741,59 +787,81 @@ function navigate(page) {
 }
 
 // Overview
+// A compact run row shared by the Overview tables. Every server value is escaped; the
+// run id goes into the inline handler through escJsAttr.
+function overviewRunRow(r, showDuration) {
+  const id = String(r.id || '');
+  const started = r.startedAt ? '<span title="'+esc(fmtDate(r.startedAt))+'">'+esc(relativeTime(r.startedAt))+'</span>' : '—';
+  return '<tr class="row-link" tabindex="0" onclick="openRun(\''+escJsAttr(id)+'\')" onkeydown="if(event.key===\'Enter\'){openRun(\''+escJsAttr(id)+'\')}">'
+    +'<td>'+statusBadge(r.status)+'</td>'
+    +'<td class="cell-strong">'+esc(r.flowName||'Unknown')+'</td>'
+    +'<td class="cell-mono col-optional-sm">'+esc(id.slice(0,8))+'</td>'
+    +'<td class="cell-dim">'+started+'</td>'
+    +(showDuration ? '<td class="cell-mono num">'+esc(duration(r.startedAt, r.completedAt)||'—')+'</td>' : '')
+    +'</tr>';
+}
+
 async function loadOverview(opts) {
   const silent = !!(opts && opts.silent);
-  const flowsTbl = $('ov-flows-table');
+  const attentionEl = $('ov-attention');
   const runsTbl = $('ov-runs-table');
-  // First-paint skeleton \u2014 only when caller is not auto-refreshing in-place.
-  if (!silent && flowsTbl && !flowsTbl.innerHTML.trim()) {
-    flowsTbl.innerHTML = skeletonRows(4, 4);
-    runsTbl.innerHTML = skeletonRows(5, 4);
+  // First-paint skeleton — only when caller is not auto-refreshing in-place.
+  if (!silent && attentionEl && !attentionEl.innerHTML.trim()) {
+    attentionEl.innerHTML = skeletonRows(3, 4);
+    runsTbl.innerHTML = skeletonRows(6, 4);
   }
   const signal = newPageController().signal;
   try {
-    const [stats, flows, runs, schedules, hourly, daily] = await Promise.all([
+    const [stats, flows, runs, schedules, hourly, failed, active] = await Promise.all([
       fetchJSON(BASE+'/runs/stats', { signal }),
       fetchJSON(BASE+'/flows', { signal }),
       fetchJSON(BASE+'/runs?take=10', { signal }),
       fetchJSON(BASE+'/schedules', { signal }).catch(() => []),
       // Server-side aggregation: 24×1h buckets with status counts + p50/p95 per bucket.
       fetchJSON(BASE+'/runs/timeseries?bucket=hour&hours=24', { signal }).catch(() => ({ buckets: [] })),
-      // Server-side aggregation: 30×1d buckets for the calendar heatmap.
-      fetchJSON(BASE+'/runs/timeseries?bucket=day&days=30', { signal }).catch(() => ({ buckets: [] }))
+      // The two lists an operator acts on: what broke, and what is still in flight.
+      fetchJSON(BASE+'/runs?status=Failed&take=8', { signal }).catch(() => []),
+      fetchJSON(BASE+'/runs/active', { signal }).catch(() => [])
     ]);
+    const activeCount = stats.activeRuns ?? 0;
+    const failedToday = stats.failedToday ?? 0;
     $('ov-flows').textContent = flows.length;
-    $('ov-active').textContent = stats.activeRuns ?? 0;
+    $('ov-active').textContent = activeCount;
     $('ov-done').textContent = stats.completedToday ?? 0;
-    $('ov-fail').textContent = stats.failedToday ?? 0;
+    $('ov-fail').textContent = failedToday;
     $('ov-scheduled').textContent = schedules.length;
+    const failStat = $('ov-stat-fail'); if (failStat) failStat.classList.toggle('is-alert', failedToday > 0);
+    const activeStat = $('ov-stat-active'); if (activeStat) activeStat.classList.toggle('is-busy', activeCount > 0);
 
     renderActivityHeatmap(bucketsFromTimeseries(hourly && hourly.buckets));
-    renderActivityCalendar(daily && daily.buckets);
 
-    flowsTbl.innerHTML = flows.length === 0
-      ? '<div class="empty-msg">No flows registered yet.</div>'
-      : '<table class="recent-table"><thead><tr><th>Name</th><th>Version</th><th>Status</th><th>Steps</th></tr></thead><tbody>'
-        + flows.map(f => {
-          const m = parseManifest(f.manifestJson);
-          return '<tr><td style="font-weight:600">'+esc(f.name)+'</td><td style="font-family:\'JetBrains Mono\',monospace;font-size:11px">'+esc(f.version)+'</td>'
-            +'<td>'+(f.isEnabled?'<span class="badge badge-enabled">Enabled</span>':'<span class="badge badge-disabled">Disabled</span>')+'</td>'
-            +'<td style="font-family:\'JetBrains Mono\',monospace;font-size:11px">'+(m?Object.keys(m.steps||{}).length:'-')+'</td></tr>';
-        }).join('')+'</tbody></table>';
+    // Needs attention: failures first (newest first), then in-flight runs (oldest first —
+    // the longest-running one is the likeliest to be stuck).
+    const failedList = (Array.isArray(failed) ? failed : (failed && failed.items) || []).slice(0, 8);
+    const activeList = (Array.isArray(active) ? active : [])
+      .slice()
+      .sort((a, b) => new Date(a.startedAt || 0) - new Date(b.startedAt || 0))
+      .slice(0, 8);
+    const attention = failedList.concat(activeList);
+    const summary = $('ov-attention-summary');
+    if (summary) {
+      summary.textContent = attention.length === 0 ? ''
+        : failedList.length + ' recent failure' + (failedList.length !== 1 ? 's' : '') + ' · ' + activeCount + ' running';
+    }
+    attentionEl.innerHTML = attention.length === 0
+      ? '<div class="ov-quiet">No failed or running runs.</div>'
+      : '<table class="recent-table"><thead><tr><th>Status</th><th>Flow</th><th class="col-optional-sm">Run</th><th>Started</th><th class="num">Duration</th></tr></thead><tbody>'
+        + attention.map(r => overviewRunRow(r, true)).join('') + '</tbody></table>';
 
     runsTbl.innerHTML = runs.length === 0
-      ? '<div class="empty-msg">No runs recorded yet.</div>'
-      : '<table class="recent-table"><thead><tr><th>Run</th><th>Flow</th><th>Status</th><th>Started</th></tr></thead><tbody>'
-        + runs.map(r =>
-          '<tr style="cursor:pointer" onclick="Router.go(\'runs\');setRunRoute(\''+r.id+'\');applyRoute(Router.parse())">'
-          +'<td style="font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--accent)">'+r.id.slice(0,8)+'\u2026</td>'
-          +'<td>'+esc(r.flowName||'')+'</td><td>'+statusBadge(r.status)+'</td><td style="font-size:12px;color:var(--text-dim)">'+fmtDate(r.startedAt)+'</td></tr>'
-        ).join('')+'</tbody></table>';
+      ? '<div class="ov-quiet">No runs recorded yet.</div>'
+      : '<table class="recent-table"><thead><tr><th>Status</th><th>Flow</th><th class="col-optional-sm">Run</th><th>Started</th></tr></thead><tbody>'
+        + runs.map(r => overviewRunRow(r, false)).join('') + '</tbody></table>';
   } catch(e) {
     if (isAbortError(e)) return;
     console.error('Overview load error', e);
     if (!silent) {
-      flowsTbl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load. <button class="btn-retry" onclick="loadOverview()">Retry</button></div>';
+      attentionEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load. <button class="btn-retry" onclick="loadOverview()">Retry</button></div>';
       runsTbl.innerHTML = '';
       showError('Failed to load overview', e.message);
     }
@@ -814,7 +882,7 @@ async function loadFlows(opts) {
   const silent = !!(opts && opts.silent);
   const grid = $('flows-grid');
   if (!silent && grid && !grid.innerHTML.trim()) {
-    grid.innerHTML = skeletonCards(4);
+    grid.innerHTML = skeletonRows(8, 7);
   }
   const signal = newPageController().signal;
   try {
@@ -830,11 +898,13 @@ async function loadFlows(opts) {
       fetchJSON(BASE+'/runs?take=200', { signal }).catch(() => [])
     ]);
     allFlows = flows;
-    $('flow-count-label').innerHTML = '<span class="num">' + allFlows.length + '</span>flow' + (allFlows.length!==1?'s':'');
+    const enabledCount = allFlows.filter(f => f.isEnabled).length;
+    $('flow-count-label').innerHTML = '<span class="num">' + allFlows.length + '</span>flow' + (allFlows.length!==1?'s':'')
+      + (enabledCount !== allFlows.length ? ' · ' + (allFlows.length - enabledCount) + ' disabled' : '');
 
     const sel = $('runs-filter-flow');
     const curVal = sel.value;
-    sel.innerHTML = '<option value="">All Flows</option>' + allFlows.map(f => '<option value="'+f.id+'"'+(f.id===curVal?' selected':'')+'>'+esc(f.name)+'</option>').join('');
+    sel.innerHTML = '<option value="">All flows</option>' + allFlows.map(f => '<option value="'+esc(f.id)+'"'+(f.id===curVal?' selected':'')+'>'+esc(f.name)+'</option>').join('');
 
     // The aggregate /timeseries doesn't carry flowId per bucket, so for cards we issue a per-flow
     // timeseries fetch in parallel. Cap at 16 concurrent requests; the dashboard fetches 1 per card.
@@ -854,12 +924,23 @@ async function loadFlows(opts) {
       lastRunByFlow[fid] = r;
     }
 
+    // One dense row per flow, ordered so the flows that need a look come first:
+    // a failing last run, then running, then everything else by name.
+    const rank = (f) => {
+      const lr = lastRunByFlow[f.id];
+      if (!lr) return 3;
+      return lr.status === 'Failed' ? 0 : lr.status === 'Running' ? 1 : 2;
+    };
+    const ordered = allFlows.slice().sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
     grid.innerHTML = allFlows.length === 0
       ? '<div class="empty-msg">No flows registered. Use <code>options.AddFlow&lt;T&gt;()</code> to register flows.</div>'
-      : allFlows.map(f => {
+      : '<table class="flows-table"><thead><tr>'
+        + '<th>Flow</th><th>Last run</th><th class="num">Runs 24 h</th><th class="num">Success</th><th class="num col-optional">p95</th>'
+        + '<th class="col-optional">Activity 24 h</th><th class="num col-optional-sm">Steps</th><th class="col-optional">Schedule</th>'
+        + '</tr></thead><tbody>'
+        + ordered.map(f => {
         const m = parseManifest(f.manifestJson);
         const stepCount = m ? Object.keys(m.steps||{}).length : 0;
-        const triggerCount = m ? Object.keys(m.triggers||{}).length : 0;
         const cronExpr = getCronExpression(m);
         const buckets = seriesByFlow[f.id] || [];
         const totals = buckets.map(b => b.total || 0);
@@ -877,36 +958,35 @@ async function loadFlows(opts) {
         const lastStatus = lastRun ? lastRun.status : 'None';
         const lastRel = lastRun ? relativeTime(lastRun.startedAt) : 'no recent runs';
 
-        let healthBadge;
-        if (sumTotal === 0) {
-          healthBadge = '<span class="health-badge health-idle">Idle</span>';
-        } else if (completed === 0) {
-          // All in-flight, nothing has finished yet.
-          healthBadge = '<span class="health-badge health-warn" title="' + sumRunning + ' run' + (sumRunning!==1?'s':'') + ' in flight, none completed">'
-            + sumRunning + ' running</span>';
-        } else {
-          const healthClass = sumFail === 0 ? 'health-ok' : (successRate >= 90 ? 'health-warn' : 'health-bad');
-          healthBadge = '<span class="health-badge ' + healthClass + '" title="Last 24h: ' + sumOk + ' ok, ' + sumFail + ' failed' + (sumRunning ? ', ' + sumRunning + ' running' : '') + '">'
-            + successRate + '% ok</span>';
+        // Success rate: colour only when it is a problem; a healthy flow reads as plain text.
+        let successCell = '<span class="dim">—</span>';
+        if (completed > 0) {
+          const cls = sumFail === 0 ? '' : (successRate >= 90 ? 'text-warn' : 'text-danger');
+          successCell = '<span class="' + cls + '" title="Last 24 h: ' + sumOk + ' ok, ' + sumFail + ' failed' + (sumRunning ? ', ' + sumRunning + ' running' : '') + '">' + successRate + '%</span>';
+        } else if (sumRunning > 0) {
+          successCell = '<span class="text-warn">' + sumRunning + ' running</span>';
         }
-        if (p95 !== null) {
-          healthBadge += '<span class="health-stat" title="p95 duration last 24h">p95 ' + fmtDurationMs(p95) + '</span>';
-        }
-        healthBadge += '<span class="health-stat" title="Total runs last 24h">' + sumTotal + ' runs</span>';
         const sparkSvg = totals.some(v => v > 0)
-          ? sparklinePath(totals, 280, 24, { cls: 'flow-card-spark' })
-          : '<svg class="flow-card-spark" viewBox="0 0 280 24" aria-hidden="true"><text x="140" y="14" class="spark-empty" text-anchor="middle">no activity</text></svg>';
-        return '<div class="flow-card" tabindex="0" role="button" onclick="openFlowDetail(\''+f.id+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openFlowDetail(\''+f.id+'\')}">'
-          +'<div class="flow-card-header"><div class="flow-card-name">'+esc(f.name)+'</div><div class="flow-card-version">v'+esc(f.version)+'</div></div>'
-          +'<div class="flow-card-meta"><span>'+stepCount+' step'+(stepCount!==1?'s':'')+'</span><span>'+triggerCount+' trigger'+(triggerCount!==1?'s':'')+'</span>'
-          +(cronExpr?'<span class="badge-cron" title="Cron schedule">&#128339; '+esc(cronExpr)+'</span>':'')
-          +'</div>'
-          +'<div class="flow-health-row">' + healthBadge + '</div>'
-          +'<div class="flow-last-run"><span class="flow-last-run-dot ' + esc(lastStatus) + '"></span>' + (lastRun ? (esc(lastStatus) + ' · ' + esc(lastRel)) : 'No recent runs') + '</div>'
-          +sparkSvg
-          +'<div class="flow-card-footer">'+(f.isEnabled?'<span class="badge badge-enabled">Enabled</span>':'<span class="badge badge-disabled">Disabled</span>')
-          +'<span style="font-size:11px;color:var(--text-dim)">'+fmtDate(f.updatedAt)+'</span></div></div>';
-      }).join('');
+          ? sparklinePath(totals, 96, 18, { cls: 'flow-card-spark' })
+          : '<span class="dim">—</span>';
+        const lastCell = lastRun
+          ? '<span class="flow-last-run"><span class="flow-last-run-dot ' + esc(lastStatus) + '"></span>'
+            + '<span class="' + (lastStatus === 'Failed' ? 'text-danger' : '') + '">' + esc(stepStatusLabel(lastStatus)) + '</span>'
+            + '<span class="dim" title="' + esc(fmtDate(lastRun.startedAt)) + '">' + esc(lastRel) + '</span></span>'
+          : '<span class="dim">No recent runs</span>';
+        const fid = escJsAttr(f.id);
+        return '<tr class="' + (f.isEnabled ? '' : 'is-disabled') + '" tabindex="0" onclick="openFlowDetail(\''+fid+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openFlowDetail(\''+fid+'\')}">'
+          +'<td><span class="flow-name">'+esc(f.name)+'</span><span class="flow-version">v'+esc(f.version)+'</span>'
+          +(f.isEnabled ? '' : ' <span class="badge badge-disabled flow-state">Disabled</span>')+'</td>'
+          +'<td>'+lastCell+'</td>'
+          +'<td class="num">'+(sumTotal || '<span class="dim">0</span>')+'</td>'
+          +'<td class="num">'+successCell+'</td>'
+          +'<td class="num cell-mono col-optional">'+(p95 !== null ? esc(fmtDurationMs(p95)) : '—')+'</td>'
+          +'<td class="col-optional">'+sparkSvg+'</td>'
+          +'<td class="num col-optional-sm">'+stepCount+'</td>'
+          +'<td class="cell-mono col-optional">'+(cronExpr ? esc(cronExpr) : '—')+'</td>'
+          +'</tr>';
+      }).join('') + '</tbody></table>';
   } catch(e) {
     if (isAbortError(e)) return;
     console.error('Flows load error', e);
@@ -1000,22 +1080,27 @@ function renderFlowDetail() {
   const m = parseManifest(f.manifestJson);
 
   $('fd-name').textContent = f.name;
+  const fdStatus = $('fd-status');
+  if (fdStatus) {
+    fdStatus.className = 'badge ' + (f.isEnabled ? 'badge-enabled' : 'badge-disabled');
+    fdStatus.textContent = f.isEnabled ? 'Enabled' : 'Disabled';
+  }
+  const fid = escJsAttr(f.id);
   $('fd-actions').innerHTML =
-    (f.isEnabled
-      ? '<button class="btn btn-danger" onclick="toggleFlow(\''+f.id+'\',false, event)">Disable</button>'
-      : '<button class="btn btn-success" onclick="toggleFlow(\''+f.id+'\',true, event)">Enable</button>')
-    + '<button class="btn btn-primary" onclick="triggerFlow(\''+f.id+'\', event)">&#9654; Trigger</button>';
+    '<button class="btn btn-ghost" onclick="location.hash=\'#/runs?flow=\'+encodeURIComponent(\''+fid+'\')">Runs</button>'
+    + (f.isEnabled
+      ? '<button class="btn btn-ghost" onclick="toggleFlow(\''+fid+'\',false, event)">Disable</button>'
+      : '<button class="btn btn-ghost" onclick="toggleFlow(\''+fid+'\',true, event)">Enable</button>')
+    + '<button class="btn btn-primary" onclick="triggerFlow(\''+fid+'\', event)">' + ICON_PLAY + 'Trigger</button>';
 
   // Manifest tab
   $('fd-manifest').innerHTML = '<table class="manifest-table"><tbody>'
-    +'<tr><td style="color:var(--text-dim);width:140px">ID</td><td class="mono">'+f.id+'</td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Name</td><td><b>'+esc(f.name)+'</b></td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Version</td><td class="mono">'+esc(f.version)+'</td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Status</td><td>'+(f.isEnabled?'<span class="badge badge-enabled">Enabled</span>':'<span class="badge badge-disabled">Disabled</span>')+'</td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Steps</td><td class="mono">'+(m?Object.keys(m.steps||{}).length:'-')+'</td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Triggers</td><td class="mono">'+(m?Object.keys(m.triggers||{}).length:'-')+'</td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Created</td><td>'+fmtDate(f.createdAt)+'</td></tr>'
-    +'<tr><td style="color:var(--text-dim)">Updated</td><td>'+fmtDate(f.updatedAt)+'</td></tr>'
+    +'<tr><td class="key">ID</td><td class="mono">'+esc(f.id)+'</td></tr>'
+    +'<tr><td class="key">Version</td><td class="mono">'+esc(f.version)+'</td></tr>'
+    +'<tr><td class="key">Steps</td><td>'+(m?Object.keys(m.steps||{}).length:'—')+'</td></tr>'
+    +'<tr><td class="key">Triggers</td><td>'+(m?Object.keys(m.triggers||{}).map(k => '<span class="mono">'+esc(k)+'</span>').join(', ') || '—':'—')+'</td></tr>'
+    +'<tr><td class="key">Created</td><td class="mono">'+esc(fmtDate(f.createdAt))+'</td></tr>'
+    +'<tr><td class="key">Updated</td><td class="mono">'+esc(fmtDate(f.updatedAt))+'</td></tr>'
     +'</tbody></table>';
 
   // Steps tab
@@ -1024,9 +1109,9 @@ function renderFlowDetail() {
     for (const [key, step] of Object.entries(m.steps)) {
       const ra = step.runAfter ? Object.keys(step.runAfter).join(', ') : '\u2014';
       const inputs = step.inputs ? Object.entries(step.inputs).map(([k,v]) => esc(k)+': '+esc(JSON.stringify(v))).join('<br>') : '\u2014';
-      rows += '<tr><td class="mono" style="color:var(--accent)">'+esc(key)+'</td><td><span class="badge" style="background:var(--accent-light);color:var(--accent)">'+esc(step.type)+'</span></td><td class="mono" style="font-size:11px">'+inputs+'</td><td class="mono" style="font-size:11px">'+esc(ra)+'</td></tr>';
+      rows += '<tr><td class="mono">'+esc(key)+'</td><td><span class="step-type-tag">'+esc(step.type)+'</span></td><td class="mono">'+inputs+'</td><td class="mono">'+esc(ra)+'</td></tr>';
     }
-    $('fd-steps').innerHTML = '<table class="manifest-table"><thead><tr><th>Key</th><th>Type</th><th>Inputs</th><th>RunAfter</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    $('fd-steps').innerHTML = '<table class="manifest-table"><thead><tr><th>Key</th><th>Type</th><th>Inputs</th><th>Runs after</th></tr></thead><tbody>'+rows+'</tbody></table>';
   } else {
     $('fd-steps').innerHTML = '<div class="empty-msg">No steps defined in manifest.</div>';
   }
@@ -1046,22 +1131,17 @@ function renderFlowDetail() {
       }) : [];
       const inputs = inputParts.length ? inputParts.join('<br>') : '\u2014';
       triggerRowIdx++;
-      const isWebhook = trigger.type && trigger.type.toLowerCase() === 'webhook';
-      let urlCell = '';
-      if (isWebhook) {
-        const webhookBase = window.location.origin + '{{BASE_PATH}}' + '/api/webhook/';
-        const urlByFlowId = webhookBase + selectedFlowDetail.id;
-        urlCell = '<div class="webhook-url-cell" style="display:flex;align-items:center;gap:8px"><code class="mono" style="font-size:11px">'+esc(urlByFlowId)+'</code><button class="btn-copy" data-url="'+esc(urlByFlowId)+'" onclick="copyWebhookUrl(this.dataset.url)" title="Copy URL"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button></div>';
-      }
-      rows += '<tr><td class="mono" style="color:var(--accent)">'+esc(key)+'</td><td><span class="badge '+(isWebhook?'badge-cron':'')+'" style="'+(isWebhook?'background:#eef4fa;color:var(--accent);border:1px solid #c5ddf0':'background:var(--success-bg);color:var(--success-text)')+'">'+esc(trigger.type)+'</span></td><td class="mono" style="font-size:11px">'+inputs+'</td><td>'+urlCell+'</td></tr>';
+      rows += '<tr><td class="mono">'+esc(key)+'</td><td><span class="step-type-tag">'+esc(trigger.type)+'</span></td><td class="mono">'+inputs+'</td></tr>';
     }
+    // The webhook URL is the same for every webhook trigger of a flow (it is keyed by flow id),
+    // so it is shown once below the table rather than repeated per row.
     let webhookSection = '';
     if (hasWebhook) {
       const webhookBase = window.location.origin + '{{BASE_PATH}}' + '/api/webhook/';
       const urlByFlowId = webhookBase + selectedFlowDetail.id;
-      webhookSection = '<div class="webhook-section" style="margin-top:16px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)"><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-dim)">Webhook URL (for external clients)</div><div class="cron-cell" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><code class="mono" style="font-size:12px;flex:1;min-width:200px;word-break:break-all">'+esc(urlByFlowId)+'</code><button class="btn btn-sm btn-sm-primary" data-url="'+esc(urlByFlowId)+'" onclick="copyWebhookUrl(this.dataset.url)">Copy URL</button></div><div style="font-size:11px;color:var(--text-dim);margin-top:6px">POST JSON body to trigger. Use <code>X-Webhook-Key</code> header if webhookSecret is configured.</div></div>';
+      webhookSection = '<div class="webhook-section"><div class="webhook-section-title">Webhook URL</div><div class="webhook-section-row"><code>'+esc(urlByFlowId)+'</code><button class="btn-copy" data-url="'+esc(urlByFlowId)+'" onclick="copyWebhookUrl(this.dataset.url)">'+ICON_COPY.replace('<svg ', '<svg width="12" height="12" ')+'Copy</button></div><div class="webhook-section-hint">POST a JSON body to trigger a run. Send the <code>X-Webhook-Key</code> header when <code>webhookSecret</code> is configured.</div></div>';
     }
-    $('fd-triggers').innerHTML = '<table class="manifest-table"><thead><tr><th>Key</th><th>Type</th><th>Inputs</th><th>Webhook URL</th></tr></thead><tbody>'+rows+'</tbody></table>'+webhookSection;
+    $('fd-triggers').innerHTML = '<table class="manifest-table"><thead><tr><th>Key</th><th>Type</th><th>Inputs</th></tr></thead><tbody>'+rows+'</tbody></table>'+webhookSection;
   } else {
     $('fd-triggers').innerHTML = '<div class="empty-msg">No triggers defined in manifest.</div>';
   }
@@ -1087,11 +1167,11 @@ function renderMermaidTab(flowId) {
     .then(text => {
       const safe = esc(text);
       host.innerHTML =
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
-        +'<div style="font-size:12px;color:var(--text-dim)">Paste into any Markdown surface that renders Mermaid (GitHub, Notion, Confluence, …).</div>'
+        '<div class="tab-intro">'
+        +'<div>Mermaid source — renders in GitHub, Notion and Confluence Markdown.</div>'
         +'<button class="btn-copy" onclick="copyMermaid(this)" data-mermaid="'+safe.replace(/"/g,'&quot;')+'">'
-          +'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
-          +'Copy Mermaid'
+          +ICON_COPY.replace('<svg ', '<svg width="12" height="12" ')
+          +'Copy'
         +'</button>'
         +'</div>'
         +'<div class="json-viewer">'+safe+'</div>';
@@ -1155,15 +1235,16 @@ function renderDAG(manifest) {
   const maxNodesInLevel = Math.max(...Object.values(byLevel).map(g => g.length));
   const svgH = maxNodesInLevel * (nodeH + padY) + 40;
 
-  let svg = '<div class="dag-svg" style="overflow:auto"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
-  svg += '<defs><marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#b0aea5"/></marker></defs>';
+  // Colours come from CSS classes (.dag-n / .dag-edge) so the graph follows the theme.
+  let svg = '<div class="dag-svg"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
+  svg += '<defs><marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon class="dag-arrow" points="0 0, 8 3, 0 6"/></marker></defs>';
 
   for (const [key, step] of Object.entries(steps)) {
     if (step.runAfter) {
       for (const dep of Object.keys(step.runAfter)) {
         if (positions[dep] && positions[key]) {
           const from = positions[dep], to = positions[key];
-          svg += '<line x1="'+(from.x+nodeW)+'" y1="'+(from.y+nodeH/2)+'" x2="'+to.x+'" y2="'+(to.y+nodeH/2)+'" stroke="#b0aea5" stroke-width="1.5" marker-end="url(#arrowhead)"/>';
+          svg += '<line class="dag-edge" x1="'+(from.x+nodeW)+'" y1="'+(from.y+nodeH/2)+'" x2="'+to.x+'" y2="'+(to.y+nodeH/2)+'" marker-end="url(#arrowhead)"/>';
         }
       }
     }
@@ -1171,10 +1252,10 @@ function renderDAG(manifest) {
 
   for (const [key, step] of Object.entries(steps)) {
     const p = positions[key];
-    svg += '<g transform="translate('+p.x+','+p.y+')">'
-      +'<rect width="'+nodeW+'" height="'+nodeH+'" rx="8" fill="#faf9f5" stroke="#e8e6dc" stroke-width="1"/>'
-      +'<text x="10" y="18" fill="#141413" font-weight="500" font-size="12">'+esc(key)+'</text>'
-      +'<text x="10" y="34" fill="#c96442" font-size="10">'+esc(step.type)+'</text>'
+    svg += '<g class="dag-n" transform="translate('+p.x+','+p.y+')">'
+      +'<rect class="dag-node-bg" width="'+nodeW+'" height="'+nodeH+'" rx="6"/>'
+      +'<text class="dag-k" x="10" y="19">'+esc(key)+'</text>'
+      +'<text class="dag-t" x="10" y="35">'+esc(step.type)+'</text>'
       +'</g>';
   }
 
@@ -1225,36 +1306,18 @@ function renderRunDAG(steps, manifest, selectedKey) {
   const maxNodes = Math.max(...Object.values(byLevel).map(g => g.length));
   const svgH = maxNodes * (nodeH + padY) + 40;
 
-  // Status → visual tokens
+  // Status → CSS class. Every colour is a --fo-* token (see .dag-n.s-* in dashboard.css),
+  // so the graph is legible in both themes.
+  const KNOWN_STATUS = ['Succeeded','Failed','Running','Skipped','Pending'];
   function nodeStyle(status) {
-    switch (status) {
-      case 'Succeeded': return { fill:'#eaf5ef', stroke:'#2d6a4f', text:'#1b4435', dimText:'#2d6a4f', label:'✓ Succeeded', cls:'' };
-      case 'Failed':    return { fill:'#fdf0ee', stroke:'#b53333', text:'#7a1e1e', dimText:'#b53333', label:'✗ Failed',    cls:'' };
-      case 'Running':   return { fill:'#fef4e8', stroke:'#c8803a', text:'#7a3f08', dimText:'#c8803a', label:'◉ Running',   cls:'dag-node-running' };
-      case 'Skipped':   return { fill:'#f5f4ed', stroke:'#87867f', text:'#5e5d59', dimText:'#87867f', label:'⊘ Blocked',   cls:'' };
-      case 'Pending':   return { fill:'#faf9f5', stroke:'#d1cfc5', text:'#87867f', dimText:'#b0aea5', label:'○ Pending',   cls:'' };
-      default:          return { fill:'#faf9f5', stroke:'#e8e6dc', text:'#87867f', dimText:'#b0aea5', label:'○ Pending',   cls:'' };
-    }
+    const s = KNOWN_STATUS.includes(status) ? status : 'Pending';
+    return { status: s, label: stepStatusLabel(s), cls: s === 'Running' ? 'dag-node-running' : '' };
   }
 
-  // Edge color based on source status
-  function edgeStroke(status) {
-    switch (status) {
-      case 'Succeeded': return { color:'#b5d9c5', marker:'dag-arr-ok'   };
-      case 'Failed':    return { color:'#f5c6c0', marker:'dag-arr-fail' };
-      case 'Running':   return { color:'#f6d8b3', marker:'dag-arr-run'  };
-      default:          return { color:'#d1cfc5', marker:'dag-arr-def'  };
-    }
-  }
+  let svg = '<div class="dag-svg"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
 
-  let svg = '<div class="dag-svg" style="min-height:160px"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
-
-  // Arrow markers
-  svg += '<defs>';
-  [['dag-arr-ok','#b5d9c5'],['dag-arr-fail','#f5c6c0'],['dag-arr-run','#f6d8b3'],['dag-arr-def','#d1cfc5']].forEach(([id,col]) => {
-    svg += '<marker id="'+id+'" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="'+col+'"/></marker>';
-  });
-  svg += '</defs>';
+  // Arrow marker — one, coloured by the edge-agnostic ring token.
+  svg += '<defs><marker id="dag-arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon class="dag-arrow" points="0 0, 8 3, 0 6"/></marker></defs>';
 
   // Draw edges
   for (const [key, step] of Object.entries(mSteps)) {
@@ -1262,12 +1325,11 @@ function renderRunDAG(steps, manifest, selectedKey) {
     for (const dep of Object.keys(step.runAfter)) {
       if (!positions[dep] || !positions[key]) continue;
       const from = positions[dep], to = positions[key];
-      const { color, marker } = edgeStroke(statusMap[dep]);
-      svg += '<line'
+      const depStatus = KNOWN_STATUS.includes(statusMap[dep]) ? statusMap[dep] : 'Pending';
+      svg += '<line class="dag-edge e-'+depStatus+'"'
         +' x1="'+(from.x+nodeW)+'" y1="'+(from.y+nodeH/2)+'"'
         +' x2="'+to.x+'" y2="'+(to.y+nodeH/2)+'"'
-        +' stroke="'+color+'" stroke-width="2"'
-        +' marker-end="url(#'+marker+')"/>';
+        +' marker-end="url(#dag-arr)"/>';
     }
   }
 
@@ -1292,8 +1354,8 @@ function renderRunDAG(steps, manifest, selectedKey) {
     const runtimeStep = stepMap[key];
     const attemptCount = runtimeStep ? getStepAttemptCount(runtimeStep) : 1;
     const dur = runtimeStep && runtimeStep.startedAt ? duration(runtimeStep.startedAt, runtimeStep.completedAt) : '\u2014';
-    const metaText = dur + (attemptCount > 1 ? '  \u00b7  \u00d7'+attemptCount+' attempts' : '');
-    const classList = [ns.cls, selectedKey===key ? 'dag-node-selected' : '', status==='Skipped' ? 'dag-node-blocked' : ''].filter(Boolean).join(' ');
+    const metaText = dur + (attemptCount > 1 ? '  ·  ×'+attemptCount+' attempts' : '');
+    const classList = ['dag-n', 's-'+ns.status, ns.cls, selectedKey===key ? 'dag-node-selected' : '', status==='Skipped' ? 'dag-node-blocked' : ''].filter(Boolean).join(' ');
     const blockedOn = status==='Skipped' ? blockedReason(key) : null;
     const tooltip = esc(key)+'\n'+esc(step.type||'')+(attemptCount>1?'\n\u00d7'+attemptCount+' attempts':'')
       + (blockedOn ? '\nBlocked because "'+esc(blockedOn)+'" did not succeed.' : '');
@@ -1301,23 +1363,15 @@ function renderRunDAG(steps, manifest, selectedKey) {
       +' onclick="selectStep(\''+safeKey+'\')"'
       +' style="cursor:pointer">'
       +'<title>'+tooltip+'</title>'
-      +'<rect class="dag-node-bg" width="'+nodeW+'" height="'+nodeH+'" rx="8"'
-      +' fill="'+ns.fill+'" stroke="'+ns.stroke+'" stroke-width="1.5"/>'
+      +'<rect class="dag-node-bg" width="'+nodeW+'" height="'+nodeH+'" rx="6"/>'
       // step key (monospace, top)
-      +'<text x="10" y="20" fill="'+ns.text+'"'
-      +' font-weight="600" font-size="12"'
-      +' font-family="JetBrains Mono,monospace">'+esc(key.length>24?key.slice(0,23)+'\u2026':key)+'</text>'
-      // step type (terracotta)
-      +'<text x="10" y="36" fill="#c96442"'
-      +' font-size="10" font-family="Inter,sans-serif">'+esc((step.type||'').slice(0,28))+'</text>'
-      // duration · attempts (grey)
-      +'<text x="10" y="52" fill="'+ns.dimText+'"'
-      +' font-size="10" font-family="JetBrains Mono,monospace">'+esc(metaText)+'</text>'
-      // status label (bottom-right pill)
-      +'<text x="'+(nodeW-8)+'" y="'+(nodeH-8)+'"'
-      +' fill="'+ns.dimText+'" font-size="9" font-weight="700"'
-      +' text-anchor="end" font-family="Inter,sans-serif"'
-      +' letter-spacing="0.4">'+ns.label+'</text>'
+      +'<text class="dag-k" x="10" y="20">'+esc(key.length>24?key.slice(0,23)+'…':key)+'</text>'
+      // step type
+      +'<text class="dag-t" x="10" y="37">'+esc((step.type||'').slice(0,28))+'</text>'
+      // duration · attempts
+      +'<text class="dag-m" x="10" y="'+(nodeH-10)+'">'+esc(metaText)+'</text>'
+      // status word (bottom-right)
+      +'<text class="dag-s" x="'+(nodeW-10)+'" y="'+(nodeH-10)+'" text-anchor="end">'+esc(ns.label)+'</text>'
       +'</g>';
   }
 
@@ -1430,25 +1484,11 @@ function skeletonRows(rows, cols) {
   return html + '</tbody></table>';
 }
 
+// Block placeholders (kept for any caller that renders a list of blocks rather than rows).
 function skeletonCards(n) {
-  let html = '<div class="flows-grid">';
+  let html = '<div class="skeleton-card" aria-hidden="true">';
   for (let i = 0; i < n; i++) {
-    html += '<div class="flow-card skeleton-card" aria-hidden="true">'
-      + '<span class="skeleton skeleton-line" style="width:60%;height:18px"></span>'
-      + '<span class="skeleton skeleton-line" style="width:35%;height:12px;margin-top:8px"></span>'
-      + '<span class="skeleton skeleton-line" style="width:80%;height:12px;margin-top:14px"></span>'
-      + '</div>';
-  }
-  return html + '</div>';
-}
-
-function skeletonStats(n) {
-  let html = '<div class="stats-grid stats-grid--' + (n === 5 ? '5col' : 'auto') + '">';
-  for (let i = 0; i < n; i++) {
-    html += '<div class="stat-card skeleton-card" aria-hidden="true">'
-      + '<span class="skeleton skeleton-line" style="width:30%;height:32px"></span>'
-      + '<span class="skeleton skeleton-line" style="width:60%;height:11px;margin-top:8px"></span>'
-      + '</div>';
+    html += '<span class="skeleton skeleton-line" style="width:' + (60 + (i * 11) % 30) + '%;margin:8px 0"></span>';
   }
   return html + '</div>';
 }
@@ -1546,10 +1586,21 @@ function renderActivityHeatmap(buckets) {
     const tip = hour + ':00 — ' + b.total + ' run' + (b.total !== 1 ? 's' : '')
       + (b.success ? ', ' + b.success + ' succeeded' : '')
       + (b.failed ? ', ' + b.failed + ' failed' : '')
-      + (b.skipped ? ', ' + b.skipped + ' blocked' : '');
+      + (b.skipped ? ', ' + b.skipped + ' cancelled' : '')
+      + (b.running ? ', ' + b.running + ' running' : '');
     html += '<div class="ov-bar" title="' + tip + '" aria-label="' + tip + '">' + segs + '</div>';
   }
   el.innerHTML = html;
+  // Hour labels every 6 columns so the axis reads without a legend.
+  const bars = el.children;
+  for (let i = 0; i < bars.length; i += 6) {
+    const b = buckets[i];
+    if (!b) continue;
+    const lbl = document.createElement('span');
+    lbl.className = 'ov-bar-label';
+    lbl.textContent = String(b.hour.getHours()).padStart(2, '0') + ':00';
+    bars[i].appendChild(lbl);
+  }
   // Summary footer.
   const total = buckets.reduce((a, b) => a + b.total, 0);
   const success = buckets.reduce((a, b) => a + b.success, 0);
@@ -1557,71 +1608,8 @@ function renderActivityHeatmap(buckets) {
   const summary = $('ov-heatmap-summary');
   if (summary) {
     summary.textContent = total === 0
-      ? '0 runs'
-      : total + ' runs · ' + success + ' ok · ' + failed + ' failed · ' + (Math.round((success / Math.max(1, total)) * 100)) + '% success';
-  }
-}
-
-// Render a 30-day GitHub-style calendar from a server timeseries (bucket=day).
-// Cells are coloured by run volume (5 quantile levels) and stamped with a
-// failure-coral underline when the day had any failed runs.
-function renderActivityCalendar(serverBuckets) {
-  const el = $('ov-calendar');
-  if (!el) return;
-  const days = (serverBuckets || []).map(b => ({
-    ts: new Date(b.timestamp),
-    total: b.total || 0,
-    failed: b.failed || 0,
-    succeeded: b.succeeded || 0,
-    cancelled: b.cancelled || 0
-  }));
-  if (days.length === 0) {
-    el.innerHTML = '<div class="empty-msg">No activity in the last 30 days.</div>';
-    const sum = $('ov-calendar-summary');
-    if (sum) sum.textContent = '0 runs';
-    return;
-  }
-  // Quantile thresholds across non-zero days so colour scale is data-relative.
-  const totals = days.map(d => d.total).filter(n => n > 0).sort((a, b) => a - b);
-  const q = (p) => totals.length ? totals[Math.floor((totals.length - 1) * p)] : 0;
-  const t1 = q(0.25), t2 = q(0.5), t3 = q(0.75), t4 = q(0.95);
-  function level(n) {
-    if (n === 0) return 0;
-    if (n <= t1) return 1;
-    if (n <= t2) return 2;
-    if (n <= t3) return 3;
-    if (n <= t4) return 4;
-    return 4;
-  }
-
-  // Pad leading cells so the first column starts on Monday (ISO week, dow=1..7).
-  const first = days[0].ts;
-  const firstDow = ((first.getDay() + 6) % 7); // Mon=0 .. Sun=6
-  let html = '';
-  for (let i = 0; i < firstDow; i++) {
-    html += '<div class="cal-cell cal-pad" aria-hidden="true"></div>';
-  }
-  for (const d of days) {
-    const lvl = level(d.total);
-    const dateLabel = d.ts.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    const tip = dateLabel + ' — ' + d.total + ' run' + (d.total !== 1 ? 's' : '')
-      + (d.succeeded ? ', ' + d.succeeded + ' ok' : '')
-      + (d.failed ? ', ' + d.failed + ' failed' : '')
-      + (d.cancelled ? ', ' + d.cancelled + ' cancelled' : '');
-    const failClass = d.failed > 0 ? ' cal-failure' : '';
-    html += '<div class="cal-cell cal-l' + lvl + failClass + '" title="' + tip + '" aria-label="' + tip + '"></div>';
-  }
-  el.innerHTML = html;
-
-  const totalRuns = days.reduce((a, b) => a + b.total, 0);
-  const totalFailed = days.reduce((a, b) => a + b.failed, 0);
-  const totalOk = days.reduce((a, b) => a + b.succeeded, 0);
-  const activeDays = days.filter(d => d.total > 0).length;
-  const sum = $('ov-calendar-summary');
-  if (sum) {
-    sum.textContent = totalRuns === 0
-      ? '0 runs'
-      : totalRuns + ' runs · ' + activeDays + '/' + days.length + ' active days · ' + totalOk + ' ok · ' + totalFailed + ' failed';
+      ? 'No runs'
+      : total + ' runs · ' + failed + ' failed';
   }
 }
 
@@ -1735,10 +1723,7 @@ async function switchRunView(view) {
   if (!bodyEl || !currentRun) return;
   // Lazy-fetch manifest the first time DAG or Gantt is opened.
   if ((view === 'dag' || view === 'gantt') && !currentRunManifest) {
-    bodyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:180px;gap:10px;color:var(--text-dim)">'
-      + '<div style="width:18px;height:18px;border:2px solid var(--border-dark);border-top-color:var(--accent);border-radius:50%;animation:spin .55s linear infinite;flex-shrink:0"></div>'
-      + '<span style="font-size:12px">Loading DAG…</span>'
-      + '</div>';
+    bodyEl.innerHTML = '<div class="loading-inline"><div class="spinner"></div><span>Loading graph…</span></div>';
     currentRunManifest = await resolveFlowManifest(currentRun);
   }
   bodyEl.innerHTML = renderActiveTab(currentRun, currentRunManifest, view);
@@ -1749,14 +1734,15 @@ async function switchRunView(view) {
 
 function renderTabs(activeView) {
   const tabs = [
-    { key:'timeline', label:'Timeline' },
-    { key:'dag',      label:'DAG' },
-    { key:'gantt',    label:'Gantt' },
+    { key:'timeline', label:'Steps' },
+    { key:'dag',      label:'Graph' },
+    { key:'gantt',    label:'Timing' },
     { key:'events',   label:'Events' }
   ];
-  return tabs.map(t =>
-    '<button class="tab'+(activeView===t.key?' active':'')+'" onclick="switchRunView(\''+t.key+'\')">'+t.label+'</button>'
-  ).join('');
+  return tabs.map(t => {
+    const on = activeView === t.key;
+    return '<button type="button" role="tab" aria-selected="'+(on?'true':'false')+'" tabindex="'+(on?'0':'-1')+'" class="tab'+(on?' active':'')+'" onclick="switchRunView(\''+t.key+'\')">'+t.label+'</button>';
+  }).join('');
 }
 
 function renderActiveTab(run, manifest, view) {
@@ -1773,16 +1759,16 @@ function renderActiveTab(run, manifest, view) {
         +renderStepInspector(findStep(steps, selectedStepKey))
         +'</div>';
     case 'events':
-      return '<div style="padding:16px 18px">'
-        +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
+      return '<div class="run-tab-pad">'
         +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
         +'</div>';
     case 'timeline':
     default: {
+      // Steps first; the trigger payload is reference material and sits collapsed below them.
       const triggerPanels = renderRunTriggerPanels(run);
-      return '<div style="padding:16px 18px">'+triggerPanels
-        +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px">Step Timeline ('+steps.length+' step'+(steps.length!==1?'s':'')+')</div>'
+      return '<div class="run-tab-pad">'
         +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
+        +(triggerPanels ? '<div class="section-label" style="margin-top:16px">Trigger</div>' + triggerPanels : '')
         +'</div>';
     }
   }
@@ -1795,56 +1781,68 @@ function findStep(steps, key) {
 
 function isTerminalStatus(s) { return s === 'Succeeded' || s === 'Failed' || s === 'Cancelled'; }
 
+// Header: one row with the flow name, status and every action; one row of facts (mono for
+// ids and times); a progress bar while running; then — for failed runs — the failing steps
+// and their error line, so the cause is visible without opening anything.
 function renderRunHeader(run, steps) {
   const total = steps.length;
   const completed = steps.filter(s => isTerminalStatus(s.status) || s.status === 'Skipped').length;
   const pct = total ? Math.round((completed / total) * 100) : 0;
   const isRunning = run.status === 'Running';
-  const failedCount = steps.filter(s => s.status === 'Failed').length;
-  const runId = run.id;
-  const progress = isRunning && total > 0
-    ? '<div class="progress-bar"><div class="progress-fill" style="width:'+pct+'%"></div></div>'
-      +'<span class="progress-label">'+completed+' of '+total+' complete</span>'
-    : '';
-  const liveDot = isRunning ? '<span class="live-dot">Live</span>' : '';
+  const failedSteps = steps.filter(s => s.status === 'Failed');
+  const failedCount = failedSteps.length;
+  const runId = escJsAttr(run.id);
   const actions = []
-    .concat(isRunning ? ['<button class="btn-action danger" onclick="cancelRun(\''+runId+'\', event)">Cancel run</button>'] : [])
-    .concat(failedCount > 0 ? ['<button class="btn-action" onclick="retryAllFailed(\''+runId+'\', event)">Retry failed steps ('+failedCount+')</button>'] : [])
-    .concat(['<button class="btn-action primary" onclick="rerunAll(\''+runId+'\', event)">Re-run all</button>']);
+    .concat(isRunning ? ['<button class="btn-action danger" onclick="cancelRun(\''+runId+'\', event)">'+ICON_X+'Cancel</button>'] : [])
+    .concat(failedCount > 0 ? ['<button class="btn-action" onclick="retryAllFailed(\''+runId+'\', event)">'+ICON_RETRY+'Retry failed ('+failedCount+')</button>'] : [])
+    .concat(['<button class="btn-action'+(isRunning ? '' : ' primary')+'" onclick="rerunAll(\''+runId+'\', event)">'+ICON_PLAY+'Re-run</button>'])
+    .concat(['<button class="icon-only" onclick="copyRunLink(\''+runId+'\')" title="Copy link to this run" aria-label="Copy link to this run">'+ICON_LINK+'</button>']);
+  const progress = isRunning && total > 0
+    ? '<div class="run-progress"><span class="live-dot">Running</span><div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="'+total+'" aria-valuenow="'+completed+'"><div class="progress-fill" style="width:'+pct+'%"></div></div>'
+      +'<span class="progress-label">'+completed+' / '+total+' steps</span></div>'
+    : '';
+  const failures = failedCount > 0
+    ? '<div class="run-failures" role="alert">'
+      + failedSteps.slice(0, 5).map(s =>
+          '<div class="run-failure"><button type="button" class="run-failure-key" onclick="selectStep(\''+escJsAttr(s.stepKey)+'\')">'+esc(s.stepKey)+'</button>'
+          +'<div class="run-failure-msg">'+(s.errorMessage ? esc(firstLine(s.errorMessage)) : 'Failed without an error message.')+'</div></div>'
+        ).join('')
+      + (failedCount > 5 ? '<div class="run-failure-msg">and '+(failedCount-5)+' more</div>' : '')
+      + '</div>'
+    : '';
   return '<div class="detail-header">'
-    +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">'
-    +'<span>Run Detail \u00b7 '+statusBadge(run.status)+'</span>'
-    +'<button class="btn-copy" onclick="copyRunLink(\''+runId+'\')" title="Copy shareable link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy link</button>'
+    +'<div class="run-head-row">'
+    +  '<div class="run-head-title"><button type="button" class="back-btn" onclick="backToRunsList()" aria-label="Back to runs list">'+ICON_BACK+'Runs</button>'
+    +  '<span class="crumb-sep" aria-hidden="true">/</span><h2>'+esc(run.flowName||'Run')+'</h2>'+statusBadge(run.status)+'</div>'
+    +  '<div class="run-header-actions">'+actions.join('')+'</div>'
     +'</div>'
-    +'<div class="detail-runid">'+runId+'</div>'
-    +'<div style="font-size:12px;color:var(--text-dim);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
-    +'<span>Flow: <b style="color:var(--text)">'+esc(run.flowName||'\u2014')+'</b></span>'
-    +'<span>Trigger: <b style="color:var(--text)">'+esc(run.triggerKey||'\u2014')+'</b></span>'
-    +'<span>Started: <b style="color:var(--text)">'+fmtDate(run.startedAt)+'</b></span>'
-    +'<span>Duration: <b style="color:var(--text)">'+duration(run.startedAt,run.completedAt)+'</b></span>'
-    +(run.sourceRunId ? '<span>Re-run of: <a href="#/runs/'+run.sourceRunId+'" style="color:var(--accent);font-family:var(--font-mono);text-decoration:underline">'+run.sourceRunId.substring(0,8)+'\u2026</a></span>' : '')
+    +'<dl class="run-meta">'
+    +  '<div><dt>Run</dt><dd class="detail-runid">'+esc(run.id)+'</dd></div>'
+    +  '<div><dt>Trigger</dt><dd>'+esc(run.triggerKey||'—')+'</dd></div>'
+    +  '<div><dt>Started</dt><dd>'+esc(fmtDate(run.startedAt))+'</dd></div>'
+    +  '<div><dt>Duration</dt><dd>'+esc(duration(run.startedAt,run.completedAt)||'—')+'</dd></div>'
+    +  (run.sourceRunId ? '<div><dt>Re-run of</dt><dd><a href="#/runs/'+encodeURIComponent(run.sourceRunId)+'">'+esc(String(run.sourceRunId).substring(0,8))+'</a></dd></div>' : '')
+    +  '<div id="lineage-derived"></div>'
+    +'</dl>'
+    +progress
     +'</div>'
-    +'<div id="lineage-derived" style="font-size:12px;color:var(--text-dim);margin-top:4px"></div>'
-    +(progress || liveDot || actions.length
-      ? '<div class="run-header-actions">'+liveDot+progress+actions.join('')+'</div>'
-      : '')
-    +'</div>';
+    +failures;
 }
 
 function renderStepInspector(step) {
-  if (!step) return '<div class="step-inspector-empty">Select a step above to see its details.</div>';
+  if (!step) return '<div class="step-inspector-empty">Select a step to see its input, output and error.</div>';
   const attemptCount = getStepAttemptCount(step);
   const timing = step.status === 'Skipped' || step.status === 'Pending'
     ? ''
-    : '<div class="step-timing"><span>Start: '+fmt(step.startedAt)+'</span><span>End: '+fmt(step.completedAt)+'</span><span>Duration: '+duration(step.startedAt,step.completedAt)+'</span></div>';
+    : '<div class="step-timing"><span>Started '+esc(fmt(step.startedAt))+'</span><span>Ended '+esc(fmt(step.completedAt))+'</span><span>'+esc(duration(step.startedAt,step.completedAt))+'</span></div>';
   return '<div class="step-inspector">'
-    +'<div class="step-card-header"><div><div class="step-key">'+esc(step.stepKey)+'</div>'
-    +(step.status!=='Skipped'?'<div class="step-type">'+esc(step.stepType||'')+'</div>':'')+'</div>'
-    +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+step.status+'">'+stepStatusLabel(step.status)+'</span>'
-    +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
+    +'<div class="step-card-header"><div class="step-title"><span class="step-key">'+esc(step.stepKey)+'</span>'
+    +(step.status!=='Skipped'?'<span class="step-type">'+esc(step.stepType||'')+'</span>':'')+'</div>'
+    +'<div class="step-meta"><span class="step-badge '+esc(step.status)+'">'+esc(stepStatusLabel(step.status))+'</span>'
+    +(attemptCount>1?'<span class="step-attempts">×'+attemptCount+' attempts</span>':'')
     +'</div></div>'
     +timing
-    +renderStepDebugPanels(step)
+    +renderStepDebugPanels(step, true)
     +'</div>';
 }
 
@@ -1918,8 +1916,8 @@ function openEventsDrawer(runId) {
   }
   drawer.innerHTML =
     '<div class="events-drawer-header">'
-    +'<span class="events-drawer-title">Event Stream'+(selectedStepKey?' \u00b7 <span style="color:var(--accent);font-family:\'JetBrains Mono\',monospace;font-size:12px">'+esc(selectedStepKey)+'</span>':'')+'</span>'
-    +'<button class="events-drawer-close" onclick="switchRunView(\'timeline\')">\u2715</button>'
+    +'<span class="events-drawer-title">Events'+(selectedStepKey?'<span class="mono">'+esc(selectedStepKey)+'</span>':'')+'</span>'
+    +'<button type="button" class="events-drawer-close" onclick="switchRunView(\'timeline\')" aria-label="Close events">'+ICON_X+'</button>'
     +'</div>'
     +'<div class="events-drawer-body" id="events-drawer-body">Loading events\u2026</div>';
   drawer.classList.add('open');
@@ -1938,7 +1936,7 @@ async function loadEventsIntoDrawer(runId) {
   try {
     const events = await fetchJSON(BASE+'/runs/'+encodeURIComponent(runId)+'/events?take=500');
     if (!events || events.length === 0) {
-      body.innerHTML = '<div class="step-inspector-empty">Event stream not enabled on this backend. Configure <code>IFlowEventReader</code> to see the raw event log.</div>';
+      body.innerHTML = '<div class="step-inspector-empty">No timeline for this run yet.</div>';
       return;
     }
     const filtered = selectedStepKey ? events.filter(e => e.stepKey === selectedStepKey) : events;
@@ -2001,19 +1999,11 @@ function renderGantt(steps, manifest, selectedKey) {
   const svgW = gutterW + chartW + 24;
   const svgH = axisH + ordered.length * (rowH + pad) + bottomPad;
 
-  function barColor(status) {
-    switch(status) {
-      case 'Succeeded': return '#7bbf9a';
-      case 'Failed':    return '#d97b6f';
-      case 'Running':   return '#e8a769';
-      case 'Skipped':   return '#c8c6bd';
-      case 'Pending':   return '#d8d6cd';
-      default:          return '#c8c6bd';
-    }
-  }
+  // Bar colours are CSS classes (.gantt-bar.s-*) backed by --fo-* tokens.
+  const GANTT_STATUS = ['Succeeded','Failed','Running','Skipped','Pending'];
 
   let svg = '<div class="gantt-svg"><svg width="'+svgW+'" height="'+svgH+'" xmlns="http://www.w3.org/2000/svg">';
-  svg += '<defs><pattern id="gantt-running-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#e8a769"/><line x1="0" y1="0" x2="0" y2="6" stroke="#faf9f5" stroke-width="2"/></pattern></defs>';
+  svg += '<defs><pattern id="gantt-running-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="gantt-hatch-bg" width="6" height="6"/><line class="gantt-hatch-line" x1="0" y1="0" x2="0" y2="6"/></pattern></defs>';
 
   // Axis ticks
   for (let i = 0; i <= 5; i++) {
@@ -2031,17 +2021,14 @@ function renderGantt(steps, manifest, selectedKey) {
     const ended   = s.completedAt ? new Date(s.completedAt).getTime() : (s.status === 'Running' ? now : started);
     let x = gutterW + ((started - t0) / span) * chartW;
     let w = Math.max(((ended - started) / span) * chartW, 2);
-    let fill = barColor(s.status);
-    let opacity = (s.status === 'Pending' || s.status === 'Skipped') ? 0.45 : 1;
-    if (s.status === 'Pending' || s.status === 'Skipped') { x = gutterW; w = Math.max(chartW * 0.02, 6); }
-    if (s.status === 'Running') fill = 'url(#gantt-running-hatch)';
+    const st = GANTT_STATUS.includes(s.status) ? s.status : 'Pending';
+    if (st === 'Pending' || st === 'Skipped') { x = gutterW; w = Math.max(chartW * 0.02, 6); }
     const selected = s.stepKey === selectedKey;
     const safeKey = escJsAttr(s.stepKey);
     svg += '<g onclick="selectStep(\''+safeKey+'\')" style="cursor:pointer">'
       +'<text class="gantt-gutter-label" x="10" y="'+(y+rowH*0.65)+'">'+esc(s.stepKey)+'</text>'
-      +'<rect class="gantt-bar'+(selected?' gantt-bar-selected':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+rowH+'"'
-      +' rx="4" fill="'+fill+'" opacity="'+opacity+'"'
-      +(selected?'':' stroke="rgba(0,0,0,0.04)"')+'>'
+      +'<rect class="gantt-bar s-'+st+(selected?' gantt-bar-selected':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+rowH+'"'
+      +' rx="3">'
       +'<title>'+esc(s.stepKey)+' \u2014 '+esc(stepStatusLabel(s.status))+' \u00b7 '+duration(s.startedAt, s.completedAt)+'</title>'
       +'</rect>'
       +'<text class="gantt-duration" x="'+(x+w+6)+'" y="'+(y+rowH*0.65)+'">'+duration(s.startedAt, s.completedAt)+'</text>'
@@ -2069,7 +2056,7 @@ function toggleWebhookSecret(cellId, btn) {
 
 // Runs
 function renderRunDetailEmpty() {
-  $('runs-detail').innerHTML = '<div class="detail-empty"><div class="icon">&#x2B21;</div><div>Select a run to see its steps</div></div>';
+  $('runs-detail').innerHTML = '<div class="detail-empty">Select a run to see its steps.</div>';
 }
 
 function showRunsListView() {
@@ -2250,29 +2237,30 @@ function renderRuns(preserveScroll) {
   const listScrollTop = preserveScroll ? runsListEl.scrollTop : 0;
 
   runsListEl.innerHTML = allRuns.length === 0
-    ? '<div class="empty-msg">No runs found.</div>'
+    ? '<div class="empty-msg">No runs match these filters.</div>'
     : '<table class="runs-table"><thead><tr>'
-      +'<th>Status</th><th>Run ID</th><th>Flow</th><th>Trigger</th><th>Started</th><th>Duration</th><th style="width:90px"></th>'
+      +'<th>Status</th><th>Flow</th><th>Run</th><th class="col-optional-sm">Trigger</th><th>Started</th><th class="num">Duration</th><th style="width:84px"><span class="visually-hidden">Actions</span></th>'
       +'</tr></thead><tbody>'
       + allRuns.map(r => {
         const active = r.id === selectedRunId ? 'run-row-active' : '';
-        const trigger = r.triggerKey ? esc(r.triggerKey) : '<span style="color:var(--text-light)">—</span>';
+        const trigger = r.triggerKey ? esc(r.triggerKey) : '—';
         const dur = duration(r.startedAt, r.completedAt);
         const isRunning = r.status === 'Running';
         const hasFailed = r.status === 'Failed';
+        const rid = escJsAttr(r.id);
         const actions = '<div class="run-actions">'
-          + (isRunning ? '<button class="run-action-btn danger" title="Cancel run" aria-label="Cancel run" onclick="event.stopPropagation();cancelRun(\''+r.id+'\', event)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' : '')
-          + (hasFailed ? '<button class="run-action-btn" title="Re-run" aria-label="Re-run" onclick="event.stopPropagation();rerunAll(\''+r.id+'\', event)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>' : '')
-          + '<button class="run-action-btn" title="Copy link" aria-label="Copy run link" onclick="event.stopPropagation();copyRunLink(\''+r.id+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>'
+          + (isRunning ? '<button class="run-action-btn danger" title="Cancel run" aria-label="Cancel run" onclick="event.stopPropagation();cancelRun(\''+rid+'\', event)">'+ICON_X+'</button>' : '')
+          + (hasFailed ? '<button class="run-action-btn" title="Re-run" aria-label="Re-run" onclick="event.stopPropagation();rerunAll(\''+rid+'\', event)">'+ICON_RETRY+'</button>' : '')
+          + '<button class="run-action-btn" title="Copy link" aria-label="Copy run link" onclick="event.stopPropagation();copyRunLink(\''+rid+'\')">'+ICON_LINK+'</button>'
           + '</div>';
-        return '<tr class="'+active+'" onclick="selectRun(\''+r.id+'\')">'
-          +'<td><span class="run-status-badge badge-'+r.status.toLowerCase()+'">'+r.status+'</span></td>'
-          +'<td class="run-id-cell">'+r.id.slice(0,8)+'…</td>'
-          +'<td>'+esc(r.flowName||'Unknown')+'</td>'
-          +'<td class="run-trigger-cell" title="'+esc(r.triggerKey||'')+'">'+trigger+'</td>'
-          +'<td style="font-size:12px;color:var(--text-dim);white-space:nowrap">'+fmtDate(r.startedAt)+'</td>'
-          +'<td class="run-duration-cell">'+(dur||'—')+'</td>'
-          +'<td style="text-align:right;padding-right:14px">'+actions+'</td>'
+        return '<tr class="'+active+'" tabindex="0" onclick="selectRun(\''+rid+'\')" onkeydown="if(event.key===\'Enter\'&&event.target===this){selectRun(\''+rid+'\')}">'
+          +'<td>'+statusBadge(r.status)+'</td>'
+          +'<td class="cell-strong">'+esc(r.flowName||'Unknown')+'</td>'
+          +'<td class="run-id-cell" title="'+esc(r.id)+'">'+esc(String(r.id).slice(0,8))+'</td>'
+          +'<td class="run-trigger-cell col-optional-sm" title="'+esc(r.triggerKey||'')+'">'+trigger+'</td>'
+          +'<td class="cell-mono" title="'+esc(relativeTime(r.startedAt))+'">'+esc(fmtDate(r.startedAt))+'</td>'
+          +'<td class="run-duration-cell">'+esc(dur||'—')+'</td>'
+          +'<td style="text-align:right">'+actions+'</td>'
           +'</tr>';
       }).join('')
       +'</tbody></table>';
@@ -2295,11 +2283,11 @@ async function loadRuns(preserveScroll) {
   }
   // Render skeleton on first paint (empty list and not preserving scroll position).
   if (listEl && !preserveScroll && !listEl.innerHTML.trim()) {
-    listEl.innerHTML = '<table class="runs-table" aria-hidden="true"><thead><tr><th>Status</th><th>Run ID</th><th>Flow</th><th>Trigger</th><th>Started</th><th>Duration</th></tr></thead><tbody>'
+    listEl.innerHTML = '<table class="runs-table" aria-hidden="true"><thead><tr><th>Status</th><th>Flow</th><th>Run</th><th>Trigger</th><th>Started</th><th>Duration</th></tr></thead><tbody>'
       + Array.from({ length: 8 }).map(() =>
         '<tr><td><span class="skeleton skeleton-line" style="width:60px;height:14px"></span></td>'
-        + '<td><span class="skeleton skeleton-line" style="width:80px"></span></td>'
         + '<td><span class="skeleton skeleton-line" style="width:120px"></span></td>'
+        + '<td><span class="skeleton skeleton-line" style="width:80px"></span></td>'
         + '<td><span class="skeleton skeleton-line" style="width:80px"></span></td>'
         + '<td><span class="skeleton skeleton-line" style="width:100px"></span></td>'
         + '<td><span class="skeleton skeleton-line" style="width:50px"></span></td></tr>'
@@ -2362,10 +2350,7 @@ async function selectRun(id, preserveScroll, targetStepKey, view) {
   const detailScrollTop = preserveScroll && detailEl ? detailEl.scrollTop : 0;
   // Show immediate loading skeleton so the user sees feedback right away.
   if (!preserveScroll && detailEl) {
-    detailEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:260px;gap:10px;color:var(--text-dim)" aria-live="polite" aria-busy="true">'
-      + '<div style="width:20px;height:20px;border:2px solid var(--border-dark);border-top-color:var(--accent);border-radius:50%;animation:spin .55s linear infinite;flex-shrink:0"></div>'
-      + '<span style="font-size:13px">Loading run…</span>'
-      + '</div>';
+    detailEl.innerHTML = '<div class="loading-inline" aria-live="polite" aria-busy="true"><div class="spinner"></div><span>Loading run…</span></div>';
   }
   // Cancel any in-flight detail fetch — fixes race when user clicks a different run mid-load.
   const signal = newRunDetailController().signal;
@@ -2429,33 +2414,44 @@ async function loadLineage(runId, signal) {
       return;
     }
     const items = lineage.derived.map(d =>
-      '<a href="#/runs/'+d.id+'" style="color:var(--accent);font-family:var(--font-mono);text-decoration:underline;margin-right:10px" title="'+esc(d.flowName||'')+' — '+esc(d.status)+'">'
-      + d.id.substring(0,8) + '… <span style="color:var(--text-dim)">('+esc(d.status)+')</span>'
-      + '</a>'
+      '<a href="#/runs/'+encodeURIComponent(d.id)+'" title="'+esc(d.flowName||'')+' — '+esc(d.status)+'">'
+      + esc(String(d.id).substring(0,8)) + '</a>'
     ).join('');
-    target.innerHTML = '<span>Re-run as: </span>' + items;
+    target.innerHTML = '<dt>Re-run as</dt><dd>' + items + '</dd>';
   } catch(e) { /* lineage is optional and might be aborted on navigation */ }
 }
 
+// One row per step: status glyph, key + type, then start time · duration and the step's
+// actions on the right. I/O panels sit collapsed under the row; a failed step opens its
+// error panel by default.
 function renderTimeline(steps, runId) {
-  let html = '<div class="timeline">';
+  const total = steps.length;
+  const failed = steps.filter(s => s.status === 'Failed').length;
+  let html = '<div class="section-label">Steps <span class="count">'+total+(failed ? ' · '+failed+' failed' : '')+'</span></div>'
+    + '<div class="timeline">';
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i], last = i===steps.length-1;
-    const icon = ({Succeeded:'\u2713',Failed:'\u2715',Running:'\u25cf',Skipped:'\u2298'})[s.status]||'\u25cb';
+    const status = String(s.status || 'Pending');
+    const icon = STEP_ICONS[status] || '';
     const attemptCount = getStepAttemptCount(s);
     const sel = selectedStepKey === s.stepKey ? ' selected' : '';
+    const ran = status !== 'Skipped' && status !== 'Pending' && s.startedAt;
+    const when = ran
+      ? '<span class="step-when" title="Started '+esc(fmt(s.startedAt))+(s.completedAt ? ', ended '+esc(fmt(s.completedAt)) : '')+'">'+esc(fmt(s.startedAt))+' · '+esc(duration(s.startedAt,s.completedAt))+'</span>'
+      : '';
     html += '<div class="step-node" data-step-key="'+esc(s.stepKey)+'"><div class="step-connector">'
-      +'<div class="step-circle '+s.status+'">'+icon+'</div>'
-      +'<div class="step-line '+(s.status==='Succeeded'?'done':'')+' '+(last?'last':'')+'"></div></div>'
-      +'<div class="step-card '+s.status+sel+'">'
-      +'<div class="step-card-header"><div><div class="step-key">'+esc(s.stepKey)+'</div>'+(s.status!=='Skipped'?'<div class="step-type">'+esc(s.stepType)+'</div>':'')+'</div>'
-      +'<div style="display:flex;align-items:center;gap:6px"><span class="step-badge '+s.status+'">'+stepStatusLabel(s.status)+'</span>'
-      +(attemptCount>1?'<span class="step-badge Pending">x'+attemptCount+' attempts</span>':'')
-      +(s.status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">&#8635; Retry</button>':'')
-      +(s.status==='Pending' && s.stepType==='WaitForSignal'?'<button class="btn-retry" onclick="sendSignal(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">Send Signal</button>':'')
-      +(s.status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\')" title="Copy step link"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>':'')
+      +'<div class="step-circle '+esc(status)+'" aria-hidden="true">'+icon+'</div>'
+      +'<div class="step-line '+(last?'last':'')+'"></div></div>'
+      +'<div class="step-card '+esc(status)+sel+'">'
+      +'<div class="step-card-header"><div class="step-title"><span class="step-key">'+esc(s.stepKey)+'</span>'+(status!=='Skipped'?'<span class="step-type">'+esc(s.stepType)+'</span>':'')+'</div>'
+      +'<div class="step-meta">'
+      +(attemptCount>1?'<span class="step-attempts" title="'+attemptCount+' attempts">×'+attemptCount+'</span>':'')
+      +when
+      +'<span class="step-badge '+esc(status)+'">'+esc(stepStatusLabel(status))+'</span>'
+      +(status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">'+ICON_RETRY+'Retry</button>':'')
+      +(status==='Pending' && s.stepType==='WaitForSignal'?'<button class="btn-retry" onclick="sendSignal(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">'+ICON_SEND+'Send signal</button>':'')
+      +(status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\')" title="Copy link to this step" aria-label="Copy link to step '+esc(s.stepKey)+'">'+ICON_LINK+'</button>':'')
       +'</div></div>'
-      +(s.status==='Skipped'?'':('<div class="step-timing"><span>Start: '+fmt(s.startedAt)+'</span><span>End: '+fmt(s.completedAt)+'</span><span>Duration: '+duration(s.startedAt,s.completedAt)+'</span></div>'))
       +renderStepDebugPanels(s)
       +'</div></div>';
   }
@@ -2522,33 +2518,34 @@ async function sendSignal(runId, stepKey, ev) {
 let allSchedules = [];
 
 function scheduleBadge(state) {
-  if (!state) return '<span class="badge badge-paused">\u2014</span>';
-  const s = state.toLowerCase();
-  if (s === 'succeeded') return '<span class="badge badge-succeeded">'+state+'</span>';
-  if (s === 'failed') return '<span class="badge badge-failed">'+state+'</span>';
-  if (s === 'skipped') return '<span class="badge badge-skipped">'+state+'</span>';
-  if (s === 'processing' || s === 'enqueued') return '<span class="badge badge-running">'+state+'</span>';
-  return '<span class="badge badge-paused">'+state+'</span>';
+  if (!state) return '<span class="dim">—</span>';
+  const s = String(state).toLowerCase();
+  const cls = s === 'succeeded' ? 'badge-succeeded'
+    : s === 'failed' ? 'badge-failed'
+    : s === 'skipped' ? 'badge-skipped'
+    : (s === 'processing' || s === 'enqueued') ? 'badge-running'
+    : 'badge-paused';
+  return '<span class="badge '+cls+'">'+esc(state)+'</span>';
 }
 
 function renderScheduleTable(jobs, forFlow) {
-  if (jobs.length === 0) return '<div class="empty-msg">No scheduled jobs'+(forFlow?' for this flow':'')+'.</div>';
+  if (jobs.length === 0) return '<div class="empty-msg">No scheduled jobs'+(forFlow?' for this flow — add a Cron trigger to schedule it':'')+'.</div>';
   let html = '<table class="schedule-table"><thead><tr>';
   if (!forFlow) html += '<th>Flow</th>';
-  html += '<th>Trigger</th><th>Cron Expression</th><th>Next Run</th><th>Last Run</th><th>Last Status</th><th>Actions</th></tr></thead><tbody>';
+  html += '<th>Trigger</th><th>Cron</th><th>Next run</th><th>Last run</th><th>Last result</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>';
   for (const j of jobs) {
     html += '<tr>';
-    if (!forFlow) html += '<td style="font-weight:600">'+esc(j.flowName)+'</td>';
-    html += '<td class="mono" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--accent)">'+esc(j.triggerKey)+'</td>'
+    if (!forFlow) html += '<td class="cell-strong">'+esc(j.flowName)+'</td>';
+    html += '<td class="cell-mono">'+esc(j.triggerKey)+'</td>'
       +'<td><span class="badge-cron">'+esc(j.cron)+'</span></td>'
-      +'<td style="font-size:12px;color:var(--text-dim)">'+fmtDate(j.nextExecution)+'</td>'
-      +'<td style="font-size:12px;color:var(--text-dim)">'+fmtDate(j.lastExecution)+'</td>'
+      +'<td class="cell-mono">'+(j.paused ? '<span class="badge badge-paused">Paused</span>' : esc(fmtDate(j.nextExecution)))+'</td>'
+      +'<td class="cell-mono">'+esc(fmtDate(j.lastExecution))+'</td>'
       +'<td>'+scheduleBadge(j.lastJobState)+'</td>'
       +'<td><div class="schedule-actions">'
-      +'<button class="btn-sm btn-sm-trigger" onclick="triggerScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Trigger now">&#9889;</button>'
+      +'<button class="btn-sm btn-sm-trigger" onclick="triggerScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Run this job now">'+ICON_PLAY+'Run now</button>'
       +(j.paused
-        ?'<button class="btn-sm btn-sm-success" onclick="resumeScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Resume">&#9654;</button>'
-        :'<button class="btn-sm btn-sm-warning" onclick="pauseScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Pause">&#10074;&#10074;</button>')
+        ?'<button class="btn-sm btn-sm-success" onclick="resumeScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Resume schedule">'+ICON_PLAY+'Resume</button>'
+        :'<button class="btn-sm btn-sm-warning" onclick="pauseScheduledJob(\''+escJsAttr(j.jobId)+'\', event)" title="Pause schedule">'+ICON_PAUSE+'Pause</button>')
       +'</div></td></tr>';
   }
   return html + '</tbody></table>';
@@ -2775,15 +2772,15 @@ function renderWebhookStats(stats) {
   const counts = (stats && stats.counts) || {};
   const entries = Object.entries(counts).sort(function(a, b) { return b[1] - a[1]; });
   if (entries.length === 0) return '';
-  return '<div class="webhook-chips">' + entries.map(function(kv) {
-    return '<span class="chip chip--reject">' + escapeHtml(kv[0]) + ' <strong>' + kv[1] + '</strong></span>';
+  return '<div class="webhook-chips"><span class="webhook-chips-label">Rejections, last 24 h</span>' + entries.map(function(kv) {
+    return '<span class="chip chip--reject">' + escapeHtml(kv[0]) + ' <strong>' + escapeHtml(String(Number(kv[1]) || 0)) + '</strong></span>';
   }).join('') + '</div>';
 }
 
 function renderWebhookTable(items) {
   return '<table class="recent-table"><thead><tr>'
     + '<th>Time</th><th>Flow</th><th>Trigger</th><th>Result</th>'
-    + '<th>Status</th><th>Reason</th><th>HMAC</th><th>IP</th><th>Bytes</th><th>ms</th>'
+    + '<th>HTTP</th><th>Reason</th><th>HMAC</th><th>IP</th><th class="num">Bytes</th><th class="num">ms</th>'
     + '</tr></thead><tbody>'
     + items.map(function(r) {
         const accepted = r.isAccepted || r.IsAccepted;
@@ -2795,16 +2792,16 @@ function renderWebhookTable(items) {
           ? '<span class="chip chip--scheme" title="HMAC signature header verified">' + escapeHtml(scheme) + '</span>'
           : '<span class="dim">—</span>';
         return '<tr>'
-          + '<td><time>' + escapeHtml(formatTimestamp(ts)) + '</time></td>'
-          + '<td>' + escapeHtml(flowId ? String(flowId).slice(0, 8) + '…' : '(unknown)') + '</td>'
-          + '<td>' + escapeHtml(r.triggerKey || r.TriggerKey || '') + '</td>'
+          + '<td class="cell-mono"><time>' + escapeHtml(formatTimestamp(ts)) + '</time></td>'
+          + '<td class="cell-mono">' + escapeHtml(flowId ? String(flowId).slice(0, 8) : '(unknown)') + '</td>'
+          + '<td class="cell-mono">' + escapeHtml(r.triggerKey || r.TriggerKey || '') + '</td>'
           + '<td>' + (accepted ? '<span class="chip chip--accept">accepted</span>' : '<span class="chip chip--reject">rejected</span>') + '</td>'
-          + '<td>' + (r.statusCode || r.StatusCode || '') + '</td>'
+          + '<td class="cell-mono">' + escapeHtml(String(r.statusCode || r.StatusCode || '')) + '</td>'
           + '<td>' + escapeHtml(reason) + '</td>'
           + '<td>' + schemeCell + '</td>'
-          + '<td>' + escapeHtml(r.remoteIp || r.RemoteIp || '') + '</td>'
-          + '<td>' + (r.bodyBytes || r.BodyBytes || 0) + '</td>'
-          + '<td>' + (Math.round((r.processingMs || r.ProcessingMs || 0) * 10) / 10) + '</td>'
+          + '<td class="cell-mono">' + escapeHtml(r.remoteIp || r.RemoteIp || '') + '</td>'
+          + '<td class="cell-mono num">' + escapeHtml(String(Number(r.bodyBytes || r.BodyBytes || 0))) + '</td>'
+          + '<td class="cell-mono num">' + escapeHtml(String(Math.round((Number(r.processingMs || r.ProcessingMs) || 0) * 10) / 10)) + '</td>'
           + '</tr>';
       }).join('')
     + '</tbody></table>';
@@ -2824,7 +2821,7 @@ function renderWebhookPager(total, exact, count, hasMore) {
   let numberedHtml = '';
   let last = 0;
   wanted.forEach(function(p) {
-    if (last && p > last + 1) numberedHtml += '<span class="page-num-ellipsis" aria-hidden="true">…</span>';
+    if (last && p > last + 1) numberedHtml += '<span class="page-ellipsis" aria-hidden="true">…</span>';
     const active = p === cur ? ' page-num-active' : '';
     const aria = p === cur ? ' aria-current="page"' : '';
     numberedHtml += '<button class="page-num' + active + '" onclick="gotoWebhookPage(' + p + ')"' + aria + '>' + p + '</button>';

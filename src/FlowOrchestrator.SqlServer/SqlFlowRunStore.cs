@@ -916,12 +916,6 @@ public sealed class SqlFlowRunStore :
             WHERE fr.CompletedAt IS NOT NULL
               AND fr.CompletedAt < @CutoffUtc;
 
-            DELETE fe
-            FROM FlowEvents fe
-            INNER JOIN FlowRuns fr ON fr.Id = fe.RunId
-            WHERE fr.CompletedAt IS NOT NULL
-              AND fr.CompletedAt < @CutoffUtc;
-
             DELETE fsa
             FROM FlowStepAttempts fsa
             INNER JOIN FlowRuns fr ON fr.Id = fsa.RunId

@@ -4,7 +4,7 @@ using FlowOrchestrator.Core.Execution;
 namespace FlowOrchestrator.Core.Storage;
 
 /// <summary>
-/// Stores and retrieves per-run step outputs, trigger data, and events.
+/// Stores and retrieves per-run step outputs, step inputs and trigger data.
 /// Outputs are keyed by RunId + step key and resolved at expression-evaluation time
 /// to satisfy <c>@outputs('stepKey')</c> references in downstream steps.
 /// </summary>
@@ -33,7 +33,4 @@ public interface IOutputsRepository
     /// or <see langword="null"/> if the step has not yet completed.
     /// </summary>
     ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey);
-
-    /// <summary>Appends a <see cref="FlowEvent"/> to the event log for the run.</summary>
-    ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt);
 }

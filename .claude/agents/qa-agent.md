@@ -45,7 +45,7 @@ Layers and their responsibilities:
 | **Engine** | `src/FlowOrchestrator.Core/Execution/` | DAG planning, dispatch, claim, polling reschedule, idempotency, run completion, **When-clause post-filter** |
 | **Expression evaluation** | `src/FlowOrchestrator.Core/Expressions/` | `BooleanExpressionEvaluator` (recursive-descent parser), `WhenClauseEvaluator`, `TriggerExpressionResolver`, `StepOutputResolver`, `WhenEvaluationTrace` |
 | **Abstractions** | `src/FlowOrchestrator.Core/Abstractions/` | `RunAfterCondition` (Statuses + When), `RunAfterCollection`, STJ + Newtonsoft converters |
-| **Storage abstractions** | `src/FlowOrchestrator.Core/Storage/` | Contract: `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore`, `IOutputsRepository`, `IFlowEventReader`; `EvaluationTraceJson` column |
+| **Storage abstractions** | `src/FlowOrchestrator.Core/Storage/` | Contract: `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore`, `IOutputsRepository`, `FlowRunTimeline` (derived run timeline); `EvaluationTraceJson` column |
 | **Hangfire adapter** | `src/FlowOrchestrator.Hangfire/` | `HangfireFlowOrchestrator` (Guid-based flow rehydration), recurring-job sync, dashboard endpoint mapping |
 | **InMemory runtime** | `src/FlowOrchestrator.InMemory/` | `InMemoryStepDispatcher`, `InMemoryStepRunnerHostedService`, `PeriodicTimerRecurringTriggerDispatcher`, full storage |
 | **ServiceBus runtime** | `src/FlowOrchestrator.ServiceBus/` | `ServiceBusStepDispatcher` (topic + per-flow subscription), `ServiceBusFlowProcessorHostedService` (one processor per *enabled* flow), `ServiceBusRecurringTriggerHub` + `ServiceBusCronProcessorHostedService` (self-perpetuating scheduled cron messages), `ServiceBusTopologyManager` (admin-client topology), `StepEnvelope` / `CronEnvelope` JSON DTOs |
@@ -125,7 +125,7 @@ private FlowOrchestratorEngine CreateEngine(
         runtimeStore is not null ? [runtimeStore] : [],
         runControlStore is not null ? [runControlStore] : [],
         new FlowRunControlOptions(),
-        new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+        new FlowObservabilityOptions { EnableOpenTelemetry = false },
         new FlowOrchestratorTelemetry(),
         _logger);
 ```
@@ -508,7 +508,7 @@ Storage abstractions:
   src/FlowOrchestrator.Core/Storage/IFlowRunRuntimeStore.cs   ← RecordSkippedStepAsync(…, evaluationTraceJson)
   src/FlowOrchestrator.Core/Storage/IFlowRunControlStore.cs
   src/FlowOrchestrator.Core/Storage/IOutputsRepository.cs
-  src/FlowOrchestrator.Core/Storage/IFlowEventReader.cs
+  src/FlowOrchestrator.Core/Storage/FlowRunTimeline.cs
   src/FlowOrchestrator.Core/Storage/FlowStepRecord.cs         ← EvaluationTraceJson property
   src/FlowOrchestrator.Core/Storage/FlowStepAttemptRecord.cs  ← EvaluationTraceJson property
 

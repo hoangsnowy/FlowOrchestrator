@@ -161,14 +161,16 @@ options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
 ## FlowObservabilityOptions
 
 ```csharp
-options.Observability.EnableEventPersistence = true;
 options.Observability.EnableOpenTelemetry = true;
 ```
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EnableEventPersistence` | `bool` | `true` | Write `FlowEvent` records to `IOutputsRepository` (requires the storage backend to implement `IFlowEventReader`). Powers the step timeline in the dashboard. Set to `false` to skip event writes. |
 | `EnableOpenTelemetry` | `bool` | `true` | Emit `FlowOrchestratorTelemetry` trace spans and metrics from the engine. The `ActivitySource` and `Meter` are always registered by `AddFlowOrchestrator`; this flag controls whether spans/counters are emitted. Use `AddFlowOrchestratorInstrumentation()` on your OTel pipeline to consume them. |
+
+`EnableEventPersistence` was removed in 2.0: run events are no longer persisted, and the dashboard's run
+timeline is derived from step attempts with no option to set. See
+[Migrating to 2.0](migrating-to-2.0.md).
 
 ---
 
@@ -227,7 +229,7 @@ Or via `appsettings.json`:
 | `BasicAuth.Username` | `string?` | — | Basic Auth username |
 | `BasicAuth.Password` | `string?` | — | Basic Auth password |
 | `BasicAuth.Realm` | `string` | `"FlowOrchestrator Dashboard"` | `WWW-Authenticate` realm returned in 401 responses |
-| `WebhookSecurity` | `WebhookSecurityOptions` | (Off) | Enterprise webhook hardening pipeline. Configure via `UseWebhookSecurity(b => …)` — see below. |
+| `WebhookSecurity` | `WebhookSecurityOptions` | (Enforce) | Enterprise webhook hardening pipeline. Configure via `UseWebhookSecurity(b => …)` — see below. |
 
 > [!NOTE]
 > Basic Auth is enforced when **both** `BasicAuth.Username` and `BasicAuth.Password` are set. There is no separate `Enabled` flag — leaving either blank disables authentication.
@@ -309,7 +311,6 @@ builder.Services.AddFlowOrchestrator(options =>
     options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
 
     // Observability
-    options.Observability.EnableEventPersistence = true;
     options.Observability.EnableOpenTelemetry = true;
 
     // Retention
@@ -344,7 +345,6 @@ builder.Services.AddFlowOrchestrator(options =>
     options.UseInMemoryRuntime();    // Channel<T> dispatcher + PeriodicTimer cron
 
     options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
-    options.Observability.EnableEventPersistence = true;
 
     options.AddFlow<HelloWorldFlow>();
 });

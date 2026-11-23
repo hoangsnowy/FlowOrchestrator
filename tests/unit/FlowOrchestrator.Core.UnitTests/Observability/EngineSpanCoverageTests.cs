@@ -56,7 +56,7 @@ public sealed class EngineSpanCoverageTests
             [runtimeStore ?? EngineTestStores.PermissiveRuntimeStore()],
             [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
+            new FlowObservabilityOptions { EnableOpenTelemetry = true },
             _telemetry,
             _logger,
             NoopFlowEventNotifier.Instance);

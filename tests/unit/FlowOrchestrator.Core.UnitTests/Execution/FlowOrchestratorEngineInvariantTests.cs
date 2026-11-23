@@ -57,7 +57,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
             [runtimeStore ?? EngineTestStores.PermissiveRuntimeStore()],
             [runControlStore ?? EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             NoopFlowEventNotifier.Instance);
@@ -482,7 +482,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
             [EngineTestStores.PermissiveRuntimeStore()],
             [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             NoopFlowEventNotifier.Instance);
@@ -502,7 +502,7 @@ public sealed class FlowOrchestratorEngineInvariantTests
             runtimeStores,
             runControlStores,
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
             NoopFlowEventNotifier.Instance);

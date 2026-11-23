@@ -119,22 +119,6 @@ public class InMemoryOutputsRepositoryTests
     }
 
     [Fact]
-    public async Task RecordEventAsync_DoesNotThrow()
-    {
-        // Arrange
-        var flow = CreateFlow();
-        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext { RunId = Guid.NewGuid() };
-        var step = new StepInstance("step1", "A") { RunId = ctx.RunId };
-        var evt = new FlowEvent { Type = "Info", Message = "Test event" };
-
-        // Act
-        var ex = await Record.ExceptionAsync(async () => await _sut.RecordEventAsync(ctx, flow, step, evt));
-
-        // Assert
-        Assert.Null(ex);
-    }
-
-    [Fact]
     public async Task SaveStepOutput_WithNullResult_StoresSuccessfully()
     {
         // Arrange

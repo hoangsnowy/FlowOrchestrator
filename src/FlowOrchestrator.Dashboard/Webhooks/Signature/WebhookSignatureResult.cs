@@ -18,6 +18,22 @@ public readonly record struct WebhookSignatureResult(
     public static WebhookSignatureResult SuccessWithRotation { get; } =
         new(true, WebhookSignatureFailureReason.None, UsedRotationKey: true);
 
+    /// <summary>
+    /// The timestamp covered by the verified digest (e.g. Stripe's <c>t=</c>, Slack's
+    /// <c>X-Slack-Request-Timestamp</c>), or <see langword="null"/> when the scheme does not sign one.
+    /// </summary>
+    /// <remarks>
+    /// Replay protection must judge freshness from this value: any other timestamp header on the request is
+    /// unauthenticated and can be set by whoever replays a captured delivery.
+    /// </remarks>
+    public string? AuthenticatedTimestamp { get; init; }
+
+    /// <summary>
+    /// A per-delivery token covered by the verified digest (e.g. Mailgun's <c>token</c>), or
+    /// <see langword="null"/> when the scheme does not sign one.
+    /// </summary>
+    public string? AuthenticatedNonce { get; init; }
+
     /// <summary>Builds a failure result with the given reason.</summary>
     /// <param name="reason">Specific failure category for telemetry / DLQ.</param>
     public static WebhookSignatureResult Failure(WebhookSignatureFailureReason reason) =>

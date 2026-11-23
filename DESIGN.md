@@ -324,11 +324,30 @@ This document is the prose spec. The machine-readable token palette is the
 
 The Dashboard SPA ships a warm dark palette applied via `<html data-theme="dark">` — the
 `[data-theme="dark"]` block in `src/FlowOrchestrator.Dashboard/Assets/dashboard.css`. It
-re-points ~30 `--fo-*` tokens (parchment `#1c1b18`, ivory `#27272a`, warm sand `#2f2e2a`,
-inverted text tokens, the semantic `-bg`/`-text`/`-border` families, rings, `--shadow-whisper`)
+re-points ~35 `--fo-*` tokens (parchment `#1c1b18`, ivory `#27272a`, warm sand `#2f2e2a`,
+inverted text tokens, the semantic `-bg`/`-text`/`-border` families plus lifted `--fo-success` /
+`--fo-danger` fills, rings, `--fo-accent-text`, `--shadow-whisper`, `--shadow-pop`, `--fo-overlay`)
 rather than introducing cool grays. The attribute is set before first paint from
 `localStorage['fo-theme']`, falling back to `prefers-color-scheme`, and is toggled by
 `#theme-toggle`. Every colour-bearing token MUST have a matching override in that block.
+
+### Dashboard: operator surface rules
+
+The marketing-page guidance in §1–§7 (serif display headlines, generous editorial spacing,
+large rounded cards) does **not** apply to the dashboard SPA. The dashboard is an operator
+tool that is scanned, not read:
+
+- **Type** — `--fo-sans` for all UI text, headings included; `--fo-mono` only for run ids,
+  step keys, JSON, cron expressions and timestamps. `--fo-serif` is not loaded by the dashboard.
+  Page titles are 15 px / 600; body and tables 13 px; numbers use `tabular-nums`.
+- **Text tiers** — primary `--fo-near-black`, secondary `--fo-olive`. `--fo-stone` fails AA on
+  light surfaces and is for dots, dashes and disabled states only.
+- **Status** — a dot + word (`.badge`, `.step-badge`). Success stays quiet; only failure gets a
+  tinted background. No uppercase pill badges.
+- **Layout** — lists are tables, not card grids; one border per section, no shadows on
+  in-page containers, no tinted header bands. Spacing steps are 4 / 8 / 12 / 16 / 20 px.
+- **Emphasis follows urgency** — failed and running work is surfaced first (Overview
+  "Needs attention", failed runs at the top of a run's detail, failing flows sorted first).
 
 ### Token naming convention
 
@@ -336,6 +355,8 @@ Colour and type tokens are prefixed `--fo-*`; radii use `--r-*`, shadows use `--
 and density uses `--d-*`:
 
 - `--fo-terracotta`, `--fo-terracotta-hover`, `--fo-coral`, `--fo-accent-tint`
+- `--fo-accent-text` — links and accent-coloured text; `#a8502f` on light surfaces, coral `#d97757` in dark mode (both pass WCAG AA, plain terracotta does not at 13 px)
+- `--fo-on-accent` — text/icons on terracotta and solid semantic fills; theme-invariant `#faf9f5`
 - `--fo-parchment`, `--fo-ivory`, `--fo-warm-sand`, `--fo-pure-white`, `--fo-dark-surface`, `--fo-deep-dark`
 - `--fo-near-black`, `--fo-dark-warm`, `--fo-charcoal`, `--fo-olive`, `--fo-stone`, `--fo-warm-silver`
 - `--fo-border-cream`, `--fo-border-warm`, `--fo-border-dark`, `--fo-ring-warm`, `--fo-ring-deep`
@@ -345,6 +366,8 @@ and density uses `--d-*`:
 - `--fo-serif`, `--fo-sans`, `--fo-mono`
 - `--r-sharp` `4px`, `--r-subtle` `6px`, `--r-comfy` `8px`, `--r-generous` `12px`, `--r-very` `16px`
 - `--shadow-ring`, `--shadow-ring-deep`, `--shadow-ring-accent`, `--shadow-whisper`
+- `--shadow-pop` — floating layers only (command palette, events drawer, toasts)
+- `--fo-overlay` — modal / off-canvas backdrop
 - `--d-cell-y`, `--d-cell-x`, `--d-btn-y`, `--d-btn-x`, `--d-text` — density scale; overridden by `[data-density="compact"]` and `[data-density="comfortable"]` (the default "cozy" sets no attribute)
 
 `--fo-info` and `--fo-focus` are the **only** sanctioned cool colours in the system;

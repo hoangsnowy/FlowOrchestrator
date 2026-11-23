@@ -130,7 +130,7 @@ X-Webhook-Key: my-secret-key
 
 ### Enterprise hardening (v1.25)
 
-The dashboard webhook endpoint ships an opt-in security pipeline: HMAC signature verification → IP allow / deny → rate limit → replay protection. With the default `WebhookEnforcementMode.Off` the endpoint behaves exactly as in v1.24; flip to `Audit` for one release to dry-run, then `Enforce` to start rejecting.
+The dashboard webhook endpoint runs a security pipeline: HMAC signature verification → IP allow / deny → rate limit → replay protection. Since 2.0 the default mode is `WebhookEnforcementMode.Enforce`: each gate a trigger declares rejects violating requests (a trigger that declares none is unaffected). Use `Audit` to dry-run a new publisher, or `Off` to disable the pipeline explicitly.
 
 Activate the pipeline in DI:
 

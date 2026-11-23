@@ -1,0 +1,33 @@
+--- skip mssql-seed 200000
+--- skip mssql-sizes
+--- skip mssql-base quick
+--- skip mssql-keyset
+--- skip mssql-write baseline 200
+=== 12:33:34 mssql-base deep
+mssql-base     deep output: invoice, 3d old [7d]                          n=  3 p50=  14697.09 ms p95=  14920.94 ms min= 14631.18 rows=   1 
+mssql-base     deep output: invoice, 60d old [7d]                         n=  3 p50=  14499.16 ms p95=  14546.15 ms min= 14377.81 rows=   0 
+mssql-base     deep output: orderId, 3d old [7d]                          n=  3 p50=  14485.59 ms p95=  14556.25 ms min= 14046.74 rows=   1 
+mssql-base     deep output: common 'express' [7d]                         n= 20 p50=      5.36 ms p95=      5.97 ms min=     5.11 rows=  51 
+mssql-base     deep error: shipment, 3d old [7d]                          n=  3 p50=  14476.62 ms p95=  14517.28 ms min= 14400.57 rows=   1 
+mssql-base     deep error: 'deadlock victim' [7d]                         n= 20 p50=   6769.24 ms p95=   6885.08 ms min=  6557.80 rows=  51 
+mssql-base     deep no match 'zq-nomatch-7731' [7d]                       n=  3 p50=  14311.62 ms p95=  14384.99 ms min= 14200.84 rows=   0 
+mssql-base     deep output: invoice, 60d old [all]                        n=  3 p50= 333764.74 ms p95= 400476.12 ms min=318053.04 rows=   1 
+mssql-base     deep output: common 'express' [all]                        n= 20 p50=      6.81 ms p95=      7.45 ms min=     5.55 rows=  51 
+mssql-base     deep error: 'deadlock victim' [all]                        n=  3 p50=   6865.31 ms p95=  12124.98 ms min=  6727.95 rows=  51 
+mssql-base     deep no match 'zq-nomatch-7731' [all]                      n=  3 p50= 311606.51 ms p95= 484069.06 ms min=310379.82 rows=   0 
+=== 13:17:58 mssql-setup idtext
+setup idtext: 00:00:00.5186159
+=== 13:17:59 mssql-cand idtext
+mssql-idtext   runId prefix, recent [7d]                                  n= 20 p50=     23.89 ms p95=     25.94 ms min=    22.60 rows=   1 
+mssql-idtext   runId prefix, 60d old [7d]                                 n= 20 p50=     23.46 ms p95=     27.98 ms min=    22.29 rows=   1 
+mssql-idtext   flow name, common 'Invoice' [7d]                           n= 20 p50=      4.42 ms p95=      4.92 ms min=     4.03 rows=  51 
+mssql-idtext   flow name, rare 'Gdpr' [7d]                                n= 20 p50=    505.01 ms p95=    527.79 ms min=   493.85 rows=  16 
+mssql-idtext   trigger key, common 'order-created' [7d]                   n= 20 p50=      4.80 ms p95=      5.00 ms min=     4.62 rows=  51 
+mssql-idtext   trigger key, rare 'backfill' [7d]                          n= 20 p50=     73.59 ms p95=     75.83 ms min=    71.49 rows=  51 
+mssql-idtext   no match 'zq-nomatch-7731' [7d]                            n= 20 p50=    513.08 ms p95=    538.20 ms min=   496.26 rows=   0 
+mssql-idtext   runId prefix, recent [all]                                 n= 20 p50=   1558.30 ms p95=   1666.71 ms min=  1492.49 rows=   1 
+mssql-idtext   runId prefix, 60d old [all]                                n= 20 p50=   1693.46 ms p95=   4340.20 ms min=  1533.82 rows=   1 
+mssql-idtext   flow name, common 'Invoice' [all]                          n= 20 p50=      3.90 ms p95=      5.11 ms min=     3.67 rows=  51 
+mssql-idtext   flow name, rare 'Gdpr' [all]                               n= 20 p50=    372.37 ms p95=    406.69 ms min=   349.43 rows=  51 
+mssql-idtext   trigger key, common 'order-created' [all]                  n= 20 p50=      4.73 ms p95=      5.93 ms min=     4.23 rows=  51 
+mssql-idtext   trigger key, rare 'backfill' [all]                         n= 20 p50=     74.92 ms p95=     79.86 ms min=    72.54 rows=  51 

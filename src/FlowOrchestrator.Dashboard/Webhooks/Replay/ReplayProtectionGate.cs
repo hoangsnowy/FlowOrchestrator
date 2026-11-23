@@ -24,7 +24,7 @@ public sealed class ReplayProtectionGate
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
-    /// <summary>Outcome of <see cref="EvaluateAsync"/>.</summary>
+    /// <summary>Outcome of <c>EvaluateAsync</c>.</summary>
     public enum Decision
     {
         /// <summary>Skipped — replay protection not configured.</summary>
@@ -60,7 +60,7 @@ public sealed class ReplayProtectionGate
     /// <param name="timestampHeader">Optional explicit timestamp header (e.g. <c>X-Webhook-Timestamp</c>).</param>
     /// <param name="nonceHeader">Optional explicit nonce header (e.g. <c>X-Webhook-Delivery-Id</c>).</param>
     /// <param name="ct">Cancellation token.</param>
-    public async ValueTask<ReplayResult> EvaluateAsync(
+    public ValueTask<ReplayResult> EvaluateAsync(
         Guid flowId,
         string triggerKey,
         IReadOnlyDictionary<string, string> headers,
@@ -69,19 +69,64 @@ public sealed class ReplayProtectionGate
         string? timestampHeader,
         string? nonceHeader,
         CancellationToken ct = default)
+        => EvaluateAsync(
+            flowId, triggerKey, headers, body, toleranceSeconds, timestampHeader, nonceHeader,
+            signatureVerified: false, authenticatedTimestamp: null, authenticatedNonce: null, ct);
+
+    /// <summary>
+    /// Evaluates the request after a signature gate has run. When <paramref name="signatureVerified"/> is
+    /// <see langword="true"/>, freshness and the replay key come only from material the signature covered:
+    /// unsigned timestamp and nonce headers are ignored, because whoever replays a captured delivery controls
+    /// them.
+    /// </summary>
+    /// <param name="flowId">Resolved flow identifier (scopes the nonce table).</param>
+    /// <param name="triggerKey">Resolved trigger key.</param>
+    /// <param name="headers">Inbound headers; case-insensitive lookup expected.</param>
+    /// <param name="body">Raw body bytes; part of the replay key.</param>
+    /// <param name="toleranceSeconds">Maximum allowed skew between client + server clocks.</param>
+    /// <param name="timestampHeader">Explicit timestamp header, used only when no signed timestamp exists.</param>
+    /// <param name="nonceHeader">Explicit nonce header, used only when no signature was verified.</param>
+    /// <param name="signatureVerified">Whether a signature gate verified this request.</param>
+    /// <param name="authenticatedTimestamp">The timestamp the verified digest covered, if any.</param>
+    /// <param name="authenticatedNonce">The per-delivery token the verified digest covered, if any.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Schemes that sign only the body (GitHub, Bitbucket, …) carry no authenticated timestamp. For them the
+    /// replay key is the body hash and its expiry is measured from the server clock, so an identical delivery
+    /// is rejected for <c>2 × toleranceSeconds</c>; beyond that window no replay protection is possible
+    /// without a signed timestamp.
+    /// </remarks>
+    public async ValueTask<ReplayResult> EvaluateAsync(
+        Guid flowId,
+        string triggerKey,
+        IReadOnlyDictionary<string, string> headers,
+        ReadOnlyMemory<byte> body,
+        int toleranceSeconds,
+        string? timestampHeader,
+        string? nonceHeader,
+        bool signatureVerified,
+        string? authenticatedTimestamp,
+        string? authenticatedNonce,
+        CancellationToken ct = default)
     {
         if (toleranceSeconds <= 0)
             return new ReplayResult(Decision.Disabled, TimeSpan.Zero, null);
 
-        // Locate timestamp: explicit header first, fall back to common standards.
-        var tsString = TryHeader(headers, timestampHeader)
-                       ?? TryHeader(headers, "X-Webhook-Timestamp")
-                       ?? TryHeader(headers, "X-Slack-Request-Timestamp")
-                       ?? TryHeader(headers, "X-Zm-Request-Timestamp");
+        var signedTimestamp = signatureVerified && !string.IsNullOrWhiteSpace(authenticatedTimestamp);
+
+        // Locate timestamp: the signed one when the signature covered it; otherwise explicit header first,
+        // then common standards.
+        var tsString = signedTimestamp
+            ? authenticatedTimestamp!.Trim()
+            : TryHeader(headers, timestampHeader)
+              ?? TryHeader(headers, "X-Webhook-Timestamp")
+              ?? TryHeader(headers, "X-Slack-Request-Timestamp")
+              ?? TryHeader(headers, "X-Zm-Request-Timestamp");
         if (string.IsNullOrWhiteSpace(tsString))
             return new ReplayResult(Decision.TimestampMissing, TimeSpan.Zero, "missing_timestamp");
 
-        if (!long.TryParse(tsString, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unixSeconds))
+        if (!long.TryParse(tsString, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unixSeconds)
+            || unixSeconds < MinUnixSeconds || unixSeconds > MaxUnixSeconds)
             return new ReplayResult(Decision.TimestampMissing, TimeSpan.Zero, "invalid_timestamp");
 
         var ts = DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
@@ -90,16 +135,34 @@ public sealed class ReplayProtectionGate
         if (skew.TotalSeconds > toleranceSeconds)
             return new ReplayResult(Decision.SkewRejected, skew, "skew_exceeded");
 
-        // Build nonce. Prefer explicit header; otherwise hash body+timestamp so
-        // identical replays share the same key but different deliveries don't.
-        var nonce = TryHeader(headers, nonceHeader) ?? DefaultNonce(body, tsString);
-        var expiresAt = ts.AddSeconds(2d * toleranceSeconds);
+        string nonce;
+        DateTimeOffset expiresAt;
+        if (signatureVerified)
+        {
+            // Replay key from signed material only. With a signed timestamp the skew check above bounds
+            // the window, so the key may expire relative to it; without one, the unsigned timestamp is
+            // attacker-chosen and must not influence the key or its lifetime.
+            nonce = authenticatedNonce ?? DefaultNonce(body, signedTimestamp ? tsString : string.Empty);
+            expiresAt = (signedTimestamp ? ts : now).AddSeconds(2d * toleranceSeconds);
+        }
+        else
+        {
+            // No signature: prefer explicit header; otherwise hash body+timestamp so identical replays
+            // share the same key but different deliveries don't.
+            nonce = TryHeader(headers, nonceHeader) ?? DefaultNonce(body, tsString);
+            expiresAt = ts.AddSeconds(2d * toleranceSeconds);
+        }
+
         var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, ct).ConfigureAwait(false);
         if (!registered)
             return new ReplayResult(Decision.ReplayRejected, skew, "nonce_seen");
 
         return new ReplayResult(Decision.Fresh, skew, null);
     }
+
+    // DateTimeOffset.FromUnixTimeSeconds throws outside this range; reject instead of surfacing a 500.
+    private const long MinUnixSeconds = -62_135_596_800;
+    private const long MaxUnixSeconds = 253_402_300_799;
 
     private static string? TryHeader(IReadOnlyDictionary<string, string> headers, string? name)
     {

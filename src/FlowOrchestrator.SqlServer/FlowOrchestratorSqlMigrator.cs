@@ -195,20 +195,6 @@ public sealed class FlowOrchestratorSqlMigrator : IHostedService
             CREATE INDEX IX_FlowIdempotencyKeys_RunId ON [FlowIdempotencyKeys]([RunId]);
         END
 
-        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowEvents')
-        BEGIN
-            CREATE TABLE [FlowEvents] (
-                [Sequence]   BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-                [RunId]      UNIQUEIDENTIFIER NOT NULL,
-                [Timestamp]  DATETIMEOFFSET   NOT NULL DEFAULT SYSDATETIMEOFFSET(),
-                [Type]       NVARCHAR(128)    NOT NULL,
-                [StepKey]    NVARCHAR(256)    NULL,
-                [Message]    NVARCHAR(MAX)    NULL
-            );
-
-            CREATE INDEX IX_FlowEvents_RunId_Sequence ON [FlowEvents]([RunId], [Sequence]);
-        END
-
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepDispatches')
         BEGIN
             CREATE TABLE [FlowStepDispatches] (

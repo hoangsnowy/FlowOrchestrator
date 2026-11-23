@@ -233,18 +233,18 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-Each re-check runs the full step path — a claim, an attempt row and a `step.started` / `step.pending` event pair — so a short interval multiplies the run history of every long-parked step.
+Each re-check runs the full step path — a claim and an attempt row (shown as a `step.started` / `step.pending` pair in the run timeline) — so a short interval multiplies the run history of every long-parked step.
 
 ## Observability
 
-When event persistence is enabled (`builder.Observability.EnableEventPersistence = true`), the engine emits these events for each `WaitForSignal` step:
+The run timeline (dashboard Events drawer, `GET /flows/api/runs/{runId}/events`, `FlowTestRunResult.Events`) is derived from the step's attempt rows and shows, for each `WaitForSignal` step:
 
 - `step.started` on every invocation (initial park, signal arrival, timeout fire).
-- `step.pending` every time an invocation parks the step, recorded before its execution claim is released — so it always precedes the `step.completed` of the resume that follows. A parked invocation never emits `step.completed`.
+- `step.pending` every time an invocation parks the step. The attempt is closed as `Pending` before its execution claim is released, so it always precedes the `step.completed` of the resume that follows. A parked invocation never shows `step.completed`.
 - `step.completed` on successful delivery.
 - `step.failed` on timeout.
 
-The dashboard run detail page shows the events in chronological order, plus the resolved input/output and any handler logs surfaced through `IExecutionContext`.
+The dashboard run detail page shows the timeline in chronological order, plus the resolved input/output and any handler logs surfaced through `IExecutionContext`.
 
 ## Restart Safety
 

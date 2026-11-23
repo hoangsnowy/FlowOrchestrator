@@ -1,0 +1,114 @@
+=== 13:20:23 mssql-tokens 200000 payload
+setup tokens: 00:00:00.1956859
+tokens loaded: 16,142,837 rows (Run=1,815,846, Trigger=3,740,918, StepKey=5,215,480, Error=475,717, Payload=4,894,876) in 00:06:40.7326088
+=== 13:27:04 mssql-sizes
+FlowEvents             IX_FlowEvents_RunId_Sequence             rows=   4,308,728      273.0 MB
+FlowEvents             PK__FlowEven__D575BEB182E7404C           rows=   4,308,728      839.9 MB
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,200       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,200       60.3 MB
+FlowRuns               IX_FlowRuns_IdText                       rows=     200,200       13.0 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,200       39.7 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,200       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07A41DDFE8           rows=     200,200      199.4 MB
+FlowRunSearchTokens    PK_FlowRunSearchTokens                   rows=  16,142,837      943.6 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,990,257      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,990,257      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,990,257   11,269.1 MB
+=== 13:27:05 mssql-cand tokens-quick
+mssql-tokens-quick runId prefix, recent [7d]                                  n= 20 p50=      1.27 ms p95=      1.50 ms min=     0.95 rows=   1 
+mssql-tokens-quick runId prefix, 60d old [7d]                                 n= 20 p50=      1.15 ms p95=      1.37 ms min=     0.94 rows=   0 
+mssql-tokens-quick flow name, common 'Invoice' [7d]                           n= 20 p50=     89.67 ms p95=    132.91 ms min=    76.77 rows=  51 
+mssql-tokens-quick flow name, rare 'Gdpr' [7d]                                n= 20 p50=      1.40 ms p95=      2.45 ms min=     0.97 rows=  16 
+mssql-tokens-quick trigger key, common 'order-created' [7d]                   n= 20 p50=     26.67 ms p95=     30.19 ms min=    22.17 rows=  51 
+mssql-tokens-quick trigger key, rare 'backfill' [7d]                          n= 20 p50=      2.25 ms p95=      3.55 ms min=     1.54 rows=  51 
+mssql-tokens-quick no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      0.85 ms p95=      1.04 ms min=     0.70 rows=   0 
+mssql-tokens-quick runId prefix, recent [all]                                 n= 20 p50=      0.98 ms p95=      1.42 ms min=     0.76 rows=   1 
+mssql-tokens-quick runId prefix, 60d old [all]                                n= 20 p50=      0.86 ms p95=      1.00 ms min=     0.71 rows=   1 
+mssql-tokens-quick flow name, common 'Invoice' [all]                          n= 20 p50=    997.53 ms p95=   1147.83 ms min=   900.44 rows=  51 
+mssql-tokens-quick flow name, rare 'Gdpr' [all]                               n= 20 p50=      4.97 ms p95=      6.67 ms min=     4.41 rows=  51 
+mssql-tokens-quick trigger key, common 'order-created' [all]                  n= 20 p50=    253.71 ms p95=    290.49 ms min=   236.71 rows=  51 
+mssql-tokens-quick trigger key, rare 'backfill' [all]                         n= 20 p50=      7.08 ms p95=      9.04 ms min=     5.95 rows=  51 
+mssql-tokens-quick no match 'zq-nomatch-7731' [all]                           n= 20 p50=      0.68 ms p95=      0.81 ms min=     0.57 rows=   0 
+=== 13:27:37 mssql-cand tokens
+mssql-tokens   deep output: invoice, 3d old [7d]                          n= 20 p50=      0.87 ms p95=      1.07 ms min=     0.63 rows=   1 
+mssql-tokens   deep output: invoice, 60d old [7d]                         n= 20 p50=      0.71 ms p95=      1.09 ms min=     0.64 rows=   0 
+mssql-tokens   deep output: orderId, 3d old [7d]                          n= 20 p50=      0.75 ms p95=      0.94 ms min=     0.61 rows=   1 
+mssql-tokens   deep output: common 'express' [7d]                         n= 20 p50=      0.70 ms p95=      0.87 ms min=     0.58 rows=   0 
+mssql-tokens   deep error: shipment, 3d old [7d]                          n= 20 p50=      0.72 ms p95=      0.87 ms min=     0.63 rows=   1 
+mssql-tokens   deep error: 'deadlock victim' [7d]                         n= 20 p50=      2.28 ms p95=      3.34 ms min=     2.12 rows=  51 
+mssql-tokens   deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=      0.76 ms p95=      0.95 ms min=     0.61 rows=   0 
+mssql-tokens   deep output: invoice, 60d old [all]                        n= 20 p50=      1.22 ms p95=      2.41 ms min=     0.87 rows=   1 
+mssql-tokens   deep output: common 'express' [all]                        n= 20 p50=      0.87 ms p95=      1.20 ms min=     0.74 rows=   0 
+mssql-tokens   deep error: 'deadlock victim' [all]                        n= 20 p50=     32.03 ms p95=     42.74 ms min=    25.80 rows=  51 
+mssql-tokens   deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=      0.79 ms p95=      0.86 ms min=     0.67 rows=   0 
+=== 13:27:38 mssql-write tokens 200 tokens
+Unhandled exception. Microsoft.Data.SqlClient.SqlException (0x80131904): Violation of PRIMARY KEY constraint 'PK__FlowRuns__3214EC07A41DDFE8'. Cannot insert duplicate key in object 'dbo.FlowRuns'. The duplicate key value is (679ad3dc-4c37-4614-9c94-8acce285047f).
+The statement has been terminated.
+--- End of stack trace from previous location ---
+ClientConnectionId:c196ea28-475c-4594-9efb-42369b19e328
+Error Number:2627,State:1,Class:14
+!!! failed: mssql-write tokens 200 tokens
+=== 13:27:39 mssql-setup searchcol
+setup searchcol: 00:00:00.4068961
+=== 13:27:39 mssql-cand searchcol
+mssql-searchcol runId prefix, recent [7d]                                  n= 20 p50=     28.77 ms p95=     30.17 ms min=    27.95 rows=   1 
+mssql-searchcol runId prefix, 60d old [7d]                                 n= 20 p50=     29.66 ms p95=     32.42 ms min=    27.94 rows=   1 
+mssql-searchcol flow name, common 'Invoice' [7d]                           n= 20 p50=      1.36 ms p95=      1.56 ms min=     1.13 rows=  51 
+mssql-searchcol flow name, rare 'Gdpr' [7d]                                n= 20 p50=      8.41 ms p95=      9.75 ms min=     6.11 rows=  16 
+mssql-searchcol trigger key, common 'order-created' [7d]                   n= 20 p50=      2.10 ms p95=      2.52 ms min=     1.77 rows=  51 
+mssql-searchcol trigger key, rare 'backfill' [7d]                          n= 20 p50=      5.36 ms p95=      7.80 ms min=     4.79 rows=  51 
+mssql-searchcol no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      6.60 ms p95=      7.26 ms min=     5.85 rows=   0 
+mssql-searchcol runId prefix, recent [all]                                 n= 20 p50=    108.21 ms p95=    118.78 ms min=   100.71 rows=   1 
+mssql-searchcol runId prefix, 60d old [all]                                n= 20 p50=    103.40 ms p95=    106.70 ms min=   101.39 rows=   1 
+mssql-searchcol flow name, common 'Invoice' [all]                          n= 20 p50=      1.39 ms p95=      1.69 ms min=     1.24 rows=  51 
+mssql-searchcol flow name, rare 'Gdpr' [all]                               n= 20 p50=     24.88 ms p95=     31.69 ms min=    22.84 rows=  51 
+mssql-searchcol trigger key, common 'order-created' [all]                  n= 20 p50=      1.32 ms p95=      1.78 ms min=     1.19 rows=  51 
+mssql-searchcol trigger key, rare 'backfill' [all]                         n= 20 p50=      4.77 ms p95=      5.26 ms min=     4.54 rows=  51 
+mssql-searchcol no match 'zq-nomatch-7731' [all]                           n= 20 p50=     79.11 ms p95=     90.92 ms min=    76.59 rows=   0 
+=== 13:27:49 mssql-setup fts
+setup fts: 00:00:28.1994613
+fts populated: 00:09:28.4479503
+=== 13:37:18 mssql-sizes
+FlowEvents             IX_FlowEvents_RunId_Sequence             rows=   4,308,728      273.0 MB
+FlowEvents             PK__FlowEven__D575BEB182E7404C           rows=   4,308,728      839.9 MB
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,200       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,200       60.3 MB
+FlowRuns               IX_FlowRuns_IdText                       rows=     200,200       13.0 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,200       39.7 MB
+FlowRuns               IX_FlowRuns_StartedAt_Search             rows=     200,200       43.1 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,200       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07A41DDFE8           rows=     200,200      199.4 MB
+FlowRunSearchTokens    PK_FlowRunSearchTokens                   rows=  16,142,837      943.6 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,990,257      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,990,257      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,990,257   11,288.8 MB
+FlowSteps              UX_FlowSteps_SearchKey                   rows=   1,990,257      115.6 MB
+FTS catalog fo_search: 2393 MB, 1,990,257 items
+=== 13:37:19 mssql-cand fts
+mssql-fts      deep output: invoice, 3d old [7d]                          n=  3 p50=    849.52 ms p95=  12078.08 ms min=   756.31 rows=   1 
+mssql-fts      deep output: invoice, 60d old [7d]                         n= 20 p50=    697.38 ms p95=   1966.78 ms min=   666.82 rows=   0 
+mssql-fts      deep output: orderId, 3d old [7d]                          n= 20 p50=   2221.77 ms p95=   2302.15 ms min=  2093.52 rows=   1 
+mssql-fts      deep output: common 'express' [7d]                         n= 20 p50=   6679.22 ms p95=   6906.14 ms min=  6410.89 rows=  51 
+mssql-fts      deep error: shipment, 3d old [7d]                          n= 20 p50=    272.65 ms p95=    300.98 ms min=   266.75 rows=   1 
+mssql-fts      deep error: 'deadlock victim' [7d]                         n= 20 p50=   7467.07 ms p95=  10840.01 ms min=  7073.43 rows=  51 
+mssql-fts      deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=    173.97 ms p95=    192.91 ms min=   171.23 rows=   0 
+mssql-fts      deep output: invoice, 60d old [all]                        n=  3 p50=  51921.61 ms p95=  59420.06 ms min= 31977.89 rows=   1 
+mssql-fts      deep output: common 'express' [all]                        n= 20 p50=   6590.68 ms p95=   6898.52 ms min=  6329.00 rows=  51 
+mssql-fts      deep error: 'deadlock victim' [all]                        n= 20 p50=   7551.52 ms p95=  12070.29 ms min=  7166.21 rows=  51 
+mssql-fts      deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=   5424.69 ms p95=   7966.94 ms min=  4786.04 rows=   0 
+=== 13:55:45 mssql-write fts 200
+Unhandled exception. Microsoft.Data.SqlClient.SqlException (0x80131904): Violation of PRIMARY KEY constraint 'PK__FlowRuns__3214EC07A41DDFE8'. Cannot insert duplicate key in object 'dbo.FlowRuns'. The duplicate key value is (679ad3dc-4c37-4614-9c94-8acce285047f).
+The statement has been terminated.
+--- End of stack trace from previous location ---
+ClientConnectionId:490cc2aa-030b-48ef-9540-92592f14c922
+Error Number:2627,State:1,Class:14
+!!! failed: mssql-write fts 200
+=== 13:55:45 mssql-cand collate-deep
+mssql-collate-deep deep output: invoice, 3d old [7d]                          n= 20 p50=   1437.41 ms p95=   1552.94 ms min=  1309.67 rows=   1 
+mssql-collate-deep deep output: invoice, 60d old [7d]                         n= 20 p50=   1345.93 ms p95=   1457.81 ms min=  1306.07 rows=   0 
+mssql-collate-deep deep output: orderId, 3d old [7d]                          n= 20 p50=   1507.69 ms p95=   1644.42 ms min=  1363.86 rows=   1 
+mssql-collate-deep deep output: common 'express' [7d]                         n= 20 p50=      1.98 ms p95=      2.35 ms min=     1.82 rows=  51 
+mssql-collate-deep deep error: shipment, 3d old [7d]                          n= 20 p50=   1363.10 ms p95=   1397.83 ms min=  1342.29 rows=   1 
+mssql-collate-deep deep error: 'deadlock victim' [7d]                         n= 20 p50=    627.78 ms p95=    976.03 ms min=   596.74 rows=  51 

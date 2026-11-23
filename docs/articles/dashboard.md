@@ -162,7 +162,7 @@ Idempotency-Key: {unique-key}    (optional — prevents duplicate runs)
 | `GET` | `/flows/api/runs/timeseries` | Bucketed run counts for the overview charts — `?bucket=hour\|day`, `?hours=` (default 24, max 720), `?days=` (default 30, max 365), `?since=`/`?until=`, `?flowId=` |
 | `GET` | `/flows/api/runs/{id}` | Run detail with trigger headers/body |
 | `GET` | `/flows/api/runs/{id}/steps` | All step details for a run |
-| `GET` | `/flows/api/runs/{runId}/events` | Event stream for the run (requires `EnableEventPersistence = true`) |
+| `GET` | `/flows/api/runs/{runId}/events` | Chronological run timeline (`?skip=`/`?take=`, default 200), derived from the run and its step attempts — no option needed |
 | `GET` | `/flows/api/runs/{runId}/control` | Timeout, cancellation, idempotency state |
 | `GET` | `/flows/api/runs/{runId}/lineage` | Re-run lineage: the source run this one was re-run from, plus the runs re-run from it |
 | `POST` | `/flows/api/runs/{runId}/cancel` | Request cooperative cancellation |

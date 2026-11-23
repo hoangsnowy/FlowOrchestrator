@@ -311,23 +311,6 @@ public sealed class RunEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task GET_api_runs_events_returns_200()
-    {
-        // Arrange
-        var runId = Guid.NewGuid();
-        _server.EventReader.GetRunEventsAsync(runId, 0, 200)
-            .Returns([new FlowEventRecord { RunId = runId, Sequence = 1, Type = "step.started" }]);
-
-        // Act
-        var response = await _client.GetAsync($"/flows/api/runs/{runId}/events");
-
-        // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("step.started", body);
-    }
-
-    [Fact]
     public async Task GET_api_runs_control_returns_200()
     {
         // Arrange

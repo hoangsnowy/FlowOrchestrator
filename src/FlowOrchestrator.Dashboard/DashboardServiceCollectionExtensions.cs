@@ -867,25 +867,35 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response, CanOperate(http) ? steps : steps.Select(Security.ManifestSecretRedactor.Redacted).ToList());
         });
 
-        group.MapGet("/api/runs/{runId:guid}/events", async (HttpContext http, IServiceProvider services, Guid runId) =>
+        // Run timeline ("Events" drawer). Persisted run events were removed in 2.0; the timeline is
+        // derived from the run record + its step attempts, so the JSON shape (FlowEventRecord:
+        // sequence, runId, timestamp, type, stepKey, message) is unchanged for dashboard.js.
+        // Cost per call: one GetRunDetailAsync (the same read /api/runs/{id} makes) plus
+        // O(a log a) time / O(a) allocation in FlowRunTimeline.Build, a = attempt rows in the run;
+        // skip/take page the derived list in memory. Read path only — nothing on the engine path.
+        group.MapGet("/api/runs/{runId:guid}/events", async (HttpContext http, IFlowRunStore store, Guid runId) =>
         {
-            var reader = services.GetService<IFlowEventReader>();
-            if (reader is null)
+            var run = await store.GetRunDetailAsync(runId);
+            if (run is null)
             {
-                await WriteJsonAsync(http.Response,Array.Empty<FlowEventRecord>());
+                // Same as the 1.x endpoint for a run with no events: an empty list, not a 404.
+                await WriteJsonAsync(http.Response, Array.Empty<FlowEventRecord>());
                 return;
             }
 
             var query = http.Request.Query;
             var skip = query.TryGetValue("skip", out var skipValues) && int.TryParse(skipValues, out var parsedSkip)
-                ? parsedSkip
+                ? Math.Max(0, parsedSkip)
                 : 0;
             var take = query.TryGetValue("take", out var takeValues) && int.TryParse(takeValues, out var parsedTake)
-                ? parsedTake
+                ? Math.Max(1, parsedTake)
                 : 200;
 
-            var events = await reader.GetRunEventsAsync(runId, skip, take);
-            await WriteJsonAsync(http.Response,events);
+            var timeline = FlowRunTimeline.Build(run);
+            IReadOnlyList<FlowEventRecord> page = skip == 0 && take >= timeline.Count
+                ? timeline
+                : timeline.Skip(skip).Take(take).ToArray();
+            await WriteJsonAsync(http.Response, page);
         });
 
         group.MapGet("/api/runs/{runId:guid}/control", async (HttpContext http, IServiceProvider services, Guid runId) =>

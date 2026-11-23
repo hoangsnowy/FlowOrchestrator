@@ -53,7 +53,7 @@ public sealed class EngineObservabilityTests
             [EngineTestStores.PermissiveRuntimeStore(statuses)],
             [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
-            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
+            new FlowObservabilityOptions { EnableOpenTelemetry = true },
             telemetry ?? new FlowOrchestratorTelemetry(),
             logger,
             NoopFlowEventNotifier.Instance);
