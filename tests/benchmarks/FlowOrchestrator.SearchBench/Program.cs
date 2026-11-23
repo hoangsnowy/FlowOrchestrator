@@ -39,6 +39,19 @@ switch (command)
         foreach (var (k, v) in gen.Needles.Values) Console.WriteLine($"  needle {k} = {v}");
         break;
     }
+    case "selftest":
+    {
+        foreach (var t in new[] { "bbdafe3e", "5001234", "INV-001353358", "deadlock victim", "order-created", "Gdpr", "zq-nomatch-7731" })
+        {
+            var (lo, hi) = PgBench.UuidRange(t);
+            Console.WriteLine($"{t,-18} uuid=[{lo}..{hi}] tsq={PgBench.TsQuery(t)} fts={MsSqlBench.FtsQuery(t)} tokens={string.Join(",", SearchTokenizer.QueryTokens(t))}");
+        }
+        var set = new HashSet<string>();
+        SearchTokenizer.AddJsonValues("{\"orderId\":\"ORD-2026-0193334\",\"email\":\"anna.jansen12@example.com\",\"lines\":[{\"sku\":\"SKU-12345\"}],\"note\":\"two words\"}", set);
+        SearchTokenizer.AddText("InvoiceSyncFlow bbdafe3e-a933-433e-ac3a-720d309388b5", set, camelCase: true);
+        Console.WriteLine(string.Join(" ", set));
+        break;
+    }
     case "mssql-seed": await MsSqlSeeder.SeedAsync(Arg(1, 200_000), withEvents: true); break;
     case "mssql-base": await MsSqlBench.BaselineAsync(deep: SArg(1, "quick") == "deep", quick: SArg(1, "quick") == "quick"); break;
     case "mssql-setup": await MsSqlBench.SetupAsync(SArg(1, "")); break;

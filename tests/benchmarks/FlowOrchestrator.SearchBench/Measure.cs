@@ -39,6 +39,7 @@ public static class Measure
             sw.Stop();
             samples.Add(sw.Elapsed.TotalMilliseconds);
             if (samples.Count >= 5 && total.Elapsed > budget) break;
+            if (samples.Count >= 3 && samples.Min() > 20_000) break;   // 20 s+ scans: 3 warm samples
         }
         samples.Sort();
         var timing = new Timing(suite, name, samples.Count, Percentile(samples, 0.50), Percentile(samples, 0.95), samples[0], samples[^1], rows, note);
