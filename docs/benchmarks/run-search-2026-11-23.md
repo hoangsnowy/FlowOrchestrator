@@ -212,6 +212,10 @@ server-side insert of ~5 B-tree rows. That folded cost is the number still to me
 
 ## FlowEvents — keep, opt-in, or remove
 
+> **Decision (2026-11-23):** the maintainer chose to **remove** persisted events in 2.0 rather than make
+> them opt-in. The engine no longer writes them; the dashboard Events drawer and `FlowTestRunResult.Events`
+> are derived from step attempts (`FlowRunTimeline`). The verdict below is the measurement-time proposal.
+
 **Cost (measured, SQL Server):**
 
 | | |

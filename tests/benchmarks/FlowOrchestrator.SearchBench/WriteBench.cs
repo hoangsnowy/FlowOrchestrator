@@ -16,7 +16,8 @@ namespace FlowOrchestrator.SearchBench;
 /// <summary>
 /// Per-step write cost on the seeded (production-size) tables, through the real store methods the engine
 /// calls for one step: dispatch ledger, claim, step start, output upsert, step complete, status read — plus
-/// the two <c>RecordEventAsync</c> inserts, and the PROTOTYPE search-token insert.
+/// and the PROTOTYPE search-token insert. (The 1.x run used for the 2026-11-23 numbers also timed the two
+/// per-step event inserts; 2.0 removed persisted events, so those timings are gone from this harness.)
 /// </summary>
 public static class WriteBench
 {
@@ -71,7 +72,6 @@ public static class WriteBench
         {
             var ctx = new ExecutionContext { RunId = run.Id };
             await s.TimeAsync("StartRunAsync", () => store.StartRunAsync(flowId, run.FlowName, run.Id, run.TriggerKey, run.TriggerDataJson, run.BackgroundJobId));
-            await s.TimeAsync("event run.started", () => outputs.RecordEventAsync(ctx, null!, RunStep(run.Id), Evt("run.started", "Flow run started via trigger 'x'.")).AsTask());
             if (tokens) await s.TimeAsync("tokens run (run+trigger)", () => MsSqlTokensAsync(db, run.Id, RunTokens(run)));
             foreach (var st in run.Steps)
             {
@@ -80,15 +80,12 @@ public static class WriteBench
                 await s.TimeAsync("TryRecordDispatchAsync", () => store.TryRecordDispatchAsync(run.Id, st.StepKey));
                 await s.TimeAsync("TryClaimStepAsync", () => store.TryClaimStepAsync(run.Id, st.StepKey));
                 await s.TimeAsync("RecordStepStartAsync", () => store.RecordStepStartAsync(run.Id, st.StepKey, st.StepType, "{\"in\":1}", null));
-                await s.TimeAsync("event step.started", () => outputs.RecordEventAsync(ctx, null!, step, Evt("step.started", $"Step '{st.StepKey}' started.")).AsTask());
                 await s.TimeAsync("SaveStepOutputAsync", () => outputs.SaveStepOutputAsync(ctx, null!, step, new StepResult { Key = st.StepKey, Result = st.OutputJson }).AsTask());
                 await s.TimeAsync("RecordStepCompleteAsync", () => store.RecordStepCompleteAsync(run.Id, st.StepKey, st.Status, st.OutputJson, st.ErrorMessage));
-                await s.TimeAsync("event step.completed", () => outputs.RecordEventAsync(ctx, null!, step, Evt("step.completed", $"Step '{st.StepKey}' completed with status {st.Status}.")).AsTask());
                 await s.TimeAsync("GetStepStatusesAsync", () => store.GetStepStatusesAsync(run.Id));
                 if (tokens) await s.TimeAsync("tokens step", () => MsSqlTokensAsync(db, run.Id, StepTokens(st)));
             }
             await s.TimeAsync("CompleteRunAsync", () => store.CompleteRunAsync(run.Id, run.Status));
-            await s.TimeAsync("event run.completed", () => outputs.RecordEventAsync(ctx, null!, RunStep(run.Id), Evt("run.completed", "Run completed with status Succeeded.")).AsTask());
         }
         await s.ReportAsync("mssql", label);
     }
@@ -107,7 +104,6 @@ public static class WriteBench
         {
             var ctx = new ExecutionContext { RunId = run.Id };
             await s.TimeAsync("StartRunAsync", () => store.StartRunAsync(flowId, run.FlowName, run.Id, run.TriggerKey, run.TriggerDataJson, run.BackgroundJobId));
-            await s.TimeAsync("event run.started", () => outputs.RecordEventAsync(ctx, null!, RunStep(run.Id), Evt("run.started", "Flow run started via trigger 'x'.")).AsTask());
             if (tokens) await s.TimeAsync("tokens run (run+trigger)", () => PgTokensAsync(db, run.Id, RunTokens(run)));
             foreach (var st in run.Steps)
             {
@@ -116,22 +112,18 @@ public static class WriteBench
                 await s.TimeAsync("TryRecordDispatchAsync", () => store.TryRecordDispatchAsync(run.Id, st.StepKey));
                 await s.TimeAsync("TryClaimStepAsync", () => store.TryClaimStepAsync(run.Id, st.StepKey));
                 await s.TimeAsync("RecordStepStartAsync", () => store.RecordStepStartAsync(run.Id, st.StepKey, st.StepType, "{\"in\":1}", null));
-                await s.TimeAsync("event step.started", () => outputs.RecordEventAsync(ctx, null!, step, Evt("step.started", $"Step '{st.StepKey}' started.")).AsTask());
                 await s.TimeAsync("SaveStepOutputAsync", () => outputs.SaveStepOutputAsync(ctx, null!, step, new StepResult { Key = st.StepKey, Result = st.OutputJson }).AsTask());
                 await s.TimeAsync("RecordStepCompleteAsync", () => store.RecordStepCompleteAsync(run.Id, st.StepKey, st.Status, st.OutputJson, st.ErrorMessage));
-                await s.TimeAsync("event step.completed", () => outputs.RecordEventAsync(ctx, null!, step, Evt("step.completed", $"Step '{st.StepKey}' completed with status {st.Status}.")).AsTask());
                 await s.TimeAsync("GetStepStatusesAsync", () => store.GetStepStatusesAsync(run.Id));
                 if (tokens) await s.TimeAsync("tokens step", () => PgTokensAsync(db, run.Id, StepTokens(st)));
             }
             await s.TimeAsync("CompleteRunAsync", () => store.CompleteRunAsync(run.Id, run.Status));
-            await s.TimeAsync("event run.completed", () => outputs.RecordEventAsync(ctx, null!, RunStep(run.Id), Evt("run.completed", "Run completed with status Succeeded.")).AsTask());
         }
         await s.ReportAsync("pg", label);
     }
 
     private static IStepInstance RunStep(Guid runId) => new StepInstance("__run", "__run") { RunId = runId };
 
-    private static FlowEvent Evt(string type, string message) => new() { Type = type, Message = message };
 
     private static List<(string Token, TokenSource Source)> RunTokens(RunRow run)
     {
