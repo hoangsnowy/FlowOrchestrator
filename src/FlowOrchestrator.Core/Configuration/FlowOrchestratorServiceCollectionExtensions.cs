@@ -89,6 +89,7 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.Retention);
         services.AddSingleton(builder.Observability);
         services.AddSingleton(builder.Signals);
+        services.AddSingleton(builder.RunSearchIndex);
 
         // The one flow registry, built once from every AddFlow<T>() registration on first resolve.
         services.TryAddSingleton(sp => new FlowRegistry(sp.GetServices<IFlowDefinition>()));

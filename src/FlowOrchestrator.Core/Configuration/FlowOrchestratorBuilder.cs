@@ -39,6 +39,26 @@ public sealed class FlowOrchestratorBuilder
     /// <summary>Signal options for <c>WaitForSignal</c> parking and resume-nudge dispatch.</summary>
     public FlowSignalOptions Signals { get; } = new();
 
+    /// <summary>Options for the opt-in run-search token index; see <see cref="UseRunSearchIndex"/>.</summary>
+    public RunSearchIndexOptions RunSearchIndex { get; } = new();
+
+    /// <summary>
+    /// Enables the built-in run-search token index (experimental): deep search by token-prefix index
+    /// seek instead of a <c>LIKE</c> scan over step payloads, with a background back-fill of existing runs.
+    /// </summary>
+    /// <param name="configure">Optional tuning of batch sizes and intervals.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// Off by default. Honoured by the SQL Server provider; other providers ignore it. Read
+    /// <see cref="RunSearchIndexOptions"/> for the storage and write-path cost before enabling it.
+    /// </remarks>
+    public FlowOrchestratorBuilder UseRunSearchIndex(Action<RunSearchIndexOptions>? configure = null)
+    {
+        RunSearchIndex.Enabled = true;
+        configure?.Invoke(RunSearchIndex);
+        return this;
+    }
+
     /// <summary>
     /// Registers <typeparamref name="TFlow"/> as a singleton <see cref="IFlowDefinition"/>.
     /// At startup, <c>FlowSyncHostedService</c> validates and syncs all registered flows.
