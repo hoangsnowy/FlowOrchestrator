@@ -277,7 +277,7 @@ public sealed class InMemoryFlowRunStore :
 
     private bool MatchesRunText(FlowRunRecord run, string text, Guid? textId, bool includeStepPayloads)
     {
-        var idMatches = textId.HasValue ? run.Id == textId.Value : ContainsIgnoreCase(run.Id.ToString(), text);
+        var idMatches = textId.HasValue ? run.Id == textId.Value : IdContainsIgnoreCase(run.Id, text);
         if (idMatches
             || ContainsIgnoreCase(run.FlowName, text)
             || ContainsIgnoreCase(run.TriggerKey, text)
@@ -905,7 +905,7 @@ public sealed class InMemoryFlowRunStore :
 
     private bool MatchesRunSearch(FlowRunRecord run, string search, bool deepSearch)
     {
-        if (ContainsIgnoreCase(run.Id.ToString(), search)
+        if (IdContainsIgnoreCase(run.Id, search)
             || ContainsIgnoreCase(run.FlowName, search)
             || ContainsIgnoreCase(run.TriggerKey, search)
             || ContainsIgnoreCase(run.Status, search)
@@ -942,6 +942,30 @@ public sealed class InMemoryFlowRunStore :
 
     private static bool ContainsIgnoreCase(string? value, string search)
         => !string.IsNullOrEmpty(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Length of a <see cref="Guid"/> in its default <c>"D"</c> format.</summary>
+    private const int GuidDFormatLength = 36;
+
+    /// <summary>
+    /// Returns what <c>ContainsIgnoreCase(id.ToString(), search)</c> returns, without allocating the
+    /// 36-character string: the id is formatted into a stack buffer and searched as a span.
+    /// </summary>
+    /// <remarks>
+    /// Runs once per candidate run of every text search, so the string it replaces was ~96 bytes per
+    /// run — about 1 MB per search at 10k runs (#189). A term longer than the formatted id cannot
+    /// occur in it, which also short-circuits the common case of a long free-text search.
+    /// </remarks>
+    private static bool IdContainsIgnoreCase(Guid id, string search)
+    {
+        if (search.Length > GuidDFormatLength)
+        {
+            return false;
+        }
+
+        Span<char> buffer = stackalloc char[GuidDFormatLength];
+        return id.TryFormat(buffer, out var written)
+            && ((ReadOnlySpan<char>)buffer[..written]).Contains(search.AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Copies a run header so readers get an immutable point-in-time snapshot instead of the live
