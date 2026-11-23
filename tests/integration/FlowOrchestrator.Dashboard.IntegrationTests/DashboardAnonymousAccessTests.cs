@@ -85,7 +85,7 @@ public sealed class DashboardAnonymousAccessTests
     {
         // Arrange
         using var server = DashboardTestServer.InEnvironment(Environments.Staging);
-        var request = new HttpRequestMessage(new HttpMethod(method), string.Format(System.Globalization.CultureInfo.InvariantCulture, pathFormat, Guid.NewGuid()))
+        using var request = new HttpRequestMessage(new HttpMethod(method), string.Format(System.Globalization.CultureInfo.InvariantCulture, pathFormat, Guid.NewGuid()))
         {
             Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json"),
         };
@@ -164,7 +164,7 @@ public sealed class DashboardAnonymousAccessTests
             o.BasicAuth.Password = "correct-horse-battery";
         });
         var flow = ArrangeFlowWithSecret(server);
-        var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/flows/{flow.Id}/trigger");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/flows/{flow.Id}/trigger");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("admin:correct-horse-battery")));
 
