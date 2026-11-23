@@ -73,6 +73,7 @@ public sealed class SignalAndCronMetricsTests
             flowRepo,
             Substitute.For<IStepDispatcher>(),
             Substitute.For<IOutputsRepository>(),
+            new[] { Substitute.For<IFlowRunRuntimeStore>() },
             telemetry);
 
         // Act
@@ -127,6 +128,7 @@ public sealed class SignalAndCronMetricsTests
             flowRepo,
             Substitute.For<IStepDispatcher>(),
             Substitute.For<IOutputsRepository>(),
+            new[] { Substitute.For<IFlowRunRuntimeStore>() },
             telemetry: null);
 
         // Act

@@ -18,10 +18,10 @@ public class FlowRunRecoveryHostedServiceTests
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly ILogger<FlowRunRecoveryHostedService> _logger = Substitute.For<ILogger<FlowRunRecoveryHostedService>>();
 
-    private FlowRunRecoveryHostedService CreateSut(bool includeRuntimeStore = true) =>
+    private FlowRunRecoveryHostedService CreateSut() =>
         new(
             _runStore,
-            includeRuntimeStore ? new[] { _runtimeStore } : Array.Empty<IFlowRunRuntimeStore>(),
+            new[] { _runtimeStore },
             _flowRepo,
             _graphPlanner,
             _dispatcher,
@@ -62,16 +62,25 @@ public class FlowRunRecoveryHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_NoRuntimeStore_SkipsRecovery()
+    public void Constructor_NoRuntimeStore_FailsFastNamingServiceAndStore()
     {
-        // Arrange
+        // Arrange — v2.0 removed the "skip recovery in legacy sequential mode" fallback: a host
+        // without a runtime store cannot evaluate step statuses, so it must not start silently.
+        var noStores = Array.Empty<IFlowRunRuntimeStore>();
 
         // Act
-        await CreateSut(includeRuntimeStore: false).StartAsync(default);
+        var ex = Assert.Throws<InvalidOperationException>(() => new FlowRunRecoveryHostedService(
+            _runStore,
+            noStores,
+            _flowRepo,
+            _graphPlanner,
+            _dispatcher,
+            _outputsRepo,
+            _logger));
 
         // Assert
-        await _runStore.DidNotReceiveWithAnyArgs().GetActiveRunsAsync();
-        Assert.Empty(_dispatcher.ReceivedCalls());
+        Assert.Contains(nameof(FlowRunRecoveryHostedService), ex.Message);
+        Assert.Contains(nameof(IFlowRunRuntimeStore), ex.Message);
     }
 
     [Fact]

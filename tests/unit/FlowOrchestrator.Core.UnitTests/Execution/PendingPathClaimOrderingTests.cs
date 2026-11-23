@@ -401,23 +401,6 @@ public sealed class PendingPathClaimOrderingTests
     // ── Re-check gating and resume shape (QA findings B4, B5) ───────────────────
 
     [Fact]
-    public async Task No_re_check_without_a_runtime_store()
-    {
-        // Arrange — no claims, so the dispatcher's nudge always enqueues immediately and a re-check
-        // would only add a duplicate execution.
-        _signalStore.GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<FlowSignalWaiter?>(DeliveredWaiter()));
-        var engine = CreateEngine(withSignalStore: true, withRuntimeStore: false);
-
-        // Act
-        await RunStepAsync(engine);
-
-        // Assert
-        await _signalStore.DidNotReceiveWithAnyArgs().GetWaiterAsync(default, default!, default);
-        Assert.DoesNotContain("enqueue", _calls);
-    }
-
-    [Fact]
     public async Task No_re_check_for_a_step_type_other_than_WaitForSignal()
     {
         // Arrange — a custom handler that parks while a delivered waiter exists for its key would be
@@ -542,7 +525,6 @@ public sealed class PendingPathClaimOrderingTests
         IFlowRunControlStore? runControlStore = null,
         FlowOrchestratorTelemetry? telemetry = null,
         bool enableOpenTelemetry = false,
-        bool withRuntimeStore = true,
         IFlowRunRuntimeStore? runtimeStoreOverride = null) =>
         new(
             _dispatcher,
@@ -554,8 +536,8 @@ public sealed class PendingPathClaimOrderingTests
             _outputsRepo,
             Substitute.For<IExecutionContextAccessor>(),
             Substitute.For<IFlowRepository>(),
-            withRuntimeStore ? [runtimeStoreOverride ?? _runtimeStore] : [],
-            runControlStore is null ? [] : [runControlStore],
+            [runtimeStoreOverride ?? _runtimeStore],
+            [runControlStore ?? EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = true, EnableOpenTelemetry = enableOpenTelemetry },
             telemetry ?? new FlowOrchestratorTelemetry(),

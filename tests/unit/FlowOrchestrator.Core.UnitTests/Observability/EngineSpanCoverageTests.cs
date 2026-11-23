@@ -4,6 +4,7 @@ using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
@@ -53,8 +54,8 @@ public sealed class EngineSpanCoverageTests
             _outputsRepo,
             _ctxAccessor,
             _flowRepo,
-            runtimeStore is not null ? [runtimeStore] : [],
-            [],
+            [runtimeStore ?? EngineTestStores.PermissiveRuntimeStore()],
+            [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
             _telemetry,
@@ -116,9 +117,11 @@ public sealed class EngineSpanCoverageTests
         };
         meterListener.SetMeasurementEventCallback<long>((_, value, _, _) => counterValues.Add(value));
         meterListener.Start();
+        var afterRetry = EngineTestStores.PermissiveRuntimeStore(
+            new Dictionary<string, StepStatus>(StringComparer.Ordinal) { ["step1"] = StepStatus.Succeeded });
 
         // Act
-        await CreateEngine().RetryStepAsync(flowId, runId, "step1");
+        await CreateEngine(afterRetry).RetryStepAsync(flowId, runId, "step1");
 
         // Assert
         var retryActivity = Assert.Single(stopped, a => a.OperationName == "flow.step.retry");

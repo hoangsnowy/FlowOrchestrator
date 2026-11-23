@@ -4,6 +4,7 @@ using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
@@ -32,7 +33,7 @@ public sealed class EngineNotifierIsolationTests
         new FlowOrchestratorEngine(
             _dispatcher, _flowExecutor, _graphPlanner, _stepExecutor,
             _flowStore, _runStore, _outputsRepo, _ctxAccessor, _flowRepo,
-            [], [],
+            [EngineTestStores.PermissiveRuntimeStore()], [EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = enableEventPersistence, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),

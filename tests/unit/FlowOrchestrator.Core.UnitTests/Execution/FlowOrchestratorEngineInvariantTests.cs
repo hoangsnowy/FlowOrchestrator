@@ -55,8 +55,8 @@ public sealed class FlowOrchestratorEngineInvariantTests
             _outputsRepo,
             _ctxAccessor,
             _flowRepo,
-            runtimeStore is not null ? [runtimeStore] : [],
-            runControlStore is not null ? [runControlStore] : [],
+            [runtimeStore ?? EngineTestStores.PermissiveRuntimeStore()],
+            [runControlStore ?? EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
@@ -83,6 +83,40 @@ public sealed class FlowOrchestratorEngineInvariantTests
 
     private static IExecutionContext MakeCtx(Guid runId) =>
         new CoreExecutionContext { RunId = runId };
+
+    // ── Required stores (v2.0): construction fails fast without them ──────────
+
+    [Fact]
+    public void Constructor_WithoutRuntimeStore_ThrowsNamingEngineAndRuntimeStore()
+    {
+        // Arrange — v2.0 removed the legacy sequential continuation that ran when no runtime store
+        // was registered; the DAG continuation and the claim guard both need the store.
+        IFlowRunRuntimeStore[] noRuntimeStores = [];
+        IFlowRunControlStore[] controlStores = [EngineTestStores.ControlStore()];
+
+        // Act
+        var ex = Assert.Throws<InvalidOperationException>(() => CreateEngineWithStoreLists(noRuntimeStores, controlStores));
+
+        // Assert
+        Assert.Contains(nameof(FlowOrchestratorEngine), ex.Message);
+        Assert.Contains(nameof(IFlowRunRuntimeStore), ex.Message);
+    }
+
+    [Fact]
+    public void Constructor_WithoutRunControlStore_ThrowsNamingEngineAndControlStore()
+    {
+        // Arrange — cancellation, timeouts and idempotency keys all read the control store; v2.0 no
+        // longer degrades to "no run control" when it is missing.
+        IFlowRunRuntimeStore[] runtimeStores = [EngineTestStores.PermissiveRuntimeStore()];
+        IFlowRunControlStore[] noControlStores = [];
+
+        // Act
+        var ex = Assert.Throws<InvalidOperationException>(() => CreateEngineWithStoreLists(runtimeStores, noControlStores));
+
+        // Assert
+        Assert.Contains(nameof(FlowOrchestratorEngine), ex.Message);
+        Assert.Contains(nameof(IFlowRunControlStore), ex.Message);
+    }
 
     // ── Invariant 1: Dispatch is idempotent ───────────────────────────────────
 
@@ -446,8 +480,28 @@ public sealed class FlowOrchestratorEngineInvariantTests
             _outputsRepo,
             _ctxAccessor,
             _flowRepo,
-            [],
-            [],
+            [EngineTestStores.PermissiveRuntimeStore()],
+            [EngineTestStores.ControlStore()],
+            new FlowRunControlOptions(),
+            new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
+            new FlowOrchestratorTelemetry(),
+            _logger);
+
+    private FlowOrchestratorEngine CreateEngineWithStoreLists(
+        IEnumerable<IFlowRunRuntimeStore> runtimeStores,
+        IEnumerable<IFlowRunControlStore> runControlStores) =>
+        new FlowOrchestratorEngine(
+            _dispatcher,
+            _flowExecutor,
+            _graphPlanner,
+            _stepExecutor,
+            _flowStore,
+            _runStore,
+            _outputsRepo,
+            _ctxAccessor,
+            _flowRepo,
+            runtimeStores,
+            runControlStores,
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
