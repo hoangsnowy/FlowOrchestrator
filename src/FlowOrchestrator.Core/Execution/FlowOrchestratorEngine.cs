@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
+using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Expressions;
 using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
@@ -17,12 +18,10 @@ namespace FlowOrchestrator.Core.Execution;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Supports two continuation modes:
-/// <list type="bullet">
-///   <item><b>Graph mode</b> (default when <see cref="IFlowRunRuntimeStore"/> is registered):
-///     evaluates the full DAG after each step, enabling parallel fan-out, loop steps, and skip propagation.</item>
-///   <item><b>Legacy sequential mode</b>: simple linear next-step resolution when no runtime store is available.</item>
-/// </list>
+/// After every step completion the engine evaluates the full DAG, enabling parallel fan-out, loop
+/// steps, and skip propagation. That evaluation, and the claim guard behind "dispatch many, execute
+/// once", require an <see cref="IFlowRunRuntimeStore"/> and an <see cref="IFlowRunControlStore"/>;
+/// construction fails when the storage backend registers neither.
 /// </para>
 /// <para>
 /// The implementation is split across five partial files for readability — each handles
@@ -44,8 +43,8 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     private readonly IOutputsRepository _outputsRepository;
     private readonly IExecutionContextAccessor _contextAccessor;
     private readonly IFlowRepository _flowRepository;
-    private readonly IFlowRunRuntimeStore? _runtimeStore;
-    private readonly IFlowRunControlStore? _runControlStore;
+    private readonly IFlowRunRuntimeStore _runtimeStore;
+    private readonly IFlowRunControlStore _runControlStore;
     private readonly FlowRunControlOptions _runControlOptions;
     private readonly FlowObservabilityOptions _observabilityOptions;
     private readonly FlowOrchestratorTelemetry _telemetry;
@@ -96,8 +95,8 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _outputsRepository = outputsRepository;
         _contextAccessor = contextAccessor;
         _flowRepository = flowRepository;
-        _runtimeStore = runtimeStores.FirstOrDefault();
-        _runControlStore = runControlStores.FirstOrDefault();
+        _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowOrchestratorEngine));
+        _runControlStore = RequiredStore.First(runControlStores, nameof(FlowOrchestratorEngine));
         _runControlOptions = runControlOptions;
         _observabilityOptions = observabilityOptions;
         _telemetry = telemetry;
@@ -105,11 +104,6 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _eventNotifier = eventNotifier ?? NoopFlowEventNotifier.Instance;
         _signalStore = signalStore;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
-
-        if (_runtimeStore is null)
-        {
-            EngineLog.LegacySequentialMode(_logger);
-        }
     }
 
     private static string? SafeSerialize(object? value)

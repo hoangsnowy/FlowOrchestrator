@@ -29,25 +29,4 @@ public class StepMetadata
     /// <c>@triggerHeaders()</c> expressions resolved at execution time.
     /// </summary>
     public IDictionary<string, object?> Inputs { get; set; } = new Dictionary<string, object?>();
-
-    /// <summary>
-    /// Returns <see langword="true"/> when this step should execute given that
-    /// <paramref name="precedingStepKey"/> has reached <paramref name="status"/>.
-    /// </summary>
-    /// <param name="precedingStepKey">The key of the step that just completed.</param>
-    /// <param name="status">The terminal status the preceding step reached.</param>
-    public virtual bool ShouldExecute(string precedingStepKey, StepStatus status)
-    {
-        if (RunAfter.Count == 0)
-        {
-            return true;
-        }
-
-        if (!RunAfter.TryGetValue(precedingStepKey, out var condition) || condition is null)
-        {
-            return false;
-        }
-
-        return condition.AcceptsStatus(status);
-    }
 }

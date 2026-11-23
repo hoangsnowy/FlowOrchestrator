@@ -47,7 +47,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
     private readonly FlowOrchestratorTelemetry? _telemetry;
-    private readonly IFlowRunRuntimeStore? _runtimeStore;
+    private readonly IFlowRunRuntimeStore _runtimeStore;
     private readonly ILogger<FlowSignalDispatcher>? _logger;
 
     /// <summary>Initialises the dispatcher with its dependencies.</summary>
@@ -56,7 +56,6 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     /// <param name="flowRepository">Used to resolve the flow definition backing the run.</param>
     /// <param name="dispatcher">Runtime adapter that carries the resume nudge back to a worker.</param>
     /// <param name="outputsRepository">Supplies trigger data/headers for the rebuilt execution context.</param>
-    /// <param name="telemetry">Optional — when omitted, signal-wait metrics are not emitted.</param>
     /// <param name="runtimeStores">
     /// Registered runtime stores; the first is used, matching how <see cref="FlowOrchestratorEngine"/>
     /// selects its own store. Taking the sequence rather than a single service keeps the two in
@@ -65,6 +64,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     /// FIRST, and the dispatcher would then read claim state from a different store than the engine
     /// claims against.
     /// </param>
+    /// <param name="telemetry">Optional — when omitted, signal-wait metrics are not emitted.</param>
     /// <param name="logger">Optional — when omitted, lost resume nudges are not reported anywhere.</param>
     public FlowSignalDispatcher(
         IFlowSignalStore signalStore,
@@ -72,8 +72,8 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         IFlowRepository flowRepository,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
+        IEnumerable<IFlowRunRuntimeStore> runtimeStores,
         FlowOrchestratorTelemetry? telemetry = null,
-        IEnumerable<IFlowRunRuntimeStore>? runtimeStores = null,
         ILogger<FlowSignalDispatcher>? logger = null)
     {
         _signalStore = signalStore;
@@ -82,7 +82,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
         _telemetry = telemetry;
-        _runtimeStore = runtimeStores?.FirstOrDefault();
+        _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowSignalDispatcher));
         _logger = logger;
     }
 
