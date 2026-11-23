@@ -6,6 +6,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **InMemory storage: retention never removed step outputs, trigger data or events.** `FlowRetention`
+  purged in-memory runs, but `InMemoryOutputsRepository` kept every run's trigger body, trigger headers,
+  step inputs / outputs and event log for the lifetime of the process. The repository is now an
+  `IFlowRetentionStore` registered by `UseInMemory()`: each sweep drops the outputs and events of the runs
+  the run store purged. Affects `UseInMemory()` storage only; SQL Server and PostgreSQL already deleted
+  these rows with their run.
+
 ## [1.34.2] - 2026-11-23
 
 Security patch release for the 1.34 line (.NET 8 / 9 / 10). It fixes three vulnerabilities; every 1.x
