@@ -237,8 +237,9 @@ Or via `appsettings.json`:
 ### WebhookSecurityOptions
 
 Opt-in HMAC signature, replay, rate-limit, IP allow/deny, body cap, and DLQ
-gates for the dashboard webhook receive endpoint. The default
-`EnforcementMode = Off` keeps the endpoint behaving exactly as in v1.24.
+gates for the dashboard webhook receive endpoint. Since 2.0 the default is
+`EnforcementMode = Enforce`: every gate a trigger declares rejects violating requests (a trigger that
+declares none is unaffected). `Off` (the 1.x default) restores the v1.24 behaviour explicitly.
 
 ```csharp
 // Use the (IConfiguration, Action<FlowDashboardOptions>) overload so appsettings-bound
@@ -267,7 +268,7 @@ builder.Services.AddFlowOrchestrator(options =>
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EnforcementMode` | `WebhookEnforcementMode` | `Off` | `Off` skips every gate. `Audit` runs gates + writes DLQ + emits metrics but always returns 202. `Enforce` rejects failing requests. |
+| `EnforcementMode` | `WebhookEnforcementMode` | `Enforce` (1.x: `Off`) | `Off` skips every gate. `Audit` runs gates + writes DLQ + emits metrics but always returns 202. `Enforce` rejects failing requests. |
 | `AllowLegacySha1` | `bool` | `false` | Allow HMAC-SHA1 signatures (legacy GitHub `X-Hub-Signature`). Off by default. |
 | `MaxBodyBytes` | `long` | `1_048_576` | Hard cap; oversized requests return 413 before JSON parsing. |
 | `ReplayToleranceSeconds` | `int` | `0` | Maximum allowed clock skew. `0` disables replay protection. |

@@ -145,13 +145,14 @@ services.AddFlowDashboard(opts => opts.UseWebhookSecurity(sec =>
 }));
 ```
 
-**Both halves are required.** The DI call above turns enforcement on; the manifest inputs below only
-*configure* what is enforced. `WebhookSecurityOptions.EnforcementMode` defaults to `Off`, and under
-`Off` the pipeline still evaluates every gate and records violations — but accepts the request
-regardless. A flow can declare `webhookHmacKey`, `webhookReplayToleranceSeconds` and
-`webhookNonceHeader` and have a bad signature, a replayed nonce and a denied IP all sail through, with
-nothing in the response to say so. Check `/flows/api/webhooks/stats`: if violation counters are
-climbing while requests still return `200`, you are in `Audit`; if they are flat, you are in `Off`.
+**Both halves matter.** The DI call sets the mode and the host-wide limits; the manifest inputs below
+configure *what* is enforced per trigger. `WebhookSecurityOptions.EnforcementMode` defaults to `Enforce`
+since 2.0 (it was `Off` in 1.x, where a flow could declare `webhookHmacKey`,
+`webhookReplayToleranceSeconds` and `webhookNonceHeader` and still have a bad signature, a replayed nonce
+and a denied IP all sail through). Under `Audit` the pipeline evaluates every gate and records violations
+but accepts the request; under `Off` it skips every gate. Check `/flows/api/webhooks/stats`: if violation
+counters are climbing while requests still return `200`, you are in `Audit`; if they are flat while
+invalid requests are accepted, you are in `Off`.
 
 Note the asymmetry with the legacy `webhookSecret` / `X-Webhook-Key` check, which runs *outside* the
 pipeline and therefore rejects with `401` whatever the enforcement mode is. `webhookSecret` secures an
