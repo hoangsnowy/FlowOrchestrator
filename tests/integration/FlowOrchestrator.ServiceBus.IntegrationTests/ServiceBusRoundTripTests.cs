@@ -1,9 +1,7 @@
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using FlowOrchestrator.ServiceBus;
-using global::Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -33,7 +31,6 @@ public class ServiceBusRoundTripTests : IAsyncLifetime
         _host = Host.CreateDefaultBuilder()
             .ConfigureServices(services =>
             {
-                services.AddHangfire(c => c.UseInMemoryStorage());
                 services.AddFlowOrchestrator(opts =>
                 {
                     opts.UseInMemory();

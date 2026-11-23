@@ -1,6 +1,6 @@
 using Azure.Messaging.ServiceBus;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Core.Abstractions;
 
 namespace FlowOrchestrator.ServiceBus;
 
@@ -10,27 +10,26 @@ namespace FlowOrchestrator.ServiceBus;
 /// </summary>
 /// <remarks>
 /// Step messages carry only a <see cref="Guid"/> flow id. The full <c>IFlowDefinition</c> is
-/// rehydrated from <see cref="IFlowRepository"/> on the worker — the manifest never leaves
+/// resolved from <see cref="FlowRegistry"/> on the worker — the manifest never leaves
 /// the process boundary, which avoids polymorphism issues in JSON serialisation and keeps
 /// flow code as the single source of truth.
 /// </remarks>
 internal sealed class ServiceBusFlowOrchestrator : IServiceBusFlowRunner
 {
     private readonly IFlowOrchestrator _engine;
-    private readonly IFlowRepository _flowRepository;
+    private readonly FlowRegistry _flows;
 
-    /// <summary>Initialises the adapter with the engine and flow repository.</summary>
-    public ServiceBusFlowOrchestrator(IFlowOrchestrator engine, IFlowRepository flowRepository)
+    /// <summary>Initialises the adapter with the engine and flow registry.</summary>
+    public ServiceBusFlowOrchestrator(IFlowOrchestrator engine, FlowRegistry flows)
     {
         _engine = engine;
-        _flowRepository = flowRepository;
+        _flows = flows;
     }
 
     /// <inheritdoc/>
     public async ValueTask RunStepAsync(StepEnvelope envelope, ServiceBusReceivedMessage message, CancellationToken ct)
     {
-        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FindById(envelope.FlowId)
+        var flow = _flows.Find(envelope.FlowId)
             ?? throw new InvalidOperationException(
                 $"Flow {envelope.FlowId} is not registered. Cannot dispatch step '{envelope.StepKey}'.");
         var ctx = envelope.ToExecutionContext();

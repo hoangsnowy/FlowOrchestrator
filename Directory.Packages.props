@@ -42,11 +42,13 @@
   <!--
     Runtime dependencies.
 
-    Newtonsoft.Json is pinned to 13.0.4 because Hangfire.Core pulls in 11.0.1, which
-    has a known high-severity ReDoS vulnerability. CPM with CentralPackageTransitivePinningEnabled=true
-    propagates this pin to every transitive consumer. FlowOrchestrator.Core also takes
-    a direct reference (only for the [Newtonsoft.Json.JsonConverter] attribute on
-    RunAfterCondition); all internal serialisation still uses System.Text.Json end-to-end.
+    Newtonsoft.Json is a safety pin, not a dependency of ours: Hangfire.Core pulls in 11.0.1, which
+    has a known high-severity ReDoS vulnerability, and CPM with CentralPackageTransitivePinningEnabled=true
+    lifts it to 13.0.4 wherever Hangfire.Core is in the graph — FlowOrchestrator.Hangfire (whose
+    published package then carries the pinned version) and the projects that reference it.
+    No FlowOrchestrator project references Newtonsoft.Json directly any more; since 2.0 Core,
+    the storage backends, InMemory, Service Bus, Dashboard and Testing carry no Newtonsoft.Json
+    at all. Drop this pin once Hangfire.Core itself depends on a fixed Newtonsoft.Json.
   -->
   <ItemGroup>
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
@@ -61,7 +63,6 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="11.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0" />

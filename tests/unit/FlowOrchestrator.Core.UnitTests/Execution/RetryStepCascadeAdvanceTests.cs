@@ -7,6 +7,7 @@ using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -20,13 +21,12 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// </summary>
 public sealed class RetryStepCascadeAdvanceTests
 {
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
@@ -115,11 +115,10 @@ public sealed class RetryStepCascadeAdvanceTests
                 return new ValueTask<IStepResult>(resultForStep(step.Key));
             });
 
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _flowRepo = new FlowRegistry(new[] { flow });
 
         var engine = new FlowOrchestratorEngine(
             dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -132,7 +131,8 @@ public sealed class RetryStepCascadeAdvanceTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
         return new TestRig
         {

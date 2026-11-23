@@ -8,6 +8,7 @@ using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Observability;
 
@@ -22,14 +23,13 @@ public sealed class EngineObservabilityTests
     // ── Substitutes shared across tests ───────────────────────────────────────
 
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
 
     public EngineObservabilityTests()
     {
@@ -43,7 +43,6 @@ public sealed class EngineObservabilityTests
         IReadOnlyDictionary<string, StepStatus>? statuses = null) =>
         new(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -56,7 +55,8 @@ public sealed class EngineObservabilityTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
             telemetry ?? new FlowOrchestratorTelemetry(),
-            logger);
+            logger,
+            NoopFlowEventNotifier.Instance);
 
     /// <summary>The runtime-store view after the single step under test has finished.</summary>
     private static IReadOnlyDictionary<string, StepStatus> Statuses(string stepKey, StepStatus status) =>

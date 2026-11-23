@@ -11,6 +11,11 @@ namespace FlowOrchestrator.Hangfire;
 /// Hangfire implementation of <see cref="IStepDispatcher"/> that submits steps
 /// as Hangfire background jobs targeting <see cref="IHangfireStepRunner"/>.
 /// </summary>
+/// <remarks>
+/// Each job carries one <see cref="HangfireStepEnvelope"/> (ids, inputs as a System.Text.Json string,
+/// scheduling data). Envelope construction happens before the timed section, so
+/// <c>flow_step_dispatch_duration_ms</c> keeps measuring only the job-store round-trip.
+/// </remarks>
 internal sealed class HangfireStepDispatcher : IStepDispatcher
 {
     private const string RuntimeName = "hangfire";
@@ -38,16 +43,15 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         IStepInstance step,
         CancellationToken ct)
     {
-        // Pass only flow.Id through Hangfire's argument store. The runner rehydrates the
-        // full IFlowDefinition via IFlowRepository — this avoids serialising the manifest
-        // (and types like RunAfterCondition) through Hangfire's Newtonsoft.Json serializer.
-        var flowId = flow.Id;
+        // Only the slim envelope goes through Hangfire's Newtonsoft.Json argument store: the runner
+        // resolves the flow from FlowRegistry and the engine reloads trigger data from the store.
+        var envelope = HangfireStepEnvelope.From(context, flow.Id, step);
         var start = Stopwatch.GetTimestamp();
         var ok = false;
         try
         {
             var id = _client.Enqueue<IHangfireStepRunner>(
-                r => r.RunStepAsync(context, flowId, step, null));
+                r => r.RunStepAsync(envelope, null));
             ok = true;
             return new(id);
         }
@@ -65,13 +69,13 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         TimeSpan delay,
         CancellationToken ct)
     {
-        var flowId = flow.Id;
+        var envelope = HangfireStepEnvelope.From(context, flow.Id, step);
         var start = Stopwatch.GetTimestamp();
         var ok = false;
         try
         {
             var id = _client.Schedule<IHangfireStepRunner>(
-                r => r.RunStepAsync(context, flowId, step, null),
+                r => r.RunStepAsync(envelope, null),
                 delay);
             ok = true;
             return new(id);

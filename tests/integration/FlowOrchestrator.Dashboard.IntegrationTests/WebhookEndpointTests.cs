@@ -43,7 +43,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id);
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         // Act
@@ -60,7 +60,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, slug: "order-received");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         // Act
@@ -74,7 +74,7 @@ public sealed class WebhookEndpointTests : IDisposable
     public async Task POST_webhook_returns_404_when_flow_not_found()
     {
         // Arrange
-        _server.FlowRepository.GetAllFlowsAsync().Returns(Array.Empty<IFlowDefinition>());
+        _server.Flows = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         // Act
         var response = await _client.PostAsync($"/flows/api/webhook/{Guid.NewGuid()}", null);
@@ -89,7 +89,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id);
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = false });
 
         // Act
@@ -105,7 +105,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "supersecret");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
@@ -124,7 +124,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "mytoken");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
@@ -143,7 +143,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "correctsecret");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
@@ -162,7 +162,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "required");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         // Act
@@ -178,7 +178,7 @@ public sealed class WebhookEndpointTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id);
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         using var content = new StringContent("not-json", System.Text.Encoding.UTF8, "application/json");

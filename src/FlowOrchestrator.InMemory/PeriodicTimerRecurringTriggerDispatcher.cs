@@ -12,24 +12,23 @@ using Microsoft.Extensions.Logging;
 namespace FlowOrchestrator.InMemory;
 
 /// <summary>
-/// Timer-based <see cref="IRecurringTriggerDispatcher"/>, <see cref="IRecurringTriggerInspector"/>,
-/// and <see cref="IRecurringTriggerSync"/> for the in-memory runtime.
+/// Timer-based <see cref="IRecurringTriggerDispatcher"/> and <see cref="IRecurringTriggerInspector"/>
+/// for the in-memory runtime.
 /// Provides cron scheduling parity with Hangfire without an external job store.
 /// </summary>
 /// <remarks>
 /// A single <see cref="PeriodicTimer"/> ticks every second; on each tick, due jobs are fired by
 /// invoking <see cref="IFlowOrchestrator.TriggerByScheduleAsync"/> within a fresh DI scope.
-/// Job state lives in process memory and is rebuilt on each start-up by <c>FlowSyncHostedService</c>.
+/// Job state lives in process memory and is rebuilt on each start-up by <c>FlowSyncHostedService</c>
+/// through Core's <see cref="RecurringTriggerSync"/>, which resolves the effective cron (pause state,
+/// persisted override) and calls <see cref="RegisterOrUpdate"/> / <see cref="Remove"/>.
 /// </remarks>
 internal sealed class PeriodicTimerRecurringTriggerDispatcher
-    : IRecurringTriggerDispatcher, IRecurringTriggerInspector, IRecurringTriggerSync, IHostedService, IDisposable, IAsyncDisposable
+    : IRecurringTriggerDispatcher, IRecurringTriggerInspector, IHostedService, IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
 
     private readonly IServiceProvider _services;
-    private readonly IFlowRepository _repository;
-    private readonly IFlowScheduleStateStore _scheduleStateStore;
-    private readonly FlowSchedulerOptions _schedulerOptions;
     private readonly ILogger<PeriodicTimerRecurringTriggerDispatcher> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly FlowOrchestratorTelemetry? _telemetry;
@@ -42,17 +41,11 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     /// <summary>Initialises the dispatcher with required services. <paramref name="telemetry"/> is optional — when omitted, cron-lag metrics are not emitted.</summary>
     public PeriodicTimerRecurringTriggerDispatcher(
         IServiceProvider services,
-        IFlowRepository repository,
-        IFlowScheduleStateStore scheduleStateStore,
-        FlowSchedulerOptions schedulerOptions,
         ILogger<PeriodicTimerRecurringTriggerDispatcher> logger,
         TimeProvider? timeProvider = null,
         FlowOrchestratorTelemetry? telemetry = null)
     {
         _services = services;
-        _repository = repository;
-        _scheduleStateStore = scheduleStateStore;
-        _schedulerOptions = schedulerOptions;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _telemetry = telemetry;
@@ -185,7 +178,6 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 {
                     FlowId = flowId,
                     TriggerKey = triggerKey,
-                    CronExpression = cronExpression,
                     EffectiveCron = cronExpression,
                 };
                 fresh.NextExecution = ComputeNext(fresh.EffectiveCron, now);
@@ -193,11 +185,12 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             },
             (_, existing) =>
             {
+                // The caller passes the already-effective cron (RecurringTriggerSync resolves the
+                // persisted override; the dashboard passes the new override), so it always wins —
+                // the same replace semantics as Hangfire's AddOrUpdate.
                 existing.FlowId = flowId;
                 existing.TriggerKey = triggerKey;
-                existing.CronExpression = cronExpression;
-                if (string.IsNullOrWhiteSpace(existing.CronOverride))
-                    existing.EffectiveCron = cronExpression;
+                existing.EffectiveCron = cronExpression;
                 existing.NextExecution = ComputeNext(existing.EffectiveCron, now);
                 existing.Paused = false;
                 return existing;
@@ -260,51 +253,6 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
         return Task.FromResult(result);
     }
 
-    // ── IRecurringTriggerSync ────────────────────────────────────────────────
-
-    /// <inheritdoc/>
-    public void SyncTriggers(Guid flowId, bool isEnabled)
-    {
-        var flows = _repository.GetAllFlowsAsync().AsTask().GetAwaiter().GetResult();
-        var flow = flows.FirstOrDefault(f => f.Id == flowId);
-        if (flow is null) return;
-
-        foreach (var (triggerKey, trigger) in flow.Manifest.Triggers)
-        {
-            if (trigger.Type != TriggerType.Cron) continue;
-
-            var jobId = $"flow-{flow.Id}-{triggerKey}";
-            var persisted = _schedulerOptions.PersistOverrides
-                ? _scheduleStateStore.GetAsync(jobId).GetAwaiter().GetResult()
-                : null;
-
-            if (!isEnabled || !trigger.TryGetCronExpression(out var manifestCron))
-            {
-                Remove(jobId);
-                continue;
-            }
-
-            if (persisted?.IsPaused == true)
-            {
-                Remove(jobId);
-                continue;
-            }
-
-            var effectiveCron = string.IsNullOrWhiteSpace(persisted?.CronOverride)
-                ? manifestCron
-                : persisted!.CronOverride!;
-
-            RegisterOrUpdate(jobId, flow.Id, triggerKey, effectiveCron);
-
-            // Track override separately so a future RegisterOrUpdate(manifestCron) does not lose it.
-            if (_jobs.TryGetValue(jobId, out var js))
-            {
-                js.CronOverride = persisted?.CronOverride;
-                js.EffectiveCron = effectiveCron;
-            }
-        }
-    }
-
     /// <summary>Internal accessor used by tests to poke job state without the dispatcher loop.</summary>
     internal bool TryGetJob(string jobId, out (Guid FlowId, string TriggerKey, string EffectiveCron, DateTimeOffset NextExecution, DateTimeOffset? LastExecution, string? LastJobState, bool Paused) snapshot)
     {
@@ -330,8 +278,6 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
     {
         public Guid FlowId;
         public string TriggerKey = "";
-        public string CronExpression = "";
-        public string? CronOverride;
         public string EffectiveCron = "";
         public DateTimeOffset NextExecution;
         public DateTimeOffset? LastExecution;

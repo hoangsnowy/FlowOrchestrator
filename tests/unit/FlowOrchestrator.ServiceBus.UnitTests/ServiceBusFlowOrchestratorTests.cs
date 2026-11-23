@@ -18,8 +18,7 @@ public class ServiceBusFlowOrchestratorTests
     {
         // Arrange
         var engine = Substitute.For<IFlowOrchestrator>();
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(Array.Empty<IFlowDefinition>()));
+        var repo = new FlowRegistry(Array.Empty<IFlowDefinition>());
         var sut = new ServiceBusFlowOrchestrator(engine, repo);
         var envelope = new StepEnvelope { FlowId = Guid.NewGuid(), StepKey = "s" };
 
@@ -33,7 +32,7 @@ public class ServiceBusFlowOrchestratorTests
     {
         // Arrange
         var engine = Substitute.For<IFlowOrchestrator>();
-        var repo = Substitute.For<IFlowRepository>();
+        var repo = FlowRegistry.Empty;
         var sut = new ServiceBusFlowOrchestrator(engine, repo);
         var flowId = Guid.NewGuid();
 

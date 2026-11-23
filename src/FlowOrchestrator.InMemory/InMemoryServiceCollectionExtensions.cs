@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
@@ -30,6 +29,9 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton<InMemoryOutputsRepository>();
         builder.Services.AddSingleton<IOutputsRepository>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
         builder.Services.AddSingleton<IFlowEventReader>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
+        // Registered after the run store so a single sweep purges the run first and its outputs
+        // and events right after; the repository follows the run store's lifetime, not the cutoff.
+        builder.Services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<InMemoryOutputsRepository>());
 
         // One instance serves both roles: the retention sweep must prune the same waiter map the
         // engine and signal endpoint read.
@@ -37,17 +39,8 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton<IFlowSignalStore>(sp => sp.GetRequiredService<InMemoryFlowSignalStore>());
         builder.Services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<InMemoryFlowSignalStore>());
 
-        builder.Services.AddSingleton<IFlowScheduleStateStore, InMemoryFlowScheduleStateStore>();
-
-        // Code-defined flow registry (populated from the IFlowDefinition instances
-        // registered via AddFlow<T>()).
-        builder.Services.TryAddSingleton<IFlowRepository>(sp =>
-        {
-            var repo = new InMemoryFlowRepository();
-            foreach (var flow in sp.GetServices<IFlowDefinition>())
-                repo.Add(flow);
-            return repo;
-        });
+        // Schedule state (dashboard pause / cron override) falls back to Core's process-local
+        // InMemoryFlowScheduleStateStore, registered by AddFlowOrchestrator.
         return builder;
     }
 
@@ -58,8 +51,8 @@ public static class InMemoryServiceCollectionExtensions
     /// dispatcher that fires cron-scheduled flows in-process.
     /// </summary>
     /// <remarks>
-    /// Call this inside <c>AddFlowOrchestrator(opts =&gt; opts.UseInMemoryRuntime())</c>
-    /// as an alternative to Hangfire. Provides cron-trigger feature parity with the
+    /// Call this inside <c>AddFlowOrchestrator(opts =&gt; opts.UseInMemoryRuntime())</c>;
+    /// no Hangfire package or registration is needed. Provides cron-trigger feature parity with the
     /// Hangfire runtime via <see cref="PeriodicTimerRecurringTriggerDispatcher"/>.
     /// <para>
     /// The runtime is registered with <c>TryAdd</c> semantics so it can co-exist with other
@@ -81,14 +74,13 @@ public static class InMemoryServiceCollectionExtensions
         // Step dispatcher — writes step envelopes to the channel.
         builder.Services.TryAddSingleton<IStepDispatcher, InMemoryStepDispatcher>();
 
-        // Recurring-trigger dispatcher: a single PeriodicTimer-backed implementation that
-        // satisfies all three recurring-trigger interfaces and runs as a hosted service.
+        // Recurring-trigger dispatcher: a single PeriodicTimer-backed implementation that serves as
+        // both dispatcher and inspector and runs as a hosted service. Effective-cron resolution is
+        // Core's RecurringTriggerSync, registered by AddFlowOrchestrator.
         builder.Services.TryAddSingleton<PeriodicTimerRecurringTriggerDispatcher>();
         builder.Services.TryAddSingleton<IRecurringTriggerDispatcher>(
             sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
         builder.Services.TryAddSingleton<IRecurringTriggerInspector>(
-            sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
-        builder.Services.TryAddSingleton<IRecurringTriggerSync>(
             sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());
         builder.Services.AddHostedService(
             sp => sp.GetRequiredService<PeriodicTimerRecurringTriggerDispatcher>());

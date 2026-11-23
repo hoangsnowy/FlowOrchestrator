@@ -128,25 +128,4 @@ public sealed class StepCollection : Dictionary<string, StepMetadata>
         }
         return steps.TryGetValue(segment.ToString(), out step);
     }
-
-    /// <summary>
-    /// Finds the scoped parent step (e.g. a <see cref="LoopStepMetadata"/>) that contains
-    /// the step identified by <paramref name="key"/>.
-    /// </summary>
-    /// <param name="key">A dot-separated step path such as <c>"processItems.validate"</c>.</param>
-    /// <returns>
-    /// The parent <see cref="StepMetadata"/> if the key has more than one segment and the parent exists;
-    /// otherwise <see langword="null"/>.
-    /// </returns>
-    public StepMetadata? FindParentStep(string key)
-    {
-        var segments = key.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length <= 1)
-        {
-            return null;
-        }
-
-        var parentSegments = segments.Take(segments.Length - 1).ToArray();
-        return FindStep(string.Join('.', parentSegments));
-    }
 }

@@ -67,7 +67,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         var id = Guid.NewGuid();
         const string secret = "ghs_test_secret";
         var flow = MakeGitHubWebhookFlow(id, secret);
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        server.Flows = new FlowRegistry(new[] { flow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
 
@@ -96,7 +96,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         var id = Guid.NewGuid();
         const string secret = "ghs_test_secret";
         var flow = MakeGitHubWebhookFlow(id, secret);
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        server.Flows = new FlowRegistry(new[] { flow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
 
@@ -124,7 +124,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         var id = Guid.NewGuid();
         const string secret = "ghs_test_secret";
         var flow = MakeGitHubWebhookFlow(id, secret);
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        server.Flows = new FlowRegistry(new[] { flow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
         var deliveryId = Guid.NewGuid().ToString();
@@ -159,7 +159,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         using var client = server.CreateClient();
         var id = Guid.NewGuid();
         var oversizedFlow = MakeGitHubWebhookFlow(id, "secret");
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { oversizedFlow });
+        server.Flows = new FlowRegistry(new[] { oversizedFlow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = new byte[128 * 1024];
 
@@ -184,7 +184,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         using var client = server.CreateClient();
         var id = Guid.NewGuid();
         var auditFlow = MakeGitHubWebhookFlow(id, "secret");
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { auditFlow });
+        server.Flows = new FlowRegistry(new[] { auditFlow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         var body = Encoding.UTF8.GetBytes("{\"event\":\"push\"}");
 
@@ -213,7 +213,7 @@ public sealed class WebhookHardeningPipelineE2ETests
         using var client = server.CreateClient();
         var id = Guid.NewGuid();
         var offFlow = MakeGitHubWebhookFlow(id, "secret");
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { offFlow });
+        server.Flows = new FlowRegistry(new[] { offFlow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
@@ -253,7 +253,7 @@ public sealed class WebhookHardeningPipelineE2ETests
                 }
             }
         });
-        server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        server.Flows = new FlowRegistry(new[] { flow });
         server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/legacy-flow")

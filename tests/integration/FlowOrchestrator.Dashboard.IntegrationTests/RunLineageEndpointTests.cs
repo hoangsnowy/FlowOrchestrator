@@ -36,7 +36,7 @@ public sealed class RunLineageEndpointTests : IDisposable
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowRunStore.GetRunDetailAsync(sourceRunId).Returns(new FlowRunRecord
         {
             Id = sourceRunId,

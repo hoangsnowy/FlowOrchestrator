@@ -64,8 +64,7 @@ public sealed class SignalAndCronMetricsTests
             StartedAt = DateTimeOffset.UtcNow,
         }));
 
-        var flowRepo = Substitute.For<IFlowRepository>();
-        flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(Array.Empty<IFlowDefinition>()));
+        var flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         var dispatcher = new FlowSignalDispatcher(
             signalStore,
@@ -119,8 +118,7 @@ public sealed class SignalAndCronMetricsTests
             StartedAt = DateTimeOffset.UtcNow,
         }));
 
-        var flowRepo = Substitute.For<IFlowRepository>();
-        flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(Array.Empty<IFlowDefinition>()));
+        var flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         var dispatcher = new FlowSignalDispatcher(
             signalStore,

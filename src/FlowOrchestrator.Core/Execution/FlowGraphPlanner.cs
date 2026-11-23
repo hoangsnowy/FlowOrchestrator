@@ -36,13 +36,6 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
     {
         public required string[] SortedKeys { get; init; }
         public required HashSet<string> KeySet { get; init; }
-
-        /// <summary>
-        /// <see langword="true"/> when a top-level key is empty or contains a <c>'.'</c> — a shape
-        /// that lets <c>StepCollection.FindStep</c> match a multi-segment path exactly, which the
-        /// span walk in <see cref="PlanCandidateStepKeys"/> does not model.
-        /// </summary>
-        public required bool HasIrregularTopLevelKey { get; init; }
     }
 
     private static readonly ConditionalWeakTable<IFlowDefinition, ManifestKeyCache> _manifestCache = new();
@@ -53,8 +46,7 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
         {
             var sortedKeys = f.Manifest.Steps.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
             var keySet = new HashSet<string>(sortedKeys, StringComparer.Ordinal);
-            var irregular = sortedKeys.Any(k => k.Length == 0 || k.Contains('.', StringComparison.Ordinal));
-            return new ManifestKeyCache { SortedKeys = sortedKeys, KeySet = keySet, HasIrregularTopLevelKey = irregular };
+            return new ManifestKeyCache { SortedKeys = sortedKeys, KeySet = keySet };
         });
     }
 
@@ -90,7 +82,7 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
     {
         // O(n) in the status-map size, no sort over n — see PlanCandidateStepKeys. The loop below is
         // over the candidates only: known keys that have no status row yet.
-        var (candidates, known) = PlanCandidateStepKeys(flow, statuses);
+        var candidates = PlanCandidateStepKeys(flow, statuses);
         var ready = new List<string>();
         var blocked = new List<string>();
         var waiting = new List<string>();
@@ -161,8 +153,7 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
         {
             ReadyStepKeys = ready,
             BlockedStepKeys = blocked,
-            WaitingStepKeys = waiting,
-            AllKnownStepKeys = known
+            WaitingStepKeys = waiting
         };
     }
 }

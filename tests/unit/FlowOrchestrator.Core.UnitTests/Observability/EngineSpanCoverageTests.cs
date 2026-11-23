@@ -8,6 +8,7 @@ using FlowOrchestrator.Core.Tests.Execution;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Observability;
 
@@ -25,14 +26,13 @@ public sealed class FlowActivitySourceCollection
 public sealed class EngineSpanCoverageTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
     private readonly FlowOrchestratorTelemetry _telemetry = new();
@@ -46,7 +46,6 @@ public sealed class EngineSpanCoverageTests
     private FlowOrchestratorEngine CreateEngine(IFlowRunRuntimeStore? runtimeStore = null) =>
         new(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -59,7 +58,8 @@ public sealed class EngineSpanCoverageTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = true },
             _telemetry,
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeFlow(Guid flowId, string stepKey, RunAfterCollection? runAfter = null)
     {
@@ -103,7 +103,7 @@ public sealed class EngineSpanCoverageTests
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var flow = MakeFlow(flowId, "step1");
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _flowRepo = new FlowRegistry(new[] { flow });
         _stepExecutor.ExecuteAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .ReturnsForAnyArgs(new ValueTask<IStepResult>(new StepResult { Key = "step1", Status = StepStatus.Succeeded }));
 

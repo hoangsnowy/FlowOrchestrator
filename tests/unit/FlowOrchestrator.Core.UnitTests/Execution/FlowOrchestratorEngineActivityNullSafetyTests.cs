@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -21,20 +22,18 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 public sealed class FlowOrchestratorEngineActivityNullSafetyTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
     private FlowOrchestratorEngine CreateEngineOtelDisabled() =>
         new(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -47,7 +46,8 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeFlow(params string[] stepKeys)
     {
@@ -101,7 +101,6 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
 
         var engine = new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -114,7 +113,8 @@ public sealed class FlowOrchestratorEngineActivityNullSafetyTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
         // Act
         var ex = await Record.ExceptionAsync(async () => await engine.RunStepAsync(ctx, flow, step));

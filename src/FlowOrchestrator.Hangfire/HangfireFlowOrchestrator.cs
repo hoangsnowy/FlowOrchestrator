@@ -1,7 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Observability;
-using FlowOrchestrator.Core.Storage;
 using Hangfire.Server;
 
 namespace FlowOrchestrator.Hangfire;
@@ -9,30 +8,32 @@ namespace FlowOrchestrator.Hangfire;
 /// <summary>
 /// Thin Hangfire adapter that implements <see cref="IHangfireFlowTrigger"/> and
 /// <see cref="IHangfireStepRunner"/> by delegating to <see cref="IFlowOrchestrator"/>.
-/// Its only job is to extract the Hangfire job ID from <see cref="PerformContext"/> and
-/// inject it into the execution context before calling the runtime-neutral engine.
+/// Its only job is to rebuild the engine arguments from the job payload, record the Hangfire job ID
+/// on the execution context, and call the runtime-neutral engine.
 /// </summary>
 /// <remarks>
-/// Step jobs receive only a <see cref="Guid"/> flow identifier, not the full
-/// <see cref="IFlowDefinition"/>. The flow is rehydrated via <see cref="IFlowRepository"/>
-/// before delegating to the engine. This avoids serialising the manifest through Hangfire's
-/// Newtonsoft.Json-based argument store, which would auto-detect collection-typed
-/// abstractions like <c>RunAfterCondition</c> as JSON arrays.
+/// Step jobs carry a <see cref="HangfireStepEnvelope"/>: the flow is resolved from
+/// <see cref="FlowRegistry"/> by id, and the engine reloads the trigger payload and headers from the
+/// run's stored trigger data, so neither the manifest nor user payloads go through Hangfire's
+/// Newtonsoft.Json argument store.
 /// </remarks>
 public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireStepRunner
 {
     private readonly IFlowOrchestrator _engine;
-    private readonly IFlowRepository _flowRepository;
+    private readonly FlowRegistry _flows;
     private readonly FlowOrchestratorTelemetry? _telemetry;
 
-    /// <summary>Initialises the adapter with the core execution engine, the flow repository used to rehydrate definitions on the worker, and an optional telemetry hub for cron-lag metrics.</summary>
+    /// <summary>Initialises the adapter with the core execution engine, the flow registry used to resolve definitions on the worker, and an optional telemetry hub for cron-lag metrics.</summary>
+    /// <param name="engine">The runtime-neutral engine every job delegates to.</param>
+    /// <param name="flows">Registry used to resolve the flow named by a step job.</param>
+    /// <param name="telemetry">Optional — when supplied, cron-lag is recorded for schedule-triggered jobs.</param>
     public HangfireFlowOrchestrator(
         IFlowOrchestrator engine,
-        IFlowRepository flowRepository,
+        FlowRegistry flows,
         FlowOrchestratorTelemetry? telemetry = null)
     {
         _engine = engine;
-        _flowRepository = flowRepository;
+        _flows = flows;
         _telemetry = telemetry;
     }
 
@@ -64,24 +65,27 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
     }
 
     /// <inheritdoc/>
-    public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null)
+    public ValueTask<object?> RunStepAsync(HangfireStepEnvelope envelope, PerformContext? performContext = null)
     {
-        ctx.JobId = performContext?.BackgroundJob?.Id;
-        // Allocation-free for-loop scan via FindById. The old call site used
-        // flows.FirstOrDefault(f => f.Id == flowId) which captures flowId in
-        // a closure on every dispatch — visible churn under load.
-        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FindById(flowId)
-            ?? throw new InvalidOperationException($"Flow {flowId} is not registered. Cannot dispatch step '{step.Key}'.");
-        return await _engine.RunStepAsync(ctx, flow, step).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(envelope);
+        var flow = ResolveFlow(envelope.FlowId, envelope.StepKey);
+        var ctx = envelope.ToExecutionContext(performContext?.BackgroundJob?.Id);
+        return _engine.RunStepAsync(ctx, flow, envelope.ToStepInstance());
     }
 
     /// <inheritdoc/>
-    [Obsolete("Use the Guid flowId overload. This method exists only so Hangfire can resolve job payloads enqueued before Plan 05.")]
-    public ValueTask<object?> RunStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, PerformContext? performContext = null)
-        => RunStepAsync(ctx, flow.Id, step, performContext);
+    [Obsolete("Only resolves step jobs enqueued before 2.0. New jobs use RunStepAsync(HangfireStepEnvelope, PerformContext?). Drain those queues before the next major release removes this overload.")]
+    public ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null)
+    {
+        ctx.JobId = performContext?.BackgroundJob?.Id;
+        return _engine.RunStepAsync(ctx, ResolveFlow(flowId, step.Key), step);
+    }
 
     /// <inheritdoc/>
     public ValueTask<object?> RetryStepAsync(Guid flowId, Guid runId, string stepKey, PerformContext? performContext = null)
         => _engine.RetryStepAsync(flowId, runId, stepKey);
+
+    private IFlowDefinition ResolveFlow(Guid flowId, string stepKey)
+        => _flows.Find(flowId)
+            ?? throw new InvalidOperationException($"Flow {flowId} is not registered. Cannot dispatch step '{stepKey}'.");
 }

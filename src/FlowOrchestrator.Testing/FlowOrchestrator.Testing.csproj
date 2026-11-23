@@ -5,11 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>1591</NoWarn>
+    <NoWarn>$(NoWarn);1591</NoWarn>
     <IsPackable>true</IsPackable>
     <PackageId>FlowOrchestrator.Testing</PackageId>
     <Description>In-process testing helper for FlowOrchestrator: spin up an in-memory host, trigger a flow, and assert on the run result without Hangfire or ASP.NET. Provides FlowTestHost.For&lt;TFlow&gt;()...BuildAsync().</Description>
-    <PackageTags>flow;orchestration;workflow;testing;xunit;hangfire;in-memory</PackageTags>
+    <PackageTags>flow;orchestration;workflow;testing;xunit;in-memory</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,7 +19,6 @@
   <ItemGroup>
     <ProjectReference Include="..\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
     <ProjectReference Include="..\FlowOrchestrator.InMemory\FlowOrchestrator.InMemory.csproj" />
-    <ProjectReference Include="..\FlowOrchestrator.Hangfire\FlowOrchestrator.Hangfire.csproj" />
   </ItemGroup>
 
 </Project>

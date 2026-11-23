@@ -71,6 +71,31 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
     }
 
     [Fact]
+    public async Task GetTriggerHeadersAsync_rehydrates_headers_case_insensitively()
+    {
+        // Arrange — HTTP header names are case-insensitive and the entry step sees the trigger's own
+        // case-insensitive dictionary, so the copy later steps read back from the store must match.
+        var runId = Guid.NewGuid();
+        var ctx = MakeTriggerContext(runId);
+        var flow = Substitute.For<IFlowDefinition>();
+        var trigger = Substitute.For<ITrigger>();
+        trigger.Data.Returns(default(object?));
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["X-Request-Id"] = "abc123" };
+        trigger.Headers.Returns(headers);
+        await _repo.SaveTriggerHeadersAsync(ctx, flow, trigger);
+
+        // Act
+        var result = await _repo.GetTriggerHeadersAsync(runId);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(result!.TryGetValue("x-request-id", out var lower));
+        Assert.Equal("abc123", lower);
+        Assert.Equal("abc123", result["X-REQUEST-ID"]);
+        Assert.Equal("abc123", result["X-Request-Id"]);
+    }
+
+    [Fact]
     public async Task GetTriggerHeadersAsync_returns_null_when_no_headers_saved()
     {
         // Arrange
@@ -140,21 +165,6 @@ public sealed class PostgreSqlOutputsRepositoryTests : IClassFixture<PostgreSqlF
         // Assert
         var je = (JsonElement)output!;
         Assert.Equal(2, je.GetProperty("value").GetInt32());
-    }
-
-    [Fact]
-    public async Task EndScopeAsync_completes_without_error()
-    {
-        // Arrange
-        var ctx = MakeExecutionContext(Guid.NewGuid());
-        var flow = Substitute.For<IFlowDefinition>();
-        var step = Substitute.For<IStepInstance>();
-
-        // Act
-        var ex = await Record.ExceptionAsync(() => _repo.EndScopeAsync(ctx, flow, step).AsTask());
-
-        // Assert
-        Assert.Null(ex);
     }
 
     [Fact]

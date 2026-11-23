@@ -11,9 +11,10 @@ using Microsoft.Extensions.Logging;
 namespace FlowOrchestrator.ServiceBus;
 
 /// <summary>
-/// Single-class implementation of <see cref="IRecurringTriggerDispatcher"/>,
-/// <see cref="IRecurringTriggerInspector"/>, and <see cref="IRecurringTriggerSync"/>
-/// for the Service Bus runtime. Schedules cron-trigger fires as
+/// Single-class implementation of <see cref="IRecurringTriggerDispatcher"/> and
+/// <see cref="IRecurringTriggerInspector"/> for the Service Bus runtime; effective-cron resolution
+/// is Core's <see cref="RecurringTriggerSync"/>, which calls <see cref="RegisterOrUpdate"/> /
+/// <see cref="Remove(string)"/>. Schedules cron-trigger fires as
 /// <see cref="ServiceBusMessage.ScheduledEnqueueTime">scheduled messages</see>
 /// on the cron queue; the consumer (<see cref="ServiceBusCronProcessorHostedService"/>)
 /// drains them, calls the engine, and self-perpetuates the next fire.
@@ -26,13 +27,10 @@ namespace FlowOrchestrator.ServiceBus;
 /// and both compute the same <c>{flowId}:{triggerKey}:{nextFire}</c> message id.
 /// </remarks>
 internal sealed class ServiceBusRecurringTriggerHub
-    : IRecurringTriggerDispatcher, IRecurringTriggerInspector, IRecurringTriggerSync, IAsyncDisposable
+    : IRecurringTriggerDispatcher, IRecurringTriggerInspector, IAsyncDisposable
 {
     private readonly ServiceBusClient _client;
     private readonly ServiceBusRuntimeOptions _options;
-    private readonly IFlowRepository _repository;
-    private readonly IFlowScheduleStateStore _scheduleStateStore;
-    private readonly FlowSchedulerOptions _schedulerOptions;
     private readonly ILogger<ServiceBusRecurringTriggerHub> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -43,17 +41,11 @@ internal sealed class ServiceBusRecurringTriggerHub
     public ServiceBusRecurringTriggerHub(
         ServiceBusClient client,
         ServiceBusRuntimeOptions options,
-        IFlowRepository repository,
-        IFlowScheduleStateStore scheduleStateStore,
-        FlowSchedulerOptions schedulerOptions,
         ILogger<ServiceBusRecurringTriggerHub> logger,
         TimeProvider? timeProvider = null)
     {
         _client = client;
         _options = options;
-        _repository = repository;
-        _scheduleStateStore = scheduleStateStore;
-        _schedulerOptions = schedulerOptions;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _sender = new Lazy<ServiceBusSender>(() => _client.CreateSender(_options.CronQueueName));
@@ -170,7 +162,7 @@ internal sealed class ServiceBusRecurringTriggerHub
     /// <inheritdoc/>
     public Task EnqueueTriggerAsync(Guid flowId, string triggerKey, CancellationToken ct = default)
     {
-        var jobId = $"flow-{flowId}-{triggerKey}";
+        var jobId = RecurringTriggerJobId.Create(flowId, triggerKey);
         return EnqueueCronMessageAsync(jobId, flowId, triggerKey, cron: string.Empty, _timeProvider.GetUtcNow(), ct);
     }
 
@@ -190,44 +182,6 @@ internal sealed class ServiceBusRecurringTriggerHub
                 TimeZoneId: null))
             .ToList();
         return Task.FromResult(result);
-    }
-
-    // ── IRecurringTriggerSync ────────────────────────────────────────────────
-
-    /// <inheritdoc/>
-    public void SyncTriggers(Guid flowId, bool isEnabled)
-    {
-        var flows = _repository.GetAllFlowsAsync().AsTask().GetAwaiter().GetResult();
-        var flow = flows.FirstOrDefault(f => f.Id == flowId);
-        if (flow is null) return;
-
-        foreach (var (triggerKey, trigger) in flow.Manifest.Triggers)
-        {
-            if (trigger.Type != TriggerType.Cron) continue;
-
-            var jobId = $"flow-{flow.Id}-{triggerKey}";
-            var persisted = _schedulerOptions.PersistOverrides
-                ? _scheduleStateStore.GetAsync(jobId).GetAwaiter().GetResult()
-                : null;
-
-            if (!isEnabled || !trigger.TryGetCronExpression(out var manifestCron))
-            {
-                Remove(jobId);
-                continue;
-            }
-
-            if (persisted?.IsPaused == true)
-            {
-                Remove(jobId);
-                continue;
-            }
-
-            var effectiveCron = string.IsNullOrWhiteSpace(persisted?.CronOverride)
-                ? manifestCron
-                : persisted!.CronOverride!;
-
-            RegisterOrUpdate(jobId, flow.Id, triggerKey, effectiveCron);
-        }
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
@@ -256,7 +210,7 @@ internal sealed class ServiceBusRecurringTriggerHub
     /// Short-circuits when <paramref name="jobId"/> is no longer in the hub's job map. This guards
     /// against the v1.22 disabled-flow self-perpetuation bug: the cron consumer calls this method
     /// BEFORE invoking the engine, so a flow that was disabled mid-flight (which calls
-    /// <see cref="Remove(string)"/> via <see cref="SyncTriggers(Guid, bool)"/>) would otherwise
+    /// <see cref="Remove(string)"/> via <see cref="RecurringTriggerSync.SyncTriggersAsync"/>) would otherwise
     /// keep enqueuing scheduled messages every tick even though the engine rejects each fire.
     /// </remarks>
     internal async Task ScheduleNextAsync(

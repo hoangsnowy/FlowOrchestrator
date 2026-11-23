@@ -15,8 +15,7 @@ public sealed partial class FlowGraphPlanner
 
     /// <summary>
     /// Returns the step keys <see cref="Evaluate"/> must classify — every known key that has no status
-    /// row yet — in ordinal order, together with the full known-key list for
-    /// <see cref="FlowGraphEvaluation.AllKnownStepKeys"/>.
+    /// row yet — in ordinal order.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -39,12 +38,12 @@ public sealed partial class FlowGraphPlanner
     /// sorted. Sublinear needs a per-run incremental status cache — P0-1 of #189, out of scope here.
     /// </para>
     /// <para>
-    /// <see cref="FlowGraphEvaluation.AllKnownStepKeys"/> is a public contract no engine path reads,
-    /// so it is materialised lazily from a snapshot of the status keys; the result is identical to
-    /// the eager form.
+    /// The span walk assumes every top-level manifest key is a single non-empty segment, which
+    /// <see cref="Validate"/> enforces: a dotted or empty top-level key would make
+    /// <c>StepCollection.FindStep</c>'s exact-match shortcut reachable from a multi-segment path.
     /// </para>
     /// </remarks>
-    private static (IReadOnlyList<string> Candidates, IReadOnlyList<string> AllKnown) PlanCandidateStepKeys(
+    private static IReadOnlyList<string> PlanCandidateStepKeys(
         IFlowDefinition flow,
         IReadOnlyDictionary<string, StepStatus> statuses)
     {
@@ -52,19 +51,10 @@ public sealed partial class FlowGraphPlanner
 
         // Fast path: a flow without loops/foreach has runtime keys that are all already in the
         // manifest. The known-key set is then exactly the manifest's sorted keys — return the
-        // cached array directly, as both the candidate list and the known list.
+        // cached array directly; Evaluate skips the keys that already have a status.
         if (!AnyRuntimeKeyOutsideManifest(cache, statuses))
         {
-            return (cache.SortedKeys, cache.SortedKeys);
-        }
-
-        // A dotted or empty top-level manifest key makes FindStep's exact-match shortcut reachable
-        // from a multi-segment template path, which the span walk below does not model. No real
-        // manifest has one; keep the original algorithm for it rather than approximate.
-        if (cache.HasIrregularTopLevelKey)
-        {
-            var known = BuildKnownStepKeysLegacy(flow, statuses.Keys);
-            return (known, known);
+            return cache.SortedKeys;
         }
 
         var candidates = new List<string>();
@@ -159,7 +149,7 @@ public sealed partial class FlowGraphPlanner
         candidates.Sort(StringComparer.Ordinal);
         RemoveAdjacentDuplicates(candidates);
 
-        return (candidates, new LazyKnownStepKeys(cache.SortedKeys, SnapshotKeys(statuses), candidates));
+        return candidates;
     }
 
     /// <summary>
@@ -302,96 +292,6 @@ public sealed partial class FlowGraphPlanner
         }
 
         sorted.RemoveRange(write, sorted.Count - write);
-    }
-
-    private static string[] SnapshotKeys(IReadOnlyDictionary<string, StepStatus> statuses)
-    {
-        var keys = new string[statuses.Count];
-        if (statuses.Keys is ICollection<string> collection)
-        {
-            collection.CopyTo(keys, 0);
-            return keys;
-        }
-
-        var i = 0;
-        foreach (var key in statuses.Keys)
-        {
-            keys[i++] = key;
-        }
-
-        return keys;
-    }
-
-    /// <summary>
-    /// The full known-key list (manifest keys ∪ status keys ∪ missing expanded children) in ordinal
-    /// order, materialised on first access — no engine path reads it, and building it eagerly was the
-    /// sort and copy that dominated <see cref="Evaluate"/>.
-    /// </summary>
-    /// <remarks>
-    /// Every expanded child either has a status row (and is in the status snapshot) or is one of the
-    /// candidates, so the union below is exactly the eager known-key set.
-    /// </remarks>
-    private sealed class LazyKnownStepKeys(string[] manifestKeys, string[] statusKeys, List<string> candidates)
-        : IReadOnlyList<string>
-    {
-        private string[]? _items;
-
-        private string[] Items
-        {
-            get
-            {
-                var items = Volatile.Read(ref _items);
-                if (items is not null)
-                {
-                    return items;
-                }
-
-                var known = new SortedSet<string>(manifestKeys, StringComparer.Ordinal);
-                known.UnionWith(statusKeys);
-                known.UnionWith(candidates);
-                items = [.. known];
-                return Interlocked.CompareExchange(ref _items, items, null) ?? items;
-            }
-        }
-
-        public string this[int index] => Items[index];
-
-        public int Count => Items.Length;
-
-        public IEnumerator<string> GetEnumerator() => ((IEnumerable<string>)Items).GetEnumerator();
-
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
-    }
-
-    /// <summary>
-    /// The original eager known-key construction, retained only for manifests with a dotted or empty
-    /// top-level key (see <see cref="PlanCandidateStepKeys"/>).
-    /// </summary>
-    private static IReadOnlyList<string> BuildKnownStepKeysLegacy(IFlowDefinition flow, IEnumerable<string> runtimeStepKeys)
-    {
-        var cache = GetManifestCache(flow);
-        var known = new SortedSet<string>(cache.KeySet, StringComparer.Ordinal);
-        HashSet<string>? expandedScopes = null;
-        foreach (var runtimeKey in runtimeStepKeys)
-        {
-            known.Add(runtimeKey);
-
-            foreach (var (scopePrefix, scopedMetadata) in ExtractRuntimeScopePrefixes(flow, runtimeKey))
-            {
-                expandedScopes ??= new HashSet<string>(StringComparer.Ordinal);
-                if (!expandedScopes.Add(scopePrefix))
-                {
-                    continue;
-                }
-
-                foreach (var child in scopedMetadata.Steps.Keys)
-                {
-                    known.Add($"{scopePrefix}.{child}");
-                }
-            }
-        }
-
-        return known.ToArray();
     }
 
     private static IEnumerable<(string RuntimeScopePrefix, IScopedStep ScopedMetadata)> ExtractRuntimeScopePrefixes(

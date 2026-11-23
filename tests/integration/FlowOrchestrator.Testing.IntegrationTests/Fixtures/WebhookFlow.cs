@@ -36,6 +36,43 @@ public sealed class WebhookFlow : IFlowDefinition
     };
 }
 
+/// <summary>
+/// Two-step flow whose steps both read a trigger header under a different casing than the caller sent.
+/// The first step sees the trigger's own header dictionary; the second runs after it and reads the
+/// headers back from the outputs repository, so both must resolve the header case-insensitively.
+/// </summary>
+public sealed class HeaderCasingFlow : IFlowDefinition
+{
+    public Guid Id { get; } = new("66666666-6666-6666-6666-666666666667");
+    public string Version => "1.0";
+
+    public FlowManifest Manifest { get; set; } = new()
+    {
+        Triggers = new FlowTriggerCollection
+        {
+            ["casing-hook"] = new TriggerMetadata
+            {
+                Type = TriggerType.Webhook,
+                Inputs = new Dictionary<string, object?> { ["webhookSlug"] = "casing-hook" }
+            }
+        },
+        Steps = new StepCollection
+        {
+            ["entry"] = new StepMetadata
+            {
+                Type = "CaptureHeader",
+                Inputs = new Dictionary<string, object?> { ["foo"] = "@triggerHeaders()['x-request-id']" }
+            },
+            ["later"] = new StepMetadata
+            {
+                Type = "CaptureHeader",
+                RunAfter = new RunAfterCollection { ["entry"] = [StepStatus.Succeeded] },
+                Inputs = new Dictionary<string, object?> { ["foo"] = "@triggerHeaders()['x-request-id']" }
+            }
+        }
+    };
+}
+
 /// <summary>Inputs for <see cref="CaptureHeaderStepHandler"/>.</summary>
 public sealed class CaptureHeaderInput
 {

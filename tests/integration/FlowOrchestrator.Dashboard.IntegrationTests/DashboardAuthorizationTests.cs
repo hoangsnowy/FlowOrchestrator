@@ -1,3 +1,4 @@
+using FlowOrchestrator.Core.Abstractions;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
@@ -266,7 +267,7 @@ public sealed class DashboardAuthorizationTests
     {
         // Arrange
         using var server = Server(basic: true, identity: true);
-        server.FlowRepository.GetAllFlowsAsync().Returns(Array.Empty<FlowOrchestrator.Core.Abstractions.IFlowDefinition>());
+        server.Flows = new FlowRegistry(Array.Empty<FlowOrchestrator.Core.Abstractions.IFlowDefinition>());
 
         // Act — no Basic header, no session: only the webhook's own secret check may reject it.
         var response = await server.Client.SendAsync(Request(HttpMethod.Post, "/flows/api/webhook/unknown-slug"));

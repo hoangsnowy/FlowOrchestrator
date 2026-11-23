@@ -2,10 +2,8 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using FlowOrchestrator.ServiceBus;
-using global::Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,9 +11,9 @@ namespace FlowOrchestrator.ServiceBus.IntegrationTests;
 
 /// <summary>
 /// End-to-end DI wiring smoke tests for the Service Bus runtime adapter. These verify that
-/// <c>UseAzureServiceBusRuntime</c> overrides the Hangfire defaults registered inside
-/// <c>AddFlowOrchestrator</c> and that every recurring-trigger interface resolves to the
-/// same hub instance (parity with the InMemory dispatcher).
+/// <c>UseAzureServiceBusRuntime</c> wires a complete runtime on its own — no Hangfire package or
+/// registration — and that the recurring-trigger dispatcher and inspector resolve to the same hub
+/// instance while cron sync is Core's runtime-agnostic <see cref="RecurringTriggerSync"/>.
 /// </summary>
 /// <remarks>
 /// No live Service Bus connection is required: <c>ServiceBusClient</c> only opens the
@@ -32,9 +30,6 @@ public class ServiceBusDiWiringTests
         services.AddSingleton(NullLoggerFactory.Instance);
         services.AddLogging();
 
-        // Hangfire infrastructure has to be registered for AddFlowOrchestrator to wire its
-        // engine plumbing; our SB runtime then overrides the dispatcher trio via TryAdd.
-        services.AddHangfire(c => c.UseInMemoryStorage());
 
         services.AddFlowOrchestrator(opts =>
         {
@@ -72,10 +67,11 @@ public class ServiceBusDiWiringTests
         var inspector = sp.GetRequiredService<IRecurringTriggerInspector>();
         var sync = sp.GetRequiredService<IRecurringTriggerSync>();
 
-        // Assert — same singleton serves all three contracts (parity with InMemory).
+        // Assert — one hub serves dispatcher + inspector (parity with InMemory); the effective-cron
+        // sync is Core's single implementation driving that hub.
         Assert.IsType<ServiceBusRecurringTriggerHub>(dispatcher);
         Assert.Same(dispatcher, inspector);
-        Assert.Same(dispatcher, sync);
+        Assert.IsType<RecurringTriggerSync>(sync);
     }
 
     [Fact]
@@ -141,7 +137,6 @@ public class ServiceBusDiWiringTests
         // Arrange
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddHangfire(c => c.UseInMemoryStorage());
 
         // Act & Assert
         Assert.Throws<InvalidOperationException>(() =>

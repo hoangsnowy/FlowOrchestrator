@@ -24,24 +24,24 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 public sealed class RunTimeoutSweepMatrixTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
     private FlowOrchestratorEngine CreateEngine(InMemoryFlowRunStore store) =>
         new(
-            _dispatcher, _flowExecutor, _graphPlanner, _stepExecutor, _flowStore, store,
+            _dispatcher, _graphPlanner, _stepExecutor, _flowStore, store,
             _outputsRepo, _ctxAccessor, _flowRepo, [store], [store],
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static async Task<(InMemoryFlowRunStore Store, Guid RunId)> StartRunAsync(DateTimeOffset? deadline)
     {

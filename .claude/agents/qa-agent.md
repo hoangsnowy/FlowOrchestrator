@@ -228,7 +228,7 @@ For every invariant: search for an existing test (grep the invariant's keyword, 
 | 14 | **When = true → step executes normally** — A step whose `When` evaluates to `true` must not be skipped; engine dispatches it via the normal path. | `FlowOrchestratorEngine` | Same setup; trigger; assert branch step `Succeeded`. |
 | 15 | **When expression type-mismatch → FlowExpressionException** — Comparing a string LHS to a numeric literal (or vice versa) must throw `FlowExpressionException`, not silently return `false`. | `BooleanExpressionEvaluator` | Feed mismatched operand types; assert exception. |
 | 16 | **Zombie-run closure** — `FlowRunRecoveryHostedService` closes a run where all steps are terminal but `FlowRuns.Status = "Running"` (host crashed between persist and `CompleteRunAsync`). | `FlowRunRecoveryHostedService.RecoverRunAsync` | Seed an active run with all steps `Succeeded`; run service; assert run status `Succeeded`. |
-| 17 | **Hangfire flow-ID rehydration** — `HangfireFlowOrchestrator.RunStepAsync(ctx, Guid, step)` looks up the flow from `IFlowRepository` by ID; if the flow is not found, the step must fail with a clear error rather than NRE. | `HangfireFlowOrchestrator` | Call `RunStepAsync` with an unknown GUID; assert it logs + throws/returns failure. |
+| 17 | **Hangfire flow-ID rehydration** — `HangfireFlowOrchestrator.RunStepAsync(ctx, Guid, step)` looks up the flow from `FlowRegistry` by ID; if the flow is not found, the step must fail with a clear error rather than NRE. | `HangfireFlowOrchestrator` | Call `RunStepAsync` with an unknown GUID; assert it logs + throws/returns failure. |
 | 18 | **Disabled flow trigger rejection (v1.22)** — `FlowOrchestratorEngine.TriggerAsync` consults `IFlowStore.GetByIdAsync(flowId).IsEnabled`. When `false`, returns `{ runId: null, disabled: true }` without dispatching. Falls through to enabled when the store has no record yet (first-startup safe default). Applies to ALL three runtimes (Hangfire / InMemory / ServiceBus) — gate sits at the runtime-neutral engine. EventId 1010 `TriggerRejectedDisabledFlow` warning. | `FlowOrchestratorEngine.TriggerAsync` | `tests/unit/.../FlowOrchestratorEngineInvariantTests.cs` — three tests (disabled, enabled, store-returns-null). |
 | 19 | **ServiceBus skip-disabled processor (v1.22)** — `ServiceBusFlowProcessorHostedService.StartAsync` consults `IFlowStore.GetAllAsync()` and skips processor creation for flows with `IsEnabled = false` (idle subscription would otherwise consume connection-pool slots). Re-enabling at runtime requires app restart (documented limitation). | `ServiceBusFlowProcessorHostedService` | `tests/unit/.../ServiceBusFlowProcessorSkipDisabledTests.cs` — disabled flow does NOT trigger `EnsureSubscriptionAsync`. |
 | 20 | **ServiceBus self-perpetuating cron correctness** — Cron consumer enqueues NEXT firing BEFORE completing current message, so a crash mid-handler triggers redelivery + duplicate-detection eats the duplicate next-fire. Multi-replica safe via SB single-delivery. | `ServiceBusCronProcessorHostedService.OnMessageAsync` | Integration test against emulator container; assert exactly N fires for N expected ticks. |
@@ -534,8 +534,8 @@ ServiceBus runtime (v1.22):
 Hangfire:
   src/FlowOrchestrator.Hangfire/HangfireFlowOrchestrator.cs
   src/FlowOrchestrator.Hangfire/HangfireStepDispatcher.cs
-  src/FlowOrchestrator.Hangfire/FlowSyncHostedService.cs
-  src/FlowOrchestrator.Hangfire/RecurringTriggerSync.cs
+  src/FlowOrchestrator.Core/Hosting/FlowSyncHostedService.cs
+  src/FlowOrchestrator.Core/Execution/RecurringTriggerSync.cs
 
 SQL stores:
   src/FlowOrchestrator.SqlServer/SqlFlowRunStore.cs

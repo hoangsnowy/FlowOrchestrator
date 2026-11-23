@@ -18,20 +18,18 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 public sealed class RunTimeoutEnforcementTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
     private FlowOrchestratorEngine CreateEngine(InMemoryFlowRunStore store, IFlowEventNotifier? notifier = null) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -45,7 +43,7 @@ public sealed class RunTimeoutEnforcementTests
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             _logger,
-            notifier);
+            notifier ?? NoopFlowEventNotifier.Instance);
 
     /// <summary>Counts published <see cref="RunCompletedEvent"/>s so tests can assert exactly-once completion.</summary>
     private sealed class CountingNotifier : IFlowEventNotifier

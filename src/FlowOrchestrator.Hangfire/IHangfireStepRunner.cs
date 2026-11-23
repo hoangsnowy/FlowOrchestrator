@@ -1,6 +1,4 @@
-using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Core.Storage;
 using Hangfire.Server;
 
 namespace FlowOrchestrator.Hangfire;
@@ -12,23 +10,29 @@ namespace FlowOrchestrator.Hangfire;
 public interface IHangfireStepRunner
 {
     /// <summary>
-    /// Executes the given step, persists its output, and enqueues any subsequent ready steps.
-    /// Called by Hangfire when the step's background job fires.
+    /// Executes the step described by <paramref name="envelope"/>, persists its output, and enqueues
+    /// any subsequent ready steps. Called by Hangfire when the step's background job fires.
     /// </summary>
-    /// <param name="ctx">The ambient execution context carrying RunId and trigger data.</param>
-    /// <param name="flowId">The identifier of the flow that owns this step. The flow definition is rehydrated server-side via <see cref="IFlowRepository"/> to avoid serialising the full manifest through Hangfire's argument store.</param>
-    /// <param name="step">The step instance with resolved inputs.</param>
+    /// <param name="envelope">
+    /// Ids, inputs and scheduling data of the step. The flow definition is resolved from
+    /// <c>FlowRegistry</c> and the trigger payload from the run's stored trigger data, so neither
+    /// travels through Hangfire's argument store.
+    /// </param>
     /// <param name="performContext">Hangfire job context; <see langword="null"/> when called outside a Hangfire job.</param>
-    ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null);
+    ValueTask<object?> RunStepAsync(HangfireStepEnvelope envelope, PerformContext? performContext = null);
 
     /// <summary>
-    /// Back-compat overload for jobs enqueued before the dispatcher was refactored to pass
-    /// only <c>flow.Id</c>. Hangfire stores invocations by exact method signature, so this
-    /// method must keep its original shape for old retries to resolve. Internally it
-    /// extracts <see cref="IFlowDefinition.Id"/> and delegates to the new overload.
+    /// Back-compat entry point for step jobs enqueued by FlowOrchestrator 1.17 – 1.x, which passed the
+    /// full execution context and step instance as job arguments. Hangfire resolves a stored job by its
+    /// exact method signature, so this overload keeps those in-flight jobs runnable across the upgrade.
+    /// New dispatches always use <see cref="RunStepAsync(HangfireStepEnvelope, PerformContext?)"/>.
     /// </summary>
-    [Obsolete("Use the Guid flowId overload. This method exists only so Hangfire can resolve job payloads enqueued before Plan 05.")]
-    ValueTask<object?> RunStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, PerformContext? performContext = null);
+    /// <param name="ctx">The execution context deserialised from the legacy job payload.</param>
+    /// <param name="flowId">The flow that owns the step.</param>
+    /// <param name="step">The step instance deserialised from the legacy job payload.</param>
+    /// <param name="performContext">Hangfire job context; <see langword="null"/> when called outside a Hangfire job.</param>
+    [Obsolete("Only resolves step jobs enqueued before 2.0. New jobs use RunStepAsync(HangfireStepEnvelope, PerformContext?). Drain those queues before the next major release removes this overload.")]
+    ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null);
 
     /// <summary>
     /// Resets a step's state and re-executes it from scratch. Used by the dashboard Retry button.

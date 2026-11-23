@@ -33,12 +33,6 @@ public interface IStepInstance<TInput> : IExecutionContext
     /// <see cref="FlowOrchestrator.Core.Abstractions.LoopStepMetadata"/> scope.
     /// </summary>
     int Index { get; set; }
-
-    /// <summary>
-    /// When <see langword="true"/>, signals the loop handler to advance to the next iteration
-    /// after this step completes. Set by <c>ForEachStepHandler</c>.
-    /// </summary>
-    bool ScopeMoveNext { get; set; }
 }
 
 /// <summary>

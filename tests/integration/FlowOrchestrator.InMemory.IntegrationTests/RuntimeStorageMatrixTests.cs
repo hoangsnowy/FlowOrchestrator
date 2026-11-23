@@ -1,5 +1,4 @@
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,7 +12,8 @@ namespace FlowOrchestrator.InMemory.Tests;
 /// <remarks>
 /// Hangfire-runtime combinations are verified in <c>FlowOrchestrator.Hangfire.Tests</c>
 /// because <c>HangfireStepDispatcher</c> is internal to that assembly. This file focuses
-/// on the InMemory-runtime side, which is the new path introduced by Delta 1.
+/// on the InMemory-runtime side and deliberately does not reference the Hangfire package:
+/// since 2.0 <c>AddFlowOrchestrator</c> ships in Core, so an in-memory host builds without it.
 /// </remarks>
 public sealed class RuntimeStorageMatrixTests
 {
@@ -81,9 +81,10 @@ public sealed class RuntimeStorageMatrixTests
         var inspector = sp.GetRequiredService<IRecurringTriggerInspector>();
         var sync = sp.GetRequiredService<IRecurringTriggerSync>();
 
-        // Assert — single PeriodicTimer instance fulfils all three roles.
+        // Assert — single PeriodicTimer instance is dispatcher + inspector; Core's
+        // RecurringTriggerSync resolves effective crons on top of it.
         Assert.Same(dispatcher, inspector);
-        Assert.Same(dispatcher, sync);
+        Assert.IsType<RecurringTriggerSync>(sync);
     }
 
     private static ServiceProvider BuildInMemoryStack()

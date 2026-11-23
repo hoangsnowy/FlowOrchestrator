@@ -34,12 +34,6 @@ public interface IOutputsRepository
     /// </summary>
     ValueTask<object?> GetStepOutputAsync(Guid runId, string stepKey);
 
-    /// <summary>
-    /// Signals that the scoped step (loop iteration) identified by <paramref name="step"/> is complete.
-    /// Implementations may use this to aggregate loop outputs or release scope-level resources.
-    /// </summary>
-    ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step);
-
     /// <summary>Appends a <see cref="FlowEvent"/> to the event log for the run.</summary>
     ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt);
 }

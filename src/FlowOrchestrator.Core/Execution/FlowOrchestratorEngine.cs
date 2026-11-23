@@ -35,14 +35,13 @@ namespace FlowOrchestrator.Core.Execution;
 public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTimeoutEnforcer
 {
     private readonly IStepDispatcher _dispatcher;
-    private readonly IFlowExecutor _flowExecutor;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepExecutor _stepExecutor;
     private readonly IFlowStore _flowStore;
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepository;
     private readonly IExecutionContextAccessor _contextAccessor;
-    private readonly IFlowRepository _flowRepository;
+    private readonly FlowRegistry _flows;
     private readonly IFlowRunRuntimeStore _runtimeStore;
     private readonly IFlowRunControlStore _runControlStore;
     private readonly FlowRunControlOptions _runControlOptions;
@@ -55,53 +54,50 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     /// <remarks>
-    /// <paramref name="eventNotifier"/> is optional with a default of <see langword="null"/> so
-    /// existing positional callers (notably unit tests built before the realtime layer landed)
-    /// continue to compile unchanged. When <see langword="null"/>, <see cref="NoopFlowEventNotifier.Instance"/>
-    /// is substituted and lifecycle events are silently discarded.
+    /// <paramref name="eventNotifier"/> is required: <c>AddFlowOrchestrator</c> registers
+    /// <see cref="NoopFlowEventNotifier"/> by default, and hand-built engines pass
+    /// <see cref="NoopFlowEventNotifier.Instance"/> when lifecycle events should be discarded.
     /// <para>
-    /// <paramref name="signalStore"/> is optional for the same reason. When supplied, a step that parks
-    /// in <see cref="StepStatus.Pending"/> re-reads its signal waiter after releasing its execution
-    /// claim and resumes itself if a payload landed while it held the claim — the delivery whose
-    /// resume nudge could only lose that claim (#190). Without it, such a delivery waits for the
-    /// step's safety-net invocation.
+    /// <paramref name="signalStore"/> is optional so hand-built engines without signal support compile
+    /// unchanged. When supplied, a step that parks in <see cref="StepStatus.Pending"/> re-reads its
+    /// signal waiter after releasing its execution claim and resumes itself if a payload landed while
+    /// it held the claim — the delivery whose resume nudge could only lose that claim (#190). Without
+    /// it, such a delivery waits for the step's safety-net invocation.
     /// </para>
     /// </remarks>
     public FlowOrchestratorEngine(
         IStepDispatcher dispatcher,
-        IFlowExecutor flowExecutor,
         IFlowGraphPlanner graphPlanner,
         IStepExecutor stepExecutor,
         IFlowStore flowStore,
         IFlowRunStore runStore,
         IOutputsRepository outputsRepository,
         IExecutionContextAccessor contextAccessor,
-        IFlowRepository flowRepository,
+        FlowRegistry flows,
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
         IEnumerable<IFlowRunControlStore> runControlStores,
         FlowRunControlOptions runControlOptions,
         FlowObservabilityOptions observabilityOptions,
         FlowOrchestratorTelemetry telemetry,
         ILogger<FlowOrchestratorEngine> logger,
-        IFlowEventNotifier? eventNotifier = null,
+        IFlowEventNotifier eventNotifier,
         IFlowSignalStore? signalStore = null)
     {
         _dispatcher = dispatcher;
-        _flowExecutor = flowExecutor;
         _graphPlanner = graphPlanner;
         _stepExecutor = stepExecutor;
         _flowStore = flowStore;
         _runStore = runStore;
         _outputsRepository = outputsRepository;
         _contextAccessor = contextAccessor;
-        _flowRepository = flowRepository;
+        _flows = flows;
         _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowOrchestratorEngine));
         _runControlStore = RequiredStore.First(runControlStores, nameof(FlowOrchestratorEngine));
         _runControlOptions = runControlOptions;
         _observabilityOptions = observabilityOptions;
         _telemetry = telemetry;
         _logger = logger;
-        _eventNotifier = eventNotifier ?? NoopFlowEventNotifier.Instance;
+        _eventNotifier = eventNotifier;
         _signalStore = signalStore;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
     }

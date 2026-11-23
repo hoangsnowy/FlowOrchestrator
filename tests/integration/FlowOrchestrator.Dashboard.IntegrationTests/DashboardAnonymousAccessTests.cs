@@ -36,7 +36,7 @@ public sealed class DashboardAnonymousAccessTests
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
         flow.Manifest.Returns(new FlowManifest());
-        server.FlowRepository.GetAllFlowsAsync().Returns([flow]);
+        server.Flows = new FlowRegistry([flow]);
         return record;
     }
 

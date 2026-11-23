@@ -6,12 +6,154 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+> **Upgrading from 1.x?** Follow [Migrating to 2.0](docs/articles/migrating-to-2.0.md): package
+> matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
+> verification and rollback.
+
+### Fixed
+
+- Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
+  on cascade reset, race-safe SQL Server gates, case-insensitive trigger headers, PostgreSQL timeseries /
+  synthetic-attempt trace, InMemory outputs retention.
+- **A failed dispatch no longer strands the step.** The engine records the dispatch-ledger row before
+  handing the step to the runtime; when the runtime call threw (broker or Hangfire storage blip), the row
+  stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
+  before rethrowing (EventId 3011 if that release also fails). The `Pending` re-poll path still re-asserts
+  it afterwards so the runtime's job retry can re-claim.
+- Dashboard-persisted cron overrides are stripped of line breaks before they are logged by the cron sync.
+
 ### Security
 
 - Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):
   GHSA-g5jp-pqw5-wrmj (unauthenticated dashboards are read-only outside `Development`),
   GHSA-358q-p9gq-3m6p (dashboard attribute encoding) and GHSA-8248-pg9c-cp7c (step inputs resolved in a
   single pass). The behaviour change is described there.
+
+### Changed — **breaking:** Hangfire is an opt-in runtime, no longer a dependency of everything
+
+Hangfire remains a first-class, fully supported runtime. What changes is that it is now only in the
+dependency graph of hosts that choose it.
+
+#### Read before upgrading
+
+- **Package matrix.** `AddFlowOrchestrator()` moves from `FlowOrchestrator.Hangfire` to
+  `FlowOrchestrator.Core`, in the `Microsoft.Extensions.DependencyInjection` namespace (in scope
+  without a `using`). What a host references:
+
+  | Runtime | Packages | Hangfire / Newtonsoft.Json in the graph |
+  |---|---|---|
+  | Hangfire | `Core` + `Hangfire` + a storage backend, plus Hangfire's own `Hangfire.AspNetCore` and a Hangfire storage package | Yes (Newtonsoft.Json via `Hangfire.Core`, pinned to 13.0.4) |
+  | InMemory | `Core` + `InMemory`, optionally `SqlServer` / `PostgreSQL` storage | No |
+  | Azure Service Bus | `Core` + `ServiceBus` + a storage backend | No |
+
+  `FlowOrchestrator.SqlServer`, `.PostgreSQL`, `.ServiceBus` and `.Testing` no longer depend on
+  `FlowOrchestrator.Hangfire`, and `FlowOrchestrator.Core` no longer depends on Newtonsoft.Json.
+- **Hangfire hosts:** no code change. Keep the `FlowOrchestrator.Hangfire` package and
+  `using FlowOrchestrator.Hangfire;`; `options.UseHangfire()` is now an extension method in that
+  package instead of a flag on the builder. **InMemory / Service Bus hosts** can drop the
+  `FlowOrchestrator.Hangfire` package reference, together with any `using FlowOrchestrator.Hangfire;`
+  and any `AddHangfire(...)` call that was only there to satisfy 1.x wiring.
+- **Drain Hangfire queues enqueued by FlowOrchestrator ≤ 1.16 before upgrading.** Those jobs target
+  `IHangfireStepRunner.RunStepAsync(IExecutionContext, IFlowDefinition, IStepInstance, …)`, which is
+  removed (with the `RunAfterConditionNewtonsoftConverter` that existed only to deserialise them).
+  Jobs enqueued by 1.17 – 1.x keep running: their `RunStepAsync(IExecutionContext, Guid, IStepInstance, …)`
+  overload is kept, `[Obsolete]`, for one major version. Most of those jobs carry the run's
+  `TriggerContext`, whose `Flow` embeds the whole manifest; `TriggerContext.Flow` is now
+  `[IgnoreDataMember]`, so Newtonsoft skips it (the overload resolves the flow from `FlowRegistry` by id)
+  instead of failing on the manifest's `RunAfter` conditions.
+- **New Hangfire step-job shape.** Step jobs now carry one `HangfireStepEnvelope` (flow id, run id,
+  principal, step key/type/index, scheduled time, and the inputs as a single System.Text.Json
+  string). Trigger body and headers are no longer copied into every job — the engine already
+  re-reads them from the run's stored trigger data — so job payloads shrink and user payload keys
+  such as `"$type"` can no longer be interpreted by Hangfire's Newtonsoft.Json `TypeNameHandling`;
+  they arrive as plain data. Step inputs reach handlers as JSON-shaped CLR values (`string`, `long`,
+  `double` — or `decimal` when `double` would drop digits the payload carried —, `bool`,
+  `Dictionary<string, object?>`, `List<object?>`) — the shape the ForEach planner already produced;
+  typed (`IStepHandler<TInput>`) handlers bind exactly as before. `NaN` / `±Infinity` inputs are written
+  as their JSON string literal instead of failing the dispatch. A 2.0 job cannot
+  be run by a 1.x worker, so do not run 1.x and 2.0 workers against the same Hangfire storage.
+- **`AddFlowOrchestrator()` fails fast without a runtime.** It throws `InvalidOperationException`
+  when no `IStepDispatcher` (call `UseHangfire()`, `UseInMemoryRuntime()` or
+  `UseAzureServiceBusRuntime(...)`) or no `IRecurringTriggerDispatcher` is registered. 1.x silently
+  registered a Hangfire dispatcher whose jobs could not be activated without `UseHangfire()`.
+  Runtime registrations use `TryAdd`, so the first runtime selected in the callback wins.
+
+#### Removed / changed API
+
+- **`IFlowRepository`**, `FlowRepositoryExtensions.FindById`, `FlowOrchestrator.InMemory.InMemoryFlowRepository`
+  and the private SQL Server / PostgreSQL registries are replaced by one **`FlowRegistry`**
+  (`FlowOrchestrator.Core.Abstractions`): built once from the `AddFlow<T>()` registrations, O(1)
+  `TryGetFlow` / `Find` over a `FrozenDictionary`, `Flows` in registration order. **Two different
+  flow types registered with the same id now fail at startup** (`InvalidOperationException` naming both
+  types) instead of one silently shadowing the other; registering the same type twice stays harmless.
+  Step execution, retries, cron fires, signal delivery,
+  recovery and the dashboard no longer fetch and scan the whole flow list. `FlowOrchestratorEngine`,
+  `FlowSignalDispatcher`, `FlowRunRecoveryHostedService` and `HangfireFlowOrchestrator` take a
+  `FlowRegistry` where they took an `IFlowRepository`. Custom storage backends no longer register a
+  flow repository.
+- **`IRecurringTriggerSync.SyncTriggers(Guid, bool)` → `SyncTriggersAsync(Guid, bool, CancellationToken)`.**
+  One Core implementation, **`RecurringTriggerSync`**, resolves the effective cron (enabled flag,
+  dashboard pause, persisted override, manifest cron) for every runtime and drives the runtime's
+  `IRecurringTriggerDispatcher`; the Hangfire, in-memory and Service Bus copies — each blocking on
+  the async schedule-state store — are deleted. **`RecurringTriggerJobId`** builds and parses the
+  persisted `flow-{flowId}-{triggerKey}` job id.
+- **`InMemoryFlowScheduleStateStore`** moves from `FlowOrchestrator.InMemory` to
+  `FlowOrchestrator.Core.Storage` and is the one process-local default for `AddFlowOrchestrator` and
+  `AddFlowDashboard` (replacing the Hangfire package's `EphemeralFlowScheduleStateStore` and the
+  dashboard's private copy). It now stores and returns copies.
+- `FlowOrchestratorBuilder.HangfireEnabled` and the instance `FlowOrchestratorBuilder.UseHangfire()`
+  are removed (`UseHangfire()` is the `HangfireFlowOrchestratorBuilderExtensions` extension).
+  `FlowOrchestrator.Hangfire.FlowOrchestratorServiceCollectionExtensions` is gone; the class of the
+  same name now lives in Core.
+- `FlowSyncHostedService` and `FlowRetentionHostedService` move to `FlowOrchestrator.Core.Hosting`
+  (both internal). New hosting log events 5000–5005 (flow sync, cron sync, retention); the Hangfire
+  recurring dispatcher now logs register/remove as EventIds 3100/3101.
+
+### Removed — **breaking:** dead and duplicate public API
+
+Code that nothing called, or that duplicated another entry point, is deleted. Each item was
+re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before removal.
+
+- **`IFlowExecutor` and `FlowExecutor`**, plus the matching `FlowOrchestratorEngine` constructor
+  parameter. The engine stored the executor but never called it: entry steps come from
+  `IFlowGraphPlanner.CreateEntrySteps` and the engine persists trigger data itself. Hand-built
+  engines drop that argument.
+- **`FlowOrchestratorEngine`'s `eventNotifier` parameter is now required** (it was
+  `IFlowEventNotifier? eventNotifier = null`). `AddFlowOrchestrator` already registers
+  `NoopFlowEventNotifier`, so DI-built engines are unaffected; hand-built engines pass
+  `NoopFlowEventNotifier.Instance`.
+- **`FlowOrchestrator.Core.Configuration.FlowOrchestratorOptions`** (`ConnectionString`). Nothing read
+  or wrote it; storage backends take their connection string through `UseSqlServer` /
+  `UsePostgreSql`.
+- **`IOutputsRepository.EndScopeAsync`**. It had no callers and all three built-in implementations
+  were no-ops. Custom `IOutputsRepository` implementations delete their override.
+- **`IStepInstance.ScopeMoveNext`**. It was copied between step instances but never read; loop
+  iteration is driven by the DAG planner. Custom `IStepInstance` implementations delete the property.
+  Hangfire jobs queued by an older version still deserialise: the Newtonsoft settings ignore the
+  now-unknown member (the Service Bus envelope never carried it).
+- **`AddFlowOrchestratorSqlServer(IServiceCollection, string)` and
+  `AddFlowOrchestratorPostgreSql(IServiceCollection, string)`**. Both were verbatim copies of
+  `UseSqlServer` / `UsePostgreSql`. Use `AddFlowOrchestrator(o => o.UseSqlServer(cs))`, or
+  `new FlowOrchestratorBuilder(services).UseSqlServer(cs)` outside the builder callback.
+- **`FlowGraphEvaluation.AllKnownStepKeys`**. No engine path read it; it was still built (lazily) on
+  every `Evaluate` call.
+- **`StepCollection.FindParentStep(string)`**. Only its own unit tests called it.
+- **Top-level step keys that are empty or contain `'.'` are now rejected** by
+  `FlowGraphPlanner.Validate`, which `FlowSyncHostedService` runs at startup — such a flow now fails
+  startup with `Step key '…' contains '.', which is reserved as the runtime scope separator.` /
+  `Flow has a step with an empty key.` Runtime keys are `.`-joined scope paths (`loop.3.child`), so a
+  dotted top-level key was ambiguous with one; the planner kept a second, pre-#189 algorithm alive
+  just for that shape. That fallback is removed with the validation. Keys of steps nested inside a
+  loop are not checked by this rule.
+- `FlowOrchestrator.Hangfire` no longer references the OpenTelemetry SDK package, which it never
+  used (Core carries `OpenTelemetry.Api`; SDK wiring lives in `FlowOrchestrator.OpenTelemetry`).
+  Hosts that relied on it transitively for `Microsoft.Extensions.Logging` outside the generic host
+  (e.g. a bare `ServiceCollection().AddLogging()`) reference `Microsoft.Extensions.Logging`
+  directly.
+- Internal clean-up with no API change: the `FlowOrchestrator.Hangfire` "moved to Core" shim files
+  (`ForEachStepHandler.cs`, the project-local `IRecurringTriggerSync` global-using alias), and the
+  dead `is not null` guards on the engine's and signal dispatcher's always-present runtime and
+  run-control stores.
 
 ### Removed — **breaking:** legacy sequential execution path and its shims
 
@@ -29,8 +171,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Removed APIs, which only the sequential path used:
   - `StepMetadata.ShouldExecute(string, StepStatus)`
   - `StepCollection.FindNextStep(string)`
-  - `IFlowExecutor.GetNextStep(...)` and its `FlowExecutor` implementation. `IFlowExecutor` now only
-    bootstraps the run.
+  - `IFlowExecutor.GetNextStep(...)` and its `FlowExecutor` implementation. `IFlowExecutor` itself is
+    now gone too — see "dead and duplicate public API" above.
 - **Custom storage backends** must register `IFlowRunRuntimeStore` and `IFlowRunControlStore`
   alongside `IFlowRunStore`. The built-in `UseSqlServer`, `UsePostgreSql` and `UseInMemory` already
   do this, so they need no change.
@@ -106,6 +248,50 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.3] - 2026-11-23
+
+Correctness release for the 1.34 line (.NET 8 / 9 / 10). Six storage fixes. Two matter for anyone on
+SQL Server or Azure SQL: a retried step could re-run an already-succeeded downstream step, and concurrent
+workers racing on a step could fail with a duplicate-key error. No API or behaviour changes beyond the
+fixes. 2.0 carries the same fixes.
+
+### Fixed
+
+- **InMemory storage: retention never removed step outputs, trigger data or events.** `FlowRetention`
+  purged in-memory runs, but `InMemoryOutputsRepository` kept every run's trigger body, trigger headers,
+  step inputs / outputs and event log for the lifetime of the process. The repository is now an
+  `IFlowRetentionStore` registered by `UseInMemory()`: each sweep drops the outputs and events of the runs
+  the run store purged. Affects `UseInMemory()` storage only; SQL Server and PostgreSQL already deleted
+  these rows with their run.
+- **SQL Server / PostgreSQL: `@triggerHeaders()['name']` was case-sensitive after the first step.** The
+  entry step resolved headers case-insensitively, but every later step reads them back from storage, and
+  both SQL stores rebuilt them into a case-sensitive dictionary — so `@triggerHeaders()['x-request-id']`
+  for a request sent with `X-Request-Id` worked in the entry step and returned `null` in every step after
+  it (and in `When` clauses and `ForEach` sources). Stored headers are now rehydrated case-insensitively.
+  Affects SQL Server and PostgreSQL storage on every runtime; InMemory storage was not affected.
+- **SQL Server / PostgreSQL: retrying a step could run an already-succeeded downstream step again.**
+  Retrying a failed step reopens the downstream steps that had been skipped because of that failure. The
+  SQL stores reopened only those steps' status rows, but cleared the execute-once claim and dispatch record
+  of *every* downstream step — including ones that had already succeeded or were skipped by their `When`
+  condition — so a later continuation pass could dispatch and execute them a second time. Only the steps
+  that were actually reset now lose their claim and dispatch record. Affects SQL Server and PostgreSQL
+  storage on every runtime; InMemory storage already behaved correctly.
+- **SQL Server: concurrent step claims, dispatches, idempotency keys and webhook nonces could throw a
+  duplicate-key error.** These checks insert a row only if it is not already there, but the check and the
+  insert were not atomic, so when two workers (or two webhook deliveries) raced on the same key the loser
+  failed with a primary-key violation (`2627`) instead of being told "already taken". Under load this
+  surfaced as failed step jobs, failed triggers and `500`s on webhook replays. The checks now lock the key
+  for the duration of the insert (`UPDLOCK, HOLDLOCK`, as flow-definition saves already do) and treat a
+  duplicate-key error as a lost race. Affects SQL Server storage on every runtime. PostgreSQL was not
+  affected (`ON CONFLICT DO NOTHING`), nor was InMemory.
+- **PostgreSQL: the dashboard's run timeline returned `500` for a time window with a non-UTC offset.**
+  Npgsql only accepts UTC `DateTimeOffset` values for `timestamptz`, and the timeseries query passed the
+  window through as received. The window is now converted to UTC first. Affects PostgreSQL storage only.
+- **PostgreSQL: "Why skipped" was missing for steps without attempt history.** When run detail builds the
+  single attempt of a step that has no attempt rows, PostgreSQL dropped the step's `When`-clause evaluation
+  trace, so the dashboard showed no reason for the skip. The trace is now carried over, as on SQL Server.
+  Affects PostgreSQL storage only.
 
 ## [1.34.2] - 2026-11-23
 

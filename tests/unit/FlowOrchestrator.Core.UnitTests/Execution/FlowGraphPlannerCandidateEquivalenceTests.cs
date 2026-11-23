@@ -7,9 +7,10 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// <summary>
 /// Pins <see cref="FlowGraphPlanner.Evaluate"/> after #189 removed the per-call <see cref="SortedSet{T}"/>
 /// rebuild of every known runtime key. <see cref="LegacyPlanner"/> is a verbatim copy of the previous
-/// eager algorithm and serves as the oracle: ready / blocked / waiting lists and the known-key list must
-/// match it element for element, in order, for loop keys such as <c>"loop.3.child"</c>, nested loop keys,
-/// keys with irregular segments, and manifests with dotted top-level keys.
+/// eager algorithm and serves as the oracle: ready / blocked / waiting lists must match it element for
+/// element, in order, for loop keys such as <c>"loop.3.child"</c>, nested loop keys, and runtime keys with
+/// irregular segments. Manifests with dotted or empty top-level keys are rejected by
+/// <see cref="FlowGraphPlanner.Validate"/> and are not part of the oracle's domain.
 /// </summary>
 public class FlowGraphPlannerCandidateEquivalenceTests
 {
@@ -63,7 +64,6 @@ public class FlowGraphPlannerCandidateEquivalenceTests
 
         // Assert
         Assert.Contains("outer.0.inner.0.tail", evaluation.ReadyStepKeys);
-        Assert.Contains("outer.1.inner", evaluation.AllKnownStepKeys);
         AssertMatchesLegacy(flow, statuses, evaluation);
     }
 
@@ -87,51 +87,6 @@ public class FlowGraphPlannerCandidateEquivalenceTests
         // Assert
         Assert.Contains("loop.4.child_0", evaluation.ReadyStepKeys);
         AssertMatchesLegacy(flow, statuses, evaluation);
-    }
-
-    [Fact]
-    public void Evaluate_DottedTopLevelManifestKey_MatchesLegacy()
-    {
-        // Arrange — a top-level key containing a dot is reachable through FindStep's exact match.
-        var steps = LoopSteps();
-        steps["odd.key"] = new StepMetadata { Type = "noop" };
-        var flow = FlowWith(steps);
-        var statuses = new Dictionary<string, StepStatus>(StringComparer.Ordinal)
-        {
-            ["entry"] = StepStatus.Succeeded,
-            ["loop"] = StepStatus.Running,
-            ["loop.0.child_0"] = StepStatus.Succeeded
-        };
-
-        // Act
-        var evaluation = _sut.Evaluate(flow, statuses);
-
-        // Assert
-        Assert.Contains("odd.key", evaluation.ReadyStepKeys);
-        AssertMatchesLegacy(flow, statuses, evaluation);
-    }
-
-    [Fact]
-    public void Evaluate_AllKnownStepKeys_IsASnapshotOfTheStatusMapAtEvaluateTime()
-    {
-        // Arrange
-        var flow = LoopFlow();
-        var statuses = new Dictionary<string, StepStatus>(StringComparer.Ordinal)
-        {
-            ["entry"] = StepStatus.Succeeded,
-            ["loop"] = StepStatus.Running,
-            ["loop.0.child_0"] = StepStatus.Succeeded
-        };
-        var expected = LegacyPlanner.Evaluate(flow, statuses).AllKnown;
-
-        // Act — mutate the map after Evaluate but before the lazy list is first read.
-        var evaluation = _sut.Evaluate(flow, statuses);
-        statuses["loop.9.child_0"] = StepStatus.Succeeded;
-        var known = evaluation.AllKnownStepKeys.ToArray();
-
-        // Assert
-        Assert.Equal(expected, known);
-        Assert.DoesNotContain("loop.9.child_0", known);
     }
 
     [Fact]
@@ -160,8 +115,7 @@ public class FlowGraphPlannerCandidateEquivalenceTests
             var actual = _sut.Evaluate(flows[which], statuses);
             if (!expected.Ready.SequenceEqual(actual.ReadyStepKeys)
                 || !expected.Blocked.SequenceEqual(actual.BlockedStepKeys)
-                || !expected.Waiting.SequenceEqual(actual.WaitingStepKeys)
-                || !expected.AllKnown.SequenceEqual(actual.AllKnownStepKeys))
+                || !expected.Waiting.SequenceEqual(actual.WaitingStepKeys))
             {
                 mismatches.Add(string.Join(", ", statuses.Select(kvp => $"{kvp.Key}={kvp.Value}")));
             }
@@ -179,7 +133,6 @@ public class FlowGraphPlannerCandidateEquivalenceTests
         Assert.Equal(expected.Ready, actual.ReadyStepKeys);
         Assert.Equal(expected.Blocked, actual.BlockedStepKeys);
         Assert.Equal(expected.Waiting, actual.WaitingStepKeys);
-        Assert.Equal(expected.AllKnown, actual.AllKnownStepKeys);
     }
 
     private static IFlowDefinition FlowWith(StepCollection steps)
@@ -291,7 +244,7 @@ public class FlowGraphPlannerCandidateEquivalenceTests
     /// <summary>The pre-#189 eager planner (SortedSet of every known key per call), kept as the oracle.</summary>
     private static class LegacyPlanner
     {
-        public static (List<string> Ready, List<string> Blocked, List<string> Waiting, string[] AllKnown) Evaluate(
+        public static (List<string> Ready, List<string> Blocked, List<string> Waiting) Evaluate(
             IFlowDefinition flow,
             IReadOnlyDictionary<string, StepStatus> statuses)
         {
@@ -360,7 +313,7 @@ public class FlowGraphPlannerCandidateEquivalenceTests
                 }
             }
 
-            return (ready, blocked, waiting, known);
+            return (ready, blocked, waiting);
         }
 
         private static string[] BuildKnownStepKeys(IFlowDefinition flow, IEnumerable<string> runtimeStepKeys)

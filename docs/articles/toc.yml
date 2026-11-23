@@ -1,6 +1,9 @@
 - name: Getting Started
   href: getting-started.md
 
+- name: Migrating to 2.0
+  href: migrating-to-2.0.md
+
 - name: Architecture
   href: architecture.md
 

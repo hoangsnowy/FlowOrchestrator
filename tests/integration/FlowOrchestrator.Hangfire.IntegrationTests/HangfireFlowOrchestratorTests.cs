@@ -8,19 +8,19 @@ using Hangfire;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Hangfire.Tests;
 
 public class HangfireFlowOrchestratorTests
 {
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
 
@@ -32,7 +32,12 @@ public class HangfireFlowOrchestratorTests
             .ReturnsForAnyArgs(Task.FromResult(true));
     }
 
-    private HangfireFlowOrchestrator CreateSut(IFlowRunRuntimeStore? runtimeStore = null, IFlowRunControlStore? runControlStore = null)
+    // FlowRegistry is an immutable snapshot, and these tests register their flow (CreateFlow) after
+    // creating the SUT — so the adapter is rebuilt on each call against the current registry.
+    private DeferredSut CreateSut(IFlowRunRuntimeStore? runtimeStore = null, IFlowRunControlStore? runControlStore = null)
+        => new(() => BuildSut(runtimeStore, runControlStore));
+
+    private HangfireFlowOrchestrator BuildSut(IFlowRunRuntimeStore? runtimeStore, IFlowRunControlStore? runControlStore)
     {
         // 2.0: the engine requires a runtime store and a control store (RequiredStore throws on
         // none), so tests that do not care get permissive defaults instead of an empty list.
@@ -41,7 +46,6 @@ public class HangfireFlowOrchestratorTests
 
         var engine = new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -54,7 +58,8 @@ public class HangfireFlowOrchestratorTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
         return new HangfireFlowOrchestrator(engine, _flowRepo);
     }
 
@@ -85,7 +90,7 @@ public class HangfireFlowOrchestratorTests
                 ["step1"] = new StepMetadata { Type = "LogMessage" }
             }
         });
-        // Register with the IFlowRepository substitute so HangfireFlowOrchestrator can rehydrate it from flow.Id.
+        // Register with the FlowRegistry so HangfireFlowOrchestrator can resolve it from flow.Id.
         RegisterFlowWithRepo(flow);
         return flow;
     }
@@ -99,7 +104,7 @@ public class HangfireFlowOrchestratorTests
             _registeredFlows.Add(flow);
         }
         IReadOnlyList<IFlowDefinition> snapshot = _registeredFlows.ToList();
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(snapshot));
+        _flowRepo = new FlowRegistry(snapshot);
     }
 
     [Fact]
@@ -574,5 +579,20 @@ public class HangfireFlowOrchestratorTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
         Assert.Contains("static DAG", ex.Message);
         Assert.Contains("step1", ex.Message);
+    }
+
+    /// <summary>
+    /// Drives the adapter through the in-process <c>RunStepAsync(ctx, flowId, step)</c> overload so the
+    /// engine receives the exact context / step instances the executor substitute is arranged on.
+    /// The serialised <see cref="HangfireStepEnvelope"/> path is covered by <c>HangfireStepEnvelopeTests</c>.
+    /// </summary>
+    private sealed class DeferredSut(Func<HangfireFlowOrchestrator> build)
+    {
+        public ValueTask<object?> TriggerAsync(ITriggerContext ctx) => build().TriggerAsync(ctx);
+
+#pragma warning disable CS0618 // the back-compat overload for pre-2.0 job payloads is what these tests exercise
+        public ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step)
+            => build().RunStepAsync(ctx, flowId, step);
+#pragma warning restore CS0618
     }
 }

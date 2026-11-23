@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -28,7 +29,7 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
     private readonly ServiceBusClient _client;
     private readonly ServiceBusRuntimeOptions _options;
     private readonly ServiceBusTopologyManager _topology;
-    private readonly IFlowRepository _repository;
+    private readonly FlowRegistry _flows;
     private readonly IFlowStore _flowStore;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ServiceBusFlowProcessorHostedService> _logger;
@@ -40,7 +41,7 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
         ServiceBusClient client,
         ServiceBusRuntimeOptions options,
         ServiceBusTopologyManager topology,
-        IFlowRepository repository,
+        FlowRegistry flows,
         IFlowStore flowStore,
         IServiceScopeFactory scopeFactory,
         ILogger<ServiceBusFlowProcessorHostedService> logger)
@@ -48,7 +49,7 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
         _client = client;
         _options = options;
         _topology = topology;
-        _repository = repository;
+        _flows = flows;
         _flowStore = flowStore;
         _scopeFactory = scopeFactory;
         _logger = logger;
@@ -63,12 +64,11 @@ internal sealed class ServiceBusFlowProcessorHostedService : IHostedService, IAs
             await _topology.EnsureCronQueueAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var flows = await _repository.GetAllFlowsAsync().ConfigureAwait(false);
         var storeRecords = await _flowStore.GetAllAsync().ConfigureAwait(false);
         var disabledIds = new HashSet<Guid>(
             storeRecords.Where(r => !r.IsEnabled).Select(r => r.Id));
 
-        foreach (var flow in flows)
+        foreach (var flow in _flows.Flows)
         {
             // Skip processor creation for disabled flows. Re-enabling at runtime requires
             // an app restart for the SB processor to come up — documented as a hotfix-time

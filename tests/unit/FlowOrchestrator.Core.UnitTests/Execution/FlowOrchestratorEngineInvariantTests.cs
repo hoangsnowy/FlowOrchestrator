@@ -7,6 +7,7 @@ using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -21,14 +22,13 @@ public sealed class FlowOrchestratorEngineInvariantTests
     // ── Substitutes ───────────────────────────────────────────────────────────
 
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
-    private readonly IFlowExecutor _flowExecutor = Substitute.For<IFlowExecutor>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepExecutor _stepExecutor = Substitute.For<IStepExecutor>();
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private readonly FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
@@ -47,7 +47,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
         IFlowRunControlStore? runControlStore = null) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -60,7 +59,8 @@ public sealed class FlowOrchestratorEngineInvariantTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private static IFlowDefinition MakeFlow(params string[] stepKeys)
     {
@@ -472,7 +472,6 @@ public sealed class FlowOrchestratorEngineInvariantTests
     private FlowOrchestratorEngine CreateEngineWithStore(IFlowStore store) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             store,
@@ -485,14 +484,14 @@ public sealed class FlowOrchestratorEngineInvariantTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private FlowOrchestratorEngine CreateEngineWithStoreLists(
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
         IEnumerable<IFlowRunControlStore> runControlStores) =>
         new FlowOrchestratorEngine(
             _dispatcher,
-            _flowExecutor,
             _graphPlanner,
             _stepExecutor,
             _flowStore,
@@ -505,7 +504,8 @@ public sealed class FlowOrchestratorEngineInvariantTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            _logger);
+            _logger,
+            NoopFlowEventNotifier.Instance);
 
     private sealed class SingleRecordFlowStore : IFlowStore
     {

@@ -30,7 +30,6 @@ public sealed class WaitForSignalParkIntervalTests
         public string Key { get; } = key;
         public WaitForSignalInput Inputs { get; set; } = inputs;
         public int Index { get; set; }
-        public bool ScopeMoveNext { get; set; }
     }
 
     [Fact]

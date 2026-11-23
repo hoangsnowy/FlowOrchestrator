@@ -11,7 +11,13 @@ namespace FlowOrchestrator.InMemory;
 /// Stores trigger data, step outputs, and events in concurrent dictionaries keyed by RunId.
 /// All data is lost on process restart.
 /// </summary>
-public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventReader
+/// <remarks>
+/// Also an <see cref="IFlowRetentionStore"/>: the retention sweep drops the trigger data, headers,
+/// step inputs/outputs and events of every run the paired <see cref="InMemoryFlowRunStore"/> no
+/// longer holds, mirroring the SQL backends, which delete <c>FlowOutputs</c> / <c>FlowEvents</c>
+/// rows together with their run. Without it the repository grew for the lifetime of the process.
+/// </remarks>
+public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventReader, IFlowRetentionStore
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 
@@ -20,6 +26,19 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), JsonElement> _stepOutputs = new();
     private readonly ConcurrentDictionary<Guid, List<FlowEventRecord>> _events = new();
     private readonly ConcurrentDictionary<Guid, long> _sequences = new();
+    private readonly InMemoryFlowRunStore? _runStore;
+
+    /// <summary>Creates a standalone repository; the retention sweep is a no-op without a paired run store.</summary>
+    public InMemoryOutputsRepository()
+    {
+    }
+
+    /// <summary>Creates a repository whose retention sweep follows <paramref name="runStore"/>'s run lifetime.</summary>
+    /// <param name="runStore">The run store whose purged runs lose their outputs and events on the next sweep.</param>
+    public InMemoryOutputsRepository(InMemoryFlowRunStore runStore)
+    {
+        _runStore = runStore;
+    }
 
     private static JsonElement ToJsonElement(object? value)
     {
@@ -77,9 +96,6 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
         return ValueTask.FromResult<object?>(null);
     }
 
-    public ValueTask EndScopeAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
-        => ValueTask.CompletedTask;
-
     public ValueTask RecordEventAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, FlowEvent evt)
     {
         var next = _sequences.AddOrUpdate(ctx.RunId, 1L, static (_, value) => value + 1L);
@@ -118,5 +134,61 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowEventRe
         }
 
         return Task.FromResult(result);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Removes every entry whose run no longer exists in the paired run store, so it follows the run
+    /// store's own cutoff rather than applying <paramref name="cutoffUtc"/> a second time — outputs
+    /// and events carry no completion time of their own. Safe against in-flight runs: the engine
+    /// starts a run in the run store before it writes any output for it. Order-independent: entries
+    /// whose run is purged later in the same sweep go on the next one. O(entries) per sweep, off the
+    /// request path.
+    /// </remarks>
+    public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
+    {
+        if (_runStore is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var runId in _triggerData.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_runStore.ContainsRun(runId))
+            {
+                _triggerData.TryRemove(runId, out _);
+            }
+        }
+
+        foreach (var runId in _triggerHeaders.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_runStore.ContainsRun(runId))
+            {
+                _triggerHeaders.TryRemove(runId, out _);
+            }
+        }
+
+        foreach (var key in _stepOutputs.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_runStore.ContainsRun(key.RunId))
+            {
+                _stepOutputs.TryRemove(key, out _);
+            }
+        }
+
+        foreach (var runId in _events.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_runStore.ContainsRun(runId))
+            {
+                _events.TryRemove(runId, out _);
+                _sequences.TryRemove(runId, out _);
+            }
+        }
+
+        return Task.CompletedTask;
     }
 }

@@ -42,14 +42,12 @@ public class StepInstanceTests
             RunId = runId,
             PrincipalId = "user-1",
             ScheduledTime = DateTimeOffset.UtcNow,
-            Index = 5,
-            ScopeMoveNext = true
+            Index = 5
         };
 
         // Assert
         Assert.Equal(runId, instance.RunId);
         Assert.Equal("user-1", instance.PrincipalId);
         Assert.Equal(5, instance.Index);
-        Assert.True(instance.ScopeMoveNext);
     }
 }

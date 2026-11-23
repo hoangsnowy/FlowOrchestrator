@@ -75,13 +75,11 @@ internal sealed class LoopBarrierEngineHarness
                 Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .Returns(call => new ValueTask<IStepResult>(resultForStep(call.Arg<IStepInstance>()!.Key)));
 
-        var flowRepo = Substitute.For<IFlowRepository>();
-        flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var flowRepo = new FlowRegistry(new[] { flow });
         FlowRepository = flowRepo;
 
         Engine = new FlowOrchestratorEngine(
             dispatcher,
-            Substitute.For<IFlowExecutor>(),
             new FlowGraphPlanner(),
             stepExecutor,
             Substitute.For<IFlowStore>(),
@@ -95,7 +93,7 @@ internal sealed class LoopBarrierEngineHarness
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             Substitute.For<ILogger<FlowOrchestratorEngine>>(),
-            eventNotifier);
+            eventNotifier ?? NoopFlowEventNotifier.Instance);
     }
 
     /// <summary>Engine under test.</summary>
@@ -105,7 +103,7 @@ internal sealed class LoopBarrierEngineHarness
     public InMemoryFlowRunStore Store { get; }
 
     /// <summary>Substituted flow repository, pre-seeded with the harness flow.</summary>
-    public IFlowRepository FlowRepository { get; }
+    public FlowRegistry FlowRepository { get; }
 
     /// <summary>Every step key the dispatcher was asked to enqueue, in call order.</summary>
     public IReadOnlyList<string> Enqueued

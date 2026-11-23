@@ -46,8 +46,7 @@ public sealed class DisabledFlowTriggerGateTests : IDisposable
             Steps = new StepCollection { ["only"] = new StepMetadata { Type = "LogMessage" } }
         });
 
-        _server.FlowRepository.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _server.Flows = new FlowRegistry(new[] { flow });
 
         _server.FlowOrchestrator.TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<object?>(new FlowTriggerResult(null, Disabled: true)));

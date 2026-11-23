@@ -237,28 +237,35 @@ FlowOrchestrator.Core          Runtime-agnostic orchestration engine + all abstr
   Abstractions/                IFlowDefinition, FlowManifest, IStepHandler, IStepInstance
   Execution/                   FlowOrchestratorEngine   ← TriggerAsync / RunStepAsync / RetryStepAsync
                                IStepDispatcher          ← bridge to runtime (Hangfire / InMemory / queue)
-                               IFlowExecutor, IStepExecutor, FlowGraphPlanner
+                               IStepExecutor, FlowGraphPlanner
+                               RecurringTriggerSync (one async effective-cron sync for every
+                               runtime) + RecurringTriggerJobId ("flow-{id}-{key}")
                                ForEachStepHandler, PollableStepHandler<T>
   Storage/                     IFlowStore, IFlowRunStore, IFlowRunRuntimeStore
                                IFlowRunControlStore, IOutputsRepository
+  Abstractions/FlowRegistry    O(1) FrozenDictionary of the AddFlow<T>() flows (replaced the 1.x
+                               IFlowRepository); two flow TYPES sharing an id fail at startup
   Hosting/                     FlowRunRecoveryHostedService  ← re-enqueues stuck runs on startup
-  Configuration/               FlowOrchestratorBuilder (the builder type only — the
-                               AddFlowOrchestrator() entry point lives in .Hangfire, see below)
+                               FlowSyncHostedService  ← syncs flows to IFlowStore, then cron sync
+                               FlowRetentionHostedService
+  Configuration/               AddFlowOrchestrator() — the single DI entry point for EVERY runtime
+                               (since 2.0 in Core; 1.x shipped it in .Hangfire), FlowOrchestratorBuilder.
+                               Throws at startup when no IStepDispatcher / IRecurringTriggerDispatcher
+                               is registered, i.e. no runtime (UseHangfire / UseInMemoryRuntime /
+                               UseServiceBusRuntime) was chosen.
 
-FlowOrchestrator.Hangfire      Thin adapter — wires Hangfire as the IStepDispatcher runtime
-  FlowOrchestratorServiceCollectionExtensions
-                               AddFlowOrchestrator() — ⚠️ the single DI entry point for EVERY
-                               runtime, including InMemory and ServiceBus. It ships in this
-                               package, so `FlowOrchestrator.Hangfire` is a required reference
-                               even for the "no Hangfire" setups. Registering Hangfire itself
-                               (AddHangfire/AddHangfireServer) is still only needed when you
-                               actually call options.UseHangfire().
-  HangfireStepDispatcher       IStepDispatcher → IBackgroundJobClient.Enqueue/Schedule
+FlowOrchestrator.Hangfire      Opt-in runtime adapter — a permanent, first-class runtime (never
+                               plan its removal). Only hosts that call UseHangfire() reference it;
+                               Core / SqlServer / PostgreSQL / ServiceBus / InMemory / Dashboard /
+                               Testing carry no Hangfire.Core and no Newtonsoft.Json since 2.0.
+  HangfireFlowOrchestratorBuilderExtensions
+                               UseHangfire() — registers the Hangfire dispatcher, recurring
+                               dispatcher/inspector and job runner
+  HangfireStepDispatcher       IStepDispatcher → IBackgroundJobClient.Enqueue/Schedule with a slim
+                               HangfireStepEnvelope (ids + inputs as STJ JSON; trigger data is
+                               re-read from the store, never copied into job arguments)
   HangfireFlowOrchestrator     Shim: extracts JobId from PerformContext, calls FlowOrchestratorEngine
   HangfireRecurringTriggerDispatcher / Inspector  ← IRecurringJobManager adapter
-  FlowSyncHostedService        On startup: syncs flows to IFlowStore, then delegates cron
-                               registration to IRecurringTriggerSync (runtime-agnostic)
-  RecurringTriggerSync         Hangfire impl of IRecurringTriggerSync (uses IRecurringJobManager)
 
 FlowOrchestrator.InMemory      Pure in-process runtime + storage — no Hangfire, no database
   InMemoryStepDispatcher       Channel<T>-backed dispatcher
@@ -326,7 +333,7 @@ builder.Services.AddFlowOrchestrator(options =>
     options.AddFlow<MyFlow>();
 });
 
-// ── InMemory runtime (dev / testing — no Hangfire needed) ──────────
+// ── InMemory runtime (dev / testing — no Hangfire package at all) ──
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.UseInMemory();                 // storage
@@ -344,7 +351,7 @@ app.UseHangfireDashboard("/hangfire");   // Hangfire runtime only
 app.MapFlowDashboard("/flows");
 ```
 
-To swap storage, implement `IFlowStore`, `IFlowRunStore`, and `IOutputsRepository` and register directly on `options.Services` instead of calling `UseSqlServer()`.
+To swap storage, implement `IFlowStore`, `IFlowRunStore`, `IFlowRunRuntimeStore`, `IFlowRunControlStore` and `IOutputsRepository` and register them directly on `options.Services` instead of calling `UseSqlServer()` — the engine fails at startup without the runtime and control stores.
 
 ## Dashboard UI Standards
 

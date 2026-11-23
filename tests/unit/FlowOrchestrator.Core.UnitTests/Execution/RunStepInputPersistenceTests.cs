@@ -6,6 +6,7 @@ using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using CoreExecutionContext = FlowOrchestrator.Core.Execution.ExecutionContext;
+using FlowOrchestrator.Core.Notifications;
 
 namespace FlowOrchestrator.Core.Tests.Execution;
 
@@ -99,14 +100,13 @@ public sealed class RunStepInputPersistenceTests
     private FlowOrchestratorEngine CreateEngine() =>
         new(
             Substitute.For<IStepDispatcher>(),
-            Substitute.For<IFlowExecutor>(),
             new FlowGraphPlanner(),
             _stepExecutor,
             Substitute.For<IFlowStore>(),
             _runStore,
             _outputs,
             Substitute.For<IExecutionContextAccessor>(),
-            Substitute.For<IFlowRepository>(),
+            FlowRegistry.Empty,
             // Every test runs the single step "a" with a succeeding executor.
             [EngineTestStores.PermissiveRuntimeStore(
                 new Dictionary<string, StepStatus>(StringComparer.Ordinal) { ["a"] = StepStatus.Succeeded })],
@@ -114,5 +114,6 @@ public sealed class RunStepInputPersistenceTests
             new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableEventPersistence = false, EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
-            Substitute.For<ILogger<FlowOrchestratorEngine>>());
+            Substitute.For<ILogger<FlowOrchestratorEngine>>(),
+            NoopFlowEventNotifier.Instance);
 }

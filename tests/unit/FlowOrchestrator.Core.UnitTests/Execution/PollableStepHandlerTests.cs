@@ -205,6 +205,5 @@ public class PollableStepHandlerTests
         public string Key { get; }
         public TestPollableInput Inputs { get; set; }
         public int Index { get; set; }
-        public bool ScopeMoveNext { get; set; }
     }
 }

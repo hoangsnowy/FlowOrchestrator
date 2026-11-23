@@ -72,15 +72,36 @@ public sealed partial class FlowOrchestratorEngine
     /// </remarks>
     private async Task DispatchReservedStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
     {
+        // O(1) per dispatch: one extra store call, and only on the failure path.
         string? jobId;
-        if (delay.HasValue)
+        try
         {
-            step.ScheduledTime = DateTimeOffset.UtcNow + delay.Value;
-            jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
+            if (delay.HasValue)
+            {
+                step.ScheduledTime = DateTimeOffset.UtcNow + delay.Value;
+                jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
+            }
+            else
+            {
+                jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
+            }
         }
-        else
+        catch (Exception dispatchFailure) when (dispatchFailure is not OperationCanceledException)
         {
-            jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
+            // The ledger row was recorded before this call. Left in place it claims "an attempt is queued"
+            // for an attempt that never reached the runtime, and recovery skips ledgered keys, so the step
+            // would never run. Release it so recovery (or a re-run of this continuation) can dispatch again;
+            // a duplicate delivery, if the runtime did accept the message, is absorbed by the step claim.
+            try
+            {
+                await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception releaseFailure) when (releaseFailure is not OperationCanceledException)
+            {
+                EngineLog.DispatchReleaseAfterFailureFailed(_logger, releaseFailure, step.Key);
+            }
+
+            throw;
         }
 
         // Best-effort: record the runtime job/message ID for observability.
@@ -382,9 +403,8 @@ public sealed partial class FlowOrchestratorEngine
 
         if (runningKeys is not null)
         {
-            var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-            var flow = flows?.FindById(run.FlowId);
-            if (flow is null)
+            // O(1): FrozenDictionary lookup (1.x fetched every registered flow and scanned it).
+            if (!_flows.TryGetFlow(run.FlowId, out var flow))
             {
                 return false;
             }

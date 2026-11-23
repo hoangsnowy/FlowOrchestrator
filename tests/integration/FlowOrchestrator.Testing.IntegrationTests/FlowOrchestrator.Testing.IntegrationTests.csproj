@@ -25,7 +25,6 @@
     <ProjectReference Include="..\..\..\src\FlowOrchestrator.Testing\FlowOrchestrator.Testing.csproj" />
     <ProjectReference Include="..\..\..\src\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
     <ProjectReference Include="..\..\..\src\FlowOrchestrator.InMemory\FlowOrchestrator.InMemory.csproj" />
-    <ProjectReference Include="..\..\..\src\FlowOrchestrator.Hangfire\FlowOrchestrator.Hangfire.csproj" />
   </ItemGroup>
 
 </Project>

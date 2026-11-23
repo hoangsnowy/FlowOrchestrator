@@ -1,9 +1,10 @@
 using FlowOrchestrator.Core.Configuration;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace FlowOrchestrator.Hangfire;
+namespace FlowOrchestrator.Core.Hosting;
 
 /// <summary>
 /// Background service that periodically sweeps all registered <see cref="IFlowRetentionStore"/>
@@ -16,6 +17,7 @@ internal sealed class FlowRetentionHostedService : BackgroundService
     private readonly FlowRetentionOptions _options;
     private readonly ILogger<FlowRetentionHostedService> _logger;
 
+    /// <summary>Initialises the sweep with every registered retention store and the retention options.</summary>
     public FlowRetentionHostedService(
         IEnumerable<IFlowRetentionStore> stores,
         FlowRetentionOptions options,
@@ -26,6 +28,7 @@ internal sealed class FlowRetentionHostedService : BackgroundService
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_options.Enabled || _stores.Count == 0)
@@ -57,7 +60,7 @@ internal sealed class FlowRetentionHostedService : BackgroundService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Flow retention cleanup failed for store {StoreType}.", store.GetType().Name);
+                HostingLog.RetentionCleanupFailed(_logger, ex, store.GetType().Name);
             }
         }
     }

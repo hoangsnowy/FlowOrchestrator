@@ -1,6 +1,6 @@
 # Storage Backends
 
-FlowOrchestrator's persistence layer is built on four core interfaces. The package you install provides an implementation; you can also swap in your own.
+FlowOrchestrator's persistence layer is built on five core interfaces. The package you install provides an implementation; you can also swap in your own.
 
 ## Core Interfaces
 
@@ -9,9 +9,10 @@ FlowOrchestrator's persistence layer is built on four core interfaces. The packa
 | `IFlowStore` | Flow definitions and enabled/disabled state |
 | `IFlowRunStore` | Run records and step status tracking |
 | `IOutputsRepository` | Step input/output blobs keyed by `(RunId, StepKey)` |
-| `IFlowRepository` | In-process registry of the code-defined `IFlowDefinition` classes; validated by `AddFlowOrchestrator` at startup |
+| `IFlowRunRuntimeStore` | Step claims (execute-once guard) and the status map the DAG planner reads |
+| `IFlowRunControlStore` | Cancellation, run timeouts and trigger idempotency keys |
 
-These four interfaces are the **minimum required** to replace the built-in backends — `AddFlowOrchestrator` throws at startup if either `IFlowStore` or `IFlowRepository` is missing.
+These five interfaces are the **minimum required** to replace the built-in backends. `AddFlowOrchestrator` throws if no storage is registered, and since 2.0 the engine throws at startup if `IFlowRunRuntimeStore` or `IFlowRunControlStore` is missing (1.x silently fell back to a sequential mode without claims). The code-defined flows themselves are not a storage concern: Core builds one `FlowRegistry` from your `AddFlow<T>()` registrations (2.0 removed the per-backend `IFlowRepository`).
 
 ## SQL Server
 
@@ -152,13 +153,12 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ## Custom Backend
 
-Implement the four core interfaces:
+Implement the five core interfaces (the run store usually implements three of them):
 
 ```csharp
 public sealed class RedisFlowStore : IFlowStore { ... }
-public sealed class RedisFlowRunStore : IFlowRunStore { ... }
+public sealed class RedisFlowRunStore : IFlowRunStore, IFlowRunRuntimeStore, IFlowRunControlStore { ... }
 public sealed class RedisOutputsRepository : IOutputsRepository { ... }
-public sealed class RedisFlowRepository : IFlowRepository { ... }
 ```
 
 Register them directly on `options.Services`:
@@ -167,10 +167,12 @@ Register them directly on `options.Services`:
 builder.Services.AddFlowOrchestrator(options =>
 {
     options.Services.AddSingleton<IFlowStore, RedisFlowStore>();
-    options.Services.AddSingleton<IFlowRunStore, RedisFlowRunStore>();
+    options.Services.AddSingleton<RedisFlowRunStore>();
+    options.Services.AddSingleton<IFlowRunStore>(sp => sp.GetRequiredService<RedisFlowRunStore>());
+    options.Services.AddSingleton<IFlowRunRuntimeStore>(sp => sp.GetRequiredService<RedisFlowRunStore>());
+    options.Services.AddSingleton<IFlowRunControlStore>(sp => sp.GetRequiredService<RedisFlowRunStore>());
     options.Services.AddSingleton<IOutputsRepository, RedisOutputsRepository>();
-    options.Services.AddSingleton<IFlowRepository, RedisFlowRepository>();
-    options.UseHangfire();
+    options.UseHangfire();      // or UseInMemoryRuntime() / UseAzureServiceBusRuntime(...)
 });
 ```
 

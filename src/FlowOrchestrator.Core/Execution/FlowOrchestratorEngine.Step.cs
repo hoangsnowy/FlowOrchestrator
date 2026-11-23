@@ -58,22 +58,19 @@ public sealed partial class FlowOrchestratorEngine
             // Pre-1.22 the claim was at schedule time which assumed 1:1 enqueue→execute — broken
             // under broadcast. Released by RetryStepAsync and the Pending re-schedule path so the
             // SAME step can claim again on a fresh attempt.
-            if (_runtimeStore is not null)
+            var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+            if (!claimed)
             {
-                var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
-                if (!claimed)
+                activity?.SetTag("flow.step.claim_lost", true);
+                if (_observabilityOptions.EnableOpenTelemetry)
                 {
-                    activity?.SetTag("flow.step.claim_lost", true);
-                    if (_observabilityOptions.EnableOpenTelemetry)
-                    {
-                        _telemetry.StepClaimLostCounter.Add(
-                            1,
-                            new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                            new KeyValuePair<string, object?>("step_key", step.Key));
-                    }
-
-                    return null;
+                    _telemetry.StepClaimLostCounter.Add(
+                        1,
+                        new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
+                        new KeyValuePair<string, object?>("step_key", step.Key));
                 }
+
+                return null;
             }
 
             var controlStatus = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
@@ -146,7 +143,7 @@ public sealed partial class FlowOrchestratorEngine
             // completion write keeps CompletedAt null until the barrier settles the step for real
             // (the settle pass writes Succeeded + the loop output). The barrier reads the iteration
             // count from IOutputsRepository (SaveStepOutputAsync above), not from this row.
-            var isBarrierParked = result.Status == StepStatus.Running && _runtimeStore is not null;
+            var isBarrierParked = result.Status == StepStatus.Running;
             if (!isBarrierParked)
             {
                 try
@@ -303,10 +300,7 @@ public sealed partial class FlowOrchestratorEngine
                     EngineLog.PendingRescheduleLedgerTaken(_logger, step.Key);
                 }
 
-                if (_runtimeStore is not null)
-                {
-                    await _runtimeStore.ReleaseStepClaimAsync(ctx.RunId, step.Key).ConfigureAwait(false);
-                }
+                await _runtimeStore.ReleaseStepClaimAsync(ctx.RunId, step.Key).ConfigureAwait(false);
 
                 // Reschedule the poll. If the dispatcher throws (transient queue/broker error)
                 // after the claim was released, the step must not be left status Pending, unclaimed
@@ -434,8 +428,7 @@ public sealed partial class FlowOrchestratorEngine
                 new KeyValuePair<string, object?>("step_key", stepKey));
         }
 
-        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FindById(flowId)
+        var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
@@ -452,11 +445,8 @@ public sealed partial class FlowOrchestratorEngine
         // honours the runaway-loop bound. Refreshing first also closes a window against the periodic
         // timeout sweep: RetryStepAsync below puts the run back into Running, and a sweep landing
         // between that write and this refresh would still see a latched terminal verdict.
-        if (_runControlStore is not null)
-        {
-            var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
-            await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
-        }
+        var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
+        await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
 
         await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
 
