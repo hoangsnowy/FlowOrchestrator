@@ -209,17 +209,6 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     /// </remarks>
     private async ValueTask<bool> RequiresDelayedResumeAsync(Guid runId, string stepKey)
     {
-        // No runtime store means the ENGINE has none either — both resolve the same registration —
-        // and FlowOrchestratorEngine.RunStepAsync only claims when its own store is non-null. With no
-        // claim guard in play there is no TryClaimStepAsync for the resume to lose, so the race this
-        // delay exists to dodge cannot happen and the immediate path is provably safe. Delaying here
-        // would impose the full Hangfire scheduled-set penalty on exactly the configuration that
-        // cannot suffer the race.
-        if (_runtimeStore is null)
-        {
-            return false;
-        }
-
         try
         {
             // Point lookup, not an enumeration: claims are never released on terminal statuses, so

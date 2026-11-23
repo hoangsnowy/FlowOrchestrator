@@ -103,7 +103,7 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-Swapping in a custom backend (Redis, DynamoDB, CosmosDB, etc.) requires four contracts at minimum: `IFlowStore`, `IFlowRunStore`, `IOutputsRepository`, and `IFlowRepository` — `AddFlowOrchestrator()` throws an `InvalidOperationException` on startup when either `IFlowStore` or `IFlowRepository` is missing. For full functionality also implement `IFlowRunRuntimeStore` (without it the claim guard is disabled and the engine falls back to legacy sequential mode, EventId 9000), `IFlowRunControlStore`, `IFlowRetentionStore`, `IFlowEventReader`, `IFlowSignalStore`, and `IFlowScheduleStateStore` (an ephemeral in-process default is registered when absent).
+Swapping in a custom backend (Redis, DynamoDB, CosmosDB, etc.) requires six contracts at minimum: `IFlowStore`, `IFlowRunStore`, `IFlowRunRuntimeStore` (DAG evaluation and the execution claim guard), `IFlowRunControlStore` (idempotency keys, run deadlines, cancellation), `IOutputsRepository`, and `IFlowRepository`. `AddFlowOrchestrator()` throws an `InvalidOperationException` on startup when either `IFlowStore` or `IFlowRepository` is missing, and `FlowOrchestratorEngine` throws `InvalidOperationException` on construction when `IFlowRunRuntimeStore` or `IFlowRunControlStore` is missing (the signal dispatcher and the recovery service likewise require `IFlowRunRuntimeStore`) — there is no reduced-functionality fallback. For full functionality also implement `IFlowRetentionStore`, `IFlowEventReader`, `IFlowSignalStore`, and `IFlowScheduleStateStore` (an ephemeral in-process default is registered when absent).
 
 ## Key Design Decisions
 

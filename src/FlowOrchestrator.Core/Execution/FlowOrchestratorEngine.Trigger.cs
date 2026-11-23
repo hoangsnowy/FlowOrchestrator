@@ -51,7 +51,7 @@ public sealed partial class FlowOrchestratorEngine
             }
 
             var idempotencyKey = TryGetIdempotencyKey(triggerContext.TriggerHeaders);
-            if (_runControlStore is not null && !string.IsNullOrWhiteSpace(idempotencyKey))
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
                 var existingRunId = await _runControlStore
                     .FindRunIdByIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey)
@@ -99,16 +99,13 @@ public sealed partial class FlowOrchestratorEngine
                 EngineLog.RunStartTrackingFailed(_logger, ex);
             }
 
-            if (_runControlStore is not null)
-            {
-                var timeoutAt = ResolveTimeoutAtUtc(triggerContext.TriggerData);
-                await _runControlStore.ConfigureRunAsync(
-                    triggerContext.RunId,
-                    triggerContext.Flow.Id,
-                    triggerContext.Trigger.Key,
-                    idempotencyKey,
-                    timeoutAt).ConfigureAwait(false);
-            }
+            var timeoutAt = ResolveTimeoutAtUtc(triggerContext.TriggerData);
+            await _runControlStore.ConfigureRunAsync(
+                triggerContext.RunId,
+                triggerContext.Flow.Id,
+                triggerContext.Trigger.Key,
+                idempotencyKey,
+                timeoutAt).ConfigureAwait(false);
 
             await _outputsRepository.SaveTriggerDataAsync(triggerContext, triggerContext.Flow, triggerContext.Trigger).ConfigureAwait(false);
             await _outputsRepository.SaveTriggerHeadersAsync(triggerContext, triggerContext.Flow, triggerContext.Trigger).ConfigureAwait(false);
@@ -138,7 +135,7 @@ public sealed partial class FlowOrchestratorEngine
 
             // If every entry step was skipped by a When clause, kick off a single graph
             // continuation pass so dependents can cascade or the run can terminate cleanly.
-            if (!anyEntryScheduled && anyEntrySkipped && _runtimeStore is not null)
+            if (!anyEntryScheduled && anyEntrySkipped)
             {
                 await RunGraphContinuationAsync(
                     triggerContext,
