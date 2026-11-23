@@ -119,7 +119,11 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         // by DeliverSignalAsync above. Skip silently if telemetry was not registered.
         if (_telemetry is not null && result.DeliveredAt is { } deliveredAt)
         {
-            var waiter = await _signalStore.GetWaiterAsync(runId, result.StepKey, ct).ConfigureAwait(false);
+            // CancellationToken.None: the signal is already durably delivered (line above), and `ct` is
+            // the HTTP request's RequestAborted. A SQL/PostgreSQL store honours it, so a client that
+            // disconnects here would throw before the resume dispatch below and strand the parked step
+            // until its timeout — the v1.26.1 / #188 failure class, reached through the telemetry read.
+            var waiter = await _signalStore.GetWaiterAsync(runId, result.StepKey, CancellationToken.None).ConfigureAwait(false);
             if (waiter is not null)
             {
                 var waitMs = Math.Max(0, (deliveredAt - waiter.CreatedAt).TotalMilliseconds);

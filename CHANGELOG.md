@@ -105,6 +105,12 @@ prototypes; re-measurement of the shipped code is pending).
   stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
   before rethrowing (EventId 3011 if that release also fails). The `Pending` re-poll path still re-asserts
   it afterwards so the runtime's job retry can re-claim.
+- **A signal delivered by a client that disconnects no longer strands the waiting step.** With
+  OpenTelemetry on, `FlowSignalDispatcher` read the waiter for the wait-time metric with the request
+  token *after* the signal was durably delivered; on SQL Server / PostgreSQL an aborted request threw
+  there, before the resume dispatch, and the `WaitForSignal` step stayed parked until its timeout (up to
+  24 h). The read now uses `CancellationToken.None`, like the dispatch itself. Found by the new stress
+  harness (client-disconnect scenario); same failure class as v1.26.1 and #188.
 - **Startup recovery releases the ledger row when its own dispatch fails**, like the engine does: a
   recovery dispatch that threw after recording the row left it behind, so the next recovery skipped the
   step and it never ran.
