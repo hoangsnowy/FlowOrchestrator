@@ -72,6 +72,7 @@ switch (command)
     case "pg-tokens": await PgBench.LoadTokensAsync(Arg(1, 200_000), includePayload: SArg(2, "payload") == "payload"); break;
     case "pg-cand": await PgBench.CandidateAsync(SArg(1, "")); break;
     case "pg-keyset": await PgBench.KeysetAsync(); break;
+    case "pg-exec": await PgBench.ExecAsync(SArg(1, "SELECT 1")); break;
     case "pg-sizes": await PgBench.SizesAsync(); break;
     case "pg-write": await WriteBench.PgAsync(SArg(1, "baseline"), Arg(2, 200), tokens: SArg(3, "") == "tokens"); break;
     default:

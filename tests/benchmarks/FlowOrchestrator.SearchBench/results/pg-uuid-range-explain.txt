@@ -1,0 +1,309 @@
+### runId prefix, recent [7d]
+Limit  (cost=1535.08..1535.11 rows=9 width=354) (actual time=19.849..19.851 rows=1.00 loops=1)
+  Buffers: shared hit=809
+  ->  Sort  (cost=1535.08..1535.11 rows=9 width=354) (actual time=19.848..19.849 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=809
+        ->  Nested Loop  (cost=1459.38..1534.94 rows=9 width=354) (actual time=19.840..19.842 rows=1.00 loops=1)
+              Buffers: shared hit=809
+              ->  Unique  (cost=1458.96..1459.00 rows=9 width=16) (actual time=19.820..19.822 rows=1.00 loops=1)
+                    Buffers: shared hit=805
+                    ->  Sort  (cost=1458.96..1458.98 rows=9 width=16) (actual time=19.814..19.815 rows=2.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Sort Method: quicksort  Memory: 25kB
+                          Buffers: shared hit=805
+                          ->  Append  (cost=0.42..1458.82 rows=9 width=16) (actual time=0.020..19.807 rows=2.00 loops=1)
+                                Buffers: shared hit=805
+                                ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.019..0.020 rows=1.00 loops=1)
+                                      Index Cond: ((id >= 'bbdafe3e-0000-0000-0000-000000000000'::uuid) AND (id <= 'bbdafe3e-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                      Heap Fetches: 0
+                                      Index Searches: 1
+                                      Buffers: shared hit=4
+                                ->  Index Scan using ix_flow_runs_started_at on flow_runs fr_1  (cost=0.42..1450.33 rows=8 width=16) (actual time=2.288..19.786 rows=1.00 loops=1)
+                                      Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+                                      Filter: (((id)::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%bbdafe3e%'::text))
+                                      Rows Removed by Filter: 15755
+                                      Index Searches: 1
+                                      Buffers: shared hit=801
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.017..0.017 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=4
+Planning Time: 0.220 ms
+Execution Time: 19.911 ms
+
+### runId prefix, 60d old [7d]
+Limit  (cost=1535.08..1535.11 rows=9 width=354) (actual time=20.045..20.047 rows=1.00 loops=1)
+  Buffers: shared hit=809
+  ->  Sort  (cost=1535.08..1535.11 rows=9 width=354) (actual time=20.044..20.046 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=809
+        ->  Nested Loop  (cost=1459.38..1534.94 rows=9 width=354) (actual time=20.038..20.040 rows=1.00 loops=1)
+              Buffers: shared hit=809
+              ->  Unique  (cost=1458.96..1459.00 rows=9 width=16) (actual time=20.023..20.024 rows=1.00 loops=1)
+                    Buffers: shared hit=805
+                    ->  Sort  (cost=1458.96..1458.98 rows=9 width=16) (actual time=20.017..20.019 rows=1.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Sort Method: quicksort  Memory: 25kB
+                          Buffers: shared hit=805
+                          ->  Append  (cost=0.42..1458.82 rows=9 width=16) (actual time=0.014..20.012 rows=1.00 loops=1)
+                                Buffers: shared hit=805
+                                ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.014..0.014 rows=1.00 loops=1)
+                                      Index Cond: ((id >= 'f41296b2-0000-0000-0000-000000000000'::uuid) AND (id <= 'f41296b2-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                      Heap Fetches: 0
+                                      Index Searches: 1
+                                      Buffers: shared hit=4
+                                ->  Index Scan using ix_flow_runs_started_at on flow_runs fr_1  (cost=0.42..1450.33 rows=8 width=16) (actual time=19.996..19.996 rows=0.00 loops=1)
+                                      Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+                                      Filter: (((id)::text ~~* '%f41296b2%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%f41296b2%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%f41296b2%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%f41296b2%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%f41296b2%'::text))
+                                      Rows Removed by Filter: 15756
+                                      Index Searches: 1
+                                      Buffers: shared hit=801
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.013..0.013 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=4
+Planning Time: 0.207 ms
+Execution Time: 20.110 ms
+
+### flow name, common 'Invoice' [7d]
+Limit  (cost=0.42..1450.33 rows=8 width=354) (actual time=0.032..0.434 rows=51.00 loops=1)
+  Buffers: shared hit=21
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1450.33 rows=8 width=354) (actual time=0.031..0.430 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%Invoice%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%Invoice%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%Invoice%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%Invoice%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%Invoice%'::text))
+        Rows Removed by Filter: 237
+        Index Searches: 1
+        Buffers: shared hit=21
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.135 ms
+Execution Time: 0.463 ms
+
+### flow name, rare 'Gdpr' [7d]
+Limit  (cost=0.42..122.24 rows=51 width=354) (actual time=0.314..19.753 rows=17.00 loops=1)
+  Buffers: shared hit=801
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1450.33 rows=607 width=354) (actual time=0.313..19.750 rows=17.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%Gdpr%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%Gdpr%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%Gdpr%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%Gdpr%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%Gdpr%'::text))
+        Rows Removed by Filter: 15739
+        Index Searches: 1
+        Buffers: shared hit=801
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.137 ms
+Execution Time: 19.789 ms
+
+### trigger key, common 'order-created' [7d]
+Limit  (cost=0.42..1450.33 rows=8 width=354) (actual time=0.024..0.661 rows=51.00 loops=1)
+  Buffers: shared hit=30
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1450.33 rows=8 width=354) (actual time=0.023..0.658 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%order-created%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%order-created%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%order-created%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%order-created%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%order-created%'::text))
+        Rows Removed by Filter: 392
+        Index Searches: 1
+        Buffers: shared hit=30
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.108 ms
+Execution Time: 0.683 ms
+
+### trigger key, rare 'backfill' [7d]
+Limit  (cost=0.42..1450.33 rows=8 width=354) (actual time=0.302..15.540 rows=51.00 loops=1)
+  Buffers: shared hit=532
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1450.33 rows=8 width=354) (actual time=0.301..15.534 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%backfill%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%backfill%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%backfill%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%backfill%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%backfill%'::text))
+        Rows Removed by Filter: 10361
+        Index Searches: 1
+        Buffers: shared hit=532
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.187 ms
+Execution Time: 15.578 ms
+
+### no match 'zq-nomatch-7731' [7d]
+Limit  (cost=0.42..1450.33 rows=8 width=354) (actual time=20.917..20.917 rows=0.00 loops=1)
+  Buffers: shared hit=801
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1450.33 rows=8 width=354) (actual time=20.916..20.916 rows=0.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text))
+        Rows Removed by Filter: 15756
+        Index Searches: 1
+        Buffers: shared hit=801
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.186 ms
+Execution Time: 20.945 ms
+
+### runId prefix, recent [all]
+Limit  (cost=13689.90..13690.03 rows=51 width=354) (actual time=94.689..98.467 rows=1.00 loops=1)
+  Buffers: shared hit=9616
+  ->  Sort  (cost=13689.90..13690.15 rows=101 width=354) (actual time=94.686..98.464 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9616
+        ->  Nested Loop  (cost=12829.84..13686.54 rows=101 width=354) (actual time=94.672..98.455 rows=1.00 loops=1)
+              Buffers: shared hit=9616
+              ->  Unique  (cost=12829.42..12850.35 rows=101 width=16) (actual time=94.595..98.376 rows=1.00 loops=1)
+                    Buffers: shared hit=9612
+                    ->  Merge Append  (cost=12829.42..12850.10 rows=101 width=16) (actual time=94.594..98.372 rows=2.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Buffers: shared hit=9612
+                          ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.021..0.023 rows=1.00 loops=1)
+                                Index Cond: ((id >= 'bbdafe3e-0000-0000-0000-000000000000'::uuid) AND (id <= 'bbdafe3e-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                Heap Fetches: 0
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Gather Merge  (cost=12828.99..12840.64 rows=100 width=16) (actual time=94.570..98.344 rows=1.00 loops=1)
+                                Workers Planned: 2
+                                Workers Launched: 2
+                                Buffers: shared hit=9608
+                                ->  Sort  (cost=11828.96..11829.07 rows=42 width=16) (actual time=91.533..91.534 rows=0.33 loops=3)
+                                      Sort Key: fr_1.id
+                                      Sort Method: quicksort  Memory: 25kB
+                                      Buffers: shared hit=9608
+                                      Worker 0:  Sort Method: quicksort  Memory: 25kB
+                                      Worker 1:  Sort Method: quicksort  Memory: 25kB
+                                      ->  Parallel Seq Scan on flow_runs fr_1  (cost=0.00..11827.83 rows=42 width=16) (actual time=91.146..91.414 rows=0.33 loops=3)
+                                            Filter: (((id)::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%bbdafe3e%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%bbdafe3e%'::text))
+                                            Rows Removed by Filter: 66733
+                                            Buffers: shared hit=9534
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.28 rows=1 width=354) (actual time=0.067..0.067 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=4
+Planning Time: 0.255 ms
+Execution Time: 98.546 ms
+
+### runId prefix, 60d old [all]
+Limit  (cost=13689.90..13690.03 rows=51 width=354) (actual time=96.426..100.518 rows=1.00 loops=1)
+  Buffers: shared hit=9616
+  ->  Sort  (cost=13689.90..13690.15 rows=101 width=354) (actual time=96.423..100.514 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9616
+        ->  Nested Loop  (cost=12829.84..13686.54 rows=101 width=354) (actual time=96.407..100.504 rows=1.00 loops=1)
+              Buffers: shared hit=9616
+              ->  Unique  (cost=12829.42..12850.35 rows=101 width=16) (actual time=96.325..100.420 rows=1.00 loops=1)
+                    Buffers: shared hit=9612
+                    ->  Merge Append  (cost=12829.42..12850.10 rows=101 width=16) (actual time=96.323..100.416 rows=2.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Buffers: shared hit=9612
+                          ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.027..0.029 rows=1.00 loops=1)
+                                Index Cond: ((id >= 'f41296b2-0000-0000-0000-000000000000'::uuid) AND (id <= 'f41296b2-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                Heap Fetches: 0
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Gather Merge  (cost=12828.99..12840.64 rows=100 width=16) (actual time=96.292..100.380 rows=1.00 loops=1)
+                                Workers Planned: 2
+                                Workers Launched: 2
+                                Buffers: shared hit=9608
+                                ->  Sort  (cost=11828.96..11829.07 rows=42 width=16) (actual time=93.397..93.398 rows=0.33 loops=3)
+                                      Sort Key: fr_1.id
+                                      Sort Method: quicksort  Memory: 25kB
+                                      Buffers: shared hit=9608
+                                      Worker 0:  Sort Method: quicksort  Memory: 25kB
+                                      Worker 1:  Sort Method: quicksort  Memory: 25kB
+                                      ->  Parallel Seq Scan on flow_runs fr_1  (cost=0.00..11827.83 rows=42 width=16) (actual time=72.578..93.286 rows=0.33 loops=3)
+                                            Filter: (((id)::text ~~* '%f41296b2%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%f41296b2%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%f41296b2%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%f41296b2%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%f41296b2%'::text))
+                                            Rows Removed by Filter: 66733
+                                            Buffers: shared hit=9534
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.28 rows=1 width=354) (actual time=0.072..0.072 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=4
+Planning Time: 0.315 ms
+Execution Time: 100.605 ms
+
+### flow name, common 'Invoice' [all]
+Limit  (cost=1000.44..8678.66 rows=51 width=354) (actual time=5.203..7.352 rows=51.00 loops=1)
+  Buffers: shared hit=57
+  ->  Gather Merge  (cost=1000.44..16055.76 rows=100 width=354) (actual time=5.201..7.347 rows=51.00 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=57
+        ->  Parallel Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..15044.20 rows=42 width=354) (actual time=0.038..0.453 rows=44.33 loops=3)
+              Filter: (((id)::text ~~* '%Invoice%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%Invoice%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%Invoice%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%Invoice%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%Invoice%'::text))
+              Rows Removed by Filter: 239
+              Index Searches: 1
+              Buffers: shared hit=57
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.240 ms
+Execution Time: 7.400 ms
+
+### flow name, rare 'Gdpr' [all]
+Limit  (cost=0.42..118.57 rows=51 width=354) (actual time=0.303..68.631 rows=51.00 loops=1)
+  Buffers: shared hit=2723
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..18255.56 rows=7880 width=354) (actual time=0.302..68.623 rows=51.00 loops=1)
+        Filter: (((id)::text ~~* '%Gdpr%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%Gdpr%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%Gdpr%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%Gdpr%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%Gdpr%'::text))
+        Rows Removed by Filter: 53875
+        Index Searches: 1
+        Buffers: shared hit=2723
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.156 ms
+Execution Time: 68.675 ms
+
+### trigger key, common 'order-created' [all]
+Limit  (cost=1000.44..8678.66 rows=51 width=354) (actual time=5.376..7.601 rows=51.00 loops=1)
+  Buffers: shared hit=66
+  ->  Gather Merge  (cost=1000.44..16055.76 rows=100 width=354) (actual time=5.375..7.597 rows=51.00 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=66
+        ->  Parallel Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..15044.20 rows=42 width=354) (actual time=0.054..0.606 rows=42.33 loops=3)
+              Filter: (((id)::text ~~* '%order-created%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%order-created%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%order-created%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%order-created%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%order-created%'::text))
+              Rows Removed by Filter: 301
+              Index Searches: 1
+              Buffers: shared hit=66
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.224 ms
+Execution Time: 7.648 ms
+
+### trigger key, rare 'backfill' [all]
+Limit  (cost=1000.44..8678.66 rows=51 width=354) (actual time=17.684..20.067 rows=51.00 loops=1)
+  Buffers: shared hit=1021
+  ->  Gather Merge  (cost=1000.44..16055.76 rows=100 width=354) (actual time=17.682..20.061 rows=51.00 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=1021
+        ->  Parallel Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..15044.20 rows=42 width=354) (actual time=0.166..9.035 rows=32.00 loops=3)
+              Filter: (((id)::text ~~* '%backfill%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%backfill%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%backfill%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%backfill%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%backfill%'::text))
+              Rows Removed by Filter: 6314
+              Index Searches: 1
+              Buffers: shared hit=1021
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.233 ms
+Execution Time: 20.114 ms
+
+### no match 'zq-nomatch-7731' [all]
+Limit  (cost=1000.44..8678.66 rows=51 width=354) (actual time=101.961..104.723 rows=0.00 loops=1)
+  Buffers: shared hit=10627
+  ->  Gather Merge  (cost=1000.44..16055.76 rows=100 width=354) (actual time=101.959..104.720 rows=0.00 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=10627
+        ->  Parallel Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..15044.20 rows=42 width=354) (actual time=99.124..99.125 rows=0.00 loops=3)
+              Filter: (((id)::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text))
+              Rows Removed by Filter: 66733
+              Index Searches: 1
+              Buffers: shared hit=10627
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.172 ms
+Execution Time: 104.765 ms
+

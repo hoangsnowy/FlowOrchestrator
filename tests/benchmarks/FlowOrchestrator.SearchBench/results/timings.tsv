@@ -112,3 +112,162 @@
 2026-11-23T13:57:31.6377224Z	mssql-collate-deep	deep output: common 'express' [7d]	20	1.98	2.35	1.82	2.40	51	
 2026-11-23T13:58:01.8503954Z	mssql-collate-deep	deep error: shipment, 3d old [7d]	20	1363.10	1397.83	1342.29	1420.53	1	
 2026-11-23T13:58:18.1340141Z	mssql-collate-deep	deep error: 'deadlock victim' [7d]	20	627.78	976.03	596.74	1129.18	51	
+2026-11-23T15:44:04.5033048Z	pg-base	runId prefix, recent [7d]	20	21.26	21.91	20.08	22.45	1	
+2026-11-23T15:44:05.0123347Z	pg-base	runId prefix, 60d old [7d]	20	21.59	24.37	20.07	28.73	0	
+2026-11-23T15:44:05.0699584Z	pg-base	flow name, common 'Invoice' [7d]	20	1.27	1.75	1.15	3.71	51	
+2026-11-23T15:44:05.5248357Z	pg-base	flow name, rare 'Gdpr' [7d]	20	20.36	21.83	19.00	23.37	16	
+2026-11-23T15:44:05.5893152Z	pg-base	trigger key, common 'order-created' [7d]	20	1.64	2.42	1.54	2.92	51	
+2026-11-23T15:44:05.9433754Z	pg-base	trigger key, rare 'backfill' [7d]	20	16.04	17.87	13.87	18.08	51	
+2026-11-23T15:44:06.4522580Z	pg-base	no match 'zq-nomatch-7731' [7d]	20	22.01	23.57	20.87	30.05	0	
+2026-11-23T15:44:09.8135672Z	pg-base	runId prefix, recent [all]	20	151.75	156.74	142.87	165.18	1	
+2026-11-23T15:44:12.3436957Z	pg-base	runId prefix, 60d old [all]	20	107.04	119.36	101.49	124.73	1	
+2026-11-23T15:44:12.6097101Z	pg-base	flow name, common 'Invoice' [all]	20	7.27	7.67	6.73	7.93	51	
+2026-11-23T15:44:14.2289540Z	pg-base	flow name, rare 'Gdpr' [all]	20	73.83	78.50	67.43	82.56	51	
+2026-11-23T15:44:14.4745581Z	pg-base	trigger key, common 'order-created' [all]	20	7.57	8.36	6.67	9.04	51	
+2026-11-23T15:44:14.9730915Z	pg-base	trigger key, rare 'backfill' [all]	20	21.75	23.58	20.91	25.87	51	
+2026-11-23T15:44:17.4002539Z	pg-base	no match 'zq-nomatch-7731' [all]	20	108.92	110.68	107.83	111.04	0	
+2026-11-23T15:44:17.5612897Z	pg-base	status word 'Failed' (+total)	20	1.03	1.14	0.97	1.15	51	
+2026-11-23T15:44:17.5866253Z	pg-base	status word 'TimedOut' (+total)	20	1.00	1.11	0.89	1.28	51	
+2026-11-23T15:44:17.6033617Z	pg-base	full run id (old)	20	0.61	0.66	0.52	0.66	1	
+2026-11-23T15:44:17.7190429Z	pg-base	unfiltered first page (+total)	20	4.84	6.07	4.31	8.39	51	
+2026-11-23T15:44:17.7380992Z	pg-base	unfiltered first page (no total)	20	0.64	1.38	0.60	1.57	51	
+2026-11-23T15:44:17.8529185Z	pg-base	unfiltered page 50 OFFSET (+total)	20	4.94	6.15	4.55	7.72	51	
+2026-11-23T15:44:18.0289713Z	pg-base	unfiltered page 2000 OFFSET	20	7.90	9.33	6.90	9.54	51	
+2026-11-23T15:44:18.4039349Z	pg-keyset	unfiltered page 50 keyset	20	1.82	2.57	1.42	2.93	51	
+2026-11-23T15:44:18.4639474Z	pg-keyset	unfiltered page 2000 keyset	20	1.47	2.00	1.19	2.27	51	
+2026-11-23T15:44:18.5810801Z	pg-count	COUNT(*) flow_runs	20	4.90	6.03	4.21	6.39	1	
+2026-11-23T15:44:18.5994230Z	pg-count	COUNT(*) WHERE status='Failed'	20	0.73	0.77	0.65	0.80	1	
+2026-11-23T15:44:18.6141331Z	pg-count	reltuples estimate	20	0.58	0.80	0.52	0.86	1	
+2026-11-23T15:45:16.2745446Z	pg-base	deep output: invoice, 3d old [7d]	20	75.54	79.36	73.08	82.29	1	
+2026-11-23T15:45:17.9393282Z	pg-base	deep output: invoice, 60d old [7d]	20	71.26	81.81	66.40	82.65	0	
+2026-11-23T15:45:32.7676249Z	pg-base	deep output: orderId, 3d old [7d]	20	661.55	691.89	652.98	696.67	1	
+2026-11-23T15:47:14.9696369Z	pg-base	deep output: common 'express' [7d]	3	33313.92	34954.44	33100.01	35136.72	51	
+2026-11-23T15:47:50.5956511Z	pg-base	deep error: shipment, 3d old [7d]	20	50.70	57.79	48.94	58.30	1	
+2026-11-23T15:47:51.0698919Z	pg-base	deep error: 'deadlock victim' [7d]	20	18.48	20.39	17.56	26.35	51	
+2026-11-23T15:47:51.6610505Z	pg-base	deep no match 'zq-nomatch-7731' [7d]	20	25.44	27.34	24.85	33.14	0	
+2026-11-23T15:47:59.6428124Z	pg-base	deep output: invoice, 60d old [all]	20	340.25	365.65	317.98	384.85	1	
+2026-11-23T15:49:48.9219528Z	pg-base	deep output: common 'express' [all]	3	36310.43	36503.36	36093.04	36524.80	51	
+2026-11-23T15:50:25.5689247Z	pg-base	deep error: 'deadlock victim' [all]	20	19.17	23.75	17.12	25.52	51	
+2026-11-23T15:50:32.0810033Z	pg-base	deep no match 'zq-nomatch-7731' [all]	20	300.75	310.81	274.26	311.74	0	
+2026-11-23T15:50:33.1664510Z	pg-uuid-range	runId prefix, recent [7d]	20	21.72	29.94	21.09	30.14	1	
+2026-11-23T15:50:33.6992739Z	pg-uuid-range	runId prefix, 60d old [7d]	20	21.98	30.26	21.39	30.98	1	
+2026-11-23T15:50:33.7569585Z	pg-uuid-range	flow name, common 'Invoice' [7d]	20	1.27	1.74	1.09	3.39	51	
+2026-11-23T15:50:34.2306246Z	pg-uuid-range	flow name, rare 'Gdpr' [7d]	20	20.91	22.39	20.26	28.68	17	
+2026-11-23T15:50:34.2909416Z	pg-uuid-range	trigger key, common 'order-created' [7d]	20	1.62	2.17	1.42	2.23	51	
+2026-11-23T15:50:34.6158867Z	pg-uuid-range	trigger key, rare 'backfill' [7d]	20	14.46	15.16	13.92	15.21	51	
+2026-11-23T15:50:35.1568214Z	pg-uuid-range	no match 'zq-nomatch-7731' [7d]	20	23.17	25.14	22.31	33.07	0	
+2026-11-23T15:50:37.3968479Z	pg-uuid-range	runId prefix, recent [all]	20	99.86	107.06	98.48	109.45	1	
+2026-11-23T15:50:39.7642360Z	pg-uuid-range	runId prefix, 60d old [all]	20	102.08	106.16	100.77	117.16	1	
+2026-11-23T15:50:40.0369649Z	pg-uuid-range	flow name, common 'Invoice' [all]	20	7.59	9.16	6.62	9.24	51	
+2026-11-23T15:50:41.6264511Z	pg-uuid-range	flow name, rare 'Gdpr' [all]	20	71.24	78.40	67.18	78.96	51	
+2026-11-23T15:50:41.8595512Z	pg-uuid-range	trigger key, common 'order-created' [all]	20	7.21	8.08	6.71	8.49	51	
+2026-11-23T15:50:42.3318369Z	pg-uuid-range	trigger key, rare 'backfill' [all]	20	20.74	22.93	19.59	22.99	51	
+2026-11-23T15:50:44.7250899Z	pg-uuid-range	no match 'zq-nomatch-7731' [all]	20	107.46	109.46	106.23	109.81	0	
+2026-11-23T15:50:46.8052545Z	pg-trgm-deep-windowed	deep output: invoice, 3d old [7d]	20	75.98	76.86	74.58	78.33	1	
+2026-11-23T15:50:48.4452037Z	pg-trgm-deep-windowed	deep output: invoice, 60d old [7d]	20	70.04	74.06	67.03	82.77	0	
+2026-11-23T15:51:03.5553096Z	pg-trgm-deep-windowed	deep output: orderId, 3d old [7d]	20	675.65	724.79	655.11	761.04	1	
+2026-11-23T15:51:04.3760808Z	pg-trgm-deep-windowed	deep output: common 'express' [7d]	20	5.06	5.26	4.78	5.39	51	
+2026-11-23T15:51:05.5282028Z	pg-trgm-deep-windowed	deep error: shipment, 3d old [7d]	20	50.62	55.70	48.32	59.64	1	
+2026-11-23T15:51:06.0009928Z	pg-trgm-deep-windowed	deep error: 'deadlock victim' [7d]	20	18.64	20.16	17.88	20.55	51	
+2026-11-23T15:51:06.5865234Z	pg-trgm-deep-windowed	deep no match 'zq-nomatch-7731' [7d]	20	25.57	26.40	24.95	26.43	0	
+2026-11-23T15:51:13.8436118Z	pg-trgm-deep-windowed	deep output: invoice, 60d old [all]	20	323.99	353.19	320.49	360.62	1	
+2026-11-23T15:52:56.3780759Z	pg-trgm-deep-windowed	deep output: common 'express' [all]	3	33761.15	34731.91	33577.22	34839.77	51	
+2026-11-23T15:53:29.5899017Z	pg-trgm-deep-windowed	deep error: 'deadlock victim' [all]	20	19.19	20.91	18.30	26.46	51	
+2026-11-23T15:53:35.7520430Z	pg-trgm-deep-windowed	deep no match 'zq-nomatch-7731' [all]	20	277.81	278.99	276.75	279.03	0	
+2026-11-23T15:53:39.7142069Z	pg-trgm-run	runId prefix, recent [7d]	20	1.00	1.26	0.91	1.31	1	
+2026-11-23T15:53:39.7449905Z	pg-trgm-run	runId prefix, 60d old [7d]	20	1.03	1.44	0.93	1.73	1	
+2026-11-23T15:53:39.7760530Z	pg-trgm-run	flow name, common 'Invoice' [7d]	20	0.95	1.49	0.84	3.44	51	
+2026-11-23T15:53:39.8052782Z	pg-trgm-run	flow name, rare 'Gdpr' [7d]	20	1.02	1.65	0.92	2.06	17	
+2026-11-23T15:53:39.8306269Z	pg-trgm-run	trigger key, common 'order-created' [7d]	20	0.99	1.69	0.79	1.85	51	
+2026-11-23T15:53:39.8813406Z	pg-trgm-run	trigger key, rare 'backfill' [7d]	20	1.98	2.39	1.80	3.45	51	
+2026-11-23T15:53:39.9014646Z	pg-trgm-run	no match 'zq-nomatch-7731' [7d]	20	0.76	0.84	0.69	1.07	0	
+2026-11-23T15:53:39.9266433Z	pg-trgm-run	runId prefix, recent [all]	20	0.95	1.25	0.89	1.45	1	
+2026-11-23T15:53:39.9512048Z	pg-trgm-run	runId prefix, 60d old [all]	20	0.98	1.22	0.89	1.29	1	
+2026-11-23T15:53:39.9723026Z	pg-trgm-run	flow name, common 'Invoice' [all]	20	0.81	0.89	0.73	1.08	51	
+2026-11-23T15:53:39.9989712Z	pg-trgm-run	flow name, rare 'Gdpr' [all]	20	1.08	1.24	0.99	1.61	51	
+2026-11-23T15:53:40.0252908Z	pg-trgm-run	trigger key, common 'order-created' [all]	20	1.05	1.56	0.75	2.30	51	
+2026-11-23T15:53:40.0791868Z	pg-trgm-run	trigger key, rare 'backfill' [all]	20	2.19	2.72	2.06	2.83	51	
+2026-11-23T15:53:40.0983211Z	pg-trgm-run	no match 'zq-nomatch-7731' [all]	20	0.75	0.77	0.68	0.77	0	
+2026-11-23T15:55:06.7071823Z	pg-tokens-quick	runId prefix, recent [7d]	20	234.84	242.58	216.46	252.06	1	
+2026-11-23T15:55:12.2933745Z	pg-tokens-quick	runId prefix, 60d old [7d]	20	239.91	256.99	232.25	257.32	0	
+2026-11-23T15:55:18.6498092Z	pg-tokens-quick	flow name, common 'Invoice' [7d]	20	268.92	307.67	261.74	312.50	51	
+2026-11-23T15:55:27.0147347Z	pg-tokens-quick	flow name, rare 'Gdpr' [7d]	20	357.82	380.47	334.23	390.74	16	
+2026-11-23T15:55:33.0655101Z	pg-tokens-quick	trigger key, common 'order-created' [7d]	20	241.41	274.12	224.40	283.13	51	
+2026-11-23T15:55:38.4685303Z	pg-tokens-quick	trigger key, rare 'backfill' [7d]	20	222.39	255.05	214.61	257.18	51	
+2026-11-23T15:55:43.5716666Z	pg-tokens-quick	no match 'zq-nomatch-7731' [7d]	20	218.24	223.20	215.29	223.83	0	
+2026-11-23T15:55:48.6349909Z	pg-tokens-quick	runId prefix, recent [all]	20	220.28	224.54	210.40	224.88	1	
+2026-11-23T15:55:53.5003884Z	pg-tokens-quick	runId prefix, 60d old [all]	20	211.83	214.80	206.74	215.66	1	
+2026-11-23T15:56:13.9564242Z	pg-tokens-quick	flow name, common 'Invoice' [all]	20	918.46	959.58	879.07	993.50	51	
+2026-11-23T15:56:21.5909536Z	pg-tokens-quick	flow name, rare 'Gdpr' [all]	20	206.22	214.96	202.70	233.36	51	
+2026-11-23T15:56:32.1404255Z	pg-tokens-quick	trigger key, common 'order-created' [all]	20	462.46	501.33	450.55	502.67	51	
+2026-11-23T15:56:40.2341554Z	pg-tokens-quick	trigger key, rare 'backfill' [all]	20	301.35	334.82	294.65	344.92	51	
+2026-11-23T15:56:45.6345218Z	pg-tokens-quick	no match 'zq-nomatch-7731' [all]	20	211.68	238.32	205.21	244.92	0	
+2026-11-23T15:56:50.7218525Z	pg-tokens	deep output: invoice, 3d old [7d]	20	202.68	219.22	198.19	221.32	1	
+2026-11-23T15:56:55.6558078Z	pg-tokens	deep output: invoice, 60d old [7d]	20	215.95	218.91	203.03	219.84	0	
+2026-11-23T15:57:00.5382970Z	pg-tokens	deep output: orderId, 3d old [7d]	20	213.16	222.33	197.52	231.00	1	
+2026-11-23T15:57:05.3132834Z	pg-tokens	deep output: common 'express' [7d]	20	207.19	211.52	204.97	211.94	0	
+2026-11-23T15:57:10.1553677Z	pg-tokens	deep error: shipment, 3d old [7d]	20	207.15	222.58	203.24	222.76	1	
+2026-11-23T15:57:18.9452236Z	pg-tokens	deep error: 'deadlock victim' [7d]	20	386.98	425.35	380.20	425.88	51	
+2026-11-23T15:57:24.0095473Z	pg-tokens	deep no match 'zq-nomatch-7731' [7d]	20	211.11	228.13	196.82	228.29	0	
+2026-11-23T15:57:28.9369648Z	pg-tokens	deep output: invoice, 60d old [all]	20	214.51	222.50	203.28	237.16	1	
+2026-11-23T15:57:33.8339622Z	pg-tokens	deep output: common 'express' [all]	20	211.35	231.74	197.83	238.89	0	
+2026-11-23T15:57:40.5549617Z	pg-tokens	deep error: 'deadlock victim' [all]	20	294.83	307.49	281.17	308.33	51	
+2026-11-23T15:57:45.4690358Z	pg-tokens	deep no match 'zq-nomatch-7731' [all]	20	211.34	216.02	197.64	218.57	0	
+2026-11-23T15:59:18.9350840Z	pg-tokens-quick	runId prefix, recent [7d]	20	0.80	0.93	0.74	1.15	1	
+2026-11-23T15:59:18.9569739Z	pg-tokens-quick	runId prefix, 60d old [7d]	20	0.76	0.87	0.70	0.91	0	
+2026-11-23T15:59:19.0865284Z	pg-tokens-quick	flow name, common 'Invoice' [7d]	20	4.85	6.14	4.63	7.46	51	
+2026-11-23T15:59:19.1147378Z	pg-tokens-quick	flow name, rare 'Gdpr' [7d]	20	0.93	1.13	0.82	1.35	16	
+2026-11-23T15:59:19.2175683Z	pg-tokens-quick	trigger key, common 'order-created' [7d]	20	4.34	6.08	3.80	7.03	51	
+2026-11-23T15:59:19.2553040Z	pg-tokens-quick	trigger key, rare 'backfill' [7d]	20	1.17	1.93	1.03	2.54	51	
+2026-11-23T15:59:19.2758755Z	pg-tokens-quick	no match 'zq-nomatch-7731' [7d]	20	0.79	1.20	0.72	1.27	0	
+2026-11-23T15:59:19.2973433Z	pg-tokens-quick	runId prefix, recent [all]	20	0.77	1.22	0.68	1.58	1	
+2026-11-23T15:59:19.3164013Z	pg-tokens-quick	runId prefix, 60d old [all]	20	0.76	0.88	0.66	0.95	1	
+2026-11-23T15:59:20.2184686Z	pg-tokens-quick	flow name, common 'Invoice' [all]	20	39.78	42.72	37.57	44.30	51	
+2026-11-23T15:59:20.3035332Z	pg-tokens-quick	flow name, rare 'Gdpr' [all]	20	1.37	2.66	1.22	3.21	51	
+2026-11-23T15:59:20.9780158Z	pg-tokens-quick	trigger key, common 'order-created' [all]	20	30.38	32.98	28.83	32.99	51	
+2026-11-23T15:59:21.0662535Z	pg-tokens-quick	trigger key, rare 'backfill' [all]	20	2.18	2.35	2.01	2.49	51	
+2026-11-23T15:59:21.0880509Z	pg-tokens-quick	no match 'zq-nomatch-7731' [all]	20	0.80	0.89	0.70	0.91	0	
+2026-11-23T15:59:21.4159984Z	pg-tokens	deep output: invoice, 3d old [7d]	20	0.85	0.99	0.75	1.19	1	
+2026-11-23T15:59:21.4407032Z	pg-tokens	deep output: invoice, 60d old [7d]	20	0.90	1.11	0.80	1.13	0	
+2026-11-23T15:59:21.4655912Z	pg-tokens	deep output: orderId, 3d old [7d]	20	0.93	1.34	0.70	1.38	1	
+2026-11-23T15:59:21.4914119Z	pg-tokens	deep output: common 'express' [7d]	20	0.99	1.42	0.85	1.63	0	
+2026-11-23T15:59:21.5160590Z	pg-tokens	deep error: shipment, 3d old [7d]	20	1.00	1.16	0.82	1.21	1	
+2026-11-23T15:59:21.5626987Z	pg-tokens	deep error: 'deadlock victim' [7d]	20	1.68	1.92	1.37	3.42	51	
+2026-11-23T15:59:21.5870666Z	pg-tokens	deep no match 'zq-nomatch-7731' [7d]	20	0.91	1.04	0.80	1.15	0	
+2026-11-23T15:59:21.6086502Z	pg-tokens	deep output: invoice, 60d old [all]	20	0.86	0.98	0.68	1.00	1	
+2026-11-23T15:59:21.6293410Z	pg-tokens	deep output: common 'express' [all]	20	0.79	0.92	0.73	1.12	0	
+2026-11-23T15:59:21.7420424Z	pg-tokens	deep error: 'deadlock victim' [all]	20	4.28	5.12	4.13	6.73	51	
+2026-11-23T15:59:21.7676708Z	pg-tokens	deep no match 'zq-nomatch-7731' [all]	20	0.78	1.06	0.69	1.30	0	
+2026-11-23T16:10:16.7936555Z	pg-tsv	deep output: invoice, 3d old [7d]	20	72.64	78.04	68.94	83.58	0	
+2026-11-23T16:10:18.4610177Z	pg-tsv	deep output: invoice, 60d old [7d]	20	71.30	76.54	68.56	76.96	0	
+2026-11-23T16:10:22.0631367Z	pg-tsv	deep output: orderId, 3d old [7d]	20	152.96	182.06	147.08	186.37	0	
+2026-11-23T16:11:10.0596808Z	pg-tsv	deep output: common 'express' [7d]	3	13969.50	19847.87	13375.61	20501.02	51	
+2026-11-23T16:11:23.8107292Z	pg-tsv	deep error: shipment, 3d old [7d]	20	25.78	29.00	24.91	34.00	1	
+2026-11-23T16:11:24.2089544Z	pg-tsv	deep error: 'deadlock victim' [7d]	20	16.56	19.19	13.50	19.85	51	
+2026-11-23T16:11:24.7940285Z	pg-tsv	deep no match 'zq-nomatch-7731' [7d]	20	25.25	27.23	24.30	33.31	0	
+2026-11-23T16:11:33.8455359Z	pg-tsv	deep output: invoice, 60d old [all]	20	339.49	354.27	334.55	358.47	0	
+2026-11-23T16:12:20.4452598Z	pg-tsv	deep output: common 'express' [all]	3	14328.27	18104.16	13407.92	18523.70	51	
+2026-11-23T16:12:34.3266417Z	pg-tsv	deep error: 'deadlock victim' [all]	20	14.22	20.29	13.28	23.16	51	
+2026-11-23T16:12:42.0975564Z	pg-tsv	deep no match 'zq-nomatch-7731' [all]	20	297.86	304.50	290.67	319.12	0	
+2026-11-23T16:13:53.0558495Z	pg-tsv	deep output: invoice, 3d old [7d]	20	78.99	81.42	73.84	81.69	1	
+2026-11-23T16:13:54.8524080Z	pg-tsv	deep output: invoice, 60d old [7d]	20	77.77	80.35	73.17	80.67	0	
+2026-11-23T16:14:01.3457639Z	pg-tsv	deep output: orderId, 3d old [7d]	20	288.78	313.82	274.86	320.92	1	
+2026-11-23T16:14:43.3038280Z	pg-tsv	deep output: common 'express' [7d]	3	13808.08	14336.60	13475.58	14395.33	51	
+2026-11-23T16:15:01.9325134Z	pg-tsv	deep error: shipment, 3d old [7d]	20	30.42	63.49	27.01	70.05	1	
+2026-11-23T16:15:02.3518360Z	pg-tsv	deep error: 'deadlock victim' [7d]	20	16.67	22.97	14.17	27.11	51	
+2026-11-23T16:15:03.0225307Z	pg-tsv	deep no match 'zq-nomatch-7731' [7d]	20	29.58	34.90	25.11	36.78	0	
+2026-11-23T16:15:16.1129104Z	pg-tsv	deep output: invoice, 60d old [all]	20	670.14	899.63	385.12	1025.26	1	
+2026-11-23T16:15:58.6228919Z	pg-tsv	deep output: common 'express' [all]	3	13142.47	15377.01	13052.29	15625.29	51	
+2026-11-23T16:16:11.3593631Z	pg-tsv	deep error: 'deadlock victim' [all]	20	14.54	21.40	13.36	21.91	51	
+2026-11-23T16:16:18.0545445Z	pg-tsv	deep no match 'zq-nomatch-7731' [all]	20	298.53	321.83	289.53	325.13	0	
+2026-11-23T16:17:40.1901690Z	pg-base-no-output-trgm	deep output: invoice, 3d old [7d]	3	14980.15	15100.24	14563.83	15113.58	1	
+2026-11-23T16:18:39.2357439Z	pg-base-no-output-trgm	deep output: invoice, 60d old [7d]	3	14712.98	14778.78	14569.46	14786.09	0	
+2026-11-23T16:19:38.5999281Z	pg-base-no-output-trgm	deep output: orderId, 3d old [7d]	3	14782.92	14816.45	14599.41	14820.18	1	
+2026-11-23T16:21:48.3833869Z	pg-base-no-output-trgm	deep output: common 'express' [7d]	3	38320.63	38509.17	38186.18	38530.11	51	
+2026-11-23T16:23:25.6426013Z	pg-base-no-output-trgm	deep error: shipment, 3d old [7d]	3	16481.11	21670.87	14863.75	22247.51	1	
+2026-11-23T16:24:23.6213943Z	pg-base-no-output-trgm	deep error: 'deadlock victim' [7d]	3	14422.43	14556.73	14310.43	14571.66	51	
+2026-11-23T16:25:19.9473248Z	pg-base-no-output-trgm	deep no match 'zq-nomatch-7731' [7d]	3	13961.69	13980.34	13935.39	13982.41	0	
+2026-11-23T16:26:19.6266349Z	pg-base-no-output-trgm	deep output: invoice, 60d old [all]	3	15208.95	15237.87	15030.32	15241.08	1	
+2026-11-23T16:28:31.9330348Z	pg-base-no-output-trgm	deep output: common 'express' [all]	3	38599.84	39487.86	38509.34	39586.53	51	
+2026-11-23T16:29:57.1948990Z	pg-base-no-output-trgm	deep error: 'deadlock victim' [all]	3	14485.91	14496.84	14291.95	14498.06	51	
+2026-11-23T16:30:53.9620632Z	pg-base-no-output-trgm	deep no match 'zq-nomatch-7731' [all]	3	14092.04	14118.89	13961.94	14121.88	0	

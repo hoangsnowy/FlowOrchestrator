@@ -6,11 +6,11 @@ subsystem is worth its cost. Harness and prototypes: `tests/benchmarks/FlowOrche
 (not in any solution filter, not in CI; README there has the run order). Raw numbers:
 `tests/benchmarks/FlowOrchestrator.SearchBench/results/`.
 
-> **Status of this document.** SQL Server is measured: baseline, five candidates, per-step write cost
-> and `FlowEvents` cost. Docker Desktop's engine failed (HTTP 500 on every API call) at ~14:05 UTC,
-> before the token-table / FTS write-overhead runs and before any PostgreSQL run. PostgreSQL is
-> therefore **not measured at this scale**; its recommendation leans on the 2026-05-24 trigram
-> measurement and is marked as such. The PostgreSQL harness (`run-pg.sh`) is written and builds.
+> **Status of this document.** Both backends measured on the same data set. SQL Server: baseline, five
+> candidates, per-step write cost and `FlowEvents` cost (session 1; Docker Desktop's engine failed at ~14:05 UTC
+> before the token / FTS write-overhead runs). PostgreSQL: baseline, five candidates, write cost of every index
+> including the migrator's `output_json` trigram index (session 2, 15:39-16:32 UTC, idle host). The 1.x
+> `FlowEvents` numbers stay valid as a record; #269 has since removed persisted events on `main`.
 
 ## Data set
 
@@ -41,7 +41,7 @@ I/O from `SET STATISTICS IO`, plan shape from the actual plan.
 samples fall in it — the max of `deep … 60d old [all]`, `deep 'deadlock victim' [all]` and
 `deep no match [all]`; their minimums are clean and are what the tables quote.
 
-## Headline
+## Headline (SQL Server; PostgreSQL headline below)
 
 | Search the user runs | Shipped today (SQL Server, p50) | Best measured | Change needed |
 |---|---|---|---|
@@ -52,6 +52,10 @@ samples fall in it — the max of `deep … 60d old [all]`, `deep 'deadlock vict
 | Deep: same, no window | **310-334 s** (5+ minutes) | **0.8-1.2 ms** (token table) | opt-in table |
 | Page 2000 of the run list | 189 ms (OFFSET) | **32 ms** (keyset) | cursor API |
 | Run list total (`includeTotal=true`, sent on every page load) | 10.7 ms of a 11.9 ms page | **1.1 ms** capped count | dashboard copy ("10,000+") |
+
+PostgreSQL, same searches (p50): quick search 1-22 ms in the window / 7-152 ms without → **~1 ms** with a trigram
+search column; deep search for a rare id **18-75 ms** in the window thanks to the migrator's `output_json` trigram
+index (14-15 s without it — keep it), but a common word **33 s** → **5 ms** with an `EXISTS` rewrite.
 
 Per step, `FlowEvents` costs **2 of the 7 commits** the storage layer performs (11.1 ms of 40.5 ms here, +37%),
 5.6 KB and 21.5 rows per run, and has one reader (the dashboard's Events drawer). Recommendation:
@@ -212,6 +216,9 @@ server-side insert of ~5 B-tree rows. That folded cost is the number still to me
 
 ## FlowEvents — keep, opt-in, or remove
 
+> **Superseded on `main` by #269**, which removed persisted events in 2.0 (after this measurement, which ran on
+> `9d13181`). The numbers below are the 1.x cost that decision removed.
+
 **Cost (measured, SQL Server):**
 
 | | |
@@ -250,23 +257,124 @@ comment. Not *remove* yet: hosts that ship the event table to an audit pipeline 
 table can be dropped in a later major once the drawer no longer needs it. If it stays on for someone, make the two
 step events part of the step's existing transactions instead of separate commits.
 
-## PostgreSQL (not measured at this scale)
+## PostgreSQL results
 
-What is known, from code and the 2026-05-24 measurement (100k runs x 5 steps, PostgreSQL 16):
+Same data set (byte-identical rows), `postgres:18-alpine`, 10 GB container, `shared_buffers=2GB`,
+`effective_cache_size=6GB`, `work_mem=64MB`, `maintenance_work_mem=1GB`. Loaded with binary `COPY`
+(200k runs + 2M steps + 4.3M events in 71 s); the real migrator then built every index including the five
+`pg_trgm` GIN indexes in **3 min 6 s**. TOAST compresses the JSON: `flow_steps` is **2.3 GB** (heap + TOAST)
+against 11.3 GB on SQL Server, which is why the same scans are cheaper here.
 
-- Deep search uses `fr.id IN (SELECT run_id FROM flow_steps WHERE step_key ILIKE … OR error_message ILIKE … OR
-  output_json ILIKE …)` with bare columns, which the migrator's `pg_trgm` GIN indexes serve (BitmapOr of three
-  index scans: step side 310 → 9 ms then). That rewrite is shipped.
-- Quick search still wraps the run columns in `COALESCE(…) ILIKE`, which no index can serve, and `id::text`,
-  `status`, `background_job_id` have no trigram index, so the `OR` cannot become a BitmapOr anyway. The prototype
-  `trgm-run` (one generated lower-cased `search_text` column + GIN trigram) is the PostgreSQL analogue of the SQL
-  Server narrow column; it is written but not measured.
-- A run-id prefix needs **no schema** on PostgreSQL: `uuid` compares bytewise, so `bbdafe3e` is the primary-key range
-  `bbdafe3e-0000-… .. bbdafe3e-ffff-…` (`PgBench.UuidRange`).
-- Unknown and important: the size and **write cost of `ix_flow_steps_output_json_trgm`** at 4.4 G chars of output
-  (a trigram GIN on large JSON is typically larger than the column and is maintained on every step completion).
-  That index is created by the migrator today on every PostgreSQL install. `run-pg.sh` measures it with and
-  without (`pg-write without-output-trgm`). **This is the one run essential to the PostgreSQL recommendation.**
+Run on a healthy, otherwise idle Docker host (re-started after the SQL Server session). Two harness bugs were
+found and fixed during the run and the affected steps re-measured: `VACUUM` inside a multi-statement batch
+(PostgreSQL runs a batch as one transaction; the first token load built no primary key, and its timings were
+discarded) and the tsvector query builder (see below). Rows marked "rows 17" instead of 16 include one run
+inserted by an earlier write-cost run (its `StartedAt` is "now", inside the window).
+
+#### PostgreSQL — quick search
+
+| Scenario | shipped | uuid range | trigram search column | token table |
+|---|---|---|---|---|
+| runId prefix, recent [7d] | 21.3 / 21.9 (1) | 21.7 / 29.9 (1) | 1.00 / 1.26 (1) | 0.80 / 0.93 (1) |
+| runId prefix, 60d old [7d] | 21.6 / 24.4 (0) | 22.0 / 30.3 (1) | 1.03 / 1.44 (1) | 0.76 / 0.87 (0) |
+| flow name, common 'Invoice' [7d] | 1.27 / 1.75 (51) | 1.27 / 1.74 (51) | 0.95 / 1.49 (51) | 4.85 / 6.14 (51) |
+| flow name, rare 'Gdpr' [7d] | 20.4 / 21.8 (16) | 20.9 / 22.4 (17) | 1.02 / 1.65 (17) | 0.93 / 1.13 (16) |
+| trigger key, common 'order-created' [7d] | 1.64 / 2.42 (51) | 1.62 / 2.17 (51) | 0.99 / 1.69 (51) | 4.34 / 6.08 (51) |
+| trigger key, rare 'backfill' [7d] | 16.0 / 17.9 (51) | 14.5 / 15.2 (51) | 1.98 / 2.39 (51) | 1.17 / 1.93 (51) |
+| no match 'zq-nomatch-7731' [7d] | 22.0 / 23.6 (0) | 23.2 / 25.1 (0) | 0.76 / 0.84 (0) | 0.79 / 1.20 (0) |
+| runId prefix, recent [all] | 151.8 / 156.7 (1) | 99.9 / 107.1 (1) | 0.95 / 1.25 (1) | 0.77 / 1.22 (1) |
+| runId prefix, 60d old [all] | 107.0 / 119.4 (1) | 102.1 / 106.2 (1) | 0.98 / 1.22 (1) | 0.76 / 0.88 (1) |
+| flow name, common 'Invoice' [all] | 7.27 / 7.67 (51) | 7.59 / 9.16 (51) | 0.81 / 0.89 (51) | 39.8 / 42.7 (51) |
+| flow name, rare 'Gdpr' [all] | 73.8 / 78.5 (51) | 71.2 / 78.4 (51) | 1.08 / 1.24 (51) | 1.37 / 2.66 (51) |
+| trigger key, common 'order-created' [all] | 7.57 / 8.36 (51) | 7.21 / 8.08 (51) | 1.05 / 1.56 (51) | 30.4 / 33.0 (51) |
+| trigger key, rare 'backfill' [all] | 21.8 / 23.6 (51) | 20.7 / 22.9 (51) | 2.19 / 2.72 (51) | 2.18 / 2.35 (51) |
+| no match 'zq-nomatch-7731' [all] | 108.9 / 110.7 (0) | 107.5 / 109.5 (0) | 0.75 / 0.77 (0) | 0.80 / 0.89 (0) |
+
+
+- **trigram search column** — `search_text TEXT GENERATED ALWAYS AS (lower(id::text || '|' || flow_name || '|' ||
+  trigger_key || '|' || status || '|' || background_job_id)) STORED` + `GIN (search_text gin_trgm_ops)`; predicate
+  `search_text LIKE lower(@term)`. **~1 ms for every quick search, windowed or not**, including the 8-char run-id
+  prefix at any age (the id is in the column). True substring semantics are kept — trigram answers `%term%`,
+  which neither the token table nor FTS does. Cost: 46.6 MB index + 18 MB of heap on `flow_runs`; migration 3.2 s
+  (the `STORED` column rewrites `flow_runs`); no measurable write cost (`StartRunAsync` p50 3.55 → 3.53 ms).
+- **uuid range** — the run-id prefix as a primary-key range needs no schema at all (`bbdafe3e` →
+  `bbdafe3e-0000-… .. bbdafe3e-ffff-…`), and the seek itself is free; the prototype's `IN (… UNION …)` shape kept the
+  windowed text scan (100 ms unwindowed), so as on SQL Server it belongs in its own statement. With the trigram
+  column it is redundant.
+- **token table** — ~1 ms for rare terms; common prefixes 4-40 ms (better than SQL Server's 90 ms - 1 s for the same
+  naive shape, because PostgreSQL sorts the matching token rows before touching `flow_runs`).
+
+#### PostgreSQL — deep search
+
+| Scenario | shipped (with output trigram) | shipped, output trigram dropped | windowed EXISTS | tsvector | token table |
+|---|---|---|---|---|---|
+| deep output: invoice, 3d old [7d] | 75.5 / 79.4 (1) | 14.6 s / 15.0 s / 15.1 s (n=3, 1) | 76.0 / 76.9 (1) | 79.0 / 81.4 (1) | 0.85 / 0.99 (1) |
+| deep output: invoice, 60d old [7d] | 71.3 / 81.8 (0) | 14.6 s / 14.7 s / 14.8 s (n=3, 0) | 70.0 / 74.1 (0) | 77.8 / 80.3 (0) | 0.90 / 1.11 (0) |
+| deep output: orderId, 3d old [7d] | 661.5 / 691.9 (1) | 14.6 s / 14.8 s / 14.8 s (n=3, 1) | 675.6 / 724.8 (1) | 288.8 / 313.8 (1) | 0.93 / 1.34 (1) |
+| deep output: common 'express' [7d] | 33.1 s / 33.3 s / 35.1 s (n=3, 51) | 38.2 s / 38.3 s / 38.5 s (n=3, 51) | 5.06 / 5.26 (51) | 13.5 s / 13.8 s / 14.4 s (n=3, 51) | 0.99 / 1.42 (0) |
+| deep error: shipment, 3d old [7d] | 50.7 / 57.8 (1) | 14.9 s / 16.5 s / 22.2 s (n=3, 1) | 50.6 / 55.7 (1) | 30.4 / 63.5 (1) | 1.00 / 1.16 (1) |
+| deep error: 'deadlock victim' [7d] | 18.5 / 20.4 (51) | 14.3 s / 14.4 s / 14.6 s (n=3, 51) | 18.6 / 20.2 (51) | 16.7 / 23.0 (51) | 1.68 / 1.92 (51) |
+| deep no match 'zq-nomatch-7731' [7d] | 25.4 / 27.3 (0) | 13.9 s / 14.0 s / 14.0 s (n=3, 0) | 25.6 / 26.4 (0) | 29.6 / 34.9 (0) | 0.91 / 1.04 (0) |
+| deep output: invoice, 60d old [all] | 340.2 / 365.6 (1) | 15.0 s / 15.2 s / 15.2 s (n=3, 1) | 324.0 / 353.2 (1) | 670.1 / 899.6 (1) | 0.86 / 0.98 (1) |
+| deep output: common 'express' [all] | 36.1 s / 36.3 s / 36.5 s (n=3, 51) | 38.5 s / 38.6 s / 39.6 s (n=3, 51) | 33.6 s / 33.8 s / 34.8 s (n=3, 51) | 13.1 s / 13.1 s / 15.6 s (n=3, 51) | 0.79 / 0.92 (0) |
+| deep error: 'deadlock victim' [all] | 19.2 / 23.8 (51) | 14.3 s / 14.5 s / 14.5 s (n=3, 51) | 19.2 / 20.9 (51) | 14.5 / 21.4 (51) | 4.28 / 5.12 (51) |
+| deep no match 'zq-nomatch-7731' [all] | 300.8 / 310.8 (0) | 14.0 s / 14.1 s / 14.1 s (n=3, 0) | 277.8 / 279.0 (0) | 298.5 / 321.8 (0) | 0.78 / 1.06 (0) |
+
+
+The shipped deep query is `fr.id IN (SELECT run_id FROM flow_steps WHERE step_key ILIKE … OR error_message ILIKE … OR
+output_json ILIKE …)`. Three things follow from the plans:
+
+- **With the migrator's `output_json` trigram index, rare terms are fast**: 18-75 ms in the window, 300-340 ms
+  without (a BitmapOr of the three step trigram indexes, then a recheck of the candidate payloads). The order id
+  is slower (660 ms) because `ORD-2026-0193334` shares trigrams with every order id of 2026: 1,356 false-positive
+  candidates, each a TOAST decompress + `ILIKE` recheck.
+- **Without that index the same query is 14-15 s for every term, windowed or not** (`[7d]` = `[all]`): the `IN`
+  sub-plan is evaluated over all 2M step rows before the run window applies. That is the benefit side of the
+  index: **200x in the default window.**
+- **Common words are pathological either way: `express` 33-36 s.** The trigram bitmap matches ~1M steps, every one
+  rechecked from TOAST (240k buffers read from disk). Rewriting the `IN` to a correlated
+  `EXISTS (SELECT 1 FROM flow_steps fs WHERE fs.run_id = fr.id AND (…))` lets the planner choose: for a common term
+  it walks the window newest-first and stops after 60 runs (**5 ms**), for a rare term it still picks the trigram
+  bitmap (same 50-75 ms; measured with the `output_json` trigram index present). Without a window the planner still mis-costs the common term (34 s), which the default
+  `RunSearchWindow` already avoids.
+- **tsvector** (`STORED` generated `to_tsvector('simple', step_key || error_message || output_json)` + GIN): rare
+  ids 75-80 ms (no better than trigram — the run-column scan dominates), order id 289 ms, `express` 13.8 s. Cost:
+  the stored vectors grow `flow_steps` from 2.3 GB to **6.0 GB** plus a 629 MB index, migration 7 min 25 s (table
+  rewrite), +0.4 ms per step completion (`to_tsvector` on every payload at write time). Not worth it.
+  A pitfall worth recording: the `simple` parser reads `INV-001353358` as `inv` followed by the *signed integer*
+  `-001353358`, so splitting the term on `-` client-side silently matches nothing; the term has to go through
+  `to_tsquery`'s own parser (`'INV-001353358':*`).
+- **token table**: 0.8-1.7 ms windowed, 0.8-4.3 ms unwindowed, for ids, order ids and error words alike.
+
+### Size, migration and write cost (PostgreSQL)
+
+| Index / candidate | Size (200k runs / 2M steps) | Migration measured | Step-completion write cost (p50) |
+|---|---|---|---|
+| shipped `ix_flow_steps_output_json_trgm` | **1,138 MB** = 49% of the `flow_steps` heap | part of the 3 min 6 s post-load index build; `DROP` 0.5 s | **none measurable**: `RecordStepCompleteAsync` 4.08 ms with, 4.06 ms without |
+| other shipped trigram indexes (step key, error, flow name, trigger key) | 55 + 19 + 8 + 7 MB | — | — |
+| trigram search column on `flow_runs` | 46.6 MB + 18 MB heap | 3.2 s | none measurable (per run, not per step) |
+| tsvector on `flow_steps` | +3.7 GB heap, +629 MB index | 7 min 25 s | +0.38 ms (4.06 → 4.44) |
+| token table | **2,166 MB** (1,152 MB heap + 1,014 MB primary key — PostgreSQL has no index-organised table, so the key is stored twice) = 94% of the `flow_steps` heap | `COPY` ~30 s + primary key 10 s | 3.5 ms as a separate statement (= one commit); folded into the completion transaction, only the insert itself |
+
+Per-step storage writes on PostgreSQL (p50 ms; commit ≈ 3 ms on this disk, round trip 0.36 ms):
+
+| Call | shipped indexes + run search column | + token insert | − output trigram (no tokens) | − output trigram + tsvector |
+|---|---|---|---|---|
+| `TryRecordDispatchAsync` | 3.09 | 2.89 | 3.04 | 3.15 |
+| `TryClaimStepAsync` | 3.01 | 3.03 | 2.96 | 3.03 |
+| `RecordStepStartAsync` | 4.95 | 5.40 | 4.94 | 5.06 |
+| event `step.started` | 3.01 | 3.05 | 2.97 | 3.03 |
+| `SaveStepOutputAsync` | 3.04 | 3.07 | 2.98 | 3.07 |
+| `RecordStepCompleteAsync` | **4.08** | 4.89 | **4.06** | **4.44** |
+| event `step.completed` | 3.01 | 3.05 | 2.97 | 3.05 |
+| `GetStepStatusesAsync` | 0.49 | 0.60 | 0.50 | 0.48 |
+| token insert (separate statement) | — | 3.48 | — | — |
+
+The "+ token insert" run was noisy (p95 of *every* call 2-4x the other runs, autovacuum on the fresh token table);
+read its p50 column only. Order of the runs: column 1 → 2 (token insert added) → 3 (token insert off, output trigram dropped) → 4 (tsvector added); `run-pg-candidates.sh`. The very first shipped-only run (before the run search column existed) gave `RecordStepCompleteAsync` 4.11 ms.
+
+`FlowEvents` on PostgreSQL: 818 MB (557 MB heap + 93 MB key + 168 MB run index) = 4.1 KB per run; 2 of 7 commits per
+step (6.0 ms on 18.7 ms, +32%) — the same picture as SQL Server.
 
 ## Recommendation
 
@@ -295,11 +403,28 @@ What is known, from code and the 2026-05-24 measurement (100k runs x 5 steps, Po
 
 ### PostgreSQL
 
-Pending the `run-pg.sh` measurement: same structure — generated `search_text` + GIN trigram for quick search (keeps
-true substring semantics, which trigram supports and the token table does not), uuid-range id prefix (no schema),
-keyset + capped count, and the token table as the opt-in deep-search index. Decide on keeping the migrator's
-`output_json` trigram index by default only after its write cost is measured; if it is material, move it behind
-the same opt-in.
+1. **Keep the migrator's `ix_flow_steps_output_json_trgm` as the default.** Its write cost on step completion is
+   not measurable at p50 (4.08 vs 4.06 ms; GIN's pending list defers the work to vacuum), while removing it makes
+   every deep search 14-15 s instead of 18-75 ms in the default window (200x). What it does cost is storage
+   (1.14 GB = 49% of the `flow_steps` heap here, scaling with payload volume) and a slower post-restore / initial
+   index build. Document that cost, and the knob: a host that never uses the deep-search box can drop it — that is
+   an operator decision, not a default. (Caveat: measured single-writer; under many concurrent writers the GIN
+   pending-list cleanup lands in whichever insert crosses `gin_pending_list_limit`, which shows up in p99, not p50
+   — not measured here.)
+2. **2.0.0, query text only:** turn the deep-search `fr.id IN (SELECT run_id …)` into the correlated
+   `EXISTS (SELECT 1 FROM flow_steps fs WHERE fs.run_id = fr.id AND (…))` — common words 33 s → 5 ms in the window,
+   rare terms unchanged (the planner still picks the trigram bitmap); and run a hex-shaped term's uuid range as its
+   own statement (any-age run-id prefix with no schema).
+3. **2.0.0, additive schema:** the generated `search_text` column + trigram index on `flow_runs` — every quick search
+   ~1 ms, windowed or not, substring semantics preserved, 47 MB, 3.2 s to migrate, no write cost. This also replaces
+   the separate `flow_name` / `trigger_key` trigram indexes, which the shipped `COALESCE(…) ILIKE` query cannot use.
+4. **Keyset paging and capped count** as on SQL Server; here the absolute gains are small (page 2000: 7.9 → 1.5 ms,
+   `COUNT(*)` 4.9 ms) because the run table is 93 MB.
+5. **Not tsvector** (2.6x the table, 7 min migration, +0.4 ms per step, no faster than trigram for ids) and **not the
+   token table by default** on PostgreSQL: trigram already answers ids in tens of ms with true substring
+   semantics, while the token table costs 2.2 GB (94% of the steps heap — PostgreSQL stores the key twice) for
+   0.8-4 ms. It stays the portable opt-in behind `IRunSearchIndex` for hosts that need sub-10 ms deep search on
+   unwindowed history.
 
 ### The seam
 
@@ -317,7 +442,7 @@ retention. `SearchRunsAsync` hydrates the page with a primary-key `IN`. Built-in
 | 1. BIN2 / no-COALESCE query text, capped count, keyset cursor, events default off | none | none | `EnableEventPersistence` default flips to `false` (CHANGELOG "Read before upgrading") |
 | 2. Search column + `IdText` (SQL Server); `search_text` + GIN (PostgreSQL) | additive, idempotent in the migrators; SQL Server: computed column + index (seconds); PostgreSQL: a `STORED` generated column rewrites `flow_runs` (small table) | none — computed / generated | always on |
 | 3. `FlowRunSearchTokens` + `IRunSearchIndex` | new table, created only when opted in | hosted service, batches by `StartedAt DESC` so recent runs become searchable first; resumable via a watermark row; ~6.7 min per 200k runs measured as a bulk load | `options.UseRunSearchIndex()` |
-| 4. `FlowEvents` table | kept; dropped in a later major once the drawer reads attempts | — | — |
+| 4. `FlowEvents` table | removed in 2.0 by #269 | — | — |
 
 ## Side findings
 
@@ -330,16 +455,18 @@ retention. `SearchRunsAsync` hydrates the page with a primary-key `IN`. Built-in
 
 ## Not measured, and why
 
-- **PostgreSQL, everything** at this scale — Docker Desktop's engine failed before the PostgreSQL run; `run-pg.sh`
-  (~1.5-2 h incl. the trigram index build on 4.4 G chars) is ready. Essential for the PostgreSQL recommendation.
-- **Write overhead of the token insert and of FTS change tracking** — the runs were scheduled after the candidate
-  queries; the first attempt failed on a harness bug (reused run ids, fixed in `WriteBench`), the re-run was
-  prevented by the Docker failure.
+- **SQL Server write overhead of the token insert and of FTS change tracking** — the first attempt failed on a
+  harness bug (reused run ids, fixed in `WriteBench`), the re-run was prevented by the Docker failure. PostgreSQL's
+  token insert was measured (3.5 ms as a separate statement = one commit); expect the same shape on SQL Server.
+- **Concurrent writers** — every write-cost number is a single writer. GIN pending-list cleanup and token-table
+  hot spots (common tokens like `eur` take an insert per run) show up under concurrency, at p99.
 - **BIN2 deep search without a window** and the BIN2 no-match row — same cause.
 - **FTS indexing lag** (commit → searchable) and the `CONTAINSTABLE`-first query shape.
 - **Real Azure SQL Database.** Everything ran on SQL Server 2022 in Docker. Azure SQL has FTS built in and the
   same optimizer, but fewer/slower cores (the search costs are CPU) and different commit latency (the write
   costs are commits). Ratios carry over; absolute numbers do not.
+- **Managed PostgreSQL** (Azure Database for PostgreSQL flexible server): `pg_trgm` is on its allow-list but must be
+  enabled per server (`azure.extensions`); the migrator already treats a missing extension as non-fatal.
 - `FlowStepAttempts` / `FlowOutputs` were not seeded, so the buffer pool held more of `FlowSteps` than it would in
   production; the deep-search baseline is optimistic.
 
