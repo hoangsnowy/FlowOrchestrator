@@ -204,8 +204,10 @@ code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
 [ "$code" = "200" ] || { echo "  webhook rejected $code"; exit 1; }
 ```
 
-Reuse a `X-GitHub-Delivery` value and the replay gate rejects the second call — a cheap way to
-confirm replay protection is live, if you want the extra signal.
+Do **not** assert that a reused `X-GitHub-Delivery` is rejected. The sample registers the replay
+stores but never calls `UseWebhookSecurity(...)`, so `WebhookSecurity.EnforcementMode` stays at its
+`Off` default and both HMAC and replay are evaluated by nothing — a replayed delivery returns `200`.
+Replay rejection (`409`) is covered by the Dashboard integration tests, not by this smoke run.
 
 #### 5.7 WaitForSignal resume (ApprovalWorkflowFlow)
 

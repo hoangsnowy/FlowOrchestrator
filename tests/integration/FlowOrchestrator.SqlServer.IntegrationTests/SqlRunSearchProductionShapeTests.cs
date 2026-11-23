@@ -1,6 +1,6 @@
 #if NET10_0
 // The query shape does not depend on the target framework, and seeding ~180 MB of step payload once
-// per TFM would triple the cost for no extra signal — so this suite runs on net10.0 only.
+// per TFM would double the cost for no extra signal — so this suite runs on net10.0 only.
 using System.Data;
 using System.Diagnostics;
 using System.Text;
@@ -260,7 +260,7 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         public const string RareTriggerFragment = "claim-0001";
         public const string PayloadToken = "policy-77f3c2e1-needle";
 
-        private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
+        private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2025-latest").Build();
 
         public string ConnectionString => _container.GetConnectionString();
         public DateTimeOffset Now { get; } = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero).AddHours(12);

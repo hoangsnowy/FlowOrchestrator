@@ -6,7 +6,7 @@ namespace FlowOrchestrator.SqlServer.Tests;
 
 public sealed class SqlServerFixture : IAsyncLifetime
 {
-    private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
+    private readonly MsSqlContainer _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2025-latest")
         .Build();
 
     public string ConnectionString => _container.GetConnectionString();

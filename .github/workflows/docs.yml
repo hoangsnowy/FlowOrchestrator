@@ -34,7 +34,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
       - name: Restore libraries
         run: dotnet restore FlowOrchestrator.Libraries.slnx

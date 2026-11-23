@@ -4,7 +4,7 @@ This guide walks you from zero to a running flow in about five minutes.
 
 ## Prerequisites
 
-- .NET 8 SDK or later
+- .NET 10 SDK or later to consume the packages (.NET 11 SDK to build this repository)
 - A running SQL Server or PostgreSQL (in-memory works fine for local development with no external DB required)
 
 ## Install NuGet Packages

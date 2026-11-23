@@ -84,4 +84,4 @@ app.MapFlowDashboard("/flows");
 | `FlowOrchestrator.Dashboard` | REST API + embedded SPA | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Dashboard)](https://www.nuget.org/packages/FlowOrchestrator.Dashboard) |
 | `FlowOrchestrator.Testing` | `FlowTestHost` — run flows in-process in tests | [![NuGet](https://img.shields.io/nuget/v/FlowOrchestrator.Testing)](https://www.nuget.org/packages/FlowOrchestrator.Testing) |
 
-All packages target **net8.0**, **net9.0**, and **net10.0**. MIT license.
+All packages target **net10.0** and **net11.0**. MIT license.

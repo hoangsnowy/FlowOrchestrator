@@ -2,6 +2,9 @@ using Aspire.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
+// Path-based registration (Aspire 17). Relative to this AppHost project directory.
+const string SampleAppPath = "../samples/FlowOrchestrator.SampleApp/FlowOrchestrator.SampleApp.csproj";
+
 // ── SQL Server resource ───────────────────────────────────────────────────────
 var sqlPassword = builder.AddParameter("sql-password", secret: true);
 var sql = builder.AddSqlServer("sql", password: sqlPassword)
@@ -24,7 +27,7 @@ var postgres = builder.AddPostgres("postgres")
 // FlowOrchestrator.ServiceBus adapter (`flow-{flowId}`) so that
 // SERVICEBUS_AUTO_CREATE_TOPOLOGY=false works out of the box.
 //
-// Caveat: Aspire 13.2 does NOT yet expose programmatic SQL filters on
+// Caveat: Aspire does NOT yet expose programmatic SQL filters on
 // subscriptions (dotnet/aspire#11708). Without a filter every subscription
 // receives every message; the engine's claim guard still ensures each step
 // is executed exactly once, but the emulator does extra work per step.
@@ -45,7 +48,7 @@ foreach (var flowId in SampleFlowIds.All)
 // ── Instance 1: SQL Server backend ──────────────────────────────── port 5101 ─
 // WithEndpoint overrides the port on the existing endpoint created from launchSettings.json
 // (calling WithHttpEndpoint would add a duplicate and throw)
-builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-sqlserver")
+builder.AddDotnetProject("flow-sqlserver", SampleAppPath)
        .WithEnvironment("FLOW_STORAGE", "sqlserver")
        .WithEndpoint("http",  e => e.Port = 5101)
        .WithEndpoint("https", e => e.Port = 7101)
@@ -54,10 +57,11 @@ builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-sqlserver")
 
 // ── Keycloak (OIDC sign-in for the PostgreSQL instance) ──────────── port 8088 ─
 // Plain container rather than Aspire.Hosting.Keycloak, which only ships as a preview for this
-// Aspire line. start-dev keeps state in-container, so the demo realm (two users: viewer /
+// Aspire line. The tag is pinned to an exact patch: Keycloak ships security fixes in patch
+// releases, so bump it whenever a new 26.x patch lands. start-dev keeps state in-container, so the demo realm (two users: viewer /
 // operator, see keycloak/flow-orchestrator-realm.json) is re-imported on every start and the
 // bootstrap admin password can be random per run. Not for production use.
-var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.4")
+var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.8.2")
        .WithArgs("start-dev", "--import-realm")
        .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", "admin")
        .WithEnvironment("KC_BOOTSTRAP_ADMIN_PASSWORD", Guid.NewGuid().ToString("N"))
@@ -68,7 +72,7 @@ var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26
 // Signs in through Keycloak (viewer / operator roles) while Basic Auth stays enabled side by
 // side, so scripts and the e2e suite keep using -u admin:admin. The OIDC handler loads Keycloak's
 // metadata on the first sign-in, so this instance does not wait for Keycloak to start.
-builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-postgresql")
+builder.AddDotnetProject("flow-postgresql", SampleAppPath)
        .WithEnvironment("FLOW_STORAGE", "postgresql")
        .WithEnvironment("Keycloak__Authority", "http://localhost:8088/realms/flow-orchestrator")
        .WithEnvironment("Keycloak__ClientId", "flow-dashboard")
@@ -82,7 +86,7 @@ builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-postgresql")
 // Demonstrates RUNTIME=inmemory + FLOW_STORAGE=inmemory: Channel<T>-backed step
 // dispatcher and PeriodicTimer-backed cron, all in-process. /hangfire returns 404
 // because Hangfire is not registered in this mode.
-builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-inmemory")
+builder.AddDotnetProject("flow-inmemory", SampleAppPath)
        .WithEnvironment("FLOW_STORAGE", "inmemory")
        .WithEnvironment("RUNTIME", "inmemory")
        .WithEndpoint("http",  e => e.Port = 5103)
@@ -94,7 +98,7 @@ builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-inmemory")
 // on a queue. Topology auto-creation is OFF; the Aspire-managed emulator
 // pre-declares all entities. WithReference("servicebus") injects the
 // `ConnectionStrings__servicebus` env var that the SampleApp reads.
-builder.AddProject<Projects.FlowOrchestrator_SampleApp>("flow-servicebus")
+builder.AddDotnetProject("flow-servicebus", SampleAppPath)
        .WithEnvironment("FLOW_STORAGE", "inmemory")
        .WithEnvironment("RUNTIME", "servicebus")
        .WithEnvironment("SERVICEBUS_AUTO_CREATE_TOPOLOGY", "false")

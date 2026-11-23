@@ -6,6 +6,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed — **breaking:** targets .NET 10 and .NET 11; .NET 8 and .NET 9 dropped
+
+- Every package now ships `net10.0` (LTS) and `net11.0` (STS). `net8.0` and `net9.0` were removed:
+  both reached end of support on 2026-11-10, and the current releases of Npgsql (11),
+  OpenTelemetry (1.21) and Microsoft.Extensions.* (11) no longer ship builds for them. Consumers on
+  .NET 8 / .NET 9 stay on 1.34.x until they move to .NET 10.
+- Microsoft.Extensions.* dependencies move to 11.0.0 on both TFMs (Npgsql 11 requires >= 11.0.0 even
+  on net10.0). `System.Text.Json` is no longer a package reference — it ships inbox with every
+  supported runtime.
+- The repository builds with the .NET 11 SDK, pinned in a new `global.json` (`11.0.100`,
+  `rollForward: latestFeature`). Samples and the AppHost target `net11.0`.
+- Dead `#if NET9_0_OR_GREATER` fallbacks deleted (`StepCollection`, `ManifestSecretRedactor`).
+
+### Changed — dependencies upgraded to latest
+
+- Aspire 13.x → **17.0.0**, which fixes CVE-2026-118740 (critical) and CVE-2026-120006 (high). The
+  AppHost moves off the obsolete `Aspire.AppHost.Sdk` (ASPIRE012) to `Microsoft.NET.Sdk` +
+  `Aspire.Hosting.AppHost` + `Aspire.Hosting.Dotnet`, registering the sample by path through
+  `AddDotnetProject`.
+- Sample Keycloak container 26.4 → 26.8.2, now pinned to an exact patch.
+- Npgsql 11.0.0, OpenTelemetry 1.21.0, Dapper 2.1.100, Microsoft.Data.SqlClient 7.1.2,
+  System.Security.Cryptography.Pkcs pin 11.0.0, SSH.NET pin 2026.0.1, Testcontainers 4.17.0,
+  Microsoft.NET.Test.Sdk 18.12.0, coverlet 10.1.1, xunit.runner.visualstudio 4.0.1,
+  Microsoft.Extensions.TimeProvider.Testing 11.0.1. The `MessagePack` transitive pin is gone: Aspire
+  17 no longer pulls the vulnerable version.
+- Integration-test images: PostgreSQL 16 → 18, SQL Server 2022 → 2025. The Service Bus emulator's
+  metadata store moves from the retired Azure SQL Edge image to SQL Server 2025.
+- CI runs the unit matrix on net10.0 + net11.0; `codeql-action` 4.39.3.
+
 ## [1.34.1] - 2026-10-31
 
 > **`1.34.0` was tagged but never reached NuGet.org.** Its publish job failed at `Test (Unit)` on the
