@@ -161,6 +161,37 @@ public class FlowRunRecoveryHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_DispatcherThrowsAfterLedgerRecorded_ReleasesTheLedgerRow()
+    {
+        // Arrange — the dispatch-ledger row is recorded, then the runtime call fails (broker blip).
+        // Left in place the row says "an attempt is queued" for one the runtime never received, and
+        // recovery skips ledgered keys, so the step would never run again.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = FlowWith(flowId, "step1");
+
+        _runStore.GetActiveRunsAsync()
+            .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
+        _runtimeStore.GetStepStatusesAsync(runId)
+            .Returns(Task.FromResult(EmptyStatuses()));
+        _runStore.GetDispatchedStepKeysAsync(runId)
+            .Returns(Task.FromResult(EmptyDispatched()));
+        _runStore.TryRecordDispatchAsync(runId, "step1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        _dispatcher.EnqueueStepAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>())
+            .Returns<ValueTask<string?>>(_ => throw new InvalidOperationException("broker down"));
+
+        // Act — the per-run isolation in recovery keeps startup alive.
+        var ex = await Record.ExceptionAsync(() => CreateSut().StartAsync(default));
+
+        // Assert
+        Assert.Null(ex);
+        await _runStore.Received(1).ReleaseDispatchAsync(runId, "step1", CancellationToken.None);
+        await _runStore.DidNotReceive().AnnotateDispatchAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task StartAsync_StepWithUnsatisfiedDependency_IsNotDispatched()
     {
         // Arrange — step1 is still Running (its worker died mid-execution); step2 depends on it.

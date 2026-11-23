@@ -237,9 +237,33 @@ internal sealed class RunRecoverer
             return false;
         }
 
-        var jobId = delay.HasValue
-            ? await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, ct).ConfigureAwait(false)
-            : await _dispatcher.EnqueueStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
+        string? jobId;
+        try
+        {
+            jobId = delay.HasValue
+                ? await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, ct).ConfigureAwait(false)
+                : await _dispatcher.EnqueueStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Catch-all-and-rethrow: the ledger row recorded above claims "an attempt is queued" for an
+            // attempt the runtime never received, and recovery skips ledgered keys — left in place it
+            // strands the step for good. Release it (CancellationToken.None: also on shutdown
+            // cancellation) so the next recovery pass can dispatch again; a duplicate delivery, if the
+            // runtime did accept the message, is absorbed by the step claim. Mirrors the engine's
+            // DispatchReservedStepAsync.
+            try
+            {
+                await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception releaseFailure) when (releaseFailure is not OperationCanceledException)
+            {
+                _logger.LogError(releaseFailure,
+                    "FlowRunRecoveryHostedService: dispatching step '{StepKey}' failed and its dispatch-ledger row could not be released.", step.Key);
+            }
+
+            throw;
+        }
 
         if (jobId is not null)
         {
