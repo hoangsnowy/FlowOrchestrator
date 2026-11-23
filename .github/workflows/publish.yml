@@ -9,7 +9,7 @@ jobs:
   publish:
     # The `create` trigger used to fire on every dependabot branch creation
     # because `on.create` does not support tag/branch filters — that's why
-    # this workflow ran with empty NUGET_API_KEY on `dependabot/*` branches.
+    # this workflow ran with an empty NuGet key on `dependabot/*` branches.
     # Switching to `on.push.tags` covers the tag-release case cleanly. Belt-
     # and-suspenders: also skip the job entirely when run by Dependabot, so
     # any future trigger surprise can't push without secrets.
@@ -18,6 +18,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # NuGet.org Trusted Publishing: the job exchanges a GitHub OIDC token for a
+      # one-hour NuGet API key, so no long-lived NUGET_API_KEY secret is stored.
+      id-token: write
 
     steps:
       - uses: actions/checkout@v7
@@ -85,9 +88,20 @@ jobs:
             --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
             --skip-duplicate
 
+      # Requested right before the push: the temporary key is valid for 1 hour.
+      # Needs a Trusted Publishing policy on nuget.org for owner `thelastsnow`,
+      # repository hoangsnowy/FlowOrchestrator, workflow file `publish.yml`.
+      - name: NuGet login (OIDC -> temporary API key)
+        id: nuget-login
+        # Pinned to the v1.2.0 commit: this step mints the publish credential, so a moved tag
+        # must not be able to change what runs (CodeQL actions/unpinned-tag).
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: thelastsnow   # nuget.org profile name of the package owner, not an email
+
       - name: Push to NuGet.org
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
           dotnet nuget push "./nupkgs/*.nupkg" \
             --api-key "$NUGET_API_KEY" \
