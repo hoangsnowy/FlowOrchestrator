@@ -32,7 +32,7 @@ public sealed class EngineSpanCoverageTests
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger = Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
     private readonly FlowOrchestratorTelemetry _telemetry = new();
@@ -103,7 +103,7 @@ public sealed class EngineSpanCoverageTests
         var flowId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var flow = MakeFlow(flowId, "step1");
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _flowRepo = new FlowRegistry(new[] { flow });
         _stepExecutor.ExecuteAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .ReturnsForAnyArgs(new ValueTask<IStepResult>(new StepResult { Key = "step1", Status = StepStatus.Succeeded }));
 

@@ -18,10 +18,6 @@ namespace FlowOrchestrator.Core.Abstractions;
 /// </remarks>
 [CollectionBuilder(typeof(RunAfterCondition), nameof(Create))]
 [JsonConverter(typeof(RunAfterConditionJsonConverter))]
-// CRITICAL: Newtonsoft attribute is the only reliable way to override Newtonsoft's
-// auto-detection of IEnumerable<StepStatus> as a JSON array. Hangfire serialises job
-// arguments via Newtonsoft and may build contracts before our settings are applied.
-[Newtonsoft.Json.JsonConverter(typeof(RunAfterConditionNewtonsoftConverter))]
 public sealed class RunAfterCondition : IEnumerable<StepStatus>
 {
     /// <summary>

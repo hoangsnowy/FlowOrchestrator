@@ -1,4 +1,3 @@
-using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,7 +38,6 @@ public static class PostgreSqlServiceCollectionExtensions
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new PostgreSqlFlowScheduleStateStore(connectionString));
         builder.Services.AddHostedService(sp =>
             new PostgreSqlFlowOrchestratorMigrator(connectionString, sp.GetRequiredService<ILogger<PostgreSqlFlowOrchestratorMigrator>>()));
-        RegisterFlowRepository(builder.Services);
         return builder;
     }
 
@@ -58,21 +56,5 @@ public static class PostgreSqlServiceCollectionExtensions
         builder.Services.Replace(ServiceDescriptor.Singleton<IWebhookReplayStore>(_ => new PostgreSqlWebhookReplayStore(connectionString)));
         builder.Services.Replace(ServiceDescriptor.Singleton<IWebhookRejectionStore>(_ => new PostgreSqlWebhookRejectionStore(connectionString)));
         return builder;
-    }
-
-    // IFlowRepository is the in-process registry of code-defined flow classes.
-    // Each storage backend is responsible for registering it; AddFlowOrchestrator validates
-    // a registration exists. Trivial private impl avoids cross-project deps.
-    private static void RegisterFlowRepository(IServiceCollection services)
-    {
-        services.TryAddSingleton<IFlowRepository>(sp =>
-            new PostgreSqlFlowRegistry(sp.GetServices<IFlowDefinition>()));
-    }
-
-    private sealed class PostgreSqlFlowRegistry : IFlowRepository
-    {
-        private readonly IReadOnlyList<IFlowDefinition> _flows;
-        public PostgreSqlFlowRegistry(IEnumerable<IFlowDefinition> flows) => _flows = flows.ToList();
-        public ValueTask<IReadOnlyList<IFlowDefinition>> GetAllFlowsAsync() => ValueTask.FromResult(_flows);
     }
 }

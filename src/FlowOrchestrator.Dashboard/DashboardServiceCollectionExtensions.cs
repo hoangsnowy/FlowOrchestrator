@@ -45,7 +45,7 @@ public static class DashboardServiceCollectionExtensions
     public static IServiceCollection AddFlowDashboard(this IServiceCollection services)
     {
         services.AddOptions<FlowDashboardOptions>();
-        services.TryAddSingleton<IFlowScheduleStateStore, InMemoryScheduleStateStore>();
+        services.TryAddSingleton<IFlowScheduleStateStore, InMemoryFlowScheduleStateStore>();
 
         // Realtime push: register the broadcaster as a singleton and bind it as the
         // IFlowEventNotifier that the engine resolves. Replace() (not TryAdd) overrides
@@ -362,10 +362,9 @@ public static class DashboardServiceCollectionExtensions
             await WriteJsonAsync(http.Response, CanOperate(http) ? flow : Security.ManifestSecretRedactor.Redacted(flow));
         });
 
-        group.MapGet("/api/flows/{id:guid}/mermaid", async (HttpContext http, IFlowRepository repo, Guid id) =>
+        group.MapGet("/api/flows/{id:guid}/mermaid", async (HttpContext http, FlowRegistry flows, Guid id) =>
         {
-            var flow = (await repo.GetAllFlowsAsync()).FirstOrDefault(f => f.Id == id);
-            if (flow is null)
+            if (!flows.TryGetFlow(id, out var flow))
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 http.Response.ContentType = "text/plain; charset=utf-8";
@@ -382,7 +381,9 @@ public static class DashboardServiceCollectionExtensions
             try
             {
                 var flow = await store.SetEnabledAsync(id, true);
-                triggerSync.SyncTriggers(id, true);
+                // CancellationToken.None: the store write above is durable, so the cron sync must
+                // finish even if the caller disconnects mid-request.
+                await triggerSync.SyncTriggersAsync(id, true, CancellationToken.None);
                 await WriteJsonAsync(http.Response,flow);
             }
             catch (KeyNotFoundException)
@@ -396,7 +397,7 @@ public static class DashboardServiceCollectionExtensions
             try
             {
                 var flow = await store.SetEnabledAsync(id, false);
-                triggerSync.SyncTriggers(id, false);
+                await triggerSync.SyncTriggersAsync(id, false, CancellationToken.None);
                 await WriteJsonAsync(http.Response,flow);
             }
             catch (KeyNotFoundException)
@@ -405,11 +406,9 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, IFlowRepository repo, Guid id, IFlowOrchestrator engine) =>
+        group.MapPost("/api/flows/{id:guid}/trigger", async (HttpContext http, FlowRegistry flows, Guid id, IFlowOrchestrator engine) =>
         {
-            var flows = await repo.GetAllFlowsAsync();
-            var flow = flows.FirstOrDefault(f => f.Id == id);
-            if (flow is null)
+            if (!flows.TryGetFlow(id, out var flow))
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 await WriteJsonAsync(http.Response,new { error = "Flow not found in repository." });
@@ -460,7 +459,7 @@ public static class DashboardServiceCollectionExtensions
         // - idOrSlug = flow GUID: use first Webhook trigger (only Webhook has external URL)
         // - idOrSlug = slug: lookup flow by webhookSlug in Webhook trigger Inputs
         // - If trigger has webhookSecret in Inputs, require X-Webhook-Key header to match
-        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, IFlowRepository repo, IFlowStore store, string idOrSlug, IFlowOrchestrator engine, [Microsoft.AspNetCore.Mvc.FromServices] FlowOrchestratorTelemetry? telemetry) =>
+        endpoints.MapPost($"{basePath}/api/webhook/{{idOrSlug}}", async (HttpContext http, FlowRegistry registry, IFlowStore store, string idOrSlug, IFlowOrchestrator engine, [Microsoft.AspNetCore.Mvc.FromServices] FlowOrchestratorTelemetry? telemetry) =>
         {
             // Stitch the run onto the caller's distributed trace by reading the inbound W3C
             // headers and starting our entry-point activity as a child of them. This works
@@ -473,7 +472,6 @@ public static class DashboardServiceCollectionExtensions
                 http.Request.Headers.TryGetValue(InboundTraceContext.TraceparentHeaderName, out var tp) ? tp.FirstOrDefault() : null,
                 http.Request.Headers.TryGetValue(InboundTraceContext.TracestateHeaderName, out var ts) ? ts.FirstOrDefault() : null);
             ingressActivity?.SetTag("flow.webhook.slug_or_id", idOrSlug);
-            var flows = (await repo.GetAllFlowsAsync()).ToList();
             Core.Abstractions.IFlowDefinition? flow = null;
             string? triggerKey = null;
             string? expectedSecret = null;
@@ -481,7 +479,7 @@ public static class DashboardServiceCollectionExtensions
 
             if (Guid.TryParse(idOrSlug, out var flowId))
             {
-                flow = flows.FirstOrDefault(f => f.Id == flowId);
+                flow = registry.Find(flowId);
                 if (flow is not null)
                 {
                     var webhookTrigger = flow.Manifest.Triggers.FirstOrDefault(t =>
@@ -497,7 +495,7 @@ public static class DashboardServiceCollectionExtensions
             }
             else
             {
-                foreach (var f in flows)
+                foreach (var f in registry.Flows)
                 {
                     foreach (var (key, meta) in f.Manifest.Triggers)
                     {
@@ -1084,7 +1082,7 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, IFlowRepository repo, IFlowOrchestrator engine, Guid runId) =>
+        group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, FlowRegistry flows, IFlowOrchestrator engine, Guid runId) =>
         {
             // Resolve options from RequestServices with a fallback default so the endpoint does
             // not require integration-test DI containers to register FlowRunControlOptions when
@@ -1101,8 +1099,7 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var flow = (await repo.GetAllFlowsAsync()).FirstOrDefault(f => f.Id == run.FlowId);
-            if (flow is null)
+            if (!flows.TryGetFlow(run.FlowId, out var flow))
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
                 await WriteJsonAsync(http.Response, new { error = "Flow for this run is no longer registered." });
@@ -1199,10 +1196,10 @@ public static class DashboardServiceCollectionExtensions
             var stateLookup = states.ToDictionary(s => s.JobId, StringComparer.Ordinal);
 
             var activeJobs = recurringJobs
-                .Where(j => j.Id.StartsWith("flow-"))
+                .Where(j => j.Id.StartsWith(RecurringTriggerJobId.Prefix, StringComparison.Ordinal))
                 .Select(j =>
                 {
-                    ParseJobId(j.Id, out var flowId, out var triggerKey);
+                    RecurringTriggerJobId.TryParse(j.Id, out var flowId, out var triggerKey);
                     flowLookup.TryGetValue(flowId, out var flow);
                     stateLookup.TryGetValue(j.Id, out var state);
                     var cron = string.IsNullOrWhiteSpace(state?.CronOverride) ? j.Cron : state!.CronOverride!;
@@ -1272,7 +1269,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapPost("/api/schedules/{jobId}/pause", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
-            if (!ParseJobId(jobId, out var flowId, out var triggerKey))
+            if (!RecurringTriggerJobId.TryParse(jobId, out var flowId, out var triggerKey))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(http.Response,new { error = "Invalid job ID format." });
@@ -1301,7 +1298,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapPost("/api/schedules/{jobId}/resume", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
-            if (!ParseJobId(jobId, out var flowId, out var triggerKey))
+            if (!RecurringTriggerJobId.TryParse(jobId, out var flowId, out var triggerKey))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(http.Response,new { error = "Invalid job ID format." });
@@ -1340,7 +1337,7 @@ public static class DashboardServiceCollectionExtensions
 
         group.MapPut("/api/schedules/{jobId}/cron", async (HttpContext http, IRecurringTriggerDispatcher triggerDispatcher, IFlowStore store, IFlowScheduleStateStore scheduleStateStore, string jobId) =>
         {
-            if (!ParseJobId(jobId, out var flowId, out var triggerKey))
+            if (!RecurringTriggerJobId.TryParse(jobId, out var flowId, out var triggerKey))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(http.Response,new { error = "Invalid job ID format." });
@@ -1758,23 +1755,6 @@ public static class DashboardServiceCollectionExtensions
         return copy;
     }
 
-    private static bool ParseJobId(string jobId, out Guid flowId, out string triggerKey)
-    {
-        flowId = Guid.Empty;
-        triggerKey = "";
-
-        if (!jobId.StartsWith("flow-")) return false;
-
-        var withoutPrefix = jobId["flow-".Length..];
-        // GUID format: 8-4-4-4-12 = 36 chars, then '-' then triggerKey
-        if (withoutPrefix.Length < 38) return false;
-
-        var guidPart = withoutPrefix[..36];
-        triggerKey = withoutPrefix[37..];
-
-        return Guid.TryParse(guidPart, out flowId) && !string.IsNullOrEmpty(triggerKey);
-    }
-
     private static string? ExtractCronExpression(string manifestJson, string triggerKey)
     {
         try
@@ -1793,43 +1773,6 @@ public static class DashboardServiceCollectionExtensions
             // best-effort: manifest may not declare cron
         }
         return null;
-    }
-
-    /// <summary>
-    /// Fallback in-memory schedule state store registered when no persistent
-    /// <see cref="IFlowScheduleStateStore"/> is provided by the storage backend.
-    /// State is lost on process restart.
-    /// </summary>
-    private sealed class InMemoryScheduleStateStore : IFlowScheduleStateStore
-    {
-        private readonly ConcurrentDictionary<string, FlowScheduleState> _states = new(StringComparer.Ordinal);
-
-        public Task<FlowScheduleState?> GetAsync(string jobId)
-        {
-            _states.TryGetValue(jobId, out var state);
-            return Task.FromResult<FlowScheduleState?>(state);
-        }
-
-        public Task<IReadOnlyList<FlowScheduleState>> GetAllAsync()
-        {
-            IReadOnlyList<FlowScheduleState> states = _states.Values
-                .OrderBy(x => x.JobId, StringComparer.Ordinal)
-                .ToList();
-            return Task.FromResult(states);
-        }
-
-        public Task SaveAsync(FlowScheduleState state)
-        {
-            state.UpdatedAtUtc = DateTimeOffset.UtcNow;
-            _states[state.JobId] = state;
-            return Task.CompletedTask;
-        }
-
-        public Task DeleteAsync(string jobId)
-        {
-            _states.TryRemove(jobId, out _);
-            return Task.CompletedTask;
-        }
     }
 
 }

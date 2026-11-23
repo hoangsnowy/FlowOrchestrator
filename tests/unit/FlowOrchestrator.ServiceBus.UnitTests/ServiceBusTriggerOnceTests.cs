@@ -1,9 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
-using FlowOrchestrator.Core.Abstractions;
-using FlowOrchestrator.Core.Configuration;
-using FlowOrchestrator.Core.Storage;
+using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.ServiceBus;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -35,7 +33,7 @@ public class ServiceBusTriggerOnceTests
         var flowId = Guid.Parse("11111111-1111-1111-1111-111111111111");
         const string triggerKey = "schedule";
         const string cron = "*/5 * * * * *";
-        var jobId = $"flow-{flowId}-{triggerKey}";
+        var jobId = RecurringTriggerJobId.Create(flowId, triggerKey);
         SeedJob(hub, jobId, flowId, triggerKey, cron);
 
         // Act — build the one-off message exactly as TriggerOnce would enqueue it.
@@ -122,9 +120,6 @@ public class ServiceBusTriggerOnceTests
         new(
             new ServiceBusClient(FakeConnString),
             new ServiceBusRuntimeOptions { ConnectionString = FakeConnString },
-            new EmptyFlowRepository(),
-            new NoopScheduleStateStore(),
-            new FlowSchedulerOptions { PersistOverrides = false },
             NullLogger<ServiceBusRecurringTriggerHub>.Instance);
 
     private static void SeedJob(ServiceBusRecurringTriggerHub hub, string jobId, Guid flowId, string triggerKey, string cron)
@@ -151,18 +146,4 @@ public class ServiceBusTriggerOnceTests
         f.SetValue(instance, value);
     }
 
-    private sealed class EmptyFlowRepository : IFlowRepository
-    {
-        public ValueTask<IReadOnlyList<IFlowDefinition>> GetAllFlowsAsync() =>
-            new(Array.Empty<IFlowDefinition>());
-    }
-
-    private sealed class NoopScheduleStateStore : IFlowScheduleStateStore
-    {
-        public Task<FlowScheduleState?> GetAsync(string jobId) => Task.FromResult<FlowScheduleState?>(null);
-        public Task<IReadOnlyList<FlowScheduleState>> GetAllAsync() =>
-            Task.FromResult<IReadOnlyList<FlowScheduleState>>(Array.Empty<FlowScheduleState>());
-        public Task SaveAsync(FlowScheduleState state) => Task.CompletedTask;
-        public Task DeleteAsync(string jobId) => Task.CompletedTask;
-    }
 }

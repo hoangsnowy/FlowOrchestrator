@@ -47,7 +47,11 @@ public sealed class DashboardTestServer : IDisposable
     }
     public IFlowRunControlStore RunControlStore { get; } = Substitute.For<IFlowRunControlStore>();
     public IFlowRunRuntimeStore RuntimeStore { get; } = Substitute.For<IFlowRunRuntimeStore>();
-    public IFlowRepository FlowRepository { get; } = Substitute.For<IFlowRepository>();
+    /// <summary>
+    /// Flows the endpoints resolve through <see cref="FlowRegistry"/>. Settable per test: the
+    /// registry is registered as a transient factory, so each request sees the current value.
+    /// </summary>
+    public FlowRegistry Flows { get; set; } = FlowRegistry.Empty;
     public IOutputsRepository OutputsRepository { get; } = Substitute.For<IOutputsRepository>();
     public IFlowEventReader EventReader { get; } = Substitute.For<IFlowEventReader>();
     public IFlowScheduleStateStore ScheduleStateStore { get; } = Substitute.For<IFlowScheduleStateStore>();
@@ -119,7 +123,7 @@ public sealed class DashboardTestServer : IDisposable
         builder.Services.AddSingleton(FlowRunStore);
         builder.Services.AddSingleton(RunControlStore);
         builder.Services.AddSingleton(RuntimeStore);
-        builder.Services.AddSingleton(FlowRepository);
+        builder.Services.AddTransient(_ => Flows);
         builder.Services.AddSingleton(OutputsRepository);
         builder.Services.AddSingleton(EventReader);
         builder.Services.AddSingleton(ScheduleStateStore);

@@ -535,7 +535,7 @@ public sealed class PendingPathClaimOrderingTests
             _runStore,
             _outputsRepo,
             Substitute.For<IExecutionContextAccessor>(),
-            Substitute.For<IFlowRepository>(),
+            FlowRegistry.Empty,
             [runtimeStoreOverride ?? _runtimeStore],
             [runControlStore ?? EngineTestStores.ControlStore()],
             new FlowRunControlOptions(),

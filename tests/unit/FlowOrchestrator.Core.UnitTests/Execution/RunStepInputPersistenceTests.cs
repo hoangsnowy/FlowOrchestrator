@@ -106,7 +106,7 @@ public sealed class RunStepInputPersistenceTests
             _runStore,
             _outputs,
             Substitute.For<IExecutionContextAccessor>(),
-            Substitute.For<IFlowRepository>(),
+            FlowRegistry.Empty,
             // Every test runs the single step "a" with a succeeding executor.
             [EngineTestStores.PermissiveRuntimeStore(
                 new Dictionary<string, StepStatus>(StringComparer.Ordinal) { ["a"] = StepStatus.Succeeded })],

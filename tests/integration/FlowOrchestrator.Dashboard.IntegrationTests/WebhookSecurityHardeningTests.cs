@@ -49,7 +49,7 @@ public sealed class WebhookSecurityHardeningTests : IDisposable
         // Arrange — registered slug is mixed-case; request uses different case.
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, slug: "Order-Created");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         // Act
@@ -65,7 +65,7 @@ public sealed class WebhookSecurityHardeningTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "S3cret-V@lue");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
         request.Headers.Add("X-Webhook-Key", "s3cret-v@lue"); // lowercased — must NOT pass
@@ -85,7 +85,7 @@ public sealed class WebhookSecurityHardeningTests : IDisposable
         // configurations.
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "tok-abcdef");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{id}");
         request.Headers.Add("Authorization", "bearer tok-abcdef");
@@ -114,7 +114,7 @@ public sealed class WebhookSecurityHardeningTests : IDisposable
         // Arrange
         var id = Guid.NewGuid();
         var flow = MakeWebhookFlow(id, secret: "the-real-secret-value-32-chars__");
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
 
         var wrongKeys = new[]

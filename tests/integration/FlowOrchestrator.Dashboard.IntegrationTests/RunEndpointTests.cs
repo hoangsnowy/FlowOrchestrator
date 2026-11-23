@@ -414,7 +414,7 @@ public sealed class RunEndpointTests : IDisposable
         var flowId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
             .Returns(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Failed", TriggerKey = "manual" });
-        _server.FlowRepository.GetAllFlowsAsync().Returns(Array.Empty<IFlowDefinition>());
+        _server.Flows = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         // Act
         var response = await _client.PostAsync($"/flows/api/runs/{runId}/rerun", null);
@@ -431,7 +431,7 @@ public sealed class RunEndpointTests : IDisposable
         var flowId = Guid.NewGuid();
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         _server.FlowRunStore.GetRunDetailAsync(runId).Returns(new FlowRunRecord
         {
             Id = runId,

@@ -428,8 +428,7 @@ public sealed partial class FlowOrchestratorEngine
                 new KeyValuePair<string, object?>("step_key", stepKey));
         }
 
-        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FindById(flowId)
+        var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)

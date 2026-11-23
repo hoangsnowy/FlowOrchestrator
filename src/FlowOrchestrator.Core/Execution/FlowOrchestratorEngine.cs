@@ -41,7 +41,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     private readonly IFlowRunStore _runStore;
     private readonly IOutputsRepository _outputsRepository;
     private readonly IExecutionContextAccessor _contextAccessor;
-    private readonly IFlowRepository _flowRepository;
+    private readonly FlowRegistry _flows;
     private readonly IFlowRunRuntimeStore _runtimeStore;
     private readonly IFlowRunControlStore _runControlStore;
     private readonly FlowRunControlOptions _runControlOptions;
@@ -73,7 +73,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         IFlowRunStore runStore,
         IOutputsRepository outputsRepository,
         IExecutionContextAccessor contextAccessor,
-        IFlowRepository flowRepository,
+        FlowRegistry flows,
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
         IEnumerable<IFlowRunControlStore> runControlStores,
         FlowRunControlOptions runControlOptions,
@@ -90,7 +90,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _runStore = runStore;
         _outputsRepository = outputsRepository;
         _contextAccessor = contextAccessor;
-        _flowRepository = flowRepository;
+        _flows = flows;
         _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowOrchestratorEngine));
         _runControlStore = RequiredStore.First(runControlStores, nameof(FlowOrchestratorEngine));
         _runControlOptions = runControlOptions;

@@ -52,7 +52,7 @@ public sealed class ManualEndpointBodyLimitTests : IDisposable
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
         flow.Manifest.Returns(new FlowManifest());
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         using var content = OversizedJson();
 
         // Act
@@ -72,7 +72,7 @@ public sealed class ManualEndpointBodyLimitTests : IDisposable
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
         flow.Manifest.Returns(new FlowManifest());
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
         using var content = new StringContent("""{"orderId":42}""", Encoding.UTF8, "application/json");
 
         // Act
@@ -93,7 +93,7 @@ public sealed class ManualEndpointBodyLimitTests : IDisposable
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
         flow.Manifest.Returns(new FlowManifest());
-        _server.FlowRepository.GetAllFlowsAsync().Returns(new[] { flow });
+        _server.Flows = new FlowRegistry(new[] { flow });
 
         var big = new string('y', (int)CapBytes * 4);
         using var content = new StringContent($$"""{"blob":"{{big}}"}""", Encoding.UTF8, "application/json");

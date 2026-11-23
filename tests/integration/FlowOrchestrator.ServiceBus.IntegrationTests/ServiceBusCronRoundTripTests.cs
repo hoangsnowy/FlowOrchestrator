@@ -1,10 +1,8 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
-using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using FlowOrchestrator.ServiceBus;
-using global::Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -13,7 +11,7 @@ namespace FlowOrchestrator.ServiceBus.IntegrationTests;
 /// <summary>
 /// End-to-end smoke test for the Service Bus cron path. Verifies the full chain:
 /// <list type="number">
-///   <item><c>FlowSyncHostedService</c> calls <c>SyncTriggers(flowId, true)</c> on startup.</item>
+///   <item><c>FlowSyncHostedService</c> calls <c>SyncTriggersAsync(flowId, true)</c> on startup.</item>
 ///   <item><c>ServiceBusRecurringTriggerHub.RegisterOrUpdate</c> enqueues the FIRST scheduled message.</item>
 ///   <item>Service Bus delivers the message at the scheduled fire time.</item>
 ///   <item><c>ServiceBusCronProcessorHostedService.OnMessageAsync</c> drains it.</item>
@@ -50,7 +48,6 @@ public class ServiceBusCronRoundTripTests : IAsyncLifetime
         _host = Host.CreateDefaultBuilder()
             .ConfigureServices(services =>
             {
-                services.AddHangfire(c => c.UseInMemoryStorage());
                 services.AddFlowOrchestrator(opts =>
                 {
                     opts.UseInMemory();
@@ -93,7 +90,7 @@ public class ServiceBusCronRoundTripTests : IAsyncLifetime
         Assert.NotNull(_host);
         var inspector = _host!.Services.GetRequiredService<IRecurringTriggerInspector>();
 
-        // Sanity: the hub knows about the cron job (proves SyncTriggers ran).
+        // Sanity: the hub knows about the cron job (proves SyncTriggersAsync ran).
         var jobs = await inspector.GetJobsAsync();
         Assert.Contains(jobs, j => j.Cron == "* * * * * *");
 

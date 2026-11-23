@@ -67,11 +67,11 @@ internal static class ForEachSourceResolver
             }
 
             // Materialise each item into a plain CLR value graph rather than leaving it as a
-            // JsonElement. The item becomes __loopItem on each child step, which the engine may
-            // serialise through a runtime job store (Hangfire / Service Bus) using Newtonsoft.Json
-            // — and System.Text.Json.JsonElement does NOT round-trip through Newtonsoft, so a
-            // JsonElement item silently failed the child job and hung the run. Plain primitives /
-            // Dictionary / List round-trip through both serialisers and the handler input binder.
+            // JsonElement. The item becomes __loopItem on each child step, which a runtime may
+            // serialise into its job envelope. Before 2.0 the Hangfire envelope went through
+            // Newtonsoft.Json, which cannot round-trip a JsonElement, so such an item silently
+            // failed the child job and hung the run. Plain primitives / Dictionary / List
+            // round-trip through every envelope serializer and the handler input binder.
             return element.EnumerateArray()
                 .Select(MaterializeJsonValue)
                 .ToList();
@@ -158,8 +158,8 @@ internal static class ForEachSourceResolver
     /// (<see langword="string"/> / <see langword="long"/> / <see langword="double"/> /
     /// <see langword="bool"/> / <see langword="null"/>, nested <see cref="Dictionary{TKey,TValue}"/>
     /// for objects and <see cref="List{T}"/> for arrays). Unlike a raw <see cref="JsonElement"/>,
-    /// the result round-trips through Newtonsoft.Json (used by the Hangfire / Service Bus runtime
-    /// job stores) and the handler input binder.
+    /// the result round-trips through any runtime's job-envelope serializer and the handler
+    /// input binder.
     /// </summary>
     private static object? MaterializeJsonValue(JsonElement element) => element.ValueKind switch
     {

@@ -185,8 +185,7 @@ public sealed partial class FlowOrchestratorEngine
     /// <inheritdoc/>
     public async ValueTask<object?> TriggerByScheduleAsync(Guid flowId, string triggerKey, string? jobId = null, CancellationToken ct = default)
     {
-        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FindById(flowId)
+        var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var ctx = new TriggerContext

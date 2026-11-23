@@ -72,7 +72,7 @@ public sealed class FlowCatalogEndpointTests : IDisposable
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        _server.TriggerSync.Received(1).SyncTriggers(id, true);
+        await _server.TriggerSync.Received(1).SyncTriggersAsync(id, true, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class FlowCatalogEndpointTests : IDisposable
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        _server.TriggerSync.Received(1).SyncTriggers(id, false);
+        await _server.TriggerSync.Received(1).SyncTriggersAsync(id, false, Arg.Any<CancellationToken>());
     }
 
     [Fact]

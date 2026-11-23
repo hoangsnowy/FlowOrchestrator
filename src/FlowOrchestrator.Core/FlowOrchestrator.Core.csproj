@@ -16,12 +16,6 @@
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <!-- Newtonsoft.Json: version pinned centrally in Directory.Packages.props.
-         Core uses it ONLY to carry the [Newtonsoft.Json.JsonConverter] attribute
-         on RunAfterCondition — the most reliable way to override Newtonsoft's
-         IEnumerable auto-detection regardless of Hangfire's contract caching /
-         settings init order. All internal serialisation still uses STJ end-to-end. -->
-    <PackageReference Include="Newtonsoft.Json" />
     <!-- Observability: OpenTelemetry.Api is the API-only ~30 KB package that defines
          TracerProviderBuilder / MeterProviderBuilder. The Activity / Meter primitives
          themselves come from System.Diagnostics in the BCL. The full OpenTelemetry SDK

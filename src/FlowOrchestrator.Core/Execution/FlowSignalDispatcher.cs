@@ -44,7 +44,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
 
     private readonly IFlowSignalStore _signalStore;
     private readonly IFlowRunStore _runStore;
-    private readonly IFlowRepository _flowRepository;
+    private readonly FlowRegistry _flows;
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
     private readonly FlowOrchestratorTelemetry? _telemetry;
@@ -54,7 +54,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     /// <summary>Initialises the dispatcher with its dependencies.</summary>
     /// <param name="signalStore">Persistence for signal waiters and delivered payloads.</param>
     /// <param name="runStore">Used to resolve the run that owns the addressed waiter.</param>
-    /// <param name="flowRepository">Used to resolve the flow definition backing the run.</param>
+    /// <param name="flows">Registry used to resolve the flow definition backing the run.</param>
     /// <param name="dispatcher">Runtime adapter that carries the resume nudge back to a worker.</param>
     /// <param name="outputsRepository">Supplies trigger data/headers for the rebuilt execution context.</param>
     /// <param name="runtimeStores">
@@ -70,7 +70,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     public FlowSignalDispatcher(
         IFlowSignalStore signalStore,
         IFlowRunStore runStore,
-        IFlowRepository flowRepository,
+        FlowRegistry flows,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
@@ -79,7 +79,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
     {
         _signalStore = signalStore;
         _runStore = runStore;
-        _flowRepository = flowRepository;
+        _flows = flows;
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
         _telemetry = telemetry;
@@ -131,9 +131,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
             }
         }
 
-        var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flow = flows.FirstOrDefault(f => f.Id == run.FlowId);
-        if (flow is null)
+        if (!_flows.TryGetFlow(run.FlowId, out var flow))
         {
             return result;
         }

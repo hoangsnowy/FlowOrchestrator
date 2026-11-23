@@ -26,7 +26,7 @@ public sealed class RetryStepCascadeAdvanceTests
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
@@ -115,7 +115,7 @@ public sealed class RetryStepCascadeAdvanceTests
                 return new ValueTask<IStepResult>(resultForStep(step.Key));
             });
 
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _flowRepo = new FlowRegistry(new[] { flow });
 
         var engine = new FlowOrchestratorEngine(
             dispatcher,

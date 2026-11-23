@@ -24,9 +24,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Azure.Messaging.ServiceBus" />
-    <PackageReference Include="Hangfire.Core" />
-    <PackageReference Include="Hangfire.AspNetCore" />
-    <PackageReference Include="Hangfire.InMemory" />
     <PackageReference Include="Testcontainers" />
   </ItemGroup>
 

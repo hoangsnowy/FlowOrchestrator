@@ -1,12 +1,12 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
+using FlowOrchestrator.Core.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
-namespace FlowOrchestrator.Hangfire.Tests;
+namespace FlowOrchestrator.Core.Tests.Hosting;
 
 /// <summary>
 /// Tests for <see cref="FlowSyncHostedService"/> — flow validation, persistence to store,
@@ -20,7 +20,7 @@ public class FlowSyncHostedServiceTests
     private readonly IRecurringTriggerSync _triggerSync = Substitute.For<IRecurringTriggerSync>();
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
 
-    private FlowSyncHostedService CreateSut(IFlowRepository repository, IFlowStore store)
+    private FlowSyncHostedService CreateSut(FlowRegistry repository, IFlowStore store)
         => new(repository, store, _triggerSync, _graphPlanner, Logger);
 
     [Fact]
@@ -38,8 +38,7 @@ public class FlowSyncHostedServiceTests
             }
         });
 
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
+        var repository = new FlowRegistry([flow]);
 
         var store = Substitute.For<IFlowStore>();
         store.GetByIdAsync(flow.Id).Returns(default(FlowDefinitionRecord?));
@@ -78,8 +77,7 @@ public class FlowSyncHostedServiceTests
             Version = "1.0"
         };
 
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
+        var repository = new FlowRegistry([flow]);
 
         var store = Substitute.For<IFlowStore>();
         store.GetByIdAsync(flowId).Returns(existing);
@@ -103,8 +101,7 @@ public class FlowSyncHostedServiceTests
         flow.Id.Returns(Guid.NewGuid());
         flow.Manifest.Returns(new FlowManifest());
 
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
+        var repository = new FlowRegistry([flow]);
 
         var store = Substitute.For<IFlowStore>();
         store.GetByIdAsync(Arg.Any<Guid>()).Returns(Task.FromException<FlowDefinitionRecord?>(new Exception("DB error")));
@@ -123,7 +120,7 @@ public class FlowSyncHostedServiceTests
     public async Task StopAsync_CompletesImmediately()
     {
         // Arrange
-        var repository = Substitute.For<IFlowRepository>();
+        var repository = FlowRegistry.Empty;
         var store = Substitute.For<IFlowStore>();
         var sut = CreateSut(repository, store);
 
@@ -147,8 +144,7 @@ public class FlowSyncHostedServiceTests
             Steps = new StepCollection { ["step1"] = new StepMetadata { Type = "LogMessage" } }
         });
 
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
+        var repository = new FlowRegistry([flow]);
 
         var store = Substitute.For<IFlowStore>();
         store.GetByIdAsync(flowId).Returns(new FlowDefinitionRecord { Id = flowId, IsEnabled = true });
@@ -159,9 +155,9 @@ public class FlowSyncHostedServiceTests
         // Act
         await sut.StartAsync(CancellationToken.None);
 
-        // Assert — recurring-trigger logic is now delegated; runtime-specific
-        // behaviour is covered by the IRecurringTriggerSync implementations' own tests.
-        _triggerSync.Received(1).SyncTriggers(flowId, isEnabled: true);
+        // Assert — effective-cron resolution is delegated to IRecurringTriggerSync
+        // (covered by RecurringTriggerSyncTests).
+        await _triggerSync.Received(1).SyncTriggersAsync(flowId, isEnabled: true, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -177,8 +173,7 @@ public class FlowSyncHostedServiceTests
             Steps = new StepCollection { ["step1"] = new StepMetadata { Type = "LogMessage" } }
         });
 
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
+        var repository = new FlowRegistry([flow]);
 
         var store = Substitute.For<IFlowStore>();
         store.GetByIdAsync(flowId).Returns(new FlowDefinitionRecord { Id = flowId, IsEnabled = false });
@@ -190,7 +185,7 @@ public class FlowSyncHostedServiceTests
         await sut.StartAsync(CancellationToken.None);
 
         // Assert
-        _triggerSync.Received(1).SyncTriggers(flowId, isEnabled: false);
+        await _triggerSync.Received(1).SyncTriggersAsync(flowId, isEnabled: false, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -210,8 +205,7 @@ public class FlowSyncHostedServiceTests
             }
         });
 
-        var repository = Substitute.For<IFlowRepository>();
-        repository.GetAllFlowsAsync().Returns(new List<IFlowDefinition> { flow });
+        var repository = new FlowRegistry([flow]);
 
         var store = Substitute.For<IFlowStore>();
 

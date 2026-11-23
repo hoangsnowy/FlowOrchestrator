@@ -2,6 +2,7 @@ using System.Reflection;
 using Azure.Messaging.ServiceBus;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
+using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.ServiceBus;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -18,7 +19,7 @@ namespace FlowOrchestrator.ServiceBus.UnitTests;
 /// <remarks>
 /// We can't drive the full flow — the SDK's <c>ServiceBusSender</c> is sealed and the
 /// hub uses a real client lazily. The test instead verifies the seam: when
-/// <c>SyncTriggers(flowId, false)</c> calls <c>Remove(jobId)</c>, the hub's
+/// <c>RecurringTriggerSync.SyncTriggersAsync(flowId, false)</c> calls <c>Remove(jobId)</c>, the hub's
 /// <c>_jobs</c> dictionary no longer contains the entry, and
 /// <c>ScheduleNextAsync</c> short-circuits before <c>_sender.Value</c> is ever
 /// realised. Sender realisation is observed via the <c>Lazy&lt;ServiceBusSender&gt;</c>'s
@@ -32,9 +33,9 @@ public class ServiceBusCronDisabledFlowTests
     [Fact]
     public async Task ScheduleNextAsync_RemovedJob_DoesNotTouchSender()
     {
-        // Arrange — register a job, then remove it the way SyncTriggers(disabled=false) would.
+        // Arrange — register a job, then remove it the way SyncTriggersAsync(disabled) would.
         var (hub, _, _) = CreateHubWithRegisteredJob(out var jobId, out var flowId, out var triggerKey, out var cron);
-        hub.Remove(jobId); // simulates SyncTriggers(flowId, isEnabled: false) → Remove(jobId)
+        hub.Remove(jobId); // simulates SyncTriggersAsync(flowId, isEnabled: false) → Remove(jobId)
 
         // Act — cron consumer calls ScheduleNextAsync regardless of disable state.
         await hub.ScheduleNextAsync(
@@ -66,13 +67,18 @@ public class ServiceBusCronDisabledFlowTests
     }
 
     [Fact]
-    public void SyncTriggers_DisabledFlow_RemovesJobFromMap()
+    public async Task SyncTriggersAsync_DisabledFlow_RemovesJobFromMap()
     {
-        // Arrange
-        var (hub, flow, _) = CreateHubWithRegisteredJob(out var jobId, out _, out _, out _);
+        // Arrange — Core's single effective-cron sync drives the Service Bus hub as its dispatcher.
+        var (hub, flow, registry) = CreateHubWithRegisteredJob(out var jobId, out _, out _, out _);
+        var sync = new RecurringTriggerSync(
+            registry,
+            hub,
+            new InMemoryFlowScheduleStateStore(),
+            new FlowSchedulerOptions { PersistOverrides = false });
 
         // Act — flip flow to disabled.
-        hub.SyncTriggers(flow.Id, isEnabled: false);
+        await sync.SyncTriggersAsync(flow.Id, isEnabled: false);
 
         // Assert — job is gone from the map, so the next cron fire's ScheduleNextAsync short-circuits.
         Assert.False(hub.TryGetJob(jobId, out _));
@@ -95,42 +101,34 @@ public class ServiceBusCronDisabledFlowTests
     {
         var client = new ServiceBusClient(FakeConnString);
         var options = new ServiceBusRuntimeOptions { ConnectionString = FakeConnString };
-        var repo = new EmptyFlowRepository();
-        var stateStore = new NoopScheduleStateStore();
         return new ServiceBusRecurringTriggerHub(
             client,
             options,
-            repo,
-            stateStore,
-            new FlowSchedulerOptions { PersistOverrides = false },
             NullLogger<ServiceBusRecurringTriggerHub>.Instance);
     }
 
-    private static (ServiceBusRecurringTriggerHub hub, IFlowDefinition flow, IFlowRepository repo)
+    private static (ServiceBusRecurringTriggerHub hub, IFlowDefinition flow, FlowRegistry registry)
         CreateHubWithRegisteredJob(out string jobId, out Guid flowId, out string triggerKey, out string cron)
     {
         flowId = Guid.Parse("11111111-1111-1111-1111-111111111111");
         triggerKey = "schedule";
         cron = "* * * * *";
-        jobId = $"flow-{flowId}-{triggerKey}";
+        jobId = RecurringTriggerJobId.Create(flowId, triggerKey);
 
         var flow = new StubFlowDefinition(flowId, triggerKey, cron);
-        var repo = new SingleFlowRepository(flow);
+        var registry = new FlowRegistry([flow]);
         var hub = new ServiceBusRecurringTriggerHub(
             new ServiceBusClient(FakeConnString),
             new ServiceBusRuntimeOptions { ConnectionString = FakeConnString },
-            repo,
-            new NoopScheduleStateStore(),
-            new FlowSchedulerOptions { PersistOverrides = false },
             NullLogger<ServiceBusRecurringTriggerHub>.Instance);
 
         // Manually populate _jobs without firing the fire-and-forget ScheduleNextAsync from
         // RegisterOrUpdate (which would touch the sender). We do this by reflecting a JobState
-        // into the dictionary using the public TryGetJob path — easier, just use SyncTriggers
+        // into the dictionary using the public TryGetJob path — easier, just use SyncTriggersAsync
         // with isEnabled: true, but RegisterOrUpdate itself fires a background ScheduleNextAsync
         // that races. To stay deterministic we use reflection.
         SeedJob(hub, jobId, flowId, triggerKey, cron);
-        return (hub, flow, repo);
+        return (hub, flow, registry);
     }
 
     private static void SeedJob(ServiceBusRecurringTriggerHub hub, string jobId, Guid flowId, string triggerKey, string cron)
@@ -156,29 +154,6 @@ public class ServiceBusCronDisabledFlowTests
         var f = t.GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
             ?? throw new InvalidOperationException($"{fieldName} field not found on {t}");
         f.SetValue(instance, value);
-    }
-
-    private sealed class EmptyFlowRepository : IFlowRepository
-    {
-        public ValueTask<IReadOnlyList<IFlowDefinition>> GetAllFlowsAsync() =>
-            new(Array.Empty<IFlowDefinition>());
-    }
-
-    private sealed class SingleFlowRepository : IFlowRepository
-    {
-        private readonly IFlowDefinition _flow;
-        public SingleFlowRepository(IFlowDefinition flow) => _flow = flow;
-        public ValueTask<IReadOnlyList<IFlowDefinition>> GetAllFlowsAsync() =>
-            new(new[] { _flow });
-    }
-
-    private sealed class NoopScheduleStateStore : IFlowScheduleStateStore
-    {
-        public Task<FlowScheduleState?> GetAsync(string jobId) => Task.FromResult<FlowScheduleState?>(null);
-        public Task<IReadOnlyList<FlowScheduleState>> GetAllAsync() =>
-            Task.FromResult<IReadOnlyList<FlowScheduleState>>(Array.Empty<FlowScheduleState>());
-        public Task SaveAsync(FlowScheduleState state) => Task.CompletedTask;
-        public Task DeleteAsync(string jobId) => Task.CompletedTask;
     }
 
     /// <summary>

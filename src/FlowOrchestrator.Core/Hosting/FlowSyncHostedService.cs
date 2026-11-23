@@ -1,25 +1,28 @@
 using System.Text.Json;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace FlowOrchestrator.Hangfire;
+namespace FlowOrchestrator.Core.Hosting;
 
 /// <summary>
 /// Hosted service that runs at application startup to validate, upsert, and
-/// activate all code-registered flow definitions, then delegates recurring-job
-/// synchronisation to the runtime-specific <see cref="IRecurringTriggerSync"/>.
+/// activate all code-registered flow definitions, then synchronises their cron triggers
+/// through <see cref="IRecurringTriggerSync"/>.
 /// </summary>
 /// <remarks>
-/// The recurring-trigger logic itself is runtime-agnostic — Hangfire provides
-/// <c>RecurringTriggerSync</c>, the in-memory runtime provides
-/// <c>PeriodicTimerRecurringTriggerDispatcher</c>. This service does not
-/// depend on Hangfire types directly.
+/// Runtime-agnostic: the recurring-job mechanics belong to the configured runtime's
+/// <see cref="IRecurringTriggerDispatcher"/> (Hangfire, in-memory timer, Service Bus), reached
+/// through <see cref="RecurringTriggerSync"/>. A flow that fails validation stops host start-up.
 /// </remarks>
 internal sealed class FlowSyncHostedService : IHostedService
 {
-    private readonly IFlowRepository _repository;
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly FlowRegistry _flows;
     private readonly IFlowStore _store;
     private readonly IRecurringTriggerSync _triggerSync;
     private readonly IFlowGraphPlanner _graphPlanner;
@@ -27,13 +30,13 @@ internal sealed class FlowSyncHostedService : IHostedService
 
     /// <summary>Initialises the hosted service with required services.</summary>
     public FlowSyncHostedService(
-        IFlowRepository repository,
+        FlowRegistry flows,
         IFlowStore store,
         IRecurringTriggerSync triggerSync,
         IFlowGraphPlanner graphPlanner,
         ILogger<FlowSyncHostedService> logger)
     {
-        _repository = repository;
+        _flows = flows;
         _store = store;
         _triggerSync = triggerSync;
         _graphPlanner = graphPlanner;
@@ -43,8 +46,7 @@ internal sealed class FlowSyncHostedService : IHostedService
     /// <inheritdoc/>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var flows = await _repository.GetAllFlowsAsync().ConfigureAwait(false);
-        foreach (var flow in flows)
+        foreach (var flow in _flows.Flows)
         {
             try
             {
@@ -55,20 +57,20 @@ internal sealed class FlowSyncHostedService : IHostedService
                         $"Flow '{flow.GetType().Name}' ({flow.Id}) is invalid: {string.Join("; ", validation.Errors)}");
                 }
 
-                var manifestJson = JsonSerializer.Serialize(flow.Manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                var manifestJson = JsonSerializer.Serialize(flow.Manifest, ManifestJsonOptions);
                 var existing = await _store.GetByIdAsync(flow.Id).ConfigureAwait(false);
                 var record = existing ?? new FlowDefinitionRecord { Id = flow.Id };
                 record.Name = flow.GetType().Name;
                 record.Version = flow.Version;
                 record.ManifestJson = manifestJson;
                 await _store.SaveAsync(record).ConfigureAwait(false);
-                _logger.LogInformation("Synced flow {FlowName} ({FlowId}) to store.", record.Name, record.Id);
+                HostingLog.FlowSynced(_logger, record.Name, record.Id);
 
-                _triggerSync.SyncTriggers(flow.Id, record.IsEnabled);
+                await _triggerSync.SyncTriggersAsync(flow.Id, record.IsEnabled, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to sync flow {FlowId}.", flow.Id);
+                HostingLog.FlowSyncFailed(_logger, ex, flow.Id);
                 throw;
             }
         }

@@ -74,7 +74,7 @@ public sealed class TraceContextHangfireFilterTests : IDisposable
         var services = new ServiceCollection();
 
         // Act
-        services.AddFlowOrchestrator(b => b.UseInMemory());
+        services.AddFlowOrchestrator(b => b.UseInMemory().UseInMemoryRuntime());
 
         // Assert
         var afterCount = GlobalJobFilters.Filters.Where(f => f.Instance is TraceContextHangfireFilter).Count();

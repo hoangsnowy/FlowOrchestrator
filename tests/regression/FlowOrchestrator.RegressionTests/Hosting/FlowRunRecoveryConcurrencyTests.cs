@@ -32,9 +32,8 @@ public sealed class FlowRunRecoveryConcurrencyTests
             Steps = new StepCollection { ["step1"] = new StepMetadata { Type = "DoWork" } }
         });
 
-        var flowRepo = Substitute.For<IFlowRepository>();
-        flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        var flowRepo = FlowRegistry.Empty;
+        flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
 
         var dispatcher = Substitute.For<IStepDispatcher>();
         dispatcher.EnqueueStepAsync(
@@ -78,9 +77,8 @@ public sealed class FlowRunRecoveryConcurrencyTests
         var runId = Guid.NewGuid();
         await sharedStore.StartRunAsync(orphanFlowId, "DeletedFlow", runId, "manual", null, null);
 
-        var flowRepo = Substitute.For<IFlowRepository>();
-        flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(Array.Empty<IFlowDefinition>()));
+        var flowRepo = FlowRegistry.Empty;
+        flowRepo = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         var dispatcher = Substitute.For<IStepDispatcher>();
         var outputsRepo = Substitute.For<IOutputsRepository>();

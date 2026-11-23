@@ -2,7 +2,6 @@ using System.Threading.Channels;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
-using FlowOrchestrator.Hangfire;
 using FlowOrchestrator.InMemory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -278,8 +277,9 @@ public sealed class InMemoryRuntimeTests
         var inspector = sp.GetRequiredService<IRecurringTriggerInspector>();
         var sync = sp.GetRequiredService<IRecurringTriggerSync>();
 
-        // Assert — all three resolve to the same PeriodicTimer instance.
+        // Assert — the PeriodicTimer instance serves dispatcher + inspector; cron sync is Core's
+        // runtime-agnostic RecurringTriggerSync driving that same dispatcher.
         Assert.Same(dispatcher, inspector);
-        Assert.Same(dispatcher, sync);
+        Assert.IsType<RecurringTriggerSync>(sync);
     }
 }

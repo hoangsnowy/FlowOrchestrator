@@ -22,9 +22,10 @@ public static class FlowOrchestratorBuilderServiceBusExtensions
     /// <returns>The same builder for chaining.</returns>
     /// <remarks>
     /// Call this inside <c>AddFlowOrchestrator(opts =&gt; opts.UseAzureServiceBusRuntime(...))</c>
-    /// instead of <c>UseHangfire()</c> or <c>UseInMemoryRuntime()</c>. The Service Bus runtime is
-    /// registered with <c>TryAdd</c> semantics, so it can co-exist with — and override — the
-    /// default Hangfire dispatcher registered by <c>AddFlowOrchestrator</c>.
+    /// instead of <c>UseHangfire()</c> or <c>UseInMemoryRuntime()</c>; no Hangfire package or
+    /// registration is needed. The runtime services are registered with <c>TryAdd</c>, so the first
+    /// runtime selected in the callback keeps the dispatcher slots. Effective-cron resolution is
+    /// Core's <c>RecurringTriggerSync</c>, which drives this runtime's recurring-trigger hub.
     /// </remarks>
     public static FlowOrchestratorBuilder UseAzureServiceBusRuntime(
         this FlowOrchestratorBuilder builder,
@@ -53,8 +54,6 @@ public static class FlowOrchestratorBuilderServiceBusExtensions
         builder.Services.TryAddSingleton<IRecurringTriggerDispatcher>(
             sp => sp.GetRequiredService<ServiceBusRecurringTriggerHub>());
         builder.Services.TryAddSingleton<IRecurringTriggerInspector>(
-            sp => sp.GetRequiredService<ServiceBusRecurringTriggerHub>());
-        builder.Services.TryAddSingleton<IRecurringTriggerSync>(
             sp => sp.GetRequiredService<ServiceBusRecurringTriggerHub>());
 
         builder.Services.AddHostedService<ServiceBusFlowProcessorHostedService>();

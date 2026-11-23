@@ -35,7 +35,7 @@ public class ServiceBusFlowProcessorSkipDisabledTests
                 AutoCreateTopology = true,
             },
             topology: topology,
-            repository: repo,
+            flows: repo,
             flowStore: store,
             scopeFactory: Substitute.For<IServiceScopeFactory>(),
             logger: NullLogger<ServiceBusFlowProcessorHostedService>.Instance);
@@ -52,7 +52,7 @@ public class ServiceBusFlowProcessorSkipDisabledTests
     private const string FakeConnString =
         "Endpoint=sb://example.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=AAAA";
 
-    private static (IFlowDefinition enabled, IFlowDefinition disabled, IFlowRepository repo, IFlowStore store) TwoFlowsOneDisabled()
+    private static (IFlowDefinition enabled, IFlowDefinition disabled, FlowRegistry repo, IFlowStore store) TwoFlowsOneDisabled()
     {
         var enabled = Substitute.For<IFlowDefinition>();
         enabled.Id.Returns(Guid.Parse("11111111-1111-1111-1111-111111111111"));
@@ -60,19 +60,12 @@ public class ServiceBusFlowProcessorSkipDisabledTests
         disabled.Id.Returns(Guid.Parse("22222222-2222-2222-2222-222222222222"));
 
         // Hand-rolled stubs avoid NSubstitute's ValueTask/Task interleaving quirk.
-        var repo = new StubFlowRepository(enabled, disabled);
+        var repo = new FlowRegistry([enabled, disabled]);
         var store = new StubFlowStore(
             new FlowDefinitionRecord { Id = enabled.Id, IsEnabled = true },
             new FlowDefinitionRecord { Id = disabled.Id, IsEnabled = false });
 
         return (enabled, disabled, repo, store);
-    }
-
-    private sealed class StubFlowRepository : IFlowRepository
-    {
-        private readonly IReadOnlyList<IFlowDefinition> _flows;
-        public StubFlowRepository(params IFlowDefinition[] flows) => _flows = flows;
-        public ValueTask<IReadOnlyList<IFlowDefinition>> GetAllFlowsAsync() => new(_flows);
     }
 
     private sealed class StubFlowStore : IFlowStore

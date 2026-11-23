@@ -23,7 +23,7 @@ public sealed class RunTimeoutEnforcementTests
     private readonly IFlowStore _flowStore = Substitute.For<IFlowStore>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 

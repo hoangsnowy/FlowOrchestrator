@@ -6,6 +6,8 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace FlowOrchestrator.Hangfire.Tests;
 
+// UseHangfire() installs a process-wide Hangfire job filter; serialize with the GlobalJobFilters tests.
+[Collection(nameof(Telemetry.HangfireGlobalFiltersCollection))]
 public class FlowOrchestratorServiceCollectionExtensionsTests
 {
     // ─── Fail-fast when no backend is registered ──────────────────────────────
@@ -31,7 +33,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseInMemory());
+        services.AddFlowOrchestrator(b => b.UseInMemory().UseInMemoryRuntime());
 
         // Act
         using var provider = services.BuildServiceProvider();
@@ -46,7 +48,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseInMemory());
+        services.AddFlowOrchestrator(b => b.UseInMemory().UseInMemoryRuntime());
 
         // Act
         using var provider = services.BuildServiceProvider();
@@ -61,7 +63,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseInMemory());
+        services.AddFlowOrchestrator(b => b.UseInMemory().UseInMemoryRuntime());
 
         // Act
         using var provider = services.BuildServiceProvider();
@@ -78,7 +80,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         // Act
-        services.AddFlowOrchestrator(b => b.UseInMemory());
+        services.AddFlowOrchestrator(b => b.UseInMemory().UseInMemoryRuntime());
 
         // Assert
         Assert.Single(services, sd => sd.ServiceType == typeof(IFlowStore));
@@ -93,7 +95,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
+        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test").UseHangfire());
 
         // Act
         using var provider = services.BuildServiceProvider();
@@ -108,7 +110,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
+        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test").UseHangfire());
 
         // Act
         using var provider = services.BuildServiceProvider();
@@ -123,7 +125,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
+        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test").UseHangfire());
 
         // Act
         using var provider = services.BuildServiceProvider();
@@ -140,7 +142,7 @@ public class FlowOrchestratorServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         // Act
-        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test"));
+        services.AddFlowOrchestrator(b => b.UseSqlServer("Server=.;Database=Test").UseHangfire());
 
         // Assert
         Assert.Single(services, sd => sd.ServiceType == typeof(IFlowStore));

@@ -75,8 +75,8 @@ internal sealed class LoopBarrierEngineHarness
                 Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .Returns(call => new ValueTask<IStepResult>(resultForStep(call.Arg<IStepInstance>()!.Key)));
 
-        var flowRepo = Substitute.For<IFlowRepository>();
-        flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var flowRepo = FlowRegistry.Empty;
+        flowRepo = new FlowRegistry(new[] { flow });
         FlowRepository = flowRepo;
 
         Engine = new FlowOrchestratorEngine(
@@ -104,7 +104,7 @@ internal sealed class LoopBarrierEngineHarness
     public InMemoryFlowRunStore Store { get; }
 
     /// <summary>Substituted flow repository, pre-seeded with the harness flow.</summary>
-    public IFlowRepository FlowRepository { get; }
+    public FlowRegistry FlowRepository { get; }
 
     /// <summary>Every step key the dispatcher was asked to enqueue, in call order.</summary>
     public IReadOnlyList<string> Enqueued

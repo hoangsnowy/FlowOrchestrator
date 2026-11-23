@@ -7,8 +7,8 @@ namespace FlowOrchestrator.ServiceBus;
 /// <summary>
 /// Wire-format DTO carried inside a Service Bus step message body.
 /// Serialised with System.Text.Json. Only <see cref="FlowId"/> is sent — the consumer
-/// rehydrates the full <c>IFlowDefinition</c> from <c>IFlowRepository</c> (mirrors the
-/// Hangfire adapter's pattern of avoiding manifest serialisation).
+/// resolves the full <c>IFlowDefinition</c> from <c>FlowRegistry</c> (mirrors the
+/// Hangfire adapter's <c>HangfireStepEnvelope</c>, which avoids manifest serialisation the same way).
 /// </summary>
 internal sealed class StepEnvelope
 {

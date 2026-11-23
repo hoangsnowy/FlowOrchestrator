@@ -13,10 +13,17 @@ namespace FlowOrchestrator.InMemory.Tests;
 /// Unit tests for <see cref="PeriodicTimerRecurringTriggerDispatcher"/> covering invariant #8
 /// (PeriodicTimer cron) plus pause/resume, override precedence, and exception isolation.
 /// </summary>
+/// <remarks>
+/// The <c>SyncTriggers_*</c> cases drive Core's <see cref="RecurringTriggerSync"/> against this
+/// dispatcher — the effective-cron resolution that used to live inside the dispatcher.
+/// </remarks>
 public sealed class PeriodicTimerRecurringTriggerDispatcherTests
 {
-    private static (PeriodicTimerRecurringTriggerDispatcher Dispatcher, IFlowOrchestrator Orchestrator, IServiceProvider Sp) CreateSut(
-        IFlowRepository? repo = null,
+    // Built by CreateSut over the same registry / state store / options the test passed.
+    private RecurringTriggerSync? _sync;
+
+    private (PeriodicTimerRecurringTriggerDispatcher Dispatcher, IFlowOrchestrator Orchestrator, IServiceProvider Sp) CreateSut(
+        FlowRegistry? repo = null,
         IFlowScheduleStateStore? scheduleStateStore = null,
         FlowSchedulerOptions? options = null)
     {
@@ -31,10 +38,13 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
 
         var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
             sp,
-            repo ?? Substitute.For<IFlowRepository>(),
-            scheduleStateStore ?? Substitute.For<IFlowScheduleStateStore>(),
-            options ?? new FlowSchedulerOptions(),
             NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
+
+        _sync = new RecurringTriggerSync(
+            repo ?? FlowRegistry.Empty,
+            dispatcher,
+            scheduleStateStore ?? Substitute.For<IFlowScheduleStateStore>(),
+            options ?? new FlowSchedulerOptions());
 
         return (dispatcher, orchestrator, sp);
     }
@@ -107,9 +117,6 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
 
         var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
             sp,
-            Substitute.For<IFlowRepository>(),
-            Substitute.For<IFlowScheduleStateStore>(),
-            new FlowSchedulerOptions(),
             NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
 
         dispatcher.RegisterOrUpdate("job1", Guid.NewGuid(), "schedule", "* * * * *");
@@ -156,7 +163,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     }
 
     [Fact]
-    public void SyncTriggers_RegistersCronJobs_ForCronTriggersInFlow()
+    public async Task SyncTriggers_RegistersCronJobs_ForCronTriggersInFlow()
     {
         // Arrange
         var flowId = Guid.NewGuid();
@@ -175,22 +182,20 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         };
         flow.Manifest.Returns(manifest);
 
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var repo = new FlowRegistry(new[] { flow });
 
         var (dispatcher, _, _) = CreateSut(repo: repo);
 
         // Act
-        dispatcher.SyncTriggers(flowId, isEnabled: true);
+        await _sync!.SyncTriggersAsync(flowId, isEnabled: true);
 
         // Assert
-        Assert.True(dispatcher.TryGetJob($"flow-{flowId}-schedule", out var snap));
+        Assert.True(dispatcher.TryGetJob(RecurringTriggerJobId.Create(flowId, "schedule"), out var snap));
         Assert.Equal("0 * * * *", snap.EffectiveCron);
     }
 
     [Fact]
-    public void SyncTriggers_DisabledFlow_RemovesJobs()
+    public async Task SyncTriggers_DisabledFlow_RemovesJobs()
     {
         // Arrange
         var flowId = Guid.NewGuid();
@@ -209,27 +214,25 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         };
         flow.Manifest.Returns(manifest);
 
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var repo = new FlowRegistry(new[] { flow });
 
         var (dispatcher, _, _) = CreateSut(repo: repo);
-        dispatcher.RegisterOrUpdate($"flow-{flowId}-schedule", flowId, "schedule", "0 * * * *");
+        dispatcher.RegisterOrUpdate(RecurringTriggerJobId.Create(flowId, "schedule"), flowId, "schedule", "0 * * * *");
 
         // Act
-        dispatcher.SyncTriggers(flowId, isEnabled: false);
+        await _sync!.SyncTriggersAsync(flowId, isEnabled: false);
 
         // Assert
-        Assert.False(dispatcher.TryGetJob($"flow-{flowId}-schedule", out _));
+        Assert.False(dispatcher.TryGetJob(RecurringTriggerJobId.Create(flowId, "schedule"), out _));
     }
 
     [Fact]
-    public void SyncTriggers_CronOverride_OverridesManifestExpression()
+    public async Task SyncTriggers_CronOverride_OverridesManifestExpression()
     {
         // Arrange
         var flowId = Guid.NewGuid();
         var triggerKey = "schedule";
-        var jobId = $"flow-{flowId}-{triggerKey}";
+        var jobId = RecurringTriggerJobId.Create(flowId, triggerKey);
 
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -246,9 +249,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         };
         flow.Manifest.Returns(manifest);
 
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var repo = new FlowRegistry(new[] { flow });
 
         var stateStore = Substitute.For<IFlowScheduleStateStore>();
         stateStore.GetAsync(jobId)
@@ -260,7 +261,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
             options: new FlowSchedulerOptions { PersistOverrides = true });
 
         // Act
-        dispatcher.SyncTriggers(flowId, isEnabled: true);
+        await _sync!.SyncTriggersAsync(flowId, isEnabled: true);
 
         // Assert
         Assert.True(dispatcher.TryGetJob(jobId, out var snap));
@@ -268,12 +269,12 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     }
 
     [Fact]
-    public void SyncTriggers_PausedOverride_RemovesJob()
+    public async Task SyncTriggers_PausedOverride_RemovesJob()
     {
         // Arrange
         var flowId = Guid.NewGuid();
         var triggerKey = "schedule";
-        var jobId = $"flow-{flowId}-{triggerKey}";
+        var jobId = RecurringTriggerJobId.Create(flowId, triggerKey);
 
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);
@@ -290,9 +291,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         };
         flow.Manifest.Returns(manifest);
 
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var repo = new FlowRegistry(new[] { flow });
 
         var stateStore = Substitute.For<IFlowScheduleStateStore>();
         stateStore.GetAsync(jobId)
@@ -306,7 +305,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         dispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, "0 * * * *");
 
         // Act
-        dispatcher.SyncTriggers(flowId, isEnabled: true);
+        await _sync!.SyncTriggersAsync(flowId, isEnabled: true);
 
         // Assert
         Assert.False(dispatcher.TryGetJob(jobId, out _));
@@ -328,9 +327,6 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         using var sp = services.BuildServiceProvider();
         var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
             sp,
-            Substitute.For<IFlowRepository>(),
-            Substitute.For<IFlowScheduleStateStore>(),
-            new FlowSchedulerOptions(),
             NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
 
         var flowId = Guid.NewGuid();
@@ -393,9 +389,6 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         using var sp = services.BuildServiceProvider();
         var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
             sp,
-            Substitute.For<IFlowRepository>(),
-            Substitute.For<IFlowScheduleStateStore>(),
-            new FlowSchedulerOptions(),
             NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
 
         var flowId = Guid.NewGuid();
@@ -441,9 +434,6 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
 
         var dispatcher = new PeriodicTimerRecurringTriggerDispatcher(
             sp,
-            Substitute.For<IFlowRepository>(),
-            Substitute.For<IFlowScheduleStateStore>(),
-            new FlowSchedulerOptions(),
             NullLogger<PeriodicTimerRecurringTriggerDispatcher>.Instance);
 
         // Act
@@ -460,14 +450,12 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     public async Task SyncTriggers_FlowNotFound_DoesNothing()
     {
         // Arrange
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(Array.Empty<IFlowDefinition>()));
+        var repo = new FlowRegistry(Array.Empty<IFlowDefinition>());
 
         var (dispatcher, _, _) = CreateSut(repo: repo);
 
         // Act
-        dispatcher.SyncTriggers(Guid.NewGuid(), isEnabled: true);
+        await _sync!.SyncTriggersAsync(Guid.NewGuid(), isEnabled: true);
 
         // Assert — no jobs registered when flow lookup misses.
         var jobs = await dispatcher.GetJobsAsync();
@@ -475,7 +463,7 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
     }
 
     [Fact]
-    public void SyncTriggers_NonCronTrigger_IsIgnored()
+    public async Task SyncTriggers_NonCronTrigger_IsIgnored()
     {
         // Arrange
         var flowId = Guid.NewGuid();
@@ -491,18 +479,16 @@ public sealed class PeriodicTimerRecurringTriggerDispatcherTests
         };
         flow.Manifest.Returns(manifest);
 
-        var repo = Substitute.For<IFlowRepository>();
-        repo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        var repo = new FlowRegistry(new[] { flow });
 
         var (dispatcher, _, _) = CreateSut(repo: repo);
 
         // Act
-        dispatcher.SyncTriggers(flowId, isEnabled: true);
+        await _sync!.SyncTriggersAsync(flowId, isEnabled: true);
 
         // Assert — non-Cron triggers are skipped, no jobs registered.
-        Assert.False(dispatcher.TryGetJob($"flow-{flowId}-webhook", out _));
-        Assert.False(dispatcher.TryGetJob($"flow-{flowId}-manual", out _));
+        Assert.False(dispatcher.TryGetJob(RecurringTriggerJobId.Create(flowId, "webhook"), out _));
+        Assert.False(dispatcher.TryGetJob(RecurringTriggerJobId.Create(flowId, "manual"), out _));
     }
 
     [Fact]

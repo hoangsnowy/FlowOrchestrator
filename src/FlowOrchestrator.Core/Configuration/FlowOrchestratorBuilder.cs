@@ -5,8 +5,14 @@ namespace FlowOrchestrator.Core.Configuration;
 
 /// <summary>
 /// Fluent builder returned by <c>AddFlowOrchestrator()</c> for configuring
-/// storage backends, flows, and optional features (Hangfire, scheduler, retention, observability).
+/// storage backends, flows, and optional features (scheduler, retention, observability).
 /// </summary>
+/// <remarks>
+/// Storage backends and runtimes plug in as extension methods from their own packages —
+/// <c>UseSqlServer</c> / <c>UsePostgreSql</c> / <c>UseInMemory</c> for storage, and
+/// <c>UseHangfire</c> (FlowOrchestrator.Hangfire), <c>UseInMemoryRuntime</c> (FlowOrchestrator.InMemory)
+/// or <c>UseAzureServiceBusRuntime</c> (FlowOrchestrator.ServiceBus) for the runtime.
+/// </remarks>
 public sealed class FlowOrchestratorBuilder
 {
     /// <summary>Initialises the builder with the application's service collection.</summary>
@@ -17,12 +23,6 @@ public sealed class FlowOrchestratorBuilder
 
     /// <summary>The service collection to register services into.</summary>
     public IServiceCollection Services { get; }
-
-    /// <summary>
-    /// <see langword="true"/> when <see cref="UseHangfire"/> has been called.
-    /// Checked by the Hangfire integration's service registration to conditionally wire Hangfire-specific services.
-    /// </summary>
-    public bool HangfireEnabled { get; private set; }
 
     /// <summary>Scheduler options controlling cron override persistence behaviour.</summary>
     public FlowSchedulerOptions Scheduler { get; } = new();
@@ -38,17 +38,6 @@ public sealed class FlowOrchestratorBuilder
 
     /// <summary>Signal options for <c>WaitForSignal</c> parking and resume-nudge dispatch.</summary>
     public FlowSignalOptions Signals { get; } = new();
-
-    /// <summary>
-    /// Activates Hangfire integration. The actual registration of Hangfire-coupled services
-    /// (trigger, step runner, recurring sync) is performed by <c>AddFlowOrchestrator</c>
-    /// in the <c>FlowOrchestrator.Hangfire</c> assembly when this flag is set.
-    /// </summary>
-    public FlowOrchestratorBuilder UseHangfire()
-    {
-        HangfireEnabled = true;
-        return this;
-    }
 
     /// <summary>
     /// Registers <typeparamref name="TFlow"/> as a singleton <see cref="IFlowDefinition"/>.

@@ -36,7 +36,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
 {
     private readonly IFlowRunStore _runStore;
     private readonly IFlowRunRuntimeStore _runtimeStore;
-    private readonly IFlowRepository _flowRepository;
+    private readonly FlowRegistry _flows;
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
@@ -46,7 +46,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
     public FlowRunRecoveryHostedService(
         IFlowRunStore runStore,
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
-        IFlowRepository flowRepository,
+        FlowRegistry flows,
         IFlowGraphPlanner graphPlanner,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
@@ -54,7 +54,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
     {
         _runStore = runStore;
         _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowRunRecoveryHostedService));
-        _flowRepository = flowRepository;
+        _flows = flows;
         _graphPlanner = graphPlanner;
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
@@ -83,9 +83,6 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         _logger.LogInformation(
             "FlowRunRecoveryHostedService: found {Count} active run(s) to evaluate for recovery.", activeRuns.Count);
 
-        var allFlows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-        var flowMap = allFlows.ToDictionary(f => f.Id);
-
         var recoverer = new RunRecoverer(
             _runStore,
             _runtimeStore,
@@ -101,7 +98,7 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
                 break;
             }
 
-            if (!flowMap.TryGetValue(run.FlowId, out var flow))
+            if (!_flows.TryGetFlow(run.FlowId, out var flow))
             {
                 _logger.LogWarning(
                     "FlowRunRecoveryHostedService: run {RunId} references unknown flow {FlowId} — skipping.",

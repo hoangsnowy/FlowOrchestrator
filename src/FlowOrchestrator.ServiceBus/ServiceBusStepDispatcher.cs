@@ -14,7 +14,7 @@ namespace FlowOrchestrator.ServiceBus;
 /// </summary>
 /// <remarks>
 /// Only <see cref="IFlowDefinition.Id"/> is serialised; the consumer rehydrates the full
-/// definition from <c>IFlowRepository</c>. The <c>FlowId</c> application property is the
+/// definition from <c>FlowRegistry</c>. The <c>FlowId</c> application property is the
 /// SQL-filter key used by per-flow subscriptions; <c>RunId</c> and <c>StepKey</c> are
 /// included for diagnostics. <c>MessageId</c> is shaped <c>{runId}:{stepKey}:{nonce}</c> — unique
 /// per dispatch, so topic duplicate-detection only squashes the SDK re-sending one message; the

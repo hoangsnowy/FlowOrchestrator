@@ -28,7 +28,7 @@ public class ServiceBusFlowProcessorIsolationTests
         // Arrange — two enabled flows; the FIRST one throws on EnsureSubscriptionAsync.
         var first = StubFlow("11111111-1111-1111-1111-111111111111");
         var second = StubFlow("22222222-2222-2222-2222-222222222222");
-        var repo = new StubFlowRepository(first, second);
+        var repo = new FlowRegistry([first, second]);
         var store = new StubFlowStore(
             new FlowDefinitionRecord { Id = first.Id, IsEnabled = true },
             new FlowDefinitionRecord { Id = second.Id, IsEnabled = true });
@@ -42,7 +42,7 @@ public class ServiceBusFlowProcessorIsolationTests
                 AutoCreateTopology = true,
             },
             topology: topology,
-            repository: repo,
+            flows: repo,
             flowStore: store,
             scopeFactory: Substitute.For<IServiceScopeFactory>(),
             logger: NullLogger<ServiceBusFlowProcessorHostedService>.Instance);
@@ -63,7 +63,7 @@ public class ServiceBusFlowProcessorIsolationTests
     {
         // Arrange — single flow that throws; the failure must be swallowed (logged), not rethrown.
         var only = StubFlow("33333333-3333-3333-3333-333333333333");
-        var repo = new StubFlowRepository(only);
+        var repo = new FlowRegistry([only]);
         var store = new StubFlowStore(new FlowDefinitionRecord { Id = only.Id, IsEnabled = true });
         var topology = new ThrowingTopologyManagerSpy(throwForFlowId: only.Id);
 
@@ -71,7 +71,7 @@ public class ServiceBusFlowProcessorIsolationTests
             client: new ServiceBusClient(FakeConnString),
             options: new ServiceBusRuntimeOptions { ConnectionString = FakeConnString, AutoCreateTopology = true },
             topology: topology,
-            repository: repo,
+            flows: repo,
             flowStore: store,
             scopeFactory: Substitute.For<IServiceScopeFactory>(),
             logger: NullLogger<ServiceBusFlowProcessorHostedService>.Instance);
@@ -89,13 +89,6 @@ public class ServiceBusFlowProcessorIsolationTests
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(Guid.Parse(id));
         return flow;
-    }
-
-    private sealed class StubFlowRepository : IFlowRepository
-    {
-        private readonly IReadOnlyList<IFlowDefinition> _flows;
-        public StubFlowRepository(params IFlowDefinition[] flows) => _flows = flows;
-        public ValueTask<IReadOnlyList<IFlowDefinition>> GetAllFlowsAsync() => new(_flows);
     }
 
     private sealed class StubFlowStore : IFlowStore

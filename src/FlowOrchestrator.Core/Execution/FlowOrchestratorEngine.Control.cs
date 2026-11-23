@@ -382,9 +382,7 @@ public sealed partial class FlowOrchestratorEngine
 
         if (runningKeys is not null)
         {
-            var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
-            var flow = flows?.FindById(run.FlowId);
-            if (flow is null)
+            if (!_flows.TryGetFlow(run.FlowId, out var flow))
             {
                 return false;
             }

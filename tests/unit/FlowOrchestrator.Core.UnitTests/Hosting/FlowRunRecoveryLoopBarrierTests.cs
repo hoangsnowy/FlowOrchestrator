@@ -23,7 +23,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
 {
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IFlowRunRuntimeStore _runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
@@ -60,7 +60,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
     {
         _runStore.GetActiveRunsAsync().Returns(Task.FromResult<IReadOnlyList<FlowRunRecord>>(
             [new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" }]));
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _flowRepo = new FlowRegistry(new[] { flow });
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(statuses));
         _outputsRepo.GetStepOutputAsync(runId, "loop").Returns(ValueTask.FromResult<object?>(
@@ -193,7 +193,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
 
         _runStore.GetActiveRunsAsync().Returns(Task.FromResult<IReadOnlyList<FlowRunRecord>>(
             [new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" }]));
-        _flowRepo.GetAllFlowsAsync().Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new[] { flow }));
+        _flowRepo = new FlowRegistry(new[] { flow });
         _runtimeStore.GetStepStatusesAsync(runId).Returns(
             _ => Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(parked),
             _ => Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(settled));

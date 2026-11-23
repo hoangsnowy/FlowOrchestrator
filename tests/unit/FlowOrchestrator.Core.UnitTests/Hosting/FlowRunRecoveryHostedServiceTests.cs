@@ -12,7 +12,7 @@ public class FlowRunRecoveryHostedServiceTests
 {
     private readonly IFlowRunStore _runStore = Substitute.For<IFlowRunStore>();
     private readonly IFlowRunRuntimeStore _runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
-    private readonly IFlowRepository _flowRepo = Substitute.For<IFlowRepository>();
+    private FlowRegistry _flowRepo = FlowRegistry.Empty;
     private readonly IFlowGraphPlanner _graphPlanner = new FlowGraphPlanner();
     private readonly IStepDispatcher _dispatcher = Substitute.For<IStepDispatcher>();
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
@@ -93,8 +93,7 @@ public class FlowRunRecoveryHostedServiceTests
 
         _runStore.GetActiveRunsAsync()
             .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
-        _flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult(EmptyStatuses()));
         _runStore.GetDispatchedStepKeysAsync(runId)
@@ -123,8 +122,7 @@ public class FlowRunRecoveryHostedServiceTests
 
         _runStore.GetActiveRunsAsync()
             .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
-        _flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult(EmptyStatuses()));
         _runStore.GetDispatchedStepKeysAsync(runId)
@@ -147,8 +145,7 @@ public class FlowRunRecoveryHostedServiceTests
 
         _runStore.GetActiveRunsAsync()
             .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
-        _flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult(EmptyStatuses()));
         _runStore.GetDispatchedStepKeysAsync(runId)
@@ -187,8 +184,7 @@ public class FlowRunRecoveryHostedServiceTests
 
         _runStore.GetActiveRunsAsync()
             .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
-        _flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
         _runtimeStore.GetStepStatusesAsync(runId)
             .Returns(Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(
                 new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Running }));
@@ -239,8 +235,7 @@ public class FlowRunRecoveryHostedServiceTests
 
         _runStore.GetActiveRunsAsync()
             .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
-        _flowRepo.GetAllFlowsAsync()
-            .Returns(new ValueTask<IReadOnlyList<IFlowDefinition>>(new IFlowDefinition[] { flow }));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
         // First read sees the parked loop; the read after settling sees it Succeeded.
         _runtimeStore.GetStepStatusesAsync(runId).Returns(
             _ => Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(parked),
