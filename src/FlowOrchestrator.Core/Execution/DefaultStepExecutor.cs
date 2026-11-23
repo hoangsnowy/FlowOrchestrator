@@ -9,8 +9,8 @@ namespace FlowOrchestrator.Core.Execution;
 /// <summary>
 /// Default implementation of <see cref="IStepExecutor"/> that resolves the matching
 /// <see cref="IStepHandlerMetadata"/> by type name, evaluates <c>@triggerBody()</c>,
-/// <c>@triggerHeaders()</c>, and <c>@steps()</c> input expressions via the
-/// <see cref="InputResolutionPipeline"/> + <see cref="StepExpressionResolutionPipeline"/>,
+/// <c>@triggerHeaders()</c>, and <c>@steps()</c> input expressions in a single
+/// <see cref="InputResolutionPipeline"/> walk,
 /// injects the enclosing ForEach iteration context via <see cref="LoopScopeInputs"/>,
 /// and delegates execution to the registered handler.
 /// </summary>
@@ -80,20 +80,27 @@ public sealed class DefaultStepExecutor : IStepExecutor
             };
         }
 
-        // Pass 1 (sync): resolve @triggerBody() and @triggerHeaders() expressions.
-        step.Inputs = InputResolutionPipeline.Resolve(step.Inputs, context.TriggerData, context.TriggerHeaders);
-
-        // Pass 2 (async): resolve @steps('key').output|status|error expressions.
+        // Resolve @triggerBody(), @triggerHeaders() and @steps('key').output|status|error in ONE
+        // walk. Each leaf is classified once from the manifest's own text; a substituted value is
+        // data and is never scanned again — neither a trigger value that reads like @steps(), nor a
+        // step output that reads like @triggerBody(), nor (via metadata.Inputs) an already-resolved
+        // value carried into a later attempt by the Pending re-poll path. O(input leaves).
         // step.Key is the runtime key, so the resolver can rewrite a bare sibling reference
         // (e.g. @steps('wait_signal')) to the current loop scope when this step runs inside a ForEach.
         var resolver = new StepOutputResolver(_outputsRepository, _runStore, context.RunId, flow.Manifest.Steps, step.Key);
-        step.Inputs = await StepExpressionResolutionPipeline.ResolveAsync(step.Inputs, resolver).ConfigureAwait(false);
+        step.Inputs = await InputResolutionPipeline.ResolveAsync(
+                step.Inputs,
+                metadata.Inputs,
+                context.TriggerData,
+                context.TriggerHeaders,
+                resolver)
+            .ConfigureAwait(false);
 
-        // Pass 3: inject the enclosing ForEach iteration context. Only the loop's ENTRY children
+        // Inject the enclosing ForEach iteration context. Only the loop's ENTRY children
         // get __loopItem / __loopIndex baked in at fan-out; every other loop child is dispatched
         // from the loop's template metadata by the DAG continuation, signal resume, retry, or crash
-        // recovery, and would otherwise see both keys missing. Deliberately runs AFTER the two
-        // resolution passes so a loop item that happens to be a string starting with '@' is never
+        // recovery, and would otherwise see both keys missing. Deliberately runs AFTER expression
+        // resolution so a loop item that happens to be a string starting with '@' is never
         // mistaken for an expression.
         // The key is parsed once and the resolved scope drives both the input injection and
         // IStepInstance.Index, which documents itself as the iteration index of the enclosing
