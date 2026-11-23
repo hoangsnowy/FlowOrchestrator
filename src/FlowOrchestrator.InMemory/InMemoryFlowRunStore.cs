@@ -247,32 +247,81 @@ public sealed class InMemoryFlowRunStore :
 
         var text = query.HasText ? query.Text!.Trim() : null;
         Guid? textId = text is not null && Guid.TryParse(text, out var parsed) ? parsed : null;
+        // An id prefix matches at any age, like the SQL providers' separate IdText seek.
+        var idPrefix = text is not null && textId is null && RunSearchQuery.IsRunIdPrefix(text) ? text : null;
 
-        var matches = candidates
-            .Where(run => MatchesPlainFilters(run, query)
-                && (text is null || MatchesRunText(run, text, textId, query.IncludeStepPayloads)))
-            .ToList();
+        var matches = new List<FlowRunRecord>();
+        foreach (var run in candidates)
+        {
+            if (!MatchesNonWindowFilters(run, query))
+                continue;
+            var inWindow = MatchesWindow(run, query);
+            if (text is null ? inWindow
+                : (inWindow && MatchesRunText(run, text, textId, query.IncludeStepPayloads))
+                  || (idPrefix is not null && IdStartsWithIgnoreCase(run.Id, idPrefix)))
+            {
+                matches.Add(run);
+            }
+        }
 
-        matches.Sort(static (a, b) => b.StartedAt.CompareTo(a.StartedAt));
-        var skip = Math.Max(0, query.Skip);
-        var take = Math.Max(0, query.Take);
-        var available = Math.Max(0, matches.Count - skip);
-        IReadOnlyList<FlowRunRecord> page = matches.GetRange(Math.Min(skip, matches.Count), Math.Min(take, available));
+        // StartedAt descending, then Id ascending: the same total order RunSearchCursor.Precedes uses, so
+        // a cursor taken from one page continues exactly after its last row.
+        matches.Sort(static (a, b) => b.StartedAt != a.StartedAt ? b.StartedAt.CompareTo(a.StartedAt) : a.Id.CompareTo(b.Id));
+
+        // The total covers the plain filters, not the cursor: it is the size of the whole list.
         int? total = query.CountsTotal ? matches.Count : null;
-        return Task.FromResult(new RunSearchPage(page, available > take, total));
+        var start = 0;
+        if (query.After is { } after)
+        {
+            // Binary search for the first row after the cursor: the list is sorted in cursor order.
+            int lo = 0, hi = matches.Count;
+            while (lo < hi)
+            {
+                var mid = (lo + hi) >>> 1;
+                if (after.Precedes(matches[mid])) hi = mid;
+                else lo = mid + 1;
+            }
+
+            start = lo;
+        }
+
+        var skip = Math.Max(0, query.Skip);
+        var take = Math.Clamp(query.Take, 0, int.MaxValue - 1);
+        start = (int)Math.Min((long)start + skip, matches.Count);
+        var rows = matches.GetRange(start, (int)Math.Min((long)take + 1, matches.Count - start));
+        var cap = query.EffectiveTotalCountCap;
+        if (total is { } exact && cap is { } limit && exact > limit)
+            total = limit + 1;   // what a capped COUNT over TOP (cap + 1) reports
+        return Task.FromResult(RunSearchPage.FromRows(rows, take, total, cap));
     }
 
-    private static bool MatchesPlainFilters(FlowRunRecord run, RunSearchQuery query)
+    private static bool MatchesNonWindowFilters(FlowRunRecord run, RunSearchQuery query)
     {
         if (query.FlowId.HasValue && run.FlowId != query.FlowId.Value)
             return false;
         if (!string.IsNullOrWhiteSpace(query.Status) && !string.Equals(run.Status, query.Status, StringComparison.OrdinalIgnoreCase))
             return false;
+        return true;
+    }
+
+    private static bool MatchesWindow(FlowRunRecord run, RunSearchQuery query)
+    {
         if (query.StartedFrom.HasValue && run.StartedAt < query.StartedFrom.Value)
             return false;
         if (query.StartedTo.HasValue && run.StartedAt > query.StartedTo.Value)
             return false;
         return true;
+    }
+
+    /// <summary>
+    /// Returns whether the canonical <c>D</c> form of <paramref name="id"/> starts with
+    /// <paramref name="prefix"/>, ignoring case, without allocating the formatted id.
+    /// </summary>
+    private static bool IdStartsWithIgnoreCase(Guid id, string prefix)
+    {
+        Span<char> buffer = stackalloc char[GuidDFormatLength];
+        return id.TryFormat(buffer, out var written, "D")
+            && buffer[..written].StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private bool MatchesRunText(FlowRunRecord run, string text, Guid? textId, bool includeStepPayloads)

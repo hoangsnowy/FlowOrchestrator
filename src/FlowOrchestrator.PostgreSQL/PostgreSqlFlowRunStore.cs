@@ -283,11 +283,7 @@ public sealed class PostgreSqlFlowRunStore :
         var rows = (await grid.ReadAsync<FlowRunRecord>()).AsList();
         int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>() : null;
 
-        var take = ClampTake(query.Take);
-        var hasMore = rows.Count > take;
-        if (hasMore)
-            rows.RemoveRange(take, rows.Count - take);
-        return new RunSearchPage(rows, hasMore, total);
+        return RunSearchPage.FromRows(rows, ClampTake(query.Take), total, query.EffectiveTotalCountCap);
     }
 
     /// <summary>Clamps a page size to <c>[0, int.MaxValue - 1]</c> so <c>Take + 1</c> neither goes negative nor overflows.</summary>
@@ -323,6 +319,11 @@ public sealed class PostgreSqlFlowRunStore :
 
         if (query.RunId.HasValue)
             filters.Add("fr.id = @RunId");
+
+        // Keyset: rows after (StartedAt, Id) in the list order started_at DESC, id ASC. Not part of the
+        // count, which is the size of the whole filtered list.
+        if (query.After.HasValue)
+            filters.Add("(fr.started_at < @AfterStartedAt OR (fr.started_at = @AfterStartedAt AND fr.id > @AfterId))");
 
         string? searchLike = null;
         Guid? textId = null;
@@ -363,9 +364,14 @@ public sealed class PostgreSqlFlowRunStore :
                    fr.started_at AS "StartedAt", fr.completed_at AS "CompletedAt",
                    fr.source_run_id AS "SourceRunId"
             FROM flow_runs AS fr
-            """ + where + " ORDER BY fr.started_at DESC LIMIT @TakePlusOne OFFSET @Skip;";
+            """ + where + " ORDER BY fr.started_at DESC, fr.id LIMIT @TakePlusOne OFFSET @Skip;";
         if (countsTotal)
-            sql += " SELECT COUNT(*)::int FROM flow_runs AS fr" + countWhere + ";";
+        {
+            // A capped count stops after cap + 1 rows instead of counting the whole retention.
+            sql += query.EffectiveTotalCountCap is null
+                ? " SELECT COUNT(*)::int FROM flow_runs AS fr" + countWhere + ";"
+                : " SELECT COUNT(*)::int FROM (SELECT 1 FROM flow_runs AS fr" + countWhere + " LIMIT @CountLimit) AS capped;";
+        }
 
         var parameters = new
         {
@@ -378,6 +384,9 @@ public sealed class PostgreSqlFlowRunStore :
             StartedTo = query.StartedTo?.ToUniversalTime(),
             Skip = Math.Max(0, query.Skip),
             TakePlusOne = ClampTake(query.Take) + 1,
+            AfterStartedAt = query.After?.StartedAt.ToUniversalTime(),
+            AfterId = query.After?.Id,
+            CountLimit = query.EffectiveTotalCountCap + 1,
         };
         return (sql, parameters, countsTotal);
     }
