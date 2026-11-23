@@ -20,6 +20,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   for a request sent with `X-Request-Id` worked in the entry step and returned `null` in every step after
   it (and in `When` clauses and `ForEach` sources). Stored headers are now rehydrated case-insensitively.
   Affects SQL Server and PostgreSQL storage on every runtime; InMemory storage was not affected.
+- **SQL Server / PostgreSQL: retrying a step could run an already-succeeded downstream step again.**
+  Retrying a failed step reopens the downstream steps that had been skipped because of that failure. The
+  SQL stores reopened only those steps' status rows, but cleared the execute-once claim and dispatch record
+  of *every* downstream step — including ones that had already succeeded or were skipped by their `When`
+  condition — so a later continuation pass could dispatch and execute them a second time. Only the steps
+  that were actually reset now lose their claim and dispatch record. Affects SQL Server and PostgreSQL
+  storage on every runtime; InMemory storage already behaved correctly.
 
 ## [1.34.2] - 2026-11-23
 

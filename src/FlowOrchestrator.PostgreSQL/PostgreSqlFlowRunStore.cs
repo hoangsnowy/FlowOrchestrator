@@ -549,19 +549,31 @@ public sealed class PostgreSqlFlowRunStore :
         // attempt stays as audit history for the dashboard. Only the latest-status row
         // (flow_steps) and the gate rows are cleared so the engine re-evaluates on the
         // next continuation pass.
+        //
+        // The engine passes EVERY transitive descendant of the retried step, including ones that
+        // already Succeeded or were When-skipped. The gate rows must therefore be cleared only for
+        // the keys whose flow_steps row was actually the PrerequisitesUnmet skip being reset — the
+        // RETURNING of the first data-modifying CTE yields exactly those. Clearing the claim of a
+        // Succeeded descendant would let it be claimed and executed a second time, breaking
+        // "execute once". One statement, so all three deletes commit or roll back together.
         await conn.ExecuteAsync(
             """
-            DELETE FROM flow_steps
-            WHERE run_id = @RunId
-              AND step_key = ANY(@StepKeys)
-              AND status = 'Skipped'
-              AND error_message = @Reason;
-
-            DELETE FROM flow_step_claims
-            WHERE run_id = @RunId AND step_key = ANY(@StepKeys);
-
-            DELETE FROM flow_step_dispatches
-            WHERE run_id = @RunId AND step_key = ANY(@StepKeys);
+            WITH reset AS (
+                DELETE FROM flow_steps
+                WHERE run_id = @RunId
+                  AND step_key = ANY(@StepKeys)
+                  AND status = 'Skipped'
+                  AND error_message = @Reason
+                RETURNING step_key
+            ),
+            cleared_claims AS (
+                DELETE FROM flow_step_claims fsc
+                USING reset r
+                WHERE fsc.run_id = @RunId AND fsc.step_key = r.step_key
+            )
+            DELETE FROM flow_step_dispatches fsd
+            USING reset r
+            WHERE fsd.run_id = @RunId AND fsd.step_key = r.step_key;
             """,
             new { RunId = runId, StepKeys = keyArray, Reason = StepSkipReasons.PrerequisitesUnmet }).ConfigureAwait(false);
     }
