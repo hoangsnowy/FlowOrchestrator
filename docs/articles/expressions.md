@@ -100,6 +100,12 @@ Any value that does **not** start with `@` is treated as a literal and passed th
 ["message"]  = "@triggerBody()?.note"  // expression
 ```
 
+Only text written in the flow manifest is ever evaluated. A value an expression **resolves to** is data:
+if a trigger payload field, a header, or a prior step's output happens to contain a string such as
+`@steps('charge').output.token` or `@triggerHeaders()['Authorization']`, the step receives that string
+verbatim. Each input value is classified once, from the manifest's own text, and a substituted value is
+never scanned again — including when a `Pending` step is re-polled with its already-resolved inputs.
+
 ## Security: Excluded Headers
 
 The following headers are **never captured** from trigger requests, regardless of what is sent.

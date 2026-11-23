@@ -18,8 +18,29 @@ internal sealed record DashboardAccess(string Method, string? UserName, bool Can
     /// <summary><see cref="HttpContext.Items"/> key the filter stores the resolved access under.</summary>
     public const string ItemKey = "FlowOrchestrator.Dashboard.Access";
 
-    /// <summary>Access granted when neither Basic Auth nor identity-based access is configured.</summary>
+    /// <summary>
+    /// Access granted when neither Basic Auth nor identity-based access is configured, in the Development
+    /// environment or when <see cref="FlowDashboardOptions.AllowAnonymousOperators"/> is set.
+    /// </summary>
     public static readonly DashboardAccess Unprotected = new("none", null, CanOperate: true);
+
+    /// <summary>
+    /// Access granted when neither Basic Auth nor identity-based access is configured outside the Development
+    /// environment: anonymous callers may read (with secrets masked) but not change state.
+    /// </summary>
+    public static readonly DashboardAccess UnprotectedReadOnly = new("none", null, CanOperate: false);
+
+    /// <summary>
+    /// Returns the access anonymous callers get when the dashboard has no authentication configured.
+    /// </summary>
+    /// <param name="options">The dashboard options; <see cref="FlowDashboardOptions.AllowAnonymousOperators"/> opts back in to operator access.</param>
+    /// <param name="isDevelopment">
+    /// <see langword="true"/> when the host runs in the Development environment. A host that registers no
+    /// <c>IHostEnvironment</c> is treated as non-Development.
+    /// </param>
+    /// <returns><see cref="Unprotected"/> in Development or when opted in; otherwise <see cref="UnprotectedReadOnly"/>.</returns>
+    public static DashboardAccess ForAnonymous(FlowDashboardOptions options, bool isDevelopment)
+        => isDevelopment || options.AllowAnonymousOperators ? Unprotected : UnprotectedReadOnly;
 }
 
 /// <summary>
@@ -37,10 +58,26 @@ internal sealed record DashboardAccess(string Method, string? UserName, bool Can
 /// <c>PATCH</c> / <c>DELETE</c> route mutates (trigger, rerun, retry, cancel, signal, schedule changes), every
 /// <c>GET</c> reads. Webhook receive endpoints are mapped outside the dashboard group and never reach this
 /// filter.</para>
+/// <para>With neither configured, anonymous callers get the access resolved at startup by
+/// <see cref="DashboardAccess.ForAnonymous"/>: full access in Development (or with
+/// <see cref="FlowDashboardOptions.AllowAnonymousOperators"/>), read-only with secrets masked everywhere
+/// else.</para>
 /// </remarks>
-internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string basePath) : IEndpointFilter
+/// <param name="options">The dashboard options.</param>
+/// <param name="basePath">The dashboard's route prefix.</param>
+/// <param name="anonymousAccess">
+/// What a caller may do when no authentication is configured; defaults to
+/// <see cref="DashboardAccess.UnprotectedReadOnly"/>.
+/// </param>
+internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string basePath, DashboardAccess? anonymousAccess = null) : IEndpointFilter
 {
+    /// <summary>Body of the 403 a state-changing call gets on a dashboard that is read-only because it has no authentication.</summary>
+    internal const string AnonymousReadOnlyMessage =
+        "The flow dashboard has no authentication configured, so it is read-only outside the Development environment. "
+        + "Configure FlowDashboard:BasicAuth or FlowDashboard:Authorization, or set FlowDashboard:AllowAnonymousOperators to true.";
+
     private static readonly string[] RoleClaimTypes = [ClaimTypes.Role, "role", "roles"];
+    private readonly DashboardAccess _anonymousAccess = anonymousAccess ?? DashboardAccess.UnprotectedReadOnly;
     private readonly string _apiPrefix = basePath.TrimEnd('/') + "/api/";
     private readonly string _mePath = basePath.TrimEnd('/') + "/api/me";
     private readonly string _signOutPath = basePath.TrimEnd('/') + "/signout";
@@ -49,8 +86,9 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
     /// <remarks>
     /// Synchronous for the common cases (unprotected, valid Basic, Basic challenge): this runs on every
     /// dashboard request including the 5 s poll, so it returns <paramref name="next"/>'s ValueTask directly
-    /// instead of adding an async state machine. Unprotected requests leave <see cref="HttpContext.Items"/>
-    /// alone; readers fall back to <see cref="DashboardAccess.Unprotected"/>.
+    /// instead of adding an async state machine. Unprotected requests with operator access leave
+    /// <see cref="HttpContext.Items"/> alone; readers fall back to <see cref="DashboardAccess.Unprotected"/>.
+    /// Read-only anonymous access is recorded explicitly so every reader sees it.
     /// </remarks>
     public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
@@ -65,7 +103,15 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
             return ErrorAsync(http, StatusCodes.Status403Forbidden, "Cross-site request blocked: state-changing dashboard calls must come from the dashboard itself.");
 
         if (!basic.IsEnabled && !identity.IsEnabled)
+        {
+            if (_anonymousAccess.CanOperate)
+                return next(context);
+
+            http.Items[DashboardAccess.ItemKey] = _anonymousAccess;
+            if (IsMutating(http.Request.Method))
+                return ErrorAsync(http, StatusCodes.Status403Forbidden, AnonymousReadOnlyMessage);
             return next(context);
+        }
 
         if (basic.IsEnabled && TryValidateBasic(http, basic, out var basicUser))
         {
