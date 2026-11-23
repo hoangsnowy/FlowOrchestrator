@@ -36,6 +36,11 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), byte> _stepClaims = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), string?> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
+
+    // Cached completed tasks for the point-lookup reads, which run on the engine's per-step-completion
+    // path: Task.FromResult(bool) allocates a fresh Task on every call.
+    private static readonly Task<bool> TrueTask = Task.FromResult(true);
+    private static readonly Task<bool> FalseTask = Task.FromResult(false);
     private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
 
     // ── Secondary per-run indexes ─────────────────────────────────────────────
@@ -615,6 +620,12 @@ public sealed class InMemoryFlowRunStore :
             : new HashSet<string>(StringComparer.Ordinal);
         return Task.FromResult(keys);
     }
+
+    /// <inheritdoc/>
+    public Task<bool> IsStepDispatchedAsync(Guid runId, string stepKey)
+        // O(1) on the flat dispatch dictionary. The interface default would copy the run's whole
+        // ledger into a HashSet to test one key.
+        => _stepDispatches.ContainsKey((runId, stepKey)) ? TrueTask : FalseTask;
 
     public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {

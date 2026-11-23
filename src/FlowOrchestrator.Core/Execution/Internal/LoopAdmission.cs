@@ -107,6 +107,11 @@ internal static class LoopAdmission
     /// One request per (iteration, entry child) pair to dispatch, in ascending iteration order;
     /// empty when the limit is saturated or every iteration has already started.
     /// </returns>
+    /// <remarks>
+    /// For callers that already hold the run's whole ledger (recovery). The engine's
+    /// per-step-completion path uses <see cref="NextAdmissionsAsync"/>, which asks the ledger only
+    /// about the keys it probes.
+    /// </remarks>
     public static IReadOnlyList<LoopAdmissionRequest> NextAdmissions(
         StepMetadata? loopMetadata,
         string runtimeLoopKey,
@@ -114,19 +119,107 @@ internal static class LoopAdmission
         IReadOnlyDictionary<string, StepStatus> statuses,
         IReadOnlySet<string> dispatchedStepKeys)
     {
-        if (iterations <= 0 || loopMetadata is not IScopedStep scoped || scoped.Steps.Count == 0)
+        if (!TryGetBody(loopMetadata, iterations, out var scoped, out var entries))
         {
             return [];
         }
 
-        var entries = EntrySteps(scoped);
-        if (entries.Count == 0)
+        var firstPending = FindFirstPending(entries, runtimeLoopKey, 0, iterations, statuses, dispatchedStepKeys);
+        return BuildAdmissions(loopMetadata!, scoped, entries, runtimeLoopKey, iterations, firstPending, statuses);
+    }
+
+    /// <summary>
+    /// Returns the same admissions as <see cref="NextAdmissions"/>, reading the dispatch ledger
+    /// through point lookups instead of a pre-fetched set of every dispatched key in the run.
+    /// </summary>
+    /// <param name="loopMetadata">The scope step's manifest metadata.</param>
+    /// <param name="runtimeLoopKey">Runtime key of the scope step.</param>
+    /// <param name="iterations">Iteration count the scope recorded in its output.</param>
+    /// <param name="statuses">Current runtime status map for the run.</param>
+    /// <param name="isDispatched">
+    /// Point lookup against the run's dispatch ledger, typically
+    /// <see cref="Storage.IFlowRunStore.IsStepDispatchedAsync"/>.
+    /// </param>
+    /// <returns>The admissions <see cref="NextAdmissions"/> would return for the same ledger state.</returns>
+    /// <remarks>
+    /// <para>
+    /// The engine used to fetch the whole ledger (<c>GetDispatchedStepKeysAsync</c>, one row per
+    /// dispatched step) on every pass while a loop was parked: O(n) payload per step completion and
+    /// O(n²) over the run (#189). The gate only needs membership for the handful of keys its search
+    /// probes.
+    /// </para>
+    /// <para>
+    /// The boundary is found in two phases. The first searches the status map alone — synchronous,
+    /// no I/O. Its result <c>b</c> is a lower bound on the true boundary: the search only ever stops
+    /// directly above an index it saw with a status row, anything with a status row is started, and
+    /// so every index below <c>b</c> is started by the prefix invariant. The second phase gallops
+    /// forward from <c>b</c> on the full predicate (status row or ledger row), consulting the ledger
+    /// only for indices without a status row. In the sequential steady state — the previous iteration
+    /// just settled, nothing dispatched-but-unstarted — <c>b</c> already is the boundary and the pass
+    /// costs one ledger lookup per entry child; a window of <c>k</c> dispatched-but-unstarted
+    /// iterations costs O(log k) lookups.
+    /// </para>
+    /// <para>
+    /// <b>Complexity per step completion:</b> O(log n) status-map probes and O(log k) ledger point
+    /// lookups to find the boundary, plus the backwards active-count walk shared with
+    /// <see cref="NextAdmissions"/>, which is still O(settled iterations) — see the remarks on
+    /// <see cref="FindFirstPending"/>.
+    /// </para>
+    /// </remarks>
+    public static async ValueTask<IReadOnlyList<LoopAdmissionRequest>> NextAdmissionsAsync(
+        StepMetadata? loopMetadata,
+        string runtimeLoopKey,
+        int iterations,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        Func<string, Task<bool>> isDispatched)
+    {
+        if (!TryGetBody(loopMetadata, iterations, out var scoped, out var entries))
         {
             return [];
         }
 
-        var firstPending = FindFirstPending(entries, runtimeLoopKey, iterations, statuses, dispatchedStepKeys);
+        var statusBoundary = FindFirstPending(entries, runtimeLoopKey, 0, iterations, statuses, dispatchedStepKeys: null);
+        var firstPending = await FindFirstPendingAsync(
+            entries, runtimeLoopKey, statusBoundary, iterations, statuses, isDispatched).ConfigureAwait(false);
 
+        return BuildAdmissions(loopMetadata!, scoped, entries, runtimeLoopKey, iterations, firstPending, statuses);
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="loopMetadata"/> is a scope with at least
+    /// one entry child and <paramref name="iterations"/> is positive, yielding the scope and its entries.
+    /// </summary>
+    private static bool TryGetBody(
+        StepMetadata? loopMetadata,
+        int iterations,
+        out IScopedStep scoped,
+        out IReadOnlyList<KeyValuePair<string, StepMetadata>> entries)
+    {
+        if (iterations <= 0 || loopMetadata is not IScopedStep scope || scope.Steps.Count == 0)
+        {
+            scoped = null!;
+            entries = [];
+            return false;
+        }
+
+        scoped = scope;
+        entries = EntrySteps(scope);
+        return entries.Count > 0;
+    }
+
+    /// <summary>
+    /// Applies the concurrency limit to the un-started block starting at
+    /// <paramref name="firstPending"/> and returns the dispatch requests for the iterations it admits.
+    /// </summary>
+    private static IReadOnlyList<LoopAdmissionRequest> BuildAdmissions(
+        StepMetadata loopMetadata,
+        IScopedStep scoped,
+        IReadOnlyList<KeyValuePair<string, StepMetadata>> entries,
+        string runtimeLoopKey,
+        int iterations,
+        int firstPending,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
         if (firstPending >= iterations)
         {
             return [];
@@ -175,9 +268,13 @@ internal static class LoopAdmission
     /// </summary>
     /// <param name="entries">Entry children of the scope — the steps an admission dispatches.</param>
     /// <param name="runtimeLoopKey">Runtime key of the scope step.</param>
+    /// <param name="start">An index every lower index of which is known to be started; the search starts there.</param>
     /// <param name="iterations">Iteration count the scope recorded in its output.</param>
     /// <param name="statuses">Current runtime status map for the run.</param>
-    /// <param name="dispatchedStepKeys">Step keys with a live dispatch-ledger row.</param>
+    /// <param name="dispatchedStepKeys">
+    /// Step keys with a live dispatch-ledger row, or <see langword="null"/> to search the status map
+    /// alone (the first phase of <see cref="NextAdmissionsAsync"/>).
+    /// </param>
     /// <remarks>
     /// Started iterations form a prefix: <see cref="NextAdmissions"/> only ever admits the
     /// contiguous block <c>[firstPending, firstPending + slots)</c>, so an iteration can only have
@@ -205,18 +302,24 @@ internal static class LoopAdmission
     private static int FindFirstPending(
         IReadOnlyList<KeyValuePair<string, StepMetadata>> entries,
         string runtimeLoopKey,
+        int start,
         int iterations,
         IReadOnlyDictionary<string, StepStatus> statuses,
-        IReadOnlySet<string> dispatchedStepKeys)
+        IReadOnlySet<string>? dispatchedStepKeys)
     {
-        if (!IsIterationStarted(entries, runtimeLoopKey, 0, statuses, dispatchedStepKeys))
+        if (start >= iterations)
         {
-            return 0;
+            return iterations;
         }
 
-        // Gallop: find the first unstarted index by doubling the stride from the known-started 0.
+        if (!IsIterationStarted(entries, runtimeLoopKey, start, statuses, dispatchedStepKeys))
+        {
+            return start;
+        }
+
+        // Gallop: find the first unstarted index by doubling the stride from the known-started start.
         // `low` is always started, `high` is the first index known NOT to be started (or the end).
-        var low = 0;
+        var low = start;
         var stride = 1;
         var high = iterations;
         while (low + stride < iterations)
@@ -252,6 +355,107 @@ internal static class LoopAdmission
     }
 
     /// <summary>
+    /// <see cref="FindFirstPending"/> on the full started predicate, with the ledger read through
+    /// <paramref name="isDispatched"/> point lookups instead of a pre-fetched set.
+    /// </summary>
+    /// <param name="entries">Entry children of the scope.</param>
+    /// <param name="runtimeLoopKey">Runtime key of the scope step.</param>
+    /// <param name="start">An index every lower index of which is known to be started.</param>
+    /// <param name="iterations">Iteration count the scope recorded in its output.</param>
+    /// <param name="statuses">Current runtime status map for the run.</param>
+    /// <param name="isDispatched">Point lookup against the run's dispatch ledger.</param>
+    /// <remarks>
+    /// Same gallop + binary search as <see cref="FindFirstPending"/>, with the same result for the
+    /// same ledger state. Duplicated rather than shared so the synchronous recovery caller neither
+    /// pays for nor blocks on an asynchronous probe.
+    /// </remarks>
+    private static async ValueTask<int> FindFirstPendingAsync(
+        IReadOnlyList<KeyValuePair<string, StepMetadata>> entries,
+        string runtimeLoopKey,
+        int start,
+        int iterations,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        Func<string, Task<bool>> isDispatched)
+    {
+        if (start >= iterations)
+        {
+            return iterations;
+        }
+
+        if (!await IsIterationStartedAsync(entries, runtimeLoopKey, start, statuses, isDispatched).ConfigureAwait(false))
+        {
+            return start;
+        }
+
+        var low = start;
+        var stride = 1;
+        var high = iterations;
+        while (low + stride < iterations)
+        {
+            var probe = low + stride;
+            if (await IsIterationStartedAsync(entries, runtimeLoopKey, probe, statuses, isDispatched).ConfigureAwait(false))
+            {
+                low = probe;
+                stride <<= 1;
+            }
+            else
+            {
+                high = probe;
+                break;
+            }
+        }
+
+        while (high - low > 1)
+        {
+            var mid = low + ((high - low) >> 1);
+            if (await IsIterationStartedAsync(entries, runtimeLoopKey, mid, statuses, isDispatched).ConfigureAwait(false))
+            {
+                low = mid;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+
+        return high;
+    }
+
+    /// <summary>
+    /// Asynchronous <see cref="IsIterationStarted"/>: every entry child is checked against the status
+    /// map first, and the ledger is consulted only when none of them has a status row.
+    /// </summary>
+    private static async ValueTask<bool> IsIterationStartedAsync(
+        IReadOnlyList<KeyValuePair<string, StepMetadata>> entries,
+        string runtimeLoopKey,
+        int index,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        Func<string, Task<bool>> isDispatched)
+    {
+        var prefix = $"{runtimeLoopKey}.{index}.";
+
+        // Status pass first, so a status hit on any entry child answers the probe without a ledger
+        // round-trip. Indexed loops for the reason given in IsIterationStarted.
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (statuses.ContainsKey(prefix + entries[i].Key))
+            {
+                return true;
+            }
+        }
+
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (await isDispatched(prefix + entries[i].Key).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns <see langword="true"/> when iteration <paramref name="index"/> has already been
     /// handed out — an entry child either carries a status row or holds a dispatch-ledger row.
     /// </summary>
@@ -260,7 +464,7 @@ internal static class LoopAdmission
         string runtimeLoopKey,
         int index,
         IReadOnlyDictionary<string, StepStatus> statuses,
-        IReadOnlySet<string> dispatchedStepKeys)
+        IReadOnlySet<string>? dispatchedStepKeys)
     {
         // Built once per probe rather than once per entry child, and walked with a foreach rather
         // than an Any(lambda): the closure plus two concatenations per child were the bulk of the
@@ -273,7 +477,7 @@ internal static class LoopAdmission
         for (var i = 0; i < entries.Count; i++)
         {
             var key = prefix + entries[i].Key;
-            if (statuses.ContainsKey(key) || dispatchedStepKeys.Contains(key))
+            if (statuses.ContainsKey(key) || (dispatchedStepKeys?.Contains(key) ?? false))
             {
                 return true;
             }

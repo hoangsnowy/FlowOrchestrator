@@ -263,7 +263,13 @@ public sealed partial class FlowOrchestratorEngine
             return 0;
         }
 
-        var dispatched = await _runStore.GetDispatchedStepKeysAsync(ctx.RunId).ConfigureAwait(false);
+        // Ledger membership by point lookup, not by fetching the set: the ledger holds one row per
+        // dispatched step, so reading it whole on every pass while a loop is parked was O(n) payload
+        // per step completion (#189). NextAdmissionsAsync consults it only for the boundary probes
+        // the status map cannot answer — one lookup per entry child in the sequential steady state.
+        var runId = ctx.RunId;
+        var runStore = _runStore;
+        Func<string, Task<bool>> isDispatched = key => runStore.IsStepDispatchedAsync(runId, key);
         var admitted = 0;
 
         foreach (var loopKey in candidates)
@@ -280,7 +286,9 @@ public sealed partial class FlowOrchestratorEngine
                 continue;
             }
 
-            var requests = LoopAdmission.NextAdmissions(loopMetadata, loopKey, iterations, statuses, dispatched);
+            var requests = await LoopAdmission
+                .NextAdmissionsAsync(loopMetadata, loopKey, iterations, statuses, isDispatched)
+                .ConfigureAwait(false);
             foreach (var request in requests)
             {
                 var childStep = new StepInstance(request.RuntimeStepKey, request.Metadata.Type)

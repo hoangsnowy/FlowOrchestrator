@@ -531,6 +531,20 @@ public sealed class SqlFlowRunStore :
         return keys.ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> IsStepDispatchedAsync(Guid runId, string stepKey)
+    {
+        // Point lookup on the (RunId, StepKey) primary key. The interface default would fetch every
+        // dispatched key in the run — one row per dispatched step — to answer a single-key question,
+        // and the ForEach admission gate asks it on every step completion while a loop is parked.
+        await using var conn = new SqlConnection(_connectionString);
+        var exists = await conn.ExecuteScalarAsync<int?>(
+            "SELECT 1 FROM FlowStepDispatches WHERE RunId = @RunId AND StepKey = @StepKey",
+            new { RunId = runId, StepKey = stepKey });
+
+        return exists is not null;
+    }
+
     public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
         await using var conn = new SqlConnection(_connectionString);

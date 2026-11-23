@@ -286,4 +286,25 @@ public interface IFlowRunStore
     /// Used by the recovery service to avoid re-dispatching already-in-flight steps.
     /// </summary>
     Task<IReadOnlySet<string>> GetDispatchedStepKeysAsync(Guid runId);
+
+    /// <summary>
+    /// Returns whether one specific step currently holds a dispatch-ledger row for the run.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The runtime step key to test, e.g. <c>"loop.3.child"</c>.</param>
+    /// <returns><see langword="true"/> when a live (not released) dispatch record exists for <c>(runId, stepKey)</c>.</returns>
+    /// <remarks>
+    /// A point lookup for callers that need membership rather than enumeration — notably the engine's
+    /// <c>ForEach</c> admission gate, which runs on every step completion while a loop is parked and
+    /// only ever probes the few keys around its started-iteration boundary. The ledger keeps one row
+    /// per dispatched step, so <see cref="GetDispatchedStepKeysAsync"/> grows with run length and
+    /// answering a single-key question through it is O(n) in both payload and scan. The default
+    /// implementation does exactly that, so existing stores keep compiling — override it with an
+    /// indexed lookup.
+    /// </remarks>
+    async Task<bool> IsStepDispatchedAsync(Guid runId, string stepKey)
+    {
+        var dispatched = await GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
+        return dispatched.Contains(stepKey);
+    }
 }
