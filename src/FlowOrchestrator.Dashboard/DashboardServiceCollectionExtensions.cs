@@ -275,10 +275,18 @@ public static class DashboardServiceCollectionExtensions
             }
         });
 
-        // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side; with
-        // neither configured the filter only records "unprotected" for /api/me.
-        ValidateAndReportAccessConfiguration(endpoints.ServiceProvider, options);
-        group.AddEndpointFilter(new Security.DashboardAccessFilter(options, basePath));
+        // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side. With
+        // neither configured, anonymous callers are operators only in Development (or when the host
+        // opted in with AllowAnonymousOperators) and read-only viewers everywhere else. The host
+        // environment is resolved once here, from the root provider, as the startup checks do.
+        var environment = endpoints.ServiceProvider.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>();
+        var isDevelopment = environment is not null
+            && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(environment);
+        ValidateAndReportAccessConfiguration(endpoints.ServiceProvider, options, environment, isDevelopment);
+        group.AddEndpointFilter(new Security.DashboardAccessFilter(
+            options,
+            basePath,
+            Security.DashboardAccess.ForAnonymous(options, isDevelopment)));
 
         // Who the SPA is talking to, and whether it may show state-changing actions.
         group.MapGet("/api/me", (HttpContext http) =>
@@ -1655,9 +1663,17 @@ public static class DashboardServiceCollectionExtensions
 
     /// <summary>
     /// Fails fast when identity-based access names a scheme the host never registered, and warns about
-    /// Basic Auth set-ups that are not fit for production.
+    /// unprotected dashboards and Basic Auth set-ups that are not fit for production.
     /// </summary>
-    private static void ValidateAndReportAccessConfiguration(IServiceProvider services, FlowDashboardOptions options)
+    /// <param name="services">The root service provider.</param>
+    /// <param name="options">The dashboard options.</param>
+    /// <param name="environment">The host environment, when one is registered.</param>
+    /// <param name="isDevelopment">Whether <paramref name="environment"/> is Development.</param>
+    private static void ValidateAndReportAccessConfiguration(
+        IServiceProvider services,
+        FlowDashboardOptions options,
+        Microsoft.Extensions.Hosting.IHostEnvironment? environment,
+        bool isDevelopment)
     {
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Dashboard.Auth");
         var authorization = options.Authorization;
@@ -1688,12 +1704,27 @@ public static class DashboardServiceCollectionExtensions
                 Security.DashboardAuthLog.IdentityAccessEnabled(logger, authorization.AuthenticationScheme!, authorization.EffectiveChallengeScheme!, basic.IsEnabled ? "also enabled" : "disabled");
         }
 
-        if (!basic.IsEnabled || logger is null)
+        if (logger is null)
             return;
 
-        var environment = services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>();
-        if (!authorization.IsEnabled && environment is not null && !Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(environment))
-            Security.DashboardAuthLog.BasicAuthOutsideDevelopment(logger, environment!.EnvironmentName);
+        if (!basic.IsEnabled && !authorization.IsEnabled)
+        {
+            // An unprotected dashboard: say so loudly outside Development, where it is now read-only
+            // (or, opted back in, open to anonymous operators), and remind in Development.
+            if (isDevelopment)
+                Security.DashboardAuthLog.UnprotectedInDevelopment(logger);
+            else if (options.AllowAnonymousOperators)
+                Security.DashboardAuthLog.UnprotectedAnonymousOperators(logger, environment?.EnvironmentName ?? "unknown");
+            else
+                Security.DashboardAuthLog.UnprotectedReadOnly(logger, environment?.EnvironmentName ?? "unknown");
+            return;
+        }
+
+        if (!basic.IsEnabled)
+            return;
+
+        if (!authorization.IsEnabled && environment is not null && !isDevelopment)
+            Security.DashboardAuthLog.BasicAuthOutsideDevelopment(logger, environment.EnvironmentName);
         if (IsWeakBasicAuthPassword(basic))
             Security.DashboardAuthLog.WeakBasicAuthPassword(logger);
     }

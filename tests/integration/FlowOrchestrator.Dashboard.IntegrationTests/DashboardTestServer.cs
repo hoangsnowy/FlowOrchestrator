@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace FlowOrchestrator.Dashboard.Tests;
 
@@ -15,6 +16,12 @@ namespace FlowOrchestrator.Dashboard.Tests;
 /// Spins up an in-process test HTTP server with the FlowOrchestrator dashboard mapped.
 /// All dependencies are pre-wired with NSubstitute mocks; configure them after construction.
 /// </summary>
+/// <remarks>
+/// The host runs in the <see cref="Environments.Development"/> environment unless a test asks for another one
+/// (<see cref="InEnvironment"/>, <see cref="WithServices"/>): an unprotected dashboard grants anonymous
+/// callers operator access only in Development, which is what the endpoint tests exercise. Tests for the
+/// non-Development default pass an explicit environment.
+/// </remarks>
 public sealed class DashboardTestServer : IDisposable
 {
     private readonly WebApplication _app;
@@ -70,7 +77,7 @@ public sealed class DashboardTestServer : IDisposable
                 services.AddFlowDashboard(configureOptions);
             else
                 services.AddFlowDashboard();
-        })
+        }, Environments.Development)
     {
     }
 
@@ -81,7 +88,7 @@ public sealed class DashboardTestServer : IDisposable
     /// <param name="configuration">Configuration bound into <see cref="FlowDashboardOptions"/> (e.g. Basic Auth).</param>
     /// <param name="configureOptions">Delegate applied after binding, for code-only settings.</param>
     public DashboardTestServer(IConfiguration configuration, Action<FlowDashboardOptions> configureOptions)
-        : this(services => services.AddFlowDashboard(configuration, configureOptions))
+        : this(services => services.AddFlowDashboard(configuration, configureOptions), Environments.Development)
     {
     }
 
@@ -91,9 +98,24 @@ public sealed class DashboardTestServer : IDisposable
     /// </summary>
     /// <param name="registerDashboard">Registers the dashboard and any extra services.</param>
     /// <returns>The started server.</returns>
-    public static DashboardTestServer WithServices(Action<IServiceCollection> registerDashboard) => new(registerDashboard);
+    /// <param name="environmentName">Host environment; defaults to <see cref="Environments.Development"/>.</param>
+    public static DashboardTestServer WithServices(Action<IServiceCollection> registerDashboard, string? environmentName = null)
+        => new(registerDashboard, environmentName ?? Environments.Development);
 
-    private DashboardTestServer(Action<IServiceCollection> registerDashboard)
+    /// <summary>Spins up the dashboard in the given host environment, e.g. <see cref="Environments.Production"/>.</summary>
+    /// <param name="environmentName">Host environment name.</param>
+    /// <param name="configureOptions">Optional dashboard option configuration.</param>
+    /// <returns>The started server.</returns>
+    public static DashboardTestServer InEnvironment(string environmentName, Action<FlowDashboardOptions>? configureOptions = null)
+        => new(services =>
+        {
+            if (configureOptions is not null)
+                services.AddFlowDashboard(configureOptions);
+            else
+                services.AddFlowDashboard();
+        }, environmentName);
+
+    private DashboardTestServer(Action<IServiceCollection> registerDashboard, string environmentName)
     {
         // Configure Hangfire in-memory so any background job infrastructure works during tests.
         GlobalConfiguration.Configuration.UseInMemoryStorage();
@@ -111,7 +133,7 @@ public sealed class DashboardTestServer : IDisposable
         FlowOrchestrator.TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<object?>((object?)null));
 
-        var builder = WebApplication.CreateBuilder();
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = environmentName });
         builder.WebHost.UseTestServer();
         builder.Services.AddRouting();
         builder.Services.AddHangfire(c => c.UseInMemoryStorage());

@@ -30,7 +30,8 @@ builder.Services.AddFlowDashboard(options =>
     options.BasicAuth.Password = "secret";
 });
 
-// No arguments — defaults only (no auth, default title)
+// No arguments — defaults only (no auth, default title). Without auth the dashboard is
+// read-only outside the Development environment; see "Securing the dashboard".
 builder.Services.AddFlowDashboard();
 
 // Configuration + code: binds appsettings (e.g. Basic Auth) first, then applies the delegate.
@@ -70,9 +71,16 @@ builder.Services.AddFlowDashboard(builder.Configuration, options =>
 | `BasicAuth.Username` | — | Basic Auth username |
 | `BasicAuth.Password` | — | Basic Auth password |
 | `BasicAuth.Realm` | `"FlowOrchestrator Dashboard"` | `WWW-Authenticate` realm returned in 401 responses |
+| `AllowAnonymousOperators` | `false` | Give anonymous callers operator access on a dashboard with no authentication outside `Development`. See [Securing the dashboard](dashboard-security.md#no-authentication-configured) for the risk. |
 
 > [!NOTE]
 > Basic Auth is enforced when **both** `BasicAuth.Username` and `BasicAuth.Password` are set. There is no separate `Enabled` flag — leaving either blank disables authentication.
+
+> [!IMPORTANT]
+> A dashboard with neither Basic Auth nor `Authorization` configured is **read-only outside the
+> `Development` environment**: state-changing calls answer `403` and secrets in manifests and payloads are
+> masked. In `Development` anonymous callers keep full access. See
+> [Securing the dashboard](dashboard-security.md#no-authentication-configured).
 
 ---
 
