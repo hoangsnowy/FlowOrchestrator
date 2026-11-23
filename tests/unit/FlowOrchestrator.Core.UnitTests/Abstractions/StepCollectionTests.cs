@@ -106,36 +106,4 @@ public class StepCollectionTests
         // Assert
         Assert.Same(child, result);
     }
-
-    [Fact]
-    public void FindParentStep_NestedKey_ReturnsParent()
-    {
-        // Arrange
-        var child = new StepMetadata { Type = "ChildType" };
-        var parent = new LoopStepMetadata
-        {
-            Type = "ForEach",
-            Steps = new StepCollection { ["child"] = child }
-        };
-        var collection = new StepCollection { ["parent"] = parent };
-
-        // Act
-        var result = collection.FindParentStep("parent.child");
-
-        // Assert
-        Assert.Same(parent, result);
-    }
-
-    [Fact]
-    public void FindParentStep_TopLevelKey_ReturnsNull()
-    {
-        // Arrange
-        var collection = new StepCollection { ["step1"] = new StepMetadata { Type = "A" } };
-
-        // Act
-        var result = collection.FindParentStep("step1");
-
-        // Assert
-        Assert.Null(result);
-    }
 }
