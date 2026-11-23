@@ -16,4 +16,13 @@ internal static partial class DashboardAuthLog
 
     [LoggerMessage(EventId = 4102, Level = LogLevel.Information, Message = "Flow dashboard sign-in: scheme '{AuthenticationScheme}', challenge '{ChallengeScheme}', Basic Auth {BasicAuth}.")]
     public static partial void IdentityAccessEnabled(ILogger logger, string authenticationScheme, string challengeScheme, string basicAuth);
+
+    [LoggerMessage(EventId = 4103, Level = LogLevel.Error, Message = "Flow dashboard has no authentication configured in the '{Environment}' environment. It is read-only for anonymous callers: state-changing calls are refused and manifest secrets are masked. Configure FlowDashboard:BasicAuth or FlowDashboard:Authorization (OpenID Connect / Keycloak).")]
+    public static partial void UnprotectedReadOnly(ILogger logger, string environment);
+
+    [LoggerMessage(EventId = 4104, Level = LogLevel.Error, Message = "Flow dashboard has no authentication configured in the '{Environment}' environment and FlowDashboard:AllowAnonymousOperators is true: anyone who can reach it can trigger, re-run, cancel and signal flows, change schedules, and read webhook secrets. Configure FlowDashboard:BasicAuth or FlowDashboard:Authorization (OpenID Connect / Keycloak).")]
+    public static partial void UnprotectedAnonymousOperators(ILogger logger, string environment);
+
+    [LoggerMessage(EventId = 4105, Level = LogLevel.Warning, Message = "Flow dashboard has no authentication configured. Anonymous callers have full operator access because the host runs in the Development environment; outside Development the dashboard becomes read-only. Configure FlowDashboard:BasicAuth or FlowDashboard:Authorization before deploying.")]
+    public static partial void UnprotectedInDevelopment(ILogger logger);
 }
