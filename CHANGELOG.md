@@ -29,6 +29,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   GHSA-358q-p9gq-3m6p (dashboard attribute encoding) and GHSA-8248-pg9c-cp7c (step inputs resolved in a
   single pass). The behaviour change is described there.
 
+### Changed — **breaking:** webhook security defaults to `Enforce`
+
+- `WebhookSecurityOptions.EnforcementMode` now defaults to `WebhookEnforcementMode.Enforce` (was `Off`).
+  Under `Off` the pipeline accepted every request before any gate ran, so a trigger that declared
+  `webhookSignatureScheme` + `webhookHmacKey`, IP lists, a rate limit or a replay tolerance was silently
+  not protected. Triggers that declare none of these are unaffected. Hosts whose publishers are not yet
+  signing correctly set `UseWebhookSecurity(s => s.UseEnforcementMode(WebhookEnforcementMode.Audit))` while
+  they fix them; `Off` remains available as an explicit choice.
+
 ### Changed — **breaking:** Hangfire is an opt-in runtime, no longer a dependency of everything
 
 Hangfire remains a first-class, fully supported runtime. What changes is that it is now only in the

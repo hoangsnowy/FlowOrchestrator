@@ -447,6 +447,24 @@ expression. Expressions written in the manifest resolve exactly as before. The o
 are ones that (knowingly or not) let a trigger payload inject `@steps(…)` / `@triggerBody()`
 expressions — the vulnerability fixed by GHSA-8248-pg9c-cp7c.
 
+### Webhook security now enforces by default
+
+`WebhookSecurityOptions.EnforcementMode` defaults to `Enforce` (1.x: `Off`). Under the old default the
+pipeline accepted every request before any gate ran, so the gates a trigger declared — signature scheme
+and HMAC key, IP allow / deny, rate limit, replay tolerance — were not applied. After upgrading they are.
+
+- A trigger with no gate inputs behaves exactly as before.
+- A trigger with gate inputs whose senders do not satisfy them now gets `401` (signature), `403` (IP),
+  `429` (rate limit) or `409` (replay) instead of `200`.
+
+Before upgrading, check `/flows/api/webhooks/stats` or the DLQ under `Audit` for a release cycle, or set
+the mode explicitly to keep the old behaviour while you fix senders:
+
+```csharp
+builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhookSecurity(sec =>
+    sec.UseEnforcementMode(WebhookEnforcementMode.Audit)));   // or .Off
+```
+
 ### Smaller changes
 
 - `@triggerHeaders()['name']` is case-insensitive in every step on SQL Server / PostgreSQL storage

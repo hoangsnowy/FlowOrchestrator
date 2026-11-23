@@ -65,8 +65,8 @@ public sealed class FlowDashboardOptions
     /// <summary>
     /// Enterprise webhook hardening pipeline (HMAC signature verification, replay
     /// protection, rate limiting, body-size cap, DLQ). Defaults to
-    /// <see cref="WebhookEnforcementMode.Off"/>; set
-    /// <c>UseWebhookSecurity(...)</c> to opt in.
+    /// <see cref="WebhookEnforcementMode.Enforce"/>; configure it with
+    /// <c>UseWebhookSecurity(...)</c>.
     /// </summary>
     public WebhookSecurityOptions WebhookSecurity { get; set; } = new();
 

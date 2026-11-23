@@ -206,10 +206,34 @@ public sealed class WebhookHardeningPipelineE2ETests
     }
 
     [Fact]
+    public async Task Default_mode_enforces_a_declared_signature_scheme()
+    {
+        // Arrange — 2.0 defaults to Enforce: a flow that declares a scheme + key is verified without opt-in.
+        using var server = new DashboardTestServer();
+        using var client = server.CreateClient();
+        var id = Guid.NewGuid();
+        var flow = MakeGitHubWebhookFlow(id, "secret");
+        server.Flows = new FlowRegistry(new[] { flow });
+        server.FlowStore.GetByIdAsync(id).Returns(new FlowDefinitionRecord { Id = id, IsEnabled = true });
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/github-events")
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes("{}")) { Headers = { { "Content-Type", "application/json" } } },
+        };
+        req.Headers.Add("X-Hub-Signature-256", "sha256=" + new string('0', 64));
+
+        // Act
+        using var response = await client.SendAsync(req);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Off_mode_passes_through_bad_signature()
     {
-        // Arrange — default Off mode skips every gate.
-        using var server = new DashboardTestServer();
+        // Arrange — an explicit Off mode skips every gate.
+        using var server = new DashboardTestServer(o => o.UseWebhookSecurity(s => s.UseEnforcementMode(WebhookEnforcementMode.Off)));
         using var client = server.CreateClient();
         var id = Guid.NewGuid();
         var offFlow = MakeGitHubWebhookFlow(id, "secret");

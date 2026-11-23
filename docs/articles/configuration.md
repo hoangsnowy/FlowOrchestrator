@@ -227,7 +227,7 @@ Or via `appsettings.json`:
 | `BasicAuth.Username` | `string?` | — | Basic Auth username |
 | `BasicAuth.Password` | `string?` | — | Basic Auth password |
 | `BasicAuth.Realm` | `string` | `"FlowOrchestrator Dashboard"` | `WWW-Authenticate` realm returned in 401 responses |
-| `WebhookSecurity` | `WebhookSecurityOptions` | (Off) | Enterprise webhook hardening pipeline. Configure via `UseWebhookSecurity(b => …)` — see below. |
+| `WebhookSecurity` | `WebhookSecurityOptions` | (Enforce) | Enterprise webhook hardening pipeline. Configure via `UseWebhookSecurity(b => …)` — see below. |
 
 > [!NOTE]
 > Basic Auth is enforced when **both** `BasicAuth.Username` and `BasicAuth.Password` are set. There is no separate `Enabled` flag — leaving either blank disables authentication.

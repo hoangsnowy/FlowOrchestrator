@@ -5,14 +5,23 @@ namespace FlowOrchestrator.Dashboard.Webhooks;
 
 /// <summary>
 /// Root configuration for the webhook hardening pipeline. Lives under
-/// <see cref="FlowDashboardOptions.WebhookSecurity"/> and is opt-in: with the
-/// default <see cref="WebhookEnforcementMode.Off"/> the dashboard webhook
-/// endpoint behaves exactly as it did before v1.25.0.
+/// <see cref="FlowDashboardOptions.WebhookSecurity"/>. Since 2.0 the default mode is
+/// <see cref="WebhookEnforcementMode.Enforce"/>: every gate a flow's trigger declares (signature
+/// scheme + key, IP lists, rate limit, replay tolerance) rejects violating requests. A flow that declares
+/// no gate inputs is unaffected.
 /// </summary>
 public sealed class WebhookSecurityOptions
 {
-    /// <summary>How rejecting gates behave. <see cref="WebhookEnforcementMode.Off"/> by default for backwards compatibility.</summary>
-    public WebhookEnforcementMode EnforcementMode { get; set; } = WebhookEnforcementMode.Off;
+    /// <summary>
+    /// How rejecting gates behave. <see cref="WebhookEnforcementMode.Enforce"/> by default.
+    /// </summary>
+    /// <remarks>
+    /// 1.x defaulted to <see cref="WebhookEnforcementMode.Off"/>, which accepted every request before any gate
+    /// ran — a flow that declared an HMAC key and signature scheme was still not verified. Choose
+    /// <see cref="WebhookEnforcementMode.Audit"/> explicitly to record violations without rejecting while a
+    /// publisher is being onboarded.
+    /// </remarks>
+    public WebhookEnforcementMode EnforcementMode { get; set; } = WebhookEnforcementMode.Enforce;
 
     /// <summary>
     /// Allow HMAC-SHA1 signatures (legacy GitHub <c>X-Hub-Signature</c>). SHA-1
