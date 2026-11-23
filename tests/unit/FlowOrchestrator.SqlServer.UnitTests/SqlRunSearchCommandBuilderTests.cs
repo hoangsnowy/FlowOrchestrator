@@ -91,6 +91,7 @@ public sealed class SqlRunSearchCommandBuilderTests
 
         // Assert
         Assert.Contains("WITH (INDEX(IX_FlowRuns_StartedAt_Search))", command.Sql);
+        Assert.Contains("AS m INNER JOIN FlowRuns AS fr ON fr.Id = m.Id ORDER BY m.StartedAt DESC, m.Id;", command.Sql);   // no sort of the wide rows
         Assert.Contains("fr.RunSearchText LIKE @LowerLike ESCAPE '\\'", command.Sql);
         Assert.Contains("fr.StartedAt >= @StartedFrom", command.Sql);
         Assert.Equal("%order\\_100\\%%", Param<string>(command, "LowerLike"));

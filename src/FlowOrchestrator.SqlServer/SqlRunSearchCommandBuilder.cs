@@ -168,10 +168,12 @@ internal static class SqlRunSearchCommandBuilder
             if (schema.SearchColumn && schema.SearchIndex)
             {
                 // Scan the narrow index (StartedAt, RunSearchText, FlowId, Status + Id) for the page's ids,
-                // then read the full rows of those ids only.
+                // then read the full rows of those ids only. The outer order is the inner (index) order —
+                // ORDER BY m.*, not fr.* — so the key lookups keep it and nothing sorts the wide rows
+                // (a sort of rows carrying TriggerDataJson spills its LOBs to a worktable).
                 sql.Append("SELECT ").Append(Columns).Append(" FROM (SELECT ").Append(page).Append("fr.Id, fr.StartedAt FROM FlowRuns AS fr WITH (INDEX(IX_FlowRuns_StartedAt_Search))")
                    .Append(Where(filters)).Append(OrderBy).Append(offset)
-                   .Append(") AS m INNER JOIN FlowRuns AS fr ON fr.Id = m.Id").Append(OrderBy).Append(";\n");
+                   .Append(") AS m INNER JOIN FlowRuns AS fr ON fr.Id = m.Id ORDER BY m.StartedAt DESC, m.Id;\n");
             }
             else
             {

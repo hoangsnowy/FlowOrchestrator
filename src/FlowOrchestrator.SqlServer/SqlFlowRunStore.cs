@@ -396,8 +396,16 @@ public sealed class SqlFlowRunStore :
     /// <param name="query">The structured run query.</param>
     /// <returns>The batch text, its parameters, and whether a count result set follows the rows.</returns>
     internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query)
+        => BuildSearchRunsCommand(query, tokenIndex: false);
+
+    /// <summary>As <see cref="BuildSearchRunsCommand(RunSearchQuery)"/>, optionally with a fully back-filled token index.</summary>
+    /// <param name="query">The structured run query.</param>
+    /// <param name="tokenIndex">Build the deep-search shape that probes <c>FlowRunSearchTokens</c>.</param>
+    /// <returns>The batch text, its parameters, and whether a count result set follows the rows.</returns>
+    internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query, bool tokenIndex)
     {
-        var command = SqlRunSearchCommandBuilder.Build(query, SqlRunSearchSchema.Complete);
+        var schema = tokenIndex ? SqlRunSearchSchema.Complete with { TokenTable = true } : SqlRunSearchSchema.Complete;
+        var command = SqlRunSearchCommandBuilder.Build(query, schema);
         return (command.Sql, command.Parameters, command.CountsTotal);
     }
 
