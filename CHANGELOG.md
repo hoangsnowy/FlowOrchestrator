@@ -178,6 +178,18 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   the in-memory runtime and Service Bus, which all sync through it. Only a cron rejection
   (`ArgumentException` / `FormatException`) is absorbed; an invalid manifest cron or any other runtime
   failure still propagates.
+- **Startup recovery honours `When` clauses.** `When` is evaluated only when a step is scheduled, and
+  recovery dispatched a Ready step from its statuses alone — so a host that died between a parent's
+  completion and its continuation ran a child whose `When` was false on restart (a "refund when
+  amount > 100" step ran for an amount of 5). Recovery now evaluates the clause first and records the
+  step `Skipped` with the same reason and evaluation trace the continuation writes, records dependents
+  whose prerequisites can no longer be met as skipped, and repeats until the run is stable — then closes it
+  if nothing is left.
+- **One failed recovery dispatch no longer abandons the rest of the run.** A dispatch that threw ended the
+  run's recovery pass, so its other ready steps (and loop admissions) waited for the next restart. The
+  failure is now logged (EventId 5026), its ledger row released as before, and the remaining steps are
+  still dispatched; the run is not closed while a dispatch failed. Recovery logs moved to
+  `LoggerMessage` (EventIds 5020-5032).
 
 ### Security
 

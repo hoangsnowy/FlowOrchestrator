@@ -79,7 +79,7 @@ The sequence from trigger to completion:
 1. Validates each registered `IFlowDefinition` via `IFlowGraphPlanner.Validate` — an invalid manifest throws `InvalidOperationException` and fails startup — then calls `IFlowStore.SaveAsync` to upsert the flow record in the database.
 2. Synchronises cron triggers through `IRecurringTriggerSync.SyncTriggersAsync(flowId, isEnabled)`. Core's single `RecurringTriggerSync` resolves the effective cron — removed for disabled flows and dashboard-paused schedules, the persisted override from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true`, else the manifest cron — and hands it to the runtime's `IRecurringTriggerDispatcher` (Hangfire `IRecurringJobManager`, the in-process `PeriodicTimer` registry, or Service Bus scheduled messages). Job ids come from `RecurringTriggerJobId` (`flow-{flowId}-{triggerKey}`).
 
-`FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart.
+`FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart. Recovery is a scheduling path, so it applies the same rules as the graph continuation before dispatching: a ready step whose `When` clause is false is recorded `Skipped` (with its evaluation trace) instead of running, a step whose prerequisites finished in an unaccepted status is skipped, and a dispatch that throws is logged without abandoning the run's other steps.
 
 This means the database always reflects the code — no manual migration step required when you add or rename a flow.
 

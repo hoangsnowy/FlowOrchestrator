@@ -2,6 +2,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Execution.Internal;
+using FlowOrchestrator.Core.Expressions;
 using FlowOrchestrator.Core.Hosting.Internal;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Hosting;
@@ -17,6 +18,12 @@ namespace FlowOrchestrator.Core.Hosting;
 /// Runs once during <see cref="StartAsync"/>. For each active (Running) run, evaluates the DAG
 /// and re-dispatches any ready step whose dispatch record is missing — indicating that the previous
 /// host crashed between persisting a result and enqueuing the next step.
+/// </para>
+/// <para>
+/// Recovery applies the same schedule-time rules as the engine's graph continuation before it dispatches:
+/// a ready step whose <c>When</c> clause is false is recorded <c>Skipped</c> (with its evaluation trace), a
+/// step whose prerequisites finished in an unaccepted status is recorded skipped, and the pass repeats until
+/// it writes nothing. A dispatch that throws is logged and the run's remaining steps are still recovered.
 /// </para>
 /// <para>
 /// Two layers of safety prevent duplicate execution even when multiple replicas start simultaneously:
@@ -100,12 +107,16 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         _logger.LogInformation(
             "FlowRunRecoveryHostedService: found {Count} active run(s) to evaluate for recovery.", activeRuns.Count);
 
+        // The same evaluator the engine builds: recovery is a scheduling path, so a ready step's When clause
+        // must be applied before it is dispatched (RunStepAsync never re-checks it).
+        var whenGate = new WhenSkipGate(new WhenClauseEvaluator(_outputsRepository, _runStore), _runtimeStore, _logger);
         var recoverer = new RunRecoverer(
             _runStore,
             _runtimeStore,
             _graphPlanner,
             _dispatcher,
             _outputsRepository,
+            whenGate,
             _logger,
             _orphanedClaimTimeout);
 
