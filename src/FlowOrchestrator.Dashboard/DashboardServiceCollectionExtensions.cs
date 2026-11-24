@@ -251,6 +251,7 @@ public static class DashboardServiceCollectionExtensions
         var isDevelopment = environment is not null
             && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(environment);
         ValidateAndReportAccessConfiguration(endpoints.ServiceProvider, options, environment, isDevelopment);
+        ValidateWebhookSignatureSchemes(endpoints.ServiceProvider, options.WebhookSecurity);
         group.AddEndpointFilter(new Security.DashboardAccessFilter(
             options,
             basePath,
@@ -1852,6 +1853,47 @@ public static class DashboardServiceCollectionExtensions
 
         /// <summary>Declared or streamed body length exceeded the configured cap.</summary>
         TooLarge,
+    }
+
+    /// <summary>
+    /// Fails fast when a registered flow's webhook trigger names a signature scheme that nothing can verify — an
+    /// unknown name, or <c>Custom</c> with an unregistered payload strategy — instead of rejecting every delivery
+    /// to it at run time.
+    /// </summary>
+    /// <param name="services">The root service provider.</param>
+    /// <param name="webhookSecurity">The host's webhook security options.</param>
+    /// <exception cref="InvalidOperationException">A webhook trigger names an unverifiable scheme.</exception>
+    private static void ValidateWebhookSignatureSchemes(IServiceProvider services, WebhookSecurityOptions webhookSecurity)
+    {
+        // Off verifies nothing by design, so a scheme name cannot matter there. Flows are read from the root
+        // provider, like the restricted-signal check; a host that registers its FlowRegistry per scope still
+        // gets the request-time rejection.
+        if (webhookSecurity.EnforcementMode == WebhookEnforcementMode.Off || services.GetService<FlowRegistry>() is not { } registry)
+            return;
+
+        var customVerifiers = services.GetService<WebhookCustomVerifierRegistry>();
+        var checkStrategies = services.GetService<IWebhookSignatureVerifier>() is HmacSignatureVerifier;
+        var customSchemes = webhookSecurity.CustomSchemes.Count == 0
+            ? null
+            : new Dictionary<string, WebhookSignatureSpec>(webhookSecurity.CustomSchemes, StringComparer.OrdinalIgnoreCase);
+        foreach (var flow in registry.Flows)
+        {
+            foreach (var (key, trigger) in flow.Manifest.Triggers)
+            {
+                if (trigger.Type != TriggerType.Webhook
+                    || !trigger.Inputs.TryGetValue("webhookSignatureScheme", out var schemeObj)
+                    || schemeObj?.ToString() is not { } scheme
+                    || customVerifiers?.Contains(scheme) == true)
+                    continue;
+
+                var inputs = new Dictionary<string, object?>(trigger.Inputs, StringComparer.OrdinalIgnoreCase);
+                var spec = WebhookSignatureSpecResolver.Resolve(inputs, customSchemes);
+                if (WebhookSecurityPipeline.DescribeUnverifiableScheme(scheme, spec, webhookSecurity, checkStrategies) is { } problem)
+                    throw new InvalidOperationException(
+                        $"Flow '{flow.GetType().Name}' ({flow.Id}), webhook trigger '{key}', sets webhookSignatureScheme to {problem}. " +
+                        $"Its deliveries could never be verified and would all be rejected. Use a built-in scheme name, or register the scheme before mapping the dashboard.");
+            }
+        }
     }
 
     /// <summary>

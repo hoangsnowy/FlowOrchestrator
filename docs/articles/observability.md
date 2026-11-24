@@ -145,7 +145,7 @@ red without any extra configuration.
 | `flow_signal_wait_ms` | histogram | ms | `flow_id`, `step_key`, `signal_name` — recorded by `FlowSignalDispatcher` on delivery |
 | `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory`) — gap between scheduled fire and actual dispatch. The Service Bus runtime does not currently emit cron-lag samples. |
 | `webhook_received_total` | counter | webhooks | `flow`, `result` (`accepted` / `rejected` / `off`), `scheme` — emitted on every webhook receive (v1.25) |
-| `webhook_rejected_total` | counter | webhooks | `flow`, `reason` (`signature_invalid` / `replay` / `rate_limited` / `payload_too_large` / `ip_denied` / `secret_invalid`) (v1.25) |
+| `webhook_rejected_total` | counter | webhooks | `flow`, `reason` (`signature_invalid` / `replay` / `rate_limited` / `payload_too_large` / `ip_denied` / `secret_invalid` / `signature_scheme_unknown`) (v1.25) |
 | `webhook_body_bytes` | histogram | bytes | `flow` — body size of every webhook receive (v1.25) |
 | `webhook_processing_ms` | histogram | ms | `flow`, `result` — wall-clock pipeline processing time (v1.25) |
 
@@ -213,12 +213,13 @@ ReplayRejected                = 4002   // skew or nonce reused — warning
 RateLimited                   = 4003   // token bucket empty — warning
 PayloadTooLarge               = 4004   // body cap exceeded — warning
 IpDenied                      = 4005   // CIDR allow/deny miss — warning
-SecretInvalid                 = 4006   // bearer-secret mismatch — warning
+SecretInvalid                 = 4006   // legacy X-Webhook-Key / bearer-secret mismatch — warning
 DeliveryAccepted              = 4007   // run dispatched — info
 RejectionStoreFailed          = 4008   // DLQ write failed — warning
 ReplayStoreFailed             = 4009   // replay store error — warning
 RotationUsedPreviousKey       = 4010   // accepted with rotated-out key — info
 ConflictingKeyFields          = 4011   // both webhookHmacKey and webhookSecret configured — warning
+SignatureSchemeUnknown        = 4012   // webhookSignatureScheme names a scheme nothing can verify — error
 ```
 
 The `flow.trigger` activity also receives a `flow.disabled = true` tag when the engine

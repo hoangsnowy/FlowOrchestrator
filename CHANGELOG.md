@@ -497,6 +497,23 @@ where one provider behaved differently from the others.
 
 ### Security
 
+- **A webhook signature scheme nothing can verify no longer turns signature checking off.** When a
+  trigger's `webhookSignatureScheme` named a scheme that is not built in, not registered with
+  `RegisterScheme` / `AddWebhookSignatureVerifier`, or was `Custom` with an unregistered
+  signed-payload strategy, the pipeline found no spec and skipped the signature gate, so unsigned
+  deliveries were accepted. Such a delivery is now rejected with `401` and reason
+  `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
+  EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
+  `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
+- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote.** Proxies append the
+  address they received the request from, so behind N trusted proxies the caller is the
+  `X-Forwarded-For` entry N positions from the right. The pipeline read the entry one further left,
+  which the caller supplies itself: with `UseForwardedHeaders(1)` behind a single proxy, any caller could
+  pick the address used for `webhookIpAllowList` / deny lists and per-IP rate limiting, and a caller
+  that sent no header got the proxy's address. The client is now `hops[^N]` (the same rule as ASP.NET
+  Core's `ForwardedHeadersMiddleware` with `ForwardLimit = N`); with fewer than N entries the socket
+  address is used. **Check your setting:** it must equal the number of proxies in front of the app. A
+  value raised by one to compensate for the old behaviour now trusts a caller-supplied entry.
 - **Read-only dashboard callers no longer see credentials whose names use separators.** Values are masked
   for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
   name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
