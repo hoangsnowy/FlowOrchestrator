@@ -463,6 +463,18 @@ visible:
 
 `Development` hosts are unchanged (EventId 4105, Warning).
 
+### Signal endpoint: per-signal authorization and bearer tokens
+
+New and opt-in: a `WaitForSignal` step can restrict who may deliver its signal (`allowedRoles` /
+`authorizationPolicy`), and `FlowDashboard:Authorization:AdditionalAuthenticationSchemes` lets API clients
+sign in with a bearer token — see [WaitForSignal → Security](wait-for-signal.md#security). Existing flows and
+configuration behave as before, except:
+
+- a request with an `Authorization` header other than Basic that no scheme accepts answers **`401`** instead
+  of redirecting to the identity provider, page requests included;
+- `POST …/signals/{name}` checks the run before the body: a missing run answers `404` to operators and `403`
+  to everyone else even when the body is not valid JSON (it used to be `400`).
+
 ### Step inputs are resolved in a single pass (since 1.34.2)
 
 Each manifest input is classified once from the manifest's own text. A value substituted from the

@@ -32,6 +32,7 @@ Fields:
 
 - `signalName` (optional, defaults to `"default"`) — the logical name addressed by the signal endpoint. Must be unique among the parked `WaitForSignal` steps in the same run, so always set it explicitly when a run has more than one waiter. Supplying an explicitly empty or whitespace value fails the step with `WaitForSignal step requires a non-empty 'signalName' input.`
 - `timeoutSeconds` (optional) — absolute deadline. When elapsed without delivery, the step transitions to `Failed` with a descriptive reason. `null` or non-positive values mean "wait forever".
+- `allowedRoles` (optional, string array) and `authorizationPolicy` (optional, policy name) — restrict who may deliver the signal over HTTP. See [Restricted signals](#restricted-signals).
 
 ## End-to-End Example
 
@@ -122,14 +123,23 @@ public sealed class ApprovalService(IFlowSignalDispatcher signals)
 
 The returned `SignalDeliveryResult` carries the same outcomes the HTTP endpoint maps to 200 / 404 / 409.
 
+`IFlowSignalDispatcher` performs **no authorization** — not the operator rule, not a step's
+`allowedRoles` / `authorizationPolicy`. That is by design: code running in your process is trusted, and
+deciding who may approve is your application's job on that path (check the current user before you call
+`DispatchAsync`). Only the HTTP endpoint enforces restrictions.
+
 ## Endpoint Status Codes
+
+Checked in this order: authentication, authorization, run state, body.
 
 | Status | Meaning |
 |---|---|
 | `200` | Signal delivered. Body includes `stepKey` and `deliveredAt`. |
-| `404` | Run does not exist, or no waiter is registered for that signal name on the run. |
+| `401` | Not signed in (no session, or a bearer token no scheme accepts). |
+| `403` | The caller may not deliver this signal — see [Security](#security). Also the answer to a caller who is not an operator when the run does not exist, so the endpoint cannot be used to probe run ids. |
+| `404` | Run does not exist (operators only), or no waiter is registered for that signal name on the run. |
 | `409` | A signal has already been delivered for this waiter — second delivery rejected. |
-| `400` | Body is not valid JSON, or run is no longer in `Running` status. |
+| `400` | Run is no longer in `Running` status, or the body is not valid JSON. |
 
 ## Timeout Patterns
 
@@ -187,12 +197,141 @@ Manager and finance each POST to their respective signal name; only when both ha
 
 ## Security
 
-The signal endpoint accepts any JSON body and is **not** authenticated by default. Production deployments should:
+The signal endpoint is part of the dashboard and is protected the same way — see
+[Securing the dashboard](dashboard-security.md). Delivering a signal changes state, so by default it is an
+**operator** action. A step can narrow that to named approvers ([restricted signals](#restricted-signals)).
 
-1. Wrap the dashboard route group in your standard auth middleware (`UseAuthentication()` / `UseAuthorization()` before `MapFlowDashboard()`).
-2. Or front the dashboard with API gateway / mTLS / service-mesh policy that verifies the caller has authority to deliver signals.
+### Who may deliver a signal
 
-The endpoint enforces only one structural check beyond your middleware: the run must be in `Running` status. A delivered signal cannot resurrect a cancelled or completed run.
+| Caller | Unrestricted signal | Restricted signal |
+|---|---|---|
+| No authentication configured, `Development` or `AllowAnonymousOperators: true` | `200` | `403` |
+| No authentication configured, any other environment (read-only) | `403` | `403` |
+| Authentication configured, no credentials | `401` | `401` |
+| Basic Auth (the shared account) | `200` | `403` |
+| Signed in (OIDC session or bearer token) with an operator role | `200` | `200` only if the caller satisfies the restriction |
+| Signed in, viewer role only | `403` | `200` only if the caller satisfies the restriction |
+| Signed in, no dashboard role | `403` | `200` only if the caller satisfies the restriction |
+
+Whatever the caller, a delivered signal cannot resurrect a cancelled or completed run: the run must be in
+`Running` status.
+
+### Restricted signals
+
+Add `allowedRoles` and / or `authorizationPolicy` to the step:
+
+```csharp
+["wait_finance"] = new StepMetadata
+{
+    Type = "WaitForSignal",
+    Inputs = new Dictionary<string, object?>
+    {
+        ["signalName"]   = "finance-approval",
+        ["allowedRoles"] = new[] { "finance-approver" },     // any one of them
+        // ["authorizationPolicy"] = "FinanceLead",          // AddAuthorization(o => o.AddPolicy("FinanceLead", …))
+        ["timeoutSeconds"] = 86400
+    }
+}
+```
+
+The endpoint then delivers `finance-approval` only to a caller who:
+
+- is an identity signed in through `FlowDashboard:Authorization` — the OIDC cookie, or any of its
+  `AdditionalAuthenticationSchemes` such as a bearer token. **Basic Auth and anonymous callers are always
+  refused**, in `Development` and with `AllowAnonymousOperators` too: the shared Basic account has no
+  identity to approve with;
+- has **any** of `allowedRoles`, matched like the viewer / operator roles (`roles` / `role` claims,
+  `IsInRole`, and Keycloak's `realm_access` / `resource_access` once `AddFlowDashboardKeycloakRoles` is
+  registered);
+- satisfies `authorizationPolicy`, when set. With both set, the caller needs both.
+
+Rules worth knowing:
+
+- **The operator role does not bypass a restriction**, and an approver does not need a viewer or operator
+  role for this endpoint. A finance approver with no dashboard role can approve but cannot list runs.
+- **Both inputs must be static**, and so must the step's `signalName`: the endpoint decides which step a
+  signal addresses from the manifest, before it writes anything. A restriction declared in a `ForEach` or
+  other scope applies to every iteration.
+- **The dashboard host must register the flow.** The restriction is read from the flows registered (with
+  `AddFlow`) in the process that serves the dashboard. A run of a flow that process does not know keeps the
+  plain operator rule, so in a split deployment register the same flows on the dashboard host as on the
+  workers.
+- When several `WaitForSignal` steps share a signal name, the caller must satisfy **every** restricted one:
+  the store delivers to whichever waiter is oldest, so the check covers every step the delivery can reach.
+- **Validated at startup.** `MapFlowDashboard` throws when a restriction is malformed (`allowedRoles` not a
+  non-empty string array, an expression in either input, a non-static `signalName`) or names a policy that is
+  not registered. A restriction that slips past (flows registered per scope) is refused with `403` at request
+  time, never delivered.
+- **Audit log.** Every restricted delivery logs EventId `4107` (Information) with the user, run, signal and
+  step; every refused delivery logs `4108` (Warning). Startup logs `4106` (Warning) when flows declare
+  restrictions but identity sign-in is not configured — such signals can then only be delivered in-process.
+- **The page follows suit.** Run detail carries a `signalAuthorization` entry for each parked restricted step
+  (`allowedRoles`, `policy`, `canSignal`); **Send signal** is shown only to callers who qualify — also in
+  view-only mode — and everyone else sees who may approve ("Requires role: finance-approver").
+
+### Machine-to-machine: approving with a bearer token
+
+A system that approves on someone's behalf (an ERP, a ticketing workflow) authenticates as a Keycloak
+**service account** with the client-credentials grant and presents the access token to the signal endpoint.
+
+1. In Keycloak, create a client `erp-approvals` with **Client authentication** on and only
+   **Service accounts roles** enabled. On its *Service account roles* tab assign the realm role
+   `finance-approver`. Add an *Audience* mapper so its access tokens carry `aud: flow-dashboard`.
+2. Register a JWT bearer scheme next to the cookie / OIDC schemes (package
+   `Microsoft.AspNetCore.Authentication.JwtBearer`) and list it in `AdditionalAuthenticationSchemes`:
+
+   ```csharp
+   builder.Services
+       .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+       .AddCookie()
+       .AddOpenIdConnect("oidc", o => { /* as in Securing the dashboard */ })
+       .AddJwtBearer("Bearer", o =>
+       {
+           o.Authority = "https://keycloak.example.com/realms/flow-orchestrator";
+           o.Audience = "flow-dashboard";
+           o.MapInboundClaims = false;
+           o.TokenValidationParameters.NameClaimType = "preferred_username";
+           o.TokenValidationParameters.RoleClaimType = "roles";
+       });
+
+   // Turns the token's realm_access.roles into role claims (client roles only for "flow-dashboard").
+   builder.Services.AddFlowDashboardKeycloakRoles(clientId: "flow-dashboard");
+   ```
+
+   ```json
+   "FlowDashboard": {
+     "Authorization": {
+       "AuthenticationScheme": "Cookies",
+       "ChallengeScheme": "oidc",
+       "AdditionalAuthenticationSchemes": [ "Bearer" ]
+     }
+   }
+   ```
+
+3. Fetch a token and deliver the signal:
+
+   ```bash
+   TOKEN=$(curl -s -X POST \
+     https://keycloak.example.com/realms/flow-orchestrator/protocol/openid-connect/token \
+     -d grant_type=client_credentials -d client_id=erp-approvals -d "client_secret=$ERP_CLIENT_SECRET" \
+     | jq -r .access_token)
+
+   curl -X POST https://flows.example.com/flows/api/runs/$RUN_ID/signals/finance-approval \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"approved":true,"approvedBy":"erp"}'
+   ```
+
+The audit log names the caller as `service-account-erp-approvals` (Keycloak's `preferred_username` for a
+service account). An expired or forged token gets `401` with the bearer handler's `WWW-Authenticate`
+header — never a redirect to the login page. The same token works on the rest of the API with whatever
+viewer / operator roles the service account holds; give it only the approver role if approving is all it
+should do.
+
+### In-process delivery
+
+`IFlowSignalDispatcher` is not authorized at all — see [Delivering a Signal In-Process](#delivering-a-signal-in-process).
+If your application exposes its own approval endpoint, enforce who may approve there.
 
 ## Resume Latency
 
@@ -254,7 +393,7 @@ Waiters live in your configured storage (`FlowSignalWaiters` table for SQL Serve
 
 For deliberate simplicity, this primitive does **not** include:
 
-- HMAC-signed signal endpoints. Use auth middleware instead.
+- HMAC-signed signal endpoints. Authenticate callers with identity sign-in or a bearer token instead ([Security](#security)).
 - Broadcast multi-recipient signals. Each waiter is identified by `(RunId, StepKey)`; one signal targets one waiter.
 - Signal cancellation API. Cancel the run instead.
 - Long-poll API for callers waiting for delivery confirmation.

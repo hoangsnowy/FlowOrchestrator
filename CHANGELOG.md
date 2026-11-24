@@ -10,6 +10,44 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Added — per-signal authorization and bearer-token access for `WaitForSignal`
+
+- **Restricted signals.** A `WaitForSignal` step can name who may deliver its signal with two new static
+  inputs: `allowedRoles` (any one of them) and `authorizationPolicy` (an ASP.NET Core policy registered with
+  `AddAuthorization`); with both set the caller needs both. `POST {base}/api/runs/{runId}/signals/{signalName}`
+  then admits only an identity signed in through `FlowDashboard:Authorization` that satisfies the
+  restriction. **The `flow-operator` role does not bypass it**, Basic Auth and anonymous callers (also in
+  `Development` and with `AllowAnonymousOperators`) get `403`, and an approver needs no viewer or operator
+  role for that one endpoint. The check runs before the payload is written; the step is resolved from the
+  manifest, `ForEach` / scope children included. Unrestricted signals keep the operator rule. See
+  [WaitForSignal → Security](docs/articles/wait-for-signal.md#security).
+- **Machine-to-machine access.** `FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes`
+  (default none) lists extra schemes — e.g. `"Bearer"` from `AddJwtBearer` — tried after
+  `AuthenticationScheme`, so a Keycloak service account (client credentials) can deliver signals and call
+  the API with an access token. Same roles, policies and restrictions apply.
+- **Audit:** EventId `4107` (Information) records who delivered a restricted signal (user, run, signal,
+  step); `4108` (Warning) records every refused signal delivery; `4106` (Warning) at startup when flows
+  declare restricted signals but identity sign-in is not configured. The stored payload is unchanged.
+- **Run detail** (`GET {base}/api/runs/{id}`) gains a `signalAuthorization` object — only while a restricted
+  `WaitForSignal` step is parked — with the step's `allowedRoles`, `policy` name, `misconfigured` and the
+  caller's `canSignal`. The page shows **Send signal** only to callers who qualify (also in view-only mode)
+  and otherwise a "Requires role: …" chip.
+- `WaitForSignalInput.AllowedRoles` / `.AuthorizationPolicy` document the inputs. `IFlowSignalDispatcher`
+  is unchanged and stays unauthenticated by design: in-process delivery is trusted and the host owns
+  authorization there.
+
+#### Read before upgrading
+
+- Nothing changes unless a step declares `allowedRoles` / `authorizationPolicy` or you set
+  `AdditionalAuthenticationSchemes`, with two small exceptions: a request that carries an `Authorization`
+  header other than Basic and is not accepted now gets `401` instead of the identity-provider redirect
+  (page requests included), and the signal endpoint looks the run up before it validates the body, so a
+  missing run answers `404` (operators) / `403` (everyone else) even when the body is not valid JSON.
+- Startup (`MapFlowDashboard`) fails fast when a restricted step is malformed (`allowedRoles` not a non-empty
+  string array, an expression in either input, or a non-static `signalName`), names an unregistered policy,
+  or when `AdditionalAuthenticationSchemes` names an unregistered scheme or is set without
+  `AuthenticationScheme`.
+
 ### Changed — dashboard UI
 
 - **Dashboard redesigned as a dense operator view.** Overview leads with a "Needs attention" list
@@ -153,6 +191,10 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 
 ### Security
 
+- **Approvals can be bound to the approver.** Before, any operator could deliver any signal of any run;
+  a `WaitForSignal` step can now restrict delivery to named roles or a policy (see *Added — per-signal
+  authorization* above). A restricted signal cannot be delivered with the shared Basic Auth account or
+  anonymously, and every delivery and refusal is logged with the caller's identity.
 - Includes the fix released in 1.34.4 (see the `[1.34.4]` section below): GHSA-5mx6-chp3-36c4, webhook
   replay protection judges freshness from the signed timestamp. Its "Read before upgrading" notes apply.
 - Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):

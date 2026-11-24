@@ -104,17 +104,72 @@ found in access tokens (useful with `AddJwtBearer` for API clients).
 | `Authorization.AuthenticationScheme` | — | Scheme that authenticates a request (usually the cookie scheme). Unset = identity sign-in off. |
 | `Authorization.ChallengeScheme` | `AuthenticationScheme` | Scheme that signs a browser in (usually `oidc`). |
 | `Authorization.ViewerRoles` | `["flow-viewer"]` | Roles that may read. Operators can always read. `[]` = any signed-in user. |
-| `Authorization.OperatorRoles` | `["flow-operator"]` | Roles that may trigger, rerun, retry, cancel, signal, enable / disable and change schedules. |
+| `Authorization.OperatorRoles` | `["flow-operator"]` | Roles that may trigger, rerun, retry, cancel, deliver unrestricted signals, enable / disable and change schedules. |
 | `Authorization.ViewPolicy` / `OperatePolicy` | — | Authorization policy names that replace the role checks. |
+| `Authorization.AdditionalAuthenticationSchemes` | `[]` | Extra schemes tried after `AuthenticationScheme`, e.g. `["Bearer"]` from `AddJwtBearer` for machine clients. Same roles and policies apply. |
 
 A misnamed scheme fails at startup (`MapFlowDashboard` throws), not on the first request.
+
+### API clients (bearer tokens)
+
+Scripts and services that cannot follow a browser sign-in authenticate with an access token. Register a JWT
+bearer scheme next to the cookie / OIDC ones and list it in `AdditionalAuthenticationSchemes`:
+
+```csharp
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie()
+    .AddOpenIdConnect("oidc", o => { /* as above */ })
+    .AddJwtBearer("Bearer", o =>
+    {
+        o.Authority = "https://keycloak.example.com/realms/flow-orchestrator";
+        o.Audience = "flow-dashboard";
+        o.MapInboundClaims = false;
+        o.TokenValidationParameters.NameClaimType = "preferred_username";
+        o.TokenValidationParameters.RoleClaimType = "roles";
+    });
+builder.Services.AddFlowDashboardKeycloakRoles(clientId: "flow-dashboard");
+```
+
+```json
+"FlowDashboard": {
+  "Authorization": {
+    "AuthenticationScheme": "Cookies",
+    "ChallengeScheme": "oidc",
+    "AdditionalAuthenticationSchemes": [ "Bearer" ]
+  }
+}
+```
+
+A request with a valid cookie never touches the extra schemes. A request that carries an `Authorization`
+header other than Basic and that no scheme accepts gets `401` from the bearer handler's challenge (with its
+`WWW-Authenticate` header), never a redirect to the identity provider. Bearer schemes take no part in
+`/flows/signout`. The roles of a Keycloak service account come from its *Service account roles* tab; a
+complete client-credentials walk-through is in
+[WaitForSignal → Machine-to-machine](wait-for-signal.md#machine-to-machine-approving-with-a-bearer-token).
+
+### Restricting who may approve a signal
+
+By default delivering a signal is an operator action, so any operator can approve any run. A `WaitForSignal`
+step can name its approvers with `allowedRoles` and / or `authorizationPolicy`
+([Restricted signals](wait-for-signal.md#restricted-signals)). For such a signal the dashboard:
+
+- requires an identity signed in through `Authorization` (cookie or additional scheme) that satisfies the
+  restriction — **the operator role does not bypass it**, and Basic Auth or anonymous callers get `403`;
+- lets that approver deliver it **without** a viewer or operator role (only this endpoint; every other route
+  keeps the normal rules);
+- logs every delivery (EventId `4107`) and refusal (`4108`) with the caller's name.
+
+A caller who is not an operator gets `403` — not `404` — for a run that does not exist, so the signal
+endpoint does not reveal which run ids exist.
 
 ### What users see
 
 - The sidebar shows the signed-in user and a **Sign out** link (`/flows/signout` ends the Keycloak
   session too).
 - Viewers get a **View only** badge and no trigger / rerun / retry / cancel / signal / schedule buttons. The
-  server enforces the same rule: those endpoints answer `403` for viewers.
+  server enforces the same rule: those endpoints answer `403` for viewers. The exception is a restricted
+  signal the viewer is an approver for: its **Send signal** button stays; a restricted signal the user may not
+  approve shows who may ("Requires role: finance-approver") instead of the button.
 - When the session expires, the next API call answers `401` and the page signs in again.
 - `GET /flows/api/me` returns `{ method, user, canOperate, canSignOut }` for your own tooling.
 
@@ -148,8 +203,10 @@ side. The demo realm is for local use only.
 - **Client roles.** `AddFlowDashboardKeycloakRoles()` without a `clientId` maps the client roles of
   *every* client in the token; pass the dashboard's client id so another client's `flow-operator` role
   cannot grant access.
-- **Policies.** `ViewPolicy` / `OperatePolicy` must be registered with `AddAuthorization`; an unknown name
-  fails at startup.
+- **Policies.** `ViewPolicy` / `OperatePolicy` and every step's `authorizationPolicy` must be registered with
+  `AddAuthorization`; an unknown name fails at startup.
+- **Bearer audience.** Set `Audience` on `AddJwtBearer` and give the API clients' tokens that audience (a
+  Keycloak *Audience* mapper); without it any token the realm issues for another client would be accepted.
 - **Sign-out.** Keycloak only ends its own session when the logout request carries `id_token_hint` (or
   `client_id`, after a confirmation page). Set `SaveTokens = true` on the OIDC handler; otherwise
   `/flows/signout` clears the dashboard cookie, Keycloak answers "Missing parameters: id_token_hint", and
