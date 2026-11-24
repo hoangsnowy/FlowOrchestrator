@@ -29,11 +29,18 @@ public sealed class InMemoryFlowRunStore :
         _flowStore = flowStore;
     }
 
+    /// <summary>
+    /// Clock that stamps claims and judges their age in <see cref="ReleaseOrphanedClaimsAsync"/>; a seam for
+    /// tests, the system clock otherwise.
+    /// </summary>
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
+
     private readonly ConcurrentDictionary<Guid, FlowRunRecord> _runs = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowStepRecord> _steps = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey, int Attempt), FlowStepAttemptRecord> _stepAttempts = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
-    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), byte> _stepClaims = new();
+    // Value: when the claim was taken (UTC), read by ReleaseOrphanedClaimsAsync.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DateTimeOffset> _stepClaims = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), string?> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
 
@@ -749,7 +756,7 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
     {
-        var claimed = _stepClaims.TryAdd((runId, stepKey), 1);
+        var claimed = _stepClaims.TryAdd((runId, stepKey), Clock.GetUtcNow());
         if (claimed)
         {
             _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
@@ -765,6 +772,43 @@ public sealed class InMemoryFlowRunStore :
             set.TryRemove(stepKey, out _);
         }
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(claims in the run) via the per-run claim index. A claim is removed only if its timestamp is still
+    /// the one that was judged old enough, so a claim re-taken in between is kept.
+    /// </remarks>
+    public Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge)
+    {
+        if (!_claimsByRun.TryGetValue(runId, out var claimSet))
+        {
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        var cutoff = Clock.GetUtcNow() - (minimumAge < TimeSpan.Zero ? TimeSpan.Zero : minimumAge);
+        List<string>? released = null;
+        foreach (var stepKey in claimSet.Keys)
+        {
+            var key = (runId, stepKey);
+            if (_steps.ContainsKey(key)
+                || !_stepClaims.TryGetValue(key, out var claimedAt)
+                || claimedAt > cutoff
+                || !_stepClaims.TryRemove(new KeyValuePair<(Guid RunId, string StepKey), DateTimeOffset>(key, claimedAt)))
+            {
+                continue;
+            }
+
+            claimSet.TryRemove(stepKey, out _);
+            if (_stepDispatches.TryRemove(key, out _) && _dispatchesByRun.TryGetValue(runId, out var dispatchSet))
+            {
+                dispatchSet.TryRemove(stepKey, out _);
+            }
+
+            (released ??= []).Add(stepKey);
+        }
+
+        return Task.FromResult<IReadOnlyList<string>>(released is null ? [] : released);
     }
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)

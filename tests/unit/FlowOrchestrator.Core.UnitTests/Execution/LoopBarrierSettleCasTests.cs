@@ -251,5 +251,8 @@ public sealed class LoopBarrierSettleCasTests
             => inner.RecordSkippedStepAsync(runId, stepKey, stepType, reason, evaluationTraceJson);
 
         public Task<string?> GetRunStatusAsync(Guid runId) => inner.GetRunStatusAsync(runId);
+
+        public Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge)
+            => inner.ReleaseOrphanedClaimsAsync(runId, minimumAge);
     }
 }

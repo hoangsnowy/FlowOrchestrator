@@ -34,4 +34,7 @@ internal sealed class PermissiveRuntimeStore : IFlowRunRuntimeStore
         _inner.RecordSkippedStepAsync(runId, stepKey, stepType, reason);
 
     public Task<string?> GetRunStatusAsync(Guid runId) => _inner.GetRunStatusAsync(runId);
+
+    public Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge) =>
+        _inner.ReleaseOrphanedClaimsAsync(runId, minimumAge);
 }

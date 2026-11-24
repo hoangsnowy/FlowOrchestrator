@@ -89,4 +89,71 @@ public sealed class InMemoryFlowRunStoreConditionalWriteTests
         Assert.Equal(1, results.Count(won => won));
         Assert.Equal(StepStatus.Succeeded, (await _sut.GetStepStatusesAsync(runId))["loop"]);
     }
+
+    [Fact]
+    public async Task ReleaseOrphanedClaimsAsync_ReleasesOnlyOldClaimsWithoutAStatusRow_AndTheirLedgerRows()
+    {
+        // Arrange - "orphan": claimed 61 s ago, never started. "started": claimed as long ago, has a row.
+        // "young": claimed 1 s ago, no row yet (its worker may still be starting it).
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryFlowRunStore { Clock = clock };
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OrphanFlow", runId, "manual", null, null);
+        foreach (var key in new[] { "orphan", "started" })
+        {
+            await store.TryRecordDispatchAsync(runId, key);
+            await store.TryClaimStepAsync(runId, key);
+        }
+
+        await store.RecordStepStartAsync(runId, "started", "Work", null, null);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await store.TryRecordDispatchAsync(runId, "young");
+        await store.TryClaimStepAsync(runId, "young");
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        // Act
+        var released = await store.ReleaseOrphanedClaimsAsync(runId, TimeSpan.FromSeconds(60));
+
+        // Assert
+        Assert.Equal(["orphan"], released);
+        Assert.False(await store.IsStepClaimedAsync(runId, "orphan"));
+        Assert.False(await store.IsStepDispatchedAsync(runId, "orphan"));
+        Assert.True(await store.IsStepClaimedAsync(runId, "started"));
+        Assert.True(await store.IsStepDispatchedAsync(runId, "started"));
+        Assert.True(await store.IsStepClaimedAsync(runId, "young"));
+        Assert.True(await store.IsStepDispatchedAsync(runId, "young"));
+        Assert.True(await store.TryClaimStepAsync(runId, "orphan"));
+    }
+
+    [Fact]
+    public async Task ReleaseOrphanedClaimsAsync_WithZeroAge_ReleasesEveryClaimWithoutARow()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "OrphanFlow", runId, "manual", null, null);
+        await _sut.TryClaimStepAsync(runId, "a");
+        await _sut.TryClaimStepAsync(runId, "b");
+        await _sut.RecordStepStartAsync(runId, "b", "Work", null, null);
+
+        // Act
+        var released = await _sut.ReleaseOrphanedClaimsAsync(runId, TimeSpan.Zero);
+        var none = await _sut.ReleaseOrphanedClaimsAsync(Guid.NewGuid(), TimeSpan.Zero);
+
+        // Assert
+        Assert.Equal(["a"], released);
+        Assert.Empty(none);
+        Assert.True(await _sut.IsStepClaimedAsync(runId, "b"));
+    }
+
+    /// <summary>A clock that only moves when the test says so.</summary>
+    private sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        /// <summary>Moves the clock forward.</summary>
+        public void Advance(TimeSpan by) => _now += by;
+
+        /// <inheritdoc/>
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
 }

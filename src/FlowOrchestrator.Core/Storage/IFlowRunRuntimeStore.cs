@@ -67,9 +67,46 @@ public interface IFlowRunRuntimeStore
     Task ReleaseStepClaimAsync(Guid runId, string stepKey) => Task.CompletedTask;
 
     /// <summary>
+    /// Atomically deletes every claim of <paramref name="runId"/> that has no step status row and was taken
+    /// at least <paramref name="minimumAge"/> ago, together with the same keys' dispatch-ledger rows, and
+    /// returns the keys it released.
+    /// </summary>
+    /// <param name="runId">The run whose orphaned claims are released.</param>
+    /// <param name="minimumAge">
+    /// How old a claim must be, measured on the store's own clock (the one that stamped the claim), before
+    /// it counts as orphaned. <see cref="TimeSpan.Zero"/> releases every claim without a status row.
+    /// </param>
+    /// <returns>The released step keys; empty when nothing was orphaned.</returns>
+    /// <remarks>
+    /// <para>
+    /// A worker records the step's first status row right after it wins the claim. A claim with no row
+    /// therefore means that worker crashed (or its storage failed) in between, and nothing else would ever
+    /// run that step: the claim makes every later attempt exit, and the completion gate counts the key as
+    /// in-flight work for ever (RFC 2.0 S1b). Releasing the claim and the ledger row returns the step to
+    /// "ready, never dispatched", which recovery re-dispatches.
+    /// </para>
+    /// <para>
+    /// The age is the only evidence that the claimer is gone, so a worker that is alive but stalled for
+    /// longer than <paramref name="minimumAge"/> between its claim and its first status write can have its
+    /// claim released and the step run twice. The lease redesign in RFC 2.0 (P3) replaces this with an
+    /// owned, renewed claim. There is deliberately no default implementation.
+    /// </para>
+    /// <para>
+    /// The check for a status row must serialise with a concurrent first status write for the same key
+    /// (a key-range lock or one statement), so a claim whose row is being written is never released.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge);
+
+    /// <summary>
     /// Records a step as <see cref="StepStatus.Skipped"/> without executing it,
     /// used when <c>runAfter</c> conditions cannot be satisfied.
     /// </summary>
+    /// <remarks>
+    /// The engine calls this right after it wins <see cref="TryClaimStepAsync"/>, so the step row and its
+    /// attempt row should be written in one transaction: a skip that is half written leaves a claim the
+    /// completion gate cannot tell apart from a step that is still starting.
+    /// </remarks>
     Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason);
 
     /// <summary>

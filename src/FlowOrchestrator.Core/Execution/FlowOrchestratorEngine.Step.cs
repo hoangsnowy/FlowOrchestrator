@@ -73,7 +73,23 @@ public sealed partial class FlowOrchestratorEngine
                 return null;
             }
 
-            var controlStatus = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
+            // From here until the start write succeeds the step is claimed with no status row. A failure
+            // in that window must not leave it so: every later attempt would lose the claim and exit, and
+            // the completion gate would count the key as in-flight work for ever (RFC 2.0 S1b). Release
+            // the claim and the ledger row, then rethrow so the runtime retries the job — the step is back
+            // to "ready, never dispatched", which recovery re-dispatches if the runtime gives up.
+            string? controlStatus;
+            try
+            {
+                controlStatus = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Catch-all-and-rethrow: never swallowed, cancellation included.
+                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                throw;
+            }
+
             if (controlStatus is not null)
             {
                 await RecordSkippedCurrentStepAsync(ctx, flow, step, controlStatus).ConfigureAwait(false);
@@ -86,16 +102,21 @@ public sealed partial class FlowOrchestratorEngine
             // "{key}:input" row after resolving expressions, so this write only ever persisted the
             // unresolved inputs to be overwritten a moment later — one wasted MERGE and serialisation
             // per step (#189). The unresolved form is still recorded, on FlowSteps.InputJson below.
-            string? inputJson = null;
+            //
+            // Before 2.0 a failed start write was only logged and the handler ran anyway: the completion
+            // UPDATE then matched no row, and the claim with no status row stranded the run (S1b).
             try
             {
-                inputJson = SafeSerialize(step.Inputs);
+                var inputJson = SafeSerialize(step.Inputs);
                 await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId)
                     .ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // Catch-all-and-rethrow, as above: logged, released, never swallowed.
                 EngineLog.StepStartTrackingFailed(_logger, ex);
+                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                throw;
             }
 
             var stepExecutionStart = Stopwatch.GetTimestamp();
@@ -533,6 +554,40 @@ public sealed partial class FlowOrchestratorEngine
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             EngineLog.ClaimReleaseAfterFailedHandOffFailed(_logger, ex, stepKey);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort release of the execution claim and the dispatch-ledger row of a step whose start
+    /// (run-control read or start write) threw after the claim was won, so the step is neither claimed
+    /// nor reserved while it has no status row. O(1): two point deletes, on the failure path only.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step whose start failed.</param>
+    /// <remarks>
+    /// <para>
+    /// The claim goes first. The runtime's retry of the job then claims the step again and runs it; the
+    /// released ledger row only means "no attempt is queued", which is true when the runtime gives up, and
+    /// lets startup recovery dispatch the ready step in that case. A duplicate dispatch, while the
+    /// runtime's own retry is still pending, is absorbed by the claim.
+    /// </para>
+    /// <para>
+    /// Swallows its own failure (logged): it must never mask the original exception, which the caller
+    /// rethrows. If the store is down hard enough that the claim release fails too, the claim is orphaned
+    /// and <see cref="IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync"/> releases it once it is older than
+    /// <c>FlowRunControlOptions.OrphanedClaimTimeout</c>.
+    /// </para>
+    /// </remarks>
+    private async Task ReleaseAfterFailedStartAsync(Guid runId, string stepKey)
+    {
+        try
+        {
+            await _runtimeStore.ReleaseStepClaimAsync(runId, stepKey).ConfigureAwait(false);
+            await _runStore.ReleaseDispatchAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.ReleaseAfterFailedStartFailed(_logger, ex, stepKey);
         }
     }
 

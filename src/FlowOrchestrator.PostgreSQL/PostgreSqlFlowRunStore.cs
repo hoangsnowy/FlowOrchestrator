@@ -665,44 +665,119 @@ public sealed class PostgreSqlFlowRunStore :
             new { RunId = runId, StepKey = stepKey });
     }
 
-    public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge)
     {
-        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
-        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+
+        // Take each candidate claim's step advisory lock first — the lock RecordStepStartAsync and
+        // RecordSkippedStepAsync hold while they write the step's first row — so a first status write
+        // racing this transaction either commits before the probe below (the claim is kept) or waits for
+        // this transaction to finish. The age is measured on the database clock that stamped claimed_at.
+        var candidates = (await conn.QueryAsync<string>(
+            """
+            SELECT c.step_key
+            FROM flow_step_claims c
+            WHERE c.run_id = @RunId
+              AND c.claimed_at <= NOW() - make_interval(secs => @AgeSeconds)
+              AND NOT EXISTS (SELECT 1 FROM flow_steps s WHERE s.run_id = c.run_id AND s.step_key = c.step_key)
+            """,
+            new { RunId = runId, AgeSeconds = Math.Max(0d, minimumAge.TotalSeconds) }, tx).ConfigureAwait(false)).AsList();
+
+        if (candidates.Count == 0)
+        {
+            await tx.CommitAsync().ConfigureAwait(false);
+            return [];
+        }
+
+        var lockKeys = new string[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            lockKeys[i] = $"{runId:N}:{candidates[i]}";
+        }
+
+        await conn.ExecuteAsync(
+            "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) FROM unnest(@LockKeys) AS k ORDER BY k",
+            new { LockKeys = lockKeys }, tx).ConfigureAwait(false);
+
+        // Statement-level snapshot taken after the locks: a row committed by a racing writer is visible.
+        var released = (await conn.QueryAsync<string>(
+            """
+            WITH released AS (
+                DELETE FROM flow_step_claims c
+                WHERE c.run_id = @RunId
+                  AND c.step_key = ANY(@Candidates)
+                  AND NOT EXISTS (SELECT 1 FROM flow_steps s WHERE s.run_id = c.run_id AND s.step_key = c.step_key)
+                RETURNING c.step_key
+            ),
+            cleared AS (
+                DELETE FROM flow_step_dispatches d
+                USING released r
+                WHERE d.run_id = @RunId AND d.step_key = r.step_key
+            )
+            SELECT step_key FROM released
+            """,
+            new { RunId = runId, Candidates = candidates.ToArray() }, tx).ConfigureAwait(false)).AsList();
+
+        await tx.CommitAsync().ConfigureAwait(false);
+        return released;
     }
+
+    public Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
+        => RecordSkippedStepAsync(runId, stepKey, stepType, reason, evaluationTraceJson: null);
 
     /// <summary>
     /// Records a <see cref="StepStatus.Skipped"/> step and persists the When-clause
     /// evaluation trace onto the current step row and its latest attempt.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Overrides the runtime-store default so PostgreSQL surfaces the "Why skipped"
     /// trace in run detail, matching the SQL Server backend.
+    /// </para>
+    /// <para>
+    /// One transaction (RFC 2.0 P-1(b)): the engine claims the step first and then calls this. Before
+    /// 2.0 the skip was a start, a completion and a trace write in up to three transactions, and a crash
+    /// between them left a claim with no <c>Skipped</c> row, which the completion gate reads as in-flight
+    /// work for ever. The attempt number is allocated under the same advisory lock as
+    /// <see cref="RecordStepStartAsync"/>; a <see langword="null"/> trace keeps the row's previous trace.
+    /// </para>
     /// </remarks>
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
     {
-        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
-        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
-        if (string.IsNullOrEmpty(evaluationTraceJson))
-            return;
+        var trace = string.IsNullOrEmpty(evaluationTraceJson) ? null : evaluationTraceJson;
 
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync().ConfigureAwait(false);
         await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
 
         await conn.ExecuteAsync(
-            "UPDATE flow_steps SET evaluation_trace_json = @Trace WHERE run_id = @RunId AND step_key = @StepKey",
-            new { RunId = runId, StepKey = stepKey, Trace = evaluationTraceJson }, tx).ConfigureAwait(false);
+            "SELECT pg_advisory_xact_lock(hashtextextended(@LockKey, 0))",
+            new { LockKey = $"{runId:N}:{stepKey}" }, tx).ConfigureAwait(false);
 
         await conn.ExecuteAsync(
             """
-            UPDATE flow_step_attempts SET evaluation_trace_json = @Trace
-            WHERE run_id = @RunId AND step_key = @StepKey
-              AND attempt_no = (
-                    SELECT MAX(attempt_no) FROM flow_step_attempts
-                    WHERE run_id = @RunId AND step_key = @StepKey)
+            INSERT INTO flow_step_attempts (run_id, step_key, attempt_no, step_type, status, error_message, evaluation_trace_json, started_at, completed_at)
+            SELECT @RunId, @StepKey, COALESCE(MAX(attempt_no), 0) + 1, @StepType, 'Skipped', @Reason, @Trace, NOW(), NOW()
+            FROM flow_step_attempts
+            WHERE run_id = @RunId AND step_key = @StepKey;
+
+            INSERT INTO flow_steps (run_id, step_key, step_type, status, input_json, output_json, error_message, job_id, started_at, completed_at, evaluation_trace_json)
+            VALUES (@RunId, @StepKey, @StepType, 'Skipped', NULL, NULL, @Reason, NULL, NOW(), NOW(), @Trace)
+            ON CONFLICT (run_id, step_key) DO UPDATE SET
+                step_type             = EXCLUDED.step_type,
+                input_json            = NULL,
+                output_json           = NULL,
+                error_message         = EXCLUDED.error_message,
+                job_id                = NULL,
+                status                = 'Skipped',
+                started_at            = NOW(),
+                completed_at          = NOW(),
+                evaluation_trace_json = COALESCE(EXCLUDED.evaluation_trace_json, flow_steps.evaluation_trace_json);
             """,
-            new { RunId = runId, StepKey = stepKey, Trace = evaluationTraceJson }, tx).ConfigureAwait(false);
+            new { RunId = runId, StepKey = stepKey, StepType = stepType, Reason = reason, Trace = trace }, tx).ConfigureAwait(false);
 
         await tx.CommitAsync().ConfigureAwait(false);
     }

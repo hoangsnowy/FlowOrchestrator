@@ -122,6 +122,20 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   compare-and-swap on `Running`; only the winner publishes and continues the graph. A run-control abandon
   (`Skipped "Run is Cancelled."`) is conditional the same way, so it no longer overwrites a loop that just
   settled. **Custom stores:** new `IFlowRunStore.TryCompleteRunningStepAsync` (no default implementation).
+- **A step claimed by a worker that died before recording its start no longer holds the run open for
+  ever** (RFC 2.0 S1b, P-1(b)). Three changes:
+  - A failed start (the run-control read or the start write) is no longer swallowed. The handler used to
+    run anyway with no status row; the engine now releases the step's claim and dispatch-ledger row and
+    rethrows, so the runtime retries the job (EventId 3012 if the release fails too).
+  - SQL Server and PostgreSQL write a blocked or `When`-skipped step (`RecordSkippedStepAsync`) in one
+    transaction instead of up to three, so a crash cannot leave the claim without its `Skipped` row.
+  - New `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off). A claim with no
+    status row older than that is released, with its ledger row, by startup recovery (which then
+    re-dispatches the step) and by the timeout sweep on a cancelled or timed-out run (EventId 3013). The
+    age is the only evidence the worker is gone: a worker stalled longer than the timeout between claim and
+    start can run the step twice, and a restart faster than the timeout leaves the claim to the next
+    startup. The lease redesign (RFC P3) closes both. **Custom stores:** new
+    `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` (no default implementation).
 
 ### Security
 

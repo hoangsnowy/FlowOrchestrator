@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
@@ -155,6 +156,29 @@ public sealed partial class FlowOrchestratorEngine
         return false;
     }
 
+    /// <summary>
+    /// Releases the run's claims that have no step status row and are older than
+    /// <see cref="FlowRunControlOptions.OrphanedClaimTimeout"/>, logging what it released.
+    /// </summary>
+    /// <param name="runId">The run to clean up.</param>
+    /// <remarks>
+    /// Used by the timeout sweep for a run that is being cancelled or timed out, where the orphaned step
+    /// does not need to run, only to stop blocking the run's completion. No-op when the option is off.
+    /// </remarks>
+    private async Task ReleaseOrphanedClaimsAsync(Guid runId)
+    {
+        if (_runControlOptions.OrphanedClaimTimeout is not { } timeout || timeout <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var released = await _runtimeStore.ReleaseOrphanedClaimsAsync(runId, timeout).ConfigureAwait(false);
+        if (released.Count > 0)
+        {
+            EngineLog.OrphanedClaimsReleased(_logger, released.Count, runId, string.Join(", ", released));
+        }
+    }
+
     private async Task TryCompleteRunAsync(Guid runId, string status)
     {
         if (await HasInFlightWorkAsync(runId).ConfigureAwait(false))
@@ -294,6 +318,13 @@ public sealed partial class FlowOrchestratorEngine
                 // the graph continuation (which classifies terminal status from step statuses, not the
                 // control record) would complete the run as Succeeded, leaving the control record and
                 // the run status inconsistent. Skipping in-flight runs avoids that entirely.
+                //
+                // A claim with no status row reads as in-flight work, so a worker that died between its
+                // claim and its start write would keep this terminating run open for ever (RFC 2.0 S1b).
+                // Release such claims first once they are old enough. Not on the step-completion path:
+                // one store call per terminating run per sweep tick.
+                await ReleaseOrphanedClaimsAsync(run.Id).ConfigureAwait(false);
+
                 var stuck = !await HasInFlightWorkAsync(run.Id).ConfigureAwait(false);
 
                 // The "in-flight" work may be parked rather than live: a WaitForSignal registered with

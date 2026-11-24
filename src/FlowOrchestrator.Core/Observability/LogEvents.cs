@@ -97,4 +97,16 @@ public static class LogEvents
     /// claim release that follows failed too; the step stays claimed until the run timeout sweep.
     /// </summary>
     public static readonly EventId ClaimReleaseAfterFailedHandOffFailed = new(3010, nameof(ClaimReleaseAfterFailedHandOffFailed));
+
+    /// <summary>
+    /// A step's start (run-control read or start write) threw after it was claimed, and the best-effort
+    /// release of its claim and dispatch-ledger row failed too; recovery releases the orphaned claim later.
+    /// </summary>
+    public static readonly EventId ReleaseAfterFailedStartFailed = new(3012, nameof(ReleaseAfterFailedStartFailed));
+
+    /// <summary>
+    /// Recovery or the timeout sweep released claims that had no step status row and were older than
+    /// <c>FlowRunControlOptions.OrphanedClaimTimeout</c> (a worker died between claim and start).
+    /// </summary>
+    public static readonly EventId OrphanedClaimsReleased = new(3013, nameof(OrphanedClaimsReleased));
 }

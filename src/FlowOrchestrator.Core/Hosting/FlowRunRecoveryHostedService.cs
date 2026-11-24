@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Hosting.Internal;
@@ -41,8 +42,20 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
     private readonly ILogger<FlowRunRecoveryHostedService> _logger;
+    private readonly TimeSpan? _orphanedClaimTimeout;
 
     /// <summary>Initialises the recovery service with its dependencies.</summary>
+    /// <param name="runStore">Run store the active runs and the dispatch ledger are read from.</param>
+    /// <param name="runtimeStores">Runtime stores; the first one is used.</param>
+    /// <param name="flows">Registered flow definitions.</param>
+    /// <param name="graphPlanner">Planner that classifies ready steps.</param>
+    /// <param name="dispatcher">Runtime adapter recovered steps are handed to.</param>
+    /// <param name="outputsRepository">Outputs repository (trigger data, loop iteration counts).</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="runControlOptions">
+    /// Supplies <see cref="FlowRunControlOptions.OrphanedClaimTimeout"/>; when <see langword="null"/> the
+    /// default timeout applies.
+    /// </param>
     public FlowRunRecoveryHostedService(
         IFlowRunStore runStore,
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
@@ -50,7 +63,8 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         IFlowGraphPlanner graphPlanner,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
-        ILogger<FlowRunRecoveryHostedService> logger)
+        ILogger<FlowRunRecoveryHostedService> logger,
+        FlowRunControlOptions? runControlOptions = null)
     {
         _runStore = runStore;
         _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowRunRecoveryHostedService));
@@ -59,6 +73,9 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
         _logger = logger;
+        _orphanedClaimTimeout = runControlOptions is null
+            ? FlowRunControlOptions.DefaultOrphanedClaimTimeout
+            : runControlOptions.OrphanedClaimTimeout;
     }
 
     /// <summary>Scans active runs and re-dispatches any orphaned steps.</summary>
@@ -89,7 +106,8 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
             _graphPlanner,
             _dispatcher,
             _outputsRepository,
-            _logger);
+            _logger,
+            _orphanedClaimTimeout);
 
         foreach (var run in activeRuns)
         {

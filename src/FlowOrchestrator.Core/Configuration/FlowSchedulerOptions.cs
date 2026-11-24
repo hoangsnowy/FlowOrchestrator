@@ -40,6 +40,32 @@ public sealed class FlowRunControlOptions
     /// </remarks>
     public TimeSpan? TimeoutEnforcementInterval { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>The default for <see cref="OrphanedClaimTimeout"/>: 60 seconds.</summary>
+    public static readonly TimeSpan DefaultOrphanedClaimTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How old an execution claim with no step status row must be before it is treated as orphaned — the
+    /// worker that took it died (or its storage failed) before it recorded the step's start.
+    /// <see langword="null"/> or a non-positive value turns the release off.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An orphaned claim makes every later attempt of the step exit as a duplicate and keeps the run
+    /// counted as in flight for ever. Startup recovery releases such claims (and their dispatch-ledger
+    /// rows) and re-dispatches the step; the periodic timeout sweep releases them on a cancelled or
+    /// timed-out run so the run can close.
+    /// </para>
+    /// <para>
+    /// The age is the only evidence the claimer is gone: a worker stalled for longer than this between its
+    /// claim and its first status write can see the step run a second time. A live worker normally spends
+    /// two store round trips there. Raise the value if your store can stall for longer. A host restart
+    /// faster than this value does not release the claims of the instance it replaced — the next startup
+    /// does (or the sweep, for a terminating run). The lease redesign planned for 2.0 (RFC P3) replaces
+    /// this heuristic with an owned, renewed claim that a periodic sweep reclaims.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? OrphanedClaimTimeout { get; set; } = DefaultOrphanedClaimTimeout;
+
     /// <summary>
     /// Name of the HTTP header that carries the caller-supplied idempotency key
     /// (e.g. <c>"Idempotency-Key"</c>). Requests carrying a key that matches an

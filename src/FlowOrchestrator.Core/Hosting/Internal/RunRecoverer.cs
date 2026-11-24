@@ -24,15 +24,27 @@ internal sealed class RunRecoverer
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
     private readonly ILogger _logger;
+    private readonly TimeSpan? _orphanedClaimTimeout;
 
     /// <summary>Initialises the recoverer with the dependencies inherited from the host service.</summary>
+    /// <param name="runStore">Run store (dispatch ledger, zombie close).</param>
+    /// <param name="runtimeStore">Runtime store (statuses, orphaned claims).</param>
+    /// <param name="graphPlanner">Planner that classifies ready steps.</param>
+    /// <param name="dispatcher">Runtime adapter recovered steps are handed to.</param>
+    /// <param name="outputsRepository">Outputs repository (trigger data, loop iteration counts).</param>
+    /// <param name="logger">Logger of the host service.</param>
+    /// <param name="orphanedClaimTimeout">
+    /// Age past which a claim with no step status row is released before the run is evaluated;
+    /// <see langword="null"/> or non-positive turns the release off.
+    /// </param>
     public RunRecoverer(
         IFlowRunStore runStore,
         IFlowRunRuntimeStore runtimeStore,
         IFlowGraphPlanner graphPlanner,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
-        ILogger logger)
+        ILogger logger,
+        TimeSpan? orphanedClaimTimeout = null)
     {
         _runStore = runStore;
         _runtimeStore = runtimeStore;
@@ -40,6 +52,7 @@ internal sealed class RunRecoverer
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
         _logger = logger;
+        _orphanedClaimTimeout = orphanedClaimTimeout is { } timeout && timeout > TimeSpan.Zero ? timeout : null;
     }
 
     /// <summary>
@@ -52,6 +65,22 @@ internal sealed class RunRecoverer
     /// <param name="ct">Cancellation token from the host's <c>StartAsync</c>.</param>
     public async Task RecoverRunAsync(FlowRunRecord run, IFlowDefinition flow, CancellationToken ct)
     {
+        // Orphaned claims first (RFC 2.0 S1b): a worker that died between winning a claim and writing the
+        // step's first status row left a claim that makes every later attempt exit and keeps the run in
+        // flight for ever. Releasing it (with its ledger row) makes the step plain "ready, never
+        // dispatched", which the pass below re-dispatches. A blocked or When-skipped step orphaned the same
+        // way stays without a row; the zombie check below then closes the run on the statuses it has.
+        if (_orphanedClaimTimeout is { } orphanAge)
+        {
+            var released = await _runtimeStore.ReleaseOrphanedClaimsAsync(run.Id, orphanAge).ConfigureAwait(false);
+            if (released.Count > 0)
+            {
+                _logger.LogWarning(
+                    "FlowRunRecoveryHostedService: released {Count} orphaned claim(s) with no step status for run {RunId}: {Keys}.",
+                    released.Count, run.Id, string.Join(", ", released));
+            }
+        }
+
         var statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
 
         // Loop barriers first: the host can have died between the last iteration completing and

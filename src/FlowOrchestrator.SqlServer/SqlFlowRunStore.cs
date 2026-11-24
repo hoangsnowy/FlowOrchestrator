@@ -769,44 +769,123 @@ public sealed class SqlFlowRunStore :
             new { RunId = runId, StepKey = stepKey });
     }
 
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+
+        // The age is measured on SYSDATETIMEOFFSET(), the clock that stamped ClaimedAt. UPDLOCK, HOLDLOCK
+        // on the status probe takes a key-range lock, so a first status write racing this statement
+        // either commits first (the claim is kept) or waits until this transaction is done. Claims and
+        // ledger rows are removed in one transaction, so a crash cannot leave "no claim, ledger row".
+        var ageMs = (int)Math.Clamp(minimumAge.TotalMilliseconds, 0, int.MaxValue);
+        var keys = await conn.QueryAsync<string>(
+            """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
+            DECLARE @Released TABLE (StepKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+
+            DELETE c
+            OUTPUT deleted.StepKey INTO @Released (StepKey)
+            FROM FlowStepClaims AS c
+            WHERE c.RunId = @RunId
+              AND c.ClaimedAt <= DATEADD(MILLISECOND, -@AgeMs, SYSDATETIMEOFFSET())
+              AND NOT EXISTS (
+                  SELECT 1 FROM FlowSteps AS s WITH (UPDLOCK, HOLDLOCK)
+                  WHERE s.RunId = c.RunId AND s.StepKey = c.StepKey);
+
+            DELETE d
+            FROM FlowStepDispatches AS d
+            INNER JOIN @Released AS r ON r.StepKey = d.StepKey
+            WHERE d.RunId = @RunId;
+
+            COMMIT TRANSACTION;
+
+            SELECT StepKey FROM @Released;
+            """,
+            new { RunId = runId, AgeMs = ageMs }).ConfigureAwait(false);
+
+        return keys.AsList();
+    }
+
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
     {
         await RecordSkippedStepAsync(runId, stepKey, stepType, reason, evaluationTraceJson: null).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One round trip and one transaction (RFC 2.0 P-1(b)). The engine claims the step first and then
+    /// calls this; before 2.0 the skip was a start write, a completion write and a trace write in up to
+    /// three transactions, and a crash between them left a claim with no <c>Skipped</c> row, which the
+    /// completion gate reads as in-flight work for ever.
+    /// </remarks>
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
     {
-        await RecordStepStartAsync(runId, stepKey, stepType, null, null).ConfigureAwait(false);
-        await RecordStepCompleteAsync(runId, stepKey, StepStatus.Skipped.ToString(), null, reason).ConfigureAwait(false);
-        if (!string.IsNullOrEmpty(evaluationTraceJson))
+        await using var conn = new SqlConnection(_connectionString);
+        var trace = string.IsNullOrEmpty(evaluationTraceJson) ? null : evaluationTraceJson;
+        var tokens = _tokenIndex?.TokenizeStep(stepKey, reason, null);
+        var parameters = new { RunId = runId, StepKey = stepKey, StepType = stepType, Reason = reason, EvaluationTraceJson = trace, SearchTokens = tokens };
+        if (tokens is null)
         {
-            await using var conn = new SqlConnection(_connectionString);
-            await conn.ExecuteAsync(
-                """
-                BEGIN TRANSACTION;
+            await conn.ExecuteAsync(RecordSkippedStepSql, parameters).ConfigureAwait(false);
+        }
+        else
+        {
+            // Same round trip; the token insert is its own best-effort statement after the commit.
+            await conn.ExecuteAsync(RecordSkippedStepSql + """
 
-                UPDATE FlowSteps
-                SET EvaluationTraceJson = @EvaluationTraceJson
-                WHERE RunId = @RunId AND StepKey = @StepKey;
+                DECLARE @SearchStartedAt DATETIMEOFFSET = (SELECT StartedAt FROM FlowRuns WHERE Id = @RunId);
+                DECLARE @SearchRunId UNIQUEIDENTIFIER = @RunId;
+                """ + SqlServerRunSearchTokenIndex.InsertTokensSql, parameters).ConfigureAwait(false);
+        }
 
-                UPDATE attempts
-                SET EvaluationTraceJson = @EvaluationTraceJson
-                FROM FlowStepAttempts AS attempts
-                INNER JOIN (
-                    SELECT TOP (1) RunId, StepKey, AttemptNo
-                    FROM FlowStepAttempts
-                    WHERE RunId = @RunId AND StepKey = @StepKey
-                    ORDER BY AttemptNo DESC
-                ) AS latest
-                    ON latest.RunId = attempts.RunId
-                   AND latest.StepKey = attempts.StepKey
-                   AND latest.AttemptNo = attempts.AttemptNo;
-
-                COMMIT TRANSACTION;
-                """,
-                new { RunId = runId, StepKey = stepKey, EvaluationTraceJson = evaluationTraceJson }).ConfigureAwait(false);
+        if (_externalIndex is { } index)
+        {
+            var document = new StepSearchDocument(runId, stepKey, StepStatus.Skipped.ToString(), reason, null);
+            await IndexBestEffortAsync(() => index.IndexStepAsync(document, CancellationToken.None)).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// The skip as one transaction: a new attempt row born <c>Skipped</c>, and the step row upserted to
+    /// <c>Skipped</c> — the same rows the old start + complete + trace sequence produced. The attempt
+    /// number is allocated under <c>UPDLOCK, HOLDLOCK</c>, as in <see cref="RecordStepStartAsync"/>.
+    /// A <see langword="null"/> trace keeps the step row's previous trace, as the old sequence did.
+    /// </summary>
+    private const string RecordSkippedStepSql = """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
+            DECLARE @AttemptNo INT;
+            SELECT @AttemptNo = ISNULL(MAX(AttemptNo), 0) + 1
+            FROM FlowStepAttempts WITH (UPDLOCK, HOLDLOCK)
+            WHERE RunId = @RunId AND StepKey = @StepKey;
+
+            INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, ErrorMessage, EvaluationTraceJson, StartedAt, CompletedAt)
+            VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Skipped', @Reason, @EvaluationTraceJson, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+
+            MERGE FlowSteps AS target
+            USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
+            ON target.RunId = source.RunId AND target.StepKey = source.StepKey
+            WHEN MATCHED THEN
+                UPDATE SET
+                    StepType = @StepType,
+                    InputJson = NULL,
+                    OutputJson = NULL,
+                    ErrorMessage = @Reason,
+                    JobId = NULL,
+                    Status = 'Skipped',
+                    StartedAt = SYSDATETIMEOFFSET(),
+                    CompletedAt = SYSDATETIMEOFFSET(),
+                    EvaluationTraceJson = ISNULL(@EvaluationTraceJson, target.EvaluationTraceJson)
+            WHEN NOT MATCHED THEN
+                INSERT (RunId, StepKey, StepType, Status, ErrorMessage, EvaluationTraceJson, StartedAt, CompletedAt)
+                VALUES (@RunId, @StepKey, @StepType, 'Skipped', @Reason, @EvaluationTraceJson, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+
+            COMMIT TRANSACTION;
+            """;
 
     public async Task<string?> GetRunStatusAsync(Guid runId)
     {

@@ -42,12 +42,17 @@ internal sealed class LoopBarrierEngineHarness
     /// Optional decorator over <see cref="Store"/> handed to the engine as its runtime store, so a test can
     /// gate one read and force an interleaving. Defaults to <see cref="Store"/> itself.
     /// </param>
+    /// <param name="runStore">
+    /// Optional decorator over <see cref="Store"/> handed to the engine as its run store, so a test can
+    /// inject a fault into one write. Defaults to <see cref="Store"/> itself.
+    /// </param>
     public LoopBarrierEngineHarness(
         IFlowDefinition flow,
         Func<string, IStepResult> resultForStep,
         FlowRunControlOptions? runControlOptions = null,
         IFlowEventNotifier? eventNotifier = null,
-        Func<InMemoryFlowRunStore, IFlowRunRuntimeStore>? runtimeStore = null)
+        Func<InMemoryFlowRunStore, IFlowRunRuntimeStore>? runtimeStore = null,
+        Func<InMemoryFlowRunStore, IFlowRunStore>? runStore = null)
     {
         _flow = flow;
         Store = new InMemoryFlowRunStore();
@@ -88,7 +93,7 @@ internal sealed class LoopBarrierEngineHarness
             new FlowGraphPlanner(),
             stepExecutor,
             Substitute.For<IFlowStore>(),
-            Store,
+            runStore?.Invoke(Store) ?? Store,
             new InMemoryOutputsRepository(),
             Substitute.For<IExecutionContextAccessor>(),
             flowRepo,

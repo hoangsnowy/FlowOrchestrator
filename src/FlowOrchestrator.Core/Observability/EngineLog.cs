@@ -67,6 +67,12 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3010, Level = LogLevel.Warning, Message = "Could not release the execution claim on step {StepKey} after its Pending hand-off failed; the step stays claimed until the run timeout sweep closes the run.")]
     public static partial void ClaimReleaseAfterFailedHandOffFailed(ILogger logger, Exception ex, string stepKey);
 
+    [LoggerMessage(EventId = 3012, Level = LogLevel.Warning, Message = "Could not release the execution claim or dispatch-ledger row on step {StepKey} after its start failed; startup recovery releases it once it is older than OrphanedClaimTimeout.")]
+    public static partial void ReleaseAfterFailedStartFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 3013, Level = LogLevel.Warning, Message = "Released {Count} orphaned execution claim(s) with no step status for run {RunId}: {StepKeys}.")]
+    public static partial void OrphanedClaimsReleased(ILogger logger, int count, Guid runId, string stepKeys);
+
     [LoggerMessage(EventId = 1010, Level = LogLevel.Warning, Message = "Trigger rejected: flow {FlowId} ('{TriggerKey}') is disabled.")]
     public static partial void TriggerRejectedDisabledFlow(ILogger logger, Guid flowId, string triggerKey);
 }
