@@ -302,7 +302,9 @@ public sealed partial class ProviderWebhookEndpointTests
                 var ts = (o.Timestamp ?? Now).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(25)).ToLowerInvariant();
                 var sig = Hex256(U(key), U(ts + token));
-                var sentToken = o.TamperBody ? "f" + token[1..] : token;
+                // Always change the first character: the token is random hex, so replacing it with a fixed digit was
+                // a no-op 1 time in 16 (the delivery then verified and the test flaked).
+                var sentToken = o.TamperBody ? (token[0] == 'f' ? "0" : "f") + token[1..] : token;
                 var sigField = o.OmitSignature ? string.Empty : $",\"signature\":\"{sig}\"";
                 var body = U($"{{\"signature\":{{\"token\":\"{sentToken}\",\"timestamp\":\"{ts}\"{sigField}}},\"event-data\":{{\"event\":\"delivered\",\"id\":\"CPgfbmQMTCKtHW6uIWtuVe\"}}}}");
                 return Post($"/flows/api/webhook/{slug}", body, "application/json",
