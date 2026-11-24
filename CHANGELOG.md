@@ -196,6 +196,21 @@ providers only:
   `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
   [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
 
+### Fixed — Pending re-checks queued by 1.x run on a 2.0 Hangfire worker
+
+- **A poll re-check or `WaitForSignal` deadline check left in the Hangfire queue by 1.17 – 1.34.x no longer
+  fails for ever on 2.0.** 1.x re-dispatched a `Pending` step with its resolved inputs, which were
+  `System.Text.Json.JsonElement` values; Hangfire's Newtonsoft.Json argument store keeps only their
+  `ValueKind`, so the job came back with `default(JsonElement)` inputs (and trigger data), and 2.0 threw
+  `InvalidOperationException: Operation is not valid due to the current state of the object` while
+  recording the step start (EventId 2006). Hangfire retried the job until it failed, and the run stayed
+  `Running`: every polling step, every `ForEach` child that polls and every parked `WaitForSignal` with a
+  `timeoutSeconds` that had a re-check scheduled at the upgrade. The legacy `IHangfireStepRunner.RunStepAsync`
+  overload now restores destroyed inputs from the manifest (expressions are resolved again from the run's
+  stored trigger data), lets the engine recompute `__loopItem`, and drops the destroyed poll bookkeeping, so
+  such a poll starts a fresh attempt count and `pollTimeoutSeconds` window. Found by the 1.34.7 → 2.0
+  upgrade rehearsal (`tests/upgrade`); see [Migrating to 2.0 → Step 4](docs/articles/migrating-to-2.0.md#step-4--move-the-hangfire-queue-across-hangfire-hosts-only).
+
 ### Fixed — a signal sent after a `WaitForSignal` timeout no longer resumes the step
 
 - **`IFlowSignalStore.DeliverSignalAsync` refuses an expired waiter** (all three stores). It ignored
