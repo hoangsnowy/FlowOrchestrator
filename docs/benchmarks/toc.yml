@@ -1,3 +1,6 @@
+- name: Viewer redaction — normalised secret names (2026-11-24)
+  href: viewer-secret-name-normalisation-2026-11-24.md
+
 - name: "#189 superlinear terms — classifier, planner, ledger, search (2026-11-23)"
   href: issue-189-superlinear-terms-2026-11-23.md
 

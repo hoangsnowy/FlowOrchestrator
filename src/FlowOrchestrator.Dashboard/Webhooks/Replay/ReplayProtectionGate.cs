@@ -168,6 +168,9 @@ public sealed class ReplayProtectionGate
             expiresAt = ts.AddSeconds(2d * toleranceSeconds);
         }
 
+        // An unsigned nonce header is caller-controlled and uncapped; the SQL / PostgreSQL columns are 256
+        // characters. Over-long nonces are registered as a fixed-length digest, so they still dedupe.
+        nonce = WebhookReplayNonceStorage.ToStorageForm(nonce);
         var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, ct).ConfigureAwait(false);
         if (!registered)
             return new ReplayResult(Decision.ReplayRejected, skew, "nonce_seen");

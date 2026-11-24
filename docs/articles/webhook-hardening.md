@@ -285,7 +285,9 @@ Two complementary defences:
   `(flowId, triggerKey, nonce)` row in `IWebhookReplayStore`; a duplicate
   is a replay and gets `409 Conflict`. The nonce is either the explicit
   `webhookNonceHeader` (e.g. `X-GitHub-Delivery`) or
-  `SHA-256(timestamp || body)` when no header is supplied.
+  `SHA-256(timestamp || body)` when no header is supplied. A nonce longer
+  than 256 characters is registered as `sha256:` + its hex digest
+  (`WebhookReplayNonceStorage`), so it still dedupes on every backend.
 
 Once a signature scheme has verified the request, only signed material counts,
 because a replayer chooses every unsigned header:

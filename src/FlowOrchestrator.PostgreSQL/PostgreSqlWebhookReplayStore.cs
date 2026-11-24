@@ -42,7 +42,8 @@ public sealed class PostgreSqlWebhookReplayStore : IWebhookReplayStore
             {
                 FlowId = flowId,
                 TriggerKey = triggerKey,
-                Nonce = nonce,
+                // The column is 256 characters: an over-long nonce is stored as its digest (no 2628 / 22001).
+                Nonce = WebhookReplayNonceStorage.ToStorageForm(nonce),
                 ExpiresAt = expiresAt,
             },
             cancellationToken: ct));
