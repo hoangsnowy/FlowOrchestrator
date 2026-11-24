@@ -6,6 +6,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+- **Read-only dashboard callers no longer see credentials whose names use separators.** Values are masked
+  for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
+  name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
+  `Ocp-Apim-Subscription-Key`, `pwd` and similar names were served unmasked in run detail, run lists,
+  flow manifests and the webhook delivery log. Names are now normalised first (case ignored; `-`, `_`, `.`
+  and spaces dropped), the list of name fragments is extended (API / subscription / function / access /
+  signing / account keys, private keys, SAS, session ids, JWTs, …), and the *Why skipped* trace of a
+  `When` condition that reads a secret-looking name no longer shows the resolved value. Masking is
+  deliberately broad (a name such as `tokenCount` is masked too); operators still see payloads as stored.
+- **The webhook delivery log records the outcome the sender received.** A delivery refused by the legacy
+  `webhookSecret` / `X-Webhook-Key` check (401) was logged in the Webhooks tab as accepted (200), because
+  the security pipeline wrote its "accepted" row before that check ran. The row is now written after the
+  final decision: a refused delivery is logged as rejected with status 401 and reason `secret_invalid`
+  (also the `webhook_rejected_total` reason tag), and EventId 4006 is logged. The write does not depend on
+  the request's abort token, so a sender that disconnects cannot keep a refusal out of the log.
+- **An over-long replay nonce no longer fails the webhook request.** With replay protection on and no
+  signature scheme, the nonce comes from the configured header (`webhookNonceHeader`) and was stored
+  verbatim; a value longer than the 256-character nonce column made SQL Server / PostgreSQL reject the
+  insert and the endpoint answered 500. A nonce over 256 characters is now registered as `sha256:` + its
+  hex SHA-256 (new public `WebhookReplayNonceStorage` helper in `FlowOrchestrator.Core.Storage`, used by
+  the replay gate and all three built-in stores), so a long nonce still gets replay protection. No schema
+  change; shorter nonces are stored as before.
+
 ## [1.34.5] - 2026-11-24
 
 Patch release for the 1.34 line (.NET 8 / 9 / 10). A `WaitForSignal` step could stay parked until its

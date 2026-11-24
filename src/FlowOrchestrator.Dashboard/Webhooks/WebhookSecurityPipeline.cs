@@ -111,13 +111,44 @@ public sealed class WebhookSecurityPipeline
     /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
     /// <param name="headers">Inbound request headers (case-insensitive).</param>
     /// <param name="ct">Cancellation token.</param>
-    public async ValueTask<PipelineResult> EvaluateAsync(
+    /// <remarks>
+    /// An accepted request is recorded in the delivery log (and counted as received) before this returns. A
+    /// caller that may still refuse the request after the pipeline — the webhook endpoint's legacy
+    /// <c>X-Webhook-Key</c> check — uses <see cref="EvaluateDeferringAcceptanceAsync"/> instead, so the log
+    /// never shows a refused delivery as accepted.
+    /// </remarks>
+    public ValueTask<PipelineResult> EvaluateAsync(
         HttpContext http,
         Guid flowId,
         string triggerKey,
         IReadOnlyDictionary<string, object?> triggerInputs,
         ReadOnlyMemory<byte> bodyBytes,
         IReadOnlyDictionary<string, string> headers,
+        CancellationToken ct = default)
+        => EvaluateDeferringAcceptanceAsync(http, flowId, triggerKey, triggerInputs, bodyBytes, headers, deferredAcceptance: null, ct);
+
+    /// <summary>
+    /// Runs the gate chain like <see cref="EvaluateAsync"/>, but when <paramref name="deferredAcceptance"/> is
+    /// given, an accepted request is NOT yet recorded: the caller finishes its own checks and then calls
+    /// <see cref="CommitAcceptance"/> or <see cref="RecordRejectionAfterPipelineAsync"/>.
+    /// </summary>
+    /// <param name="http">HTTP context (used for client IP, absolute URL, activity tags).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key (manifest key).</param>
+    /// <param name="triggerInputs">Manifest inputs for the matching webhook trigger.</param>
+    /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
+    /// <param name="headers">Inbound request headers (case-insensitive).</param>
+    /// <param name="deferredAcceptance">Receives the accepted-delivery bookkeeping; <see langword="null"/> records it at once.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The pipeline verdict. Rejections are recorded before this returns, deferred or not.</returns>
+    internal async ValueTask<PipelineResult> EvaluateDeferringAcceptanceAsync(
+        HttpContext http,
+        Guid flowId,
+        string triggerKey,
+        IReadOnlyDictionary<string, object?> triggerInputs,
+        ReadOnlyMemory<byte> bodyBytes,
+        IReadOnlyDictionary<string, string> headers,
+        DeferredAcceptance? deferredAcceptance,
         CancellationToken ct = default)
     {
         var stopwatch = ValueStopwatch.StartNew();
@@ -131,7 +162,7 @@ public sealed class WebhookSecurityPipeline
 
         if (_options.EnforcementMode == WebhookEnforcementMode.Off)
         {
-            EmitAccept(flowId, triggerKey, "off", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, scheme: null);
+            Accept(deferredAcceptance, flowId, triggerKey, "off", clientIp, bodyBytes.Length, headers, stopwatch, scheme: null);
             return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", false);
         }
 
@@ -257,8 +288,103 @@ public sealed class WebhookSecurityPipeline
         }
 
         Activity.Current?.SetTag("flow.webhook.result", "accepted");
-        EmitAccept(flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, spec?.HeaderName);
+        Accept(deferredAcceptance, flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch, spec?.HeaderName);
         return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation);
+    }
+
+    /// <summary>
+    /// Accepted-delivery bookkeeping (log row + received counter) for a request the gate chain let through,
+    /// held back by <see cref="EvaluateDeferringAcceptanceAsync"/> until the caller has made its final decision.
+    /// </summary>
+    /// <remarks>Single use: the first <see cref="CommitAcceptance"/> or <see cref="RecordRejectionAfterPipelineAsync"/> consumes it.</remarks>
+    internal sealed class DeferredAcceptance
+    {
+        /// <summary><see langword="true"/> between the pipeline accepting the request and the caller's decision.</summary>
+        internal bool IsPending { get; private set; }
+
+        internal Guid FlowId { get; private set; }
+
+        internal string TriggerKey { get; private set; } = string.Empty;
+
+        internal string Result { get; private set; } = string.Empty;
+
+        internal IPAddress? ClientIp { get; private set; }
+
+        internal long Bytes { get; private set; }
+
+        internal IReadOnlyDictionary<string, string>? Headers { get; private set; }
+
+        internal string? Scheme { get; private set; }
+
+        internal long StartTimestamp { get; private set; }
+
+        internal void Hold(Guid flowId, string triggerKey, string result, IPAddress? ip, long bytes, IReadOnlyDictionary<string, string> headers, string? scheme, long startTimestamp)
+        {
+            FlowId = flowId;
+            TriggerKey = triggerKey;
+            Result = result;
+            ClientIp = ip;
+            Bytes = bytes;
+            Headers = headers;
+            Scheme = scheme;
+            StartTimestamp = startTimestamp;
+            IsPending = true;
+        }
+
+        internal bool TryConsume()
+        {
+            if (!IsPending)
+                return false;
+            IsPending = false;
+            return true;
+        }
+    }
+
+    /// <summary>Records a request held by <see cref="EvaluateDeferringAcceptanceAsync"/> as accepted.</summary>
+    /// <param name="acceptance">The held bookkeeping; a no-op when nothing is pending.</param>
+    internal void CommitAcceptance(DeferredAcceptance acceptance)
+    {
+        if (!acceptance.TryConsume())
+            return;
+        EmitAccept(acceptance.FlowId, acceptance.TriggerKey, acceptance.Result, acceptance.ClientIp, acceptance.Bytes,
+            acceptance.Headers!, Stopwatch.GetElapsedTime(acceptance.StartTimestamp).TotalMilliseconds, acceptance.Scheme);
+    }
+
+    /// <summary>
+    /// Records a delivery the caller refused after the gate chain (e.g. a wrong legacy <c>X-Webhook-Key</c>) as
+    /// rejected with its real status code and reason, and drops any acceptance still held for it.
+    /// </summary>
+    /// <param name="http">HTTP context (client IP).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key.</param>
+    /// <param name="reason">Reason chip shown in the delivery log.</param>
+    /// <param name="statusCode">The status code the caller answers with.</param>
+    /// <param name="bodyBytes">Raw body bytes (an excerpt is kept, as for every rejection).</param>
+    /// <param name="headers">Inbound request headers.</param>
+    /// <param name="acceptance">Bookkeeping held for this request, if any; discarded.</param>
+    /// <returns>A task that completes once the rejection is recorded.</returns>
+    /// <remarks>
+    /// The write uses <see cref="CancellationToken.None"/>: the decision is final, and a client that hangs up
+    /// right after a refused attempt must not be able to keep it out of the log.
+    /// </remarks>
+    internal async ValueTask RecordRejectionAfterPipelineAsync(
+        HttpContext http, Guid flowId, string triggerKey, string reason, int statusCode,
+        ReadOnlyMemory<byte> bodyBytes, IReadOnlyDictionary<string, string> headers, DeferredAcceptance? acceptance)
+    {
+        var held = acceptance is not null && acceptance.TryConsume();
+        var timing = held ? ValueStopwatch.FromTimestamp(acceptance!.StartTimestamp) : ValueStopwatch.StartNew();
+        var clientIp = held ? acceptance!.ClientIp : ResolveClientIp(http, _options.ForwardedHeaderDepth);
+        await RecordRejectedAsync(flowId, triggerKey, reason, statusCode, clientIp, bodyBytes, headers, spec: null, timing, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private void Accept(
+        DeferredAcceptance? deferred, Guid flowId, string triggerKey, string result, IPAddress? ip, long bytes,
+        IReadOnlyDictionary<string, string> headers, ValueStopwatch stopwatch, string? scheme)
+    {
+        if (deferred is not null)
+            deferred.Hold(flowId, triggerKey, result, ip, bytes, headers, scheme, stopwatch.StartTimestamp);
+        else
+            EmitAccept(flowId, triggerKey, result, ip, bytes, headers, stopwatch.Elapsed.TotalMilliseconds, scheme);
     }
 
     private async ValueTask<PipelineResult> PersistRejectSignatureAsync(
@@ -303,6 +429,21 @@ public sealed class WebhookSecurityPipeline
         ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
         WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
     {
+        await RecordRejectedAsync(flowId, triggerKey, reason, statusCode, ip, body, headers, spec, sw, ct).ConfigureAwait(false);
+
+        return _options.EnforcementMode switch
+        {
+            WebhookEnforcementMode.Audit => new PipelineResult(Decision.AuditFail, statusCode, reason, false),
+            WebhookEnforcementMode.Enforce => new PipelineResult(Decision.Reject, statusCode, reason, false),
+            _ => new PipelineResult(Decision.Accept, StatusCodes.Status200OK, reason, false),
+        };
+    }
+
+    private async ValueTask RecordRejectedAsync(
+        Guid flowId, string triggerKey, string reason, int statusCode, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
+    {
         Activity.Current?.SetTag("flow.webhook.result", "rejected");
         Activity.Current?.SetTag("flow.webhook.reject_reason", reason);
 
@@ -326,13 +467,6 @@ public sealed class WebhookSecurityPipeline
                 WebhookLog.RejectionStoreFailed(_logger, ex, flowId, triggerKey);
             }
         }
-
-        return _options.EnforcementMode switch
-        {
-            WebhookEnforcementMode.Audit => new PipelineResult(Decision.AuditFail, statusCode, reason, false),
-            WebhookEnforcementMode.Enforce => new PipelineResult(Decision.Reject, statusCode, reason, false),
-            _ => new PipelineResult(Decision.Accept, StatusCodes.Status200OK, reason, false),
-        };
     }
 
     private void EmitAccept(
@@ -589,6 +723,8 @@ public sealed class WebhookSecurityPipeline
         private readonly long _start;
         private ValueStopwatch(long start) { _start = start; }
         public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
+        public static ValueStopwatch FromTimestamp(long start) => new(start);
+        public long StartTimestamp => _start;
         public TimeSpan Elapsed => Stopwatch.GetElapsedTime(_start);
     }
 }
