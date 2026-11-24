@@ -104,6 +104,29 @@ HMAC verifier is generic — set `webhookSignatureScheme` and the wire
 format is resolved through `PartnerSchemeRegistry`. Use `Custom` for any
 publisher not on the built-in list.
 
+| `webhookSignatureScheme` | Signature header | Signed content | Key bytes |
+| --- | --- | --- | --- |
+| `GitHub` | `X-Hub-Signature-256: sha256=<hex>` | raw body | UTF-8 |
+| `GitHubLegacy` | `X-Hub-Signature: sha1=<hex>` (needs `AllowLegacySha1`) | raw body | UTF-8 |
+| `Bitbucket`, `Atlassian` | `X-Hub-Signature: sha256=<hex>` | raw body | UTF-8 |
+| `Stripe` | `Stripe-Signature: t=<ts>,v1=<hex>,…` | `{t}.{body}` | UTF-8 |
+| `Calendly` | `Calendly-Webhook-Signature: t=<ts>,v1=<hex>` | `{t}.{body}` | UTF-8 |
+| `Slack` | `X-Slack-Signature: v0=<hex>` + `X-Slack-Request-Timestamp` | `v0:{ts}:{body}` | UTF-8 |
+| `Zoom` | `X-Zm-Signature: v0=<hex>` + `X-Zm-Request-Timestamp` | `v0:{ts}:{body}` | UTF-8 |
+| `Shopify` | `X-Shopify-Hmac-SHA256: <base64>` | raw body | UTF-8 |
+| `Twilio` | `X-Twilio-Signature: <base64>` (HMAC-SHA1, needs `AllowLegacySha1`) | `{url}{sorted form fields}` | UTF-8 |
+| `Square` | `X-Square-HmacSha256-Signature: <base64>` | `{url}{body}` | UTF-8 |
+| `Linear` | `Linear-Signature: <hex>` | raw body | UTF-8 |
+| `Dropbox` | `X-Dropbox-Signature: <hex>` | raw body | UTF-8 |
+| `Mailgun` | in the JSON body (`signature.signature`) | `{timestamp}{token}` | UTF-8 |
+| `MicrosoftTeams` | `Authorization: HMAC <base64>` | raw body | base64-decoded token |
+| `StandardWebhooks` | `webhook-signature: v1,<base64> …` + `webhook-id` + `webhook-timestamp` | `{webhook-id}.{webhook-timestamp}.{body}` | base64-decoded part after `whsec_` |
+| `Generic` | `X-Signature: sha256=<hex>` | raw body | UTF-8 |
+| `Custom` | from the [manifest fields](#custom-scheme-reference) | | |
+
+All of them use HMAC-SHA256 unless noted, and compare every candidate signature
+against the current and previous key in constant time.
+
 A `webhookSignatureScheme` value that nothing can verify — not a built-in
 name, not registered with `RegisterScheme` or `AddWebhookSignatureVerifier`,
 or `Custom` with a signed-payload strategy that was never registered with
@@ -203,9 +226,9 @@ Inputs = new Dictionary<string, object?>
 
 Same shape — set `webhookSignatureScheme` to the exact enum name
 (`"MicrosoftTeams"`, no space). Names are matched case-insensitively but must
-otherwise be exact: an unrecognised name resolves to no spec and the signature
-gate is skipped silently, with no error. See `PartnerSchemeRegistry` for the
-exact spec each one resolves to.
+otherwise be exact: an unrecognised name is rejected as described above
+(`signature_scheme_unknown`). See `PartnerSchemeRegistry` for the exact spec
+each one resolves to.
 
 ### Microsoft Teams (`Authorization: HMAC …`)
 
@@ -226,6 +249,51 @@ Inputs = new Dictionary<string, object?>
     ["webhookSignatureScheme"] = "MicrosoftTeams",
 }
 ```
+
+### Standard Webhooks (Svix, Clerk, Resend, Lemon Squeezy, …)
+
+[Standard Webhooks](https://www.standardwebhooks.com) is the open signing
+scheme behind Svix and the providers that deliver through it. Per the
+[specification](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md),
+each delivery carries `webhook-id`, `webhook-timestamp` (Unix seconds) and
+`webhook-signature`, a space-delimited list of `v1,<base64 HMAC-SHA256>`
+entries over `{webhook-id}.{webhook-timestamp}.{body}`. Paste the signing
+secret into `webhookHmacKey` exactly as the provider shows it — `whsec_…`; the
+verifier keys the HMAC with the base64-decoded part after the prefix (a secret
+without the prefix works too). A secret that is not valid base64 is rejected as
+`KeyNotConfigured`.
+
+The delivery is accepted when **any** `v1` entry matches. Entries of other
+versions (`v1a`, the asymmetric `v2a`) and malformed entries are ignored, so a
+publisher rolling its secret can send one signature per secret — and a digest
+under any label other than `v1` never verifies. A missing `webhook-signature` or
+`webhook-id` is `MissingHeader`; a missing `webhook-timestamp` is
+`MissingTimestamp`.
+
+```csharp
+Inputs = new Dictionary<string, object?>
+{
+    ["webhookSlug"] = "clerk-events",
+    ["webhookHmacKey"] = "<whsec_… signing secret from the provider dashboard>",
+    ["webhookSignatureScheme"] = "StandardWebhooks",
+}
+```
+
+The spec asks receivers to check the timestamp against a tolerance (its
+reference libraries use 5 minutes) and to use `webhook-id` as an idempotency key.
+Both come from [replay protection](#replay-protection): turn it on with
+`UseReplayProtection(toleranceSeconds: 300)` (or
+`webhookReplayToleranceSeconds = 300` on the trigger). The skew window then
+applies to the signed `webhook-timestamp`, and the signed `webhook-id` is the
+replay key — a resend of the same message id within the window is `409`, even
+though the publisher re-timestamps and re-signs every retry. The key is held for
+`2 × tolerance` from the first delivery's timestamp, so a retry of a message whose
+first attempt passed the gate but then failed (a `5xx` while starting the run) is
+accepted again once that window has passed; publishers retry on a back-off
+schedule well beyond it.
+
+There is no `Svix` alias: use `StandardWebhooks` for every provider that signs
+this way. (`Svix` stays an unknown scheme name and is rejected like any other.)
 
 ### Mailgun (body-resident signature)
 
@@ -301,9 +369,10 @@ Two complementary defences:
 Once a signature scheme has verified the request, only signed material counts,
 because a replayer chooses every unsigned header:
 
-- **Signed timestamp** (Stripe, Slack, Zoom, Calendly, Mailgun): the skew window
-  applies to the signed timestamp and the replay key is derived from it (or from
-  the signed token). Unsigned timestamp / nonce headers are ignored.
+- **Signed timestamp** (Stripe, Slack, Zoom, Calendly, Mailgun, StandardWebhooks):
+  the skew window applies to the signed timestamp and the replay key is derived
+  from it — or is the signed token (Mailgun `token`, Standard Webhooks
+  `webhook-id`). Unsigned timestamp / nonce headers are ignored.
 - **Body-only signature** (GitHub, Shopify, Linear, Dropbox, Bitbucket,
   Atlassian, Teams, …): no timestamp header is required — these publishers send
   none — and any unsigned one is ignored. The replay key is `SHA-256(body)`, held
@@ -516,7 +585,10 @@ these — pick a built-in scheme first.
 | `webhookHeaderValuePrefix`             | Prefix on the whole header line, stripped before parsing (Microsoft Teams `HMAC `).                    |
 | `webhookAcceptMultipleSignatures`      | When `true`, every matching segment is treated as a candidate.                                         |
 | `webhookAcceptedVersions`              | Allowlist of segment keys (`["v0", "v1"]`); other segments ignored.                                    |
-| `webhookSignedPayloadStrategy`         | `RawBody` (default), `TimestampDotBody`, `ColonDelimited`, `UrlPlusSortedForm`, `UrlPlusBody`, `TimestampPlusToken`, `Custom`. |
+| `webhookSignedPayloadStrategy`         | `RawBody` (default), `TimestampDotBody`, `ColonDelimited`, `UrlPlusSortedForm`, `UrlPlusBody`, `TimestampPlusToken`, `MessageIdTimestampBody`, `Custom`. |
+| `webhookHmacKeyEncoding`               | `Utf8` (default) keys the HMAC with the key string's UTF-8 bytes; `Base64` with its decoded bytes (an optional `whsec_` prefix is stripped first). |
+| `webhookMessageIdHeader`               | Header carrying the message id signed by `MessageIdTimestampBody` (Standard Webhooks `webhook-id`); it becomes the replay key. |
+| `webhookIgnoreMalformedSignatureEntries` | When `true`, a multi-value entry without the key/value separator is skipped instead of failing the header as `MalformedHeader`. |
 | `webhookSignedPayloadDelimiter`        | Delimiter between timestamp and body for delimited strategies.                                         |
 | `webhookSignedPayloadVersion`          | Version literal injected for `ColonDelimited` (e.g. Slack `v0`).                                       |
 | `webhookCustomStrategyName`            | Name of a strategy registered through `AddCustomSignatureStrategy(...)`; required when strategy = `Custom`. |

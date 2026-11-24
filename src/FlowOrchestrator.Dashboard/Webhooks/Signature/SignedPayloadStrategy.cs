@@ -28,4 +28,15 @@ public enum SignedPayloadStrategy
 
     /// <summary>User-supplied <see cref="System.Func{T, TResult}"/> registered through the <c>WebhookSecurityOptionsBuilder</c>.</summary>
     Custom,
+
+    /// <summary>
+    /// Sign <c>{messageId}.{timestamp}.{body}</c>; uses the configured delimiter (default '.'). The message id comes
+    /// from <see cref="WebhookSignatureSpec.MessageIdHeaderName"/>. Standard Webhooks (Svix).
+    /// </summary>
+    /// <remarks>
+    /// Both the timestamp and the message id are covered by the digest, so a verified delivery hands them to
+    /// replay protection as the authenticated timestamp and the authenticated nonce (replay key).
+    /// Appended after <see cref="Custom"/> so the numeric values of the existing members do not change.
+    /// </remarks>
+    MessageIdTimestampBody,
 }

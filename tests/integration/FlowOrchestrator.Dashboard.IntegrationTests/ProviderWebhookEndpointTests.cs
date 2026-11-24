@@ -98,7 +98,7 @@ public sealed class ProviderWebhookEndpointTests
     public static TheoryData<string> AllDialects => new(Providers.Keys);
 
     /// <summary>Dialects whose signed material includes a timestamp.</summary>
-    public static TheoryData<string> TimestampedDialects => new("Stripe", "Slack", "SlackEvents", "Zoom", "Calendly", "Mailgun");
+    public static TheoryData<string> TimestampedDialects => new("Stripe", "Slack", "SlackEvents", "Zoom", "Calendly", "Mailgun", "StandardWebhooks");
 
     /// <summary>Dialects that sign only the body (or URL + body): the provider sends no timestamp at all.</summary>
     public static TheoryData<string> BodyOnlyDialects => new(
@@ -331,6 +331,17 @@ public sealed class ProviderWebhookEndpointTests
                     ("Calendly-Webhook-Signature", o.OmitSignature ? null : $"t={t},v1=" + Hex256(U(key), U(t + ".").Concat(body).ToArray())));
             });
 
+        // Standard Webhooks (Svix, Clerk, Resend, …) — https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md
+        // webhook-id / webhook-timestamp / webhook-signature "v1,<base64>" over {id}.{ts}.{body}, keyed with the
+        // base64-decoded part after whsec_. Secret = the reference libraries' sample, assembled at runtime.
+        yield return new("StandardWebhooks", "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", "whsec_" + Convert.ToBase64String(new byte[24]), false, Scheme("StandardWebhooks"),
+            (slug, key, o) =>
+            {
+                var body = U("{\"type\":\"contact.created\",\"timestamp\":\"2022-11-03T20:26:10.344522Z\",\"data\":{\"id\":\"1f81eb52-5198-4599-803e-771906343485\"}}");
+                var id = "msg_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+                return StandardWebhooksRequest(slug, key, id, o.Timestamp ?? Now, o.TamperBody ? Tampered(body) : body, body, o.OmitSignature);
+            });
+
         // Generic — FlowOrchestrator's own dialect: X-Signature: sha256=<hex>.
         yield return new("Generic", "generic-secret", "generic-secreu", false, Scheme("Generic"),
             (slug, key, o) =>
@@ -352,6 +363,19 @@ public sealed class ProviderWebhookEndpointTests
                 ["webhookSignedPayloadStrategy"] = "RawBody",
             },
             (slug, key, o) => GitHubRequest(slug, key, o, "application/json", gitHubBody));
+    }
+
+    /// <summary>Builds a Standard Webhooks delivery signed over <paramref name="signedBody"/> but sending <paramref name="sentBody"/>.</summary>
+    private static HttpRequestMessage StandardWebhooksRequest(string slug, string key, string id, long timestamp, byte[] sentBody, byte[] signedBody, bool omitSignature = false)
+    {
+        var ts = timestamp.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var k = Convert.FromBase64String(key.StartsWith("whsec_", StringComparison.Ordinal) ? key["whsec_".Length..] : key);
+        var sig = "v1," + B64256(k, U(id + "." + ts + ".").Concat(signedBody).ToArray());
+        return Post($"/flows/api/webhook/{slug}", sentBody, "application/json",
+            ("User-Agent", "Svix-Webhooks/1.0"),
+            ("webhook-id", id),
+            ("webhook-timestamp", ts),
+            ("webhook-signature", omitSignature ? null : sig));
     }
 
     // ── Server plumbing ─────────────────────────────────────────────────────────────────────────
@@ -653,8 +677,8 @@ public sealed class ProviderWebhookEndpointTests
     public async Task StandardWebhooks_library_vector_is_accepted()
     {
         // Arrange — DOC: https://github.com/standard-webhooks/standard-webhooks/blob/main/libraries/python/tests/test_webhooks.py
-        // verbatim (Svix uses the same scheme). There is no built-in dialect today; "StandardWebhooks" is the
-        // name the fix is expected to use. Clock pinned next to the vector's timestamp.
+        // verbatim (Svix uses the same scheme), verified by the built-in StandardWebhooks dialect. Clock pinned
+        // next to the vector's timestamp.
         using var server = NewServer(clock: new FixedClock(DateTimeOffset.FromUnixTimeSeconds(1614265330 + 10)));
         Register(server, "stdwh-events", new Dictionary<string, object?>
         {
@@ -687,6 +711,111 @@ public sealed class ProviderWebhookEndpointTests
             ("webhook-id", "msg_p5jXN8AQM9LWM0D4loKWxJek"),
             ("webhook-timestamp", "1614265330"),
             ("webhook-signature", "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OA="));
+
+        // Act
+        var (status, body) = await SendAsync(server, req);
+
+        // Assert
+        Assert.True(status == HttpStatusCode.Unauthorized, $"expected 401, got {(int)status} {body}");
+        await server.FlowOrchestrator.DidNotReceive().TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task StandardWebhooks_resend_of_the_same_webhook_id_is_409_under_replay_protection()
+    {
+        // Arrange — the spec: webhook-id "remains the same no matter how many times a webhook that has failed is
+        // retried" and should be used "as an idempotency key". The resend is freshly timestamped and correctly
+        // re-signed, so only the signed webhook-id (the replay key) identifies it as the same message.
+        var p = Providers["StandardWebhooks"];
+        using var server = NewServer(replaySeconds: 300);
+        Register(server, p);
+        var body = U("{\"type\":\"invoice.paid\",\"n\":1}");
+        var first = StandardWebhooksRequest(p.Slug, p.Key, "msg_resent", Now, body, body);
+        var resend = StandardWebhooksRequest(p.Slug, p.Key, "msg_resent", Now + 5, body, body);
+
+        // Act
+        var (s1, b1) = await SendAsync(server, first);
+        var (s2, b2) = await SendAsync(server, resend);
+
+        // Assert
+        Assert.True(s1 == HttpStatusCode.OK, $"first delivery expected 200, got {(int)s1} {b1}");
+        Assert.True(s2 == HttpStatusCode.Conflict, $"resend of the same webhook-id expected 409, got {(int)s2} {b2}");
+        await server.FlowOrchestrator.Received(1).TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task StandardWebhooks_distinct_messages_with_identical_bodies_are_both_accepted()
+    {
+        // Arrange — the replay key is the signed webhook-id, not the body: two messages may carry the same payload.
+        var p = Providers["StandardWebhooks"];
+        using var server = NewServer(replaySeconds: 300);
+        Register(server, p);
+        var body = U("{\"type\":\"invoice.paid\",\"n\":1}");
+        var ts = Now;
+        var a = StandardWebhooksRequest(p.Slug, p.Key, "msg_a", ts, body, body);
+        var b = StandardWebhooksRequest(p.Slug, p.Key, "msg_b", ts, body, body);
+
+        // Act
+        var (sa, ba) = await SendAsync(server, a);
+        var (sb, bb) = await SendAsync(server, b);
+
+        // Assert
+        Assert.True(sa == HttpStatusCode.OK, $"msg_a expected 200, got {(int)sa} {ba}");
+        Assert.True(sb == HttpStatusCode.OK, $"msg_b expected 200, got {(int)sb} {bb}");
+    }
+
+    [Fact]
+    public async Task StandardWebhooks_forged_webhook_id_header_cannot_dodge_the_replay_key()
+    {
+        // Arrange — an attacker replays a captured delivery with a new webhook-id; the id is signed, so the
+        // altered request fails the signature instead of registering as a fresh message.
+        var p = Providers["StandardWebhooks"];
+        using var server = NewServer(replaySeconds: 300);
+        Register(server, p);
+        var body = U("{\"type\":\"invoice.paid\",\"n\":2}");
+        var ts = Now;
+        var genuine = StandardWebhooksRequest(p.Slug, p.Key, "msg_captured", ts, body, body);
+        var replay = StandardWebhooksRequest(p.Slug, p.Key, "msg_captured", ts, body, body);
+        replay.Headers.Remove("webhook-id");
+        replay.Headers.TryAddWithoutValidation("webhook-id", "msg_attacker_chosen");
+
+        // Act
+        var (s1, b1) = await SendAsync(server, genuine);
+        var (s2, b2) = await SendAsync(server, replay);
+
+        // Assert
+        Assert.True(s1 == HttpStatusCode.OK, $"genuine expected 200, got {(int)s1} {b1}");
+        Assert.True(s2 == HttpStatusCode.Unauthorized, $"re-labelled replay expected 401, got {(int)s2} {b2}");
+    }
+
+    [Fact]
+    public async Task StandardWebhooks_delivery_signed_with_the_previous_secret_is_accepted_during_rotation()
+    {
+        // Arrange — webhookHmacKeyPrevious keeps the rotated-out whsec_ secret valid for the rotation window.
+        var p = Providers["StandardWebhooks"];
+        using var server = NewServer();
+        Register(server, p.Slug, new Dictionary<string, object?>(p.Inputs)
+        {
+            ["webhookHmacKey"] = "whsec_" + Convert.ToBase64String(Encoding.UTF8.GetBytes("brand-new-secret-24bytes")),
+            ["webhookHmacKeyPrevious"] = p.Key,
+        });
+        var req = p.Build(p.Slug, p.Key, new DeliveryOptions());
+
+        // Act
+        var (status, body) = await SendAsync(server, req);
+
+        // Assert
+        Assert.True(status == HttpStatusCode.OK, $"expected 200, got {(int)status} {body}");
+    }
+
+    [Fact]
+    public async Task StandardWebhooks_key_with_invalid_base64_is_rejected_401()
+    {
+        // Arrange — a mis-pasted secret must fail closed, never fall back to the raw string as the key.
+        var p = Providers["StandardWebhooks"];
+        using var server = NewServer();
+        Register(server, p.Slug, new Dictionary<string, object?>(p.Inputs) { ["webhookHmacKey"] = "whsec_%%not-base64%%" });
+        var req = p.Build(p.Slug, p.Key, new DeliveryOptions());
 
         // Act
         var (status, body) = await SendAsync(server, req);

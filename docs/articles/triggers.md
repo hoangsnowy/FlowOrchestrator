@@ -179,7 +179,7 @@ Configure per flow via manifest inputs. The full set of v1.25 fields:
 
 | Field | Purpose |
 |-------|---------|
-| `webhookSignatureScheme` | Selects a built-in dialect: `GitHub`, `GitHubLegacy`, `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`, `Linear`, `Dropbox`, `Mailgun`, `MicrosoftTeams`, `Atlassian`, `Calendly`, `Generic`, or `Custom`. |
+| `webhookSignatureScheme` | Selects a built-in dialect: `GitHub`, `GitHubLegacy`, `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`, `Linear`, `Dropbox`, `Mailgun`, `MicrosoftTeams`, `Atlassian`, `Calendly`, `StandardWebhooks` (Svix, Clerk, Resend, …), `Generic`, or `Custom`. |
 | `webhookHmacKey` | Signing key used for HMAC verification. Falls back to `webhookSecret` when absent. |
 | `webhookHmacKeyPrevious` / `webhookSecretPrevious` | Optional rotated-out key. Successful matches against the previous key emit `EventId 4010` (`WebhookLog.RotationUsedPreviousKey`). |
 | `webhookSignatureHeader`, `webhookSignatureAlgorithm`, `webhookSignatureEncoding`, `webhookSignaturePrefix`, `webhookSignatureMultiValueDelimiter`, `webhookSignatureKeyValueSeparator`, `webhookSignatureValueKey`, `webhookTimestampValueKey`, `webhookTimestampHeader`, `webhookSignedPayloadStrategy`, `webhookSignedPayloadDelimiter`, `webhookSignedPayloadVersion`, `webhookHeaderValuePrefix`, `webhookCustomStrategyName` | Drive the `Custom` scheme directly from the manifest (every aspect of the wire format is controllable). |

@@ -101,8 +101,9 @@ public sealed class TeamsWebhookFlow() : ProviderWebhookFlowBase(new Guid("d1f8a
 /// <c>webhook-signature: v1,&lt;base64&gt;</c> over <c>{id}.{ts}.{body}</c> with the base64-decoded part after <c>whsec_</c>.
 /// </summary>
 /// <remarks>
-/// There is no built-in <c>StandardWebhooks</c> scheme yet; the e2e check exists to catch the unknown-scheme
-/// fail-open (an unrecognised scheme name currently disables signature verification).
+/// Verified by the built-in <c>StandardWebhooks</c> scheme; the secret is pasted exactly as the provider shows it
+/// (<c>whsec_…</c>). Under the host's replay protection the signed <c>webhook-id</c> is the replay key, so the e2e
+/// check sends a fresh message id per delivery.
 /// </remarks>
 public sealed class StandardWebhooksFlow() : ProviderWebhookFlowBase(new Guid("d1f8a000-0000-0000-0000-000000000206"), new()
 {

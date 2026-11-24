@@ -62,6 +62,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   or when `AdditionalAuthenticationSchemes` names an unregistered scheme or is set without
   `AuthenticationScheme`.
 
+### Added — Standard Webhooks signature scheme
+
+- **`webhookSignatureScheme = "StandardWebhooks"`** verifies deliveries signed per the
+  [Standard Webhooks spec](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md)
+  — Svix and the providers that deliver through it (Clerk, Resend, Lemon Squeezy, …): `webhook-signature`
+  (space-delimited `v1,<base64>` list; accepted when any `v1` entry matches, other versions and malformed
+  entries ignored) over `{webhook-id}.{webhook-timestamp}.{body}`, keyed with the base64-decoded part after
+  `whsec_` (the prefix is optional). Under replay protection the signed `webhook-timestamp` is skew-checked
+  and the signed `webhook-id` is the replay key, so a resend of the same message id inside the window is
+  `409`. Key rotation (`webhookHmacKeyPrevious`) works as for every other scheme. Pinned by the reference
+  libraries' known-answer vectors. There is deliberately no `Svix` alias — it stays an unknown scheme name.
+- New building blocks, also reachable from `Custom` specs: `SignedPayloadStrategy.MessageIdTimestampBody`,
+  `WebhookSignatureSpec.MessageIdHeaderName` / `IgnoreMalformedEntries`, and the manifest fields
+  `webhookHmacKeyEncoding`, `webhookMessageIdHeader`, `webhookIgnoreMalformedSignatureEntries`.
+  `HmacKeyEncoding.Base64` now strips an optional leading `whsec_` before decoding (no valid base64 key can
+  start with it, so Microsoft Teams keys are unaffected) and no longer throws internally on an invalid key.
+- New enum members are appended (`WebhookSignatureScheme.StandardWebhooks` and
+  `SignedPayloadStrategy.MessageIdTimestampBody` after `Custom`), so existing numeric values are unchanged. A
+  custom verifier registered with `AddWebhookSignatureVerifier` under the name `StandardWebhooks` now
+  collides with the built-in scheme and fails at registration — rename it.
+
 ### Changed — dashboard UI
 
 - **Dashboard redesigned as a dense operator view.** Overview leads with a "Needs attention" list

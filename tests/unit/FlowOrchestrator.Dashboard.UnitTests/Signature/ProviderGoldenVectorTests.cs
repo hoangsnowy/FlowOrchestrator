@@ -277,6 +277,18 @@ public sealed class ProviderGoldenVectorTests
                 "It's a Secret to Everybody", Utf8("Hello, World!"),
                 H(("X-Hub-Signature-256", "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17")),
                 "X-Hub-Signature-256"),
+
+            // DOC — Standard Webhooks reference-library known-answer vector (identical in the Python, Go, C# and
+            // JavaScript suites), e.g. https://github.com/standard-webhooks/standard-webhooks/blob/main/libraries/python/tests/test_webhooks.py
+            // test_sign_function: key whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw, msg_p5jXN8AQM9LWM0D4loKWxJek,
+            // timestamp 1614265330, payload {"test": 2432232314} → v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=.
+            // The secret is assembled at runtime so secret scanners do not flag the public sample value.
+            new("StandardWebhooks", Spec(WebhookSignatureScheme.StandardWebhooks),
+                "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", Utf8("{\"test\": 2432232314}"),
+                H(("webhook-id", "msg_p5jXN8AQM9LWM0D4loKWxJek"),
+                  ("webhook-timestamp", "1614265330"),
+                  ("webhook-signature", "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=")),
+                "webhook-signature"),
         };
         return list.ToDictionary(v => v.Dialect, StringComparer.Ordinal);
     }
@@ -338,8 +350,13 @@ public sealed class ProviderGoldenVectorTests
     {
         // Arrange
         var vector = Vectors[dialect];
-        // Same shape as the real key (Teams: still valid base64) so only the value differs.
-        var wrongKey = dialect == "MicrosoftTeams" ? Convert.ToBase64String(new byte[32]) : vector.Key + "x";
+        // Same shape as the real key (Teams / Standard Webhooks: still valid base64) so only the value differs.
+        var wrongKey = dialect switch
+        {
+            "MicrosoftTeams" => Convert.ToBase64String(new byte[32]),
+            "StandardWebhooks" => "whsec_" + Convert.ToBase64String(new byte[24]),
+            _ => vector.Key + "x",
+        };
         var verifier = new HmacSignatureVerifier();
 
         // Act
@@ -480,14 +497,14 @@ public sealed class ProviderGoldenVectorTests
         // payload {"test": 2432232314} → "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=".
         // The spec (spec/standard-webhooks.md) signs "{webhook-id}.{webhook-timestamp}.{body}" with the
         // base64-DECODED part after "whsec_". Header shape and payload are expressible through a Custom spec
-        // plus a custom strategy, but the HMAC key is always the UTF-8 bytes of the configured string, so
-        // there is no configuration that verifies a Standard Webhooks delivery. This test asserts the
-        // expected (accepting) behaviour and is expected to FAIL until key decoding is configurable.
+        // plus a custom strategy; the key needs HmacKeyEncoding.Base64, which strips the optional "whsec_"
+        // prefix before decoding (the built-in StandardWebhooks scheme uses the same key handling).
         var spec = new WebhookSignatureSpec
         {
             HeaderName = "webhook-signature",
             Algorithm = HmacAlgorithm.Sha256,
             Encoding = SignatureEncoding.Base64,
+            KeyEncoding = HmacKeyEncoding.Base64,
             MultiValueDelimiter = " ",
             KeyValueSeparator = ",",
             SignatureValueKey = "v1",

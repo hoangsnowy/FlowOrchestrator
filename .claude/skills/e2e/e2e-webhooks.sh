@@ -128,7 +128,8 @@ check_instance() {
     [ "$auth" = 0 ] && ok "W.7 Teams outgoing webhook → 200, Authorization not persisted" || bad "W.7 Teams" "Authorization header persisted in run triggerHeaders"
   else bad "W.7 Teams outgoing webhook" "${r:0:200}"; fi
 
-  # W.8 Standard Webhooks / Svix — genuine → 200, tampered signature → 401.
+  # W.8 Standard Webhooks / Svix (built-in StandardWebhooks scheme) — genuine → 200, forged signature → 401.
+  # A fresh webhook-id per run: under replay protection the signed webhook-id is the replay key.
   f=$TMP/stdwh.json; printf '{"type":"contact.created","n":%s}' "$RANDOM$RANDOM" > "$f"
   local mid="msg_$RANDOM$RANDOM"; ts=$(now); sig=$(sign stdwh whsec_"MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw" "$mid" "$ts" "$f")
   r=$(post "$B/flows/api/webhook/e2e-standard-webhooks" application/json "$f" -H "User-Agent: Svix-Webhooks/1.0" \

@@ -61,4 +61,14 @@ public enum WebhookSignatureScheme
 
     /// <summary>Fully manifest-driven verifier; every aspect of the spec is read from flow inputs.</summary>
     Custom,
+
+    /// <summary>
+    /// Standard Webhooks (<see href="https://www.standardwebhooks.com"/>; Svix, Clerk, Resend, Lemon Squeezy, …):
+    /// <c>webhook-signature: v1,&lt;base64&gt;</c> (space-delimited list) over
+    /// <c>{webhook-id}.{webhook-timestamp}.{body}</c>, keyed with the base64-decoded part after <c>whsec_</c>.
+    /// </summary>
+    /// <remarks>
+    /// Appended after <see cref="Custom"/> so the numeric values of the existing members do not change.
+    /// </remarks>
+    StandardWebhooks,
 }

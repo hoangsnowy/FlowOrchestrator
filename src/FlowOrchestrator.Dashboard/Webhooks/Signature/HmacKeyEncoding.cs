@@ -11,7 +11,14 @@ public enum HmacKeyEncoding
 
     /// <summary>
     /// The key string is base64 and the HMAC is keyed with the decoded bytes (Microsoft Teams outgoing
-    /// webhooks: the security token Teams shows at registration is base64).
+    /// webhooks: the security token Teams shows at registration is base64; Standard Webhooks: the secret is
+    /// <c>whsec_</c> followed by base64).
     /// </summary>
+    /// <remarks>
+    /// A leading <c>whsec_</c> is stripped before decoding, so a Standard Webhooks secret can be pasted exactly
+    /// as the publisher's console shows it. The prefix is unambiguous: <c>_</c> is not in the base64 alphabet, so
+    /// no valid base64 key can start with it. A key that is not valid base64 (after the optional prefix) or decodes
+    /// to zero bytes fails verification with <see cref="WebhookSignatureFailureReason.KeyNotConfigured"/>.
+    /// </remarks>
     Base64,
 }

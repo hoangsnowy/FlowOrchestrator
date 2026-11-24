@@ -99,7 +99,7 @@ public sealed class WebhookUnknownSignatureSchemeTests
     public async Task StandardWebhooks_tampered_vector_is_rejected()
     {
         // Arrange — the Standard Webhooks library's own "invalid signature" case (last base64 char changed).
-        // No built-in dialect verifies it, so it must be rejected rather than accepted unverified.
+        // The built-in StandardWebhooks dialect verifies it and rejects the digest mismatch.
         using var server = Server(WebhookEnforcementMode.Enforce);
         Register(server, "stdwh-events", new Dictionary<string, object?>
         {
@@ -213,8 +213,10 @@ public sealed class WebhookUnknownSignatureSchemeTests
     [Fact]
     public void Registered_flows_with_verifiable_schemes_start_normally()
     {
-        // Arrange — a built-in scheme, a scheme registered with RegisterScheme, and Off mode with a typo.
+        // Arrange — built-in schemes (incl. StandardWebhooks, used by the sample app), a scheme registered with
+        // RegisterScheme, and Off mode with a typo.
         var builtIn = WebhookFlow("gh", new Dictionary<string, object?> { ["webhookSignatureScheme"] = "GitHub" });
+        var standardWebhooks = WebhookFlow("stdwh", new Dictionary<string, object?> { ["webhookSignatureScheme"] = "StandardWebhooks" });
         var registered = WebhookFlow("acme", new Dictionary<string, object?> { ["webhookSignatureScheme"] = "Acme" });
         var typo = WebhookFlow("typo", new Dictionary<string, object?> { ["webhookSignatureScheme"] = "GitHuub" });
 
@@ -223,7 +225,7 @@ public sealed class WebhookUnknownSignatureSchemeTests
         {
             using var server = DashboardTestServer.WithServices(s =>
             {
-                s.AddSingleton(new FlowRegistry([builtIn, registered]));
+                s.AddSingleton(new FlowRegistry([builtIn, standardWebhooks, registered]));
                 s.AddFlowDashboard(o => o.UseWebhookSecurity(w => w
                     .UseEnforcementMode(WebhookEnforcementMode.Enforce)
                     .RegisterScheme("Acme", new WebhookSignatureSpec { HeaderName = "X-Acme-Signature" })));

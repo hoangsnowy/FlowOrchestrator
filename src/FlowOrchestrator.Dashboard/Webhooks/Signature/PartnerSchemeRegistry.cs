@@ -10,7 +10,8 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Signature;
 /// <remarks>
 /// Specs are derived from the public webhook security documentation of each
 /// publisher (GitHub, Stripe, Slack, Shopify, Twilio, Square, Zoom, Linear,
-/// Dropbox, Mailgun, Microsoft Teams, Atlassian, Calendly, Bitbucket).
+/// Dropbox, Mailgun, Microsoft Teams, Atlassian, Calendly, Bitbucket) and from the Standard Webhooks
+/// specification.
 /// Custom and Generic do not have a fixed spec — Generic falls back to a sane
 /// default and Custom is built from manifest inputs.
 /// </remarks>
@@ -200,6 +201,39 @@ public static class PartnerSchemeRegistry
             SignedPayloadDelimiter = ".",
             RequireTimestamp = true,
             AcceptMultipleSignatures = true,
+        });
+
+        // Standard Webhooks — https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md
+        // (used by Svix, Clerk, Resend, Lemon Squeezy, …). From the spec:
+        //  • headers "webhook-id", "webhook-timestamp" ("integer unix timestamp (seconds since epoch)") and
+        //    "webhook-signature" ("a space delimited list of signatures");
+        //  • symmetric signed content "msg_id.timestamp.payload" — "the message's: ID, timestamp and body are
+        //    concatenated (delimited by full-stops) and then signed";
+        //  • signature "v1, followed by a comma (,), followed by the base64 encoded signature"; other versions
+        //    (asymmetric v2a, deprecated v1a) are skipped — only v1 is HMAC, and a valid digest under another
+        //    version label must not be accepted (the reference libraries reject it too);
+        //  • key "the base64 decoded part after whsec_" (HmacKeyEncoding.Base64 strips the optional prefix);
+        //  • "use a constant time comparison function" (every candidate goes through FixedTimeEquals) and verify
+        //    the timestamp is "within some allowable tolerance" — the signed timestamp and webhook-id are reported
+        //    as authenticated, so UseReplayProtection(...) checks the skew and uses webhook-id as the replay key,
+        //    in line with the spec's "use the webhook-id header as an idempotency key".
+        yield return Pair(WebhookSignatureScheme.StandardWebhooks, new WebhookSignatureSpec
+        {
+            HeaderName = "webhook-signature",
+            Algorithm = HmacAlgorithm.Sha256,
+            Encoding = SignatureEncoding.Base64,
+            KeyEncoding = HmacKeyEncoding.Base64,
+            MultiValueDelimiter = " ",
+            KeyValueSeparator = ",",
+            SignatureValueKey = "v1",
+            AcceptedVersions = new[] { "v1" },
+            TimestampHeaderName = "webhook-timestamp",
+            MessageIdHeaderName = "webhook-id",
+            SignedPayloadStrategy = SignedPayloadStrategy.MessageIdTimestampBody,
+            SignedPayloadDelimiter = ".",
+            RequireTimestamp = true,
+            AcceptMultipleSignatures = true,
+            IgnoreMalformedEntries = true,
         });
 
         static KeyValuePair<WebhookSignatureScheme, WebhookSignatureSpec> Pair(

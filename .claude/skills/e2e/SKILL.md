@@ -223,7 +223,7 @@ subscriptions).
 | W.5 | `e2e-slack` | slash command, `application/x-www-form-urlencoded`, `X-Slack-Request-Timestamp` + `X-Slack-Signature` | 200 |
 | W.6 | `e2e-twilio` | form POST, `X-Twilio-Signature` = base64 HMAC-SHA1 over URL + sorted fields, `I-Twilio-Idempotency-Token` | 200 |
 | W.7 | `e2e-teams` | `Authorization: HMAC <base64>` (key = base64-decoded security token) | 200, no `Authorization` in run `triggerHeaders` |
-| W.8 | `e2e-standard-webhooks` | `webhook-id` / `webhook-timestamp` / `webhook-signature: v1,…`; then a forged signature | 200, then 401 |
+| W.8 | `e2e-standard-webhooks` | `webhook-id` / `webhook-timestamp` / `webhook-signature: v1,…` (built-in `StandardWebhooks` scheme, key `whsec_…`); then a forged signature | 200, then 401 |
 | W.9 | `e2e-shared-secret` | `X-Webhook-Key` right / wrong (this IS the shared-secret protocol) | 200 / 401 |
 | W.10 | `e2e-shared-secret` | two deliveries with the same `Idempotency-Key` | same `runId`, second `duplicate=true`, exactly one new run |
 | W.11 | `e2e-shared-secret` | 1.2 MB body with `Content-Length`, then chunked | 413 both |
@@ -235,10 +235,11 @@ subscriptions).
 Expected failures on `548bb7f` (baseline, before the 2.0-P-1 webhook fixes): W.1b (legacy
 `webhookSecret` forces `X-Webhook-Key`), W.2 / W.1 under host replay (`missing_timestamp` 409 on the first
 delivery), W.5 / W.6 (form bodies rejected as invalid JSON), W.7 (Teams signature header stripped,
-key not base64-decoded), W.14 (unhandled `BadHttpRequestException`). Still expected to fail after
-those fixes, until fixed: **W.8** (no `StandardWebhooks` scheme — an unknown scheme name silently
-disables verification, so the forged delivery gets 200) and **W.13** (X-Forwarded-For trusts the
-entry left of the one the proxy appended).
+key not base64-decoded), W.14 (unhandled `BadHttpRequestException`), W.8 (no `StandardWebhooks`
+scheme — an unknown scheme name silently disabled verification, so the forged delivery got 200; the
+built-in `StandardWebhooks` scheme now verifies it: genuine → 200, forged → 401). Still expected to fail
+after those fixes, until fixed: **W.13** (X-Forwarded-For trusts the entry left of the one the proxy
+appended).
 
 Report the matrix as a separate block per instance and add its `RESULT: N/N` line to the summary.
 
