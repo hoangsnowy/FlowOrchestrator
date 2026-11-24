@@ -1225,7 +1225,14 @@ public static class DashboardServiceCollectionExtensions
             // Idempotency-Key would hit the engine's dedup path, return the original
             // RunId, and silently drop the rerun (the user would see the success message
             // but no new run would actually start).
-            var rehydratedHeaders = StripIdempotencyHeader(run.TriggerHeaders, runControlOptions.IdempotencyHeaderName);
+            // Headers live in IOutputsRepository (run detail reads them from there too); no store fills
+            // FlowRunRecord.TriggerHeaders from GetRunAsync, so reading only the record replayed none and
+            // every @triggerHeaders() input of the rerun resolved null. Resolved with a fallback per the
+            // dashboard DI rule.
+            var originalHeaders = run.TriggerHeaders;
+            if (originalHeaders is null && http.RequestServices.GetService<IOutputsRepository>() is { } outputs)
+                originalHeaders = await outputs.GetTriggerHeadersAsync(runId);
+            var rehydratedHeaders = StripIdempotencyHeader(originalHeaders, runControlOptions.IdempotencyHeaderName);
 
             var triggerKey = string.IsNullOrWhiteSpace(run.TriggerKey) ? "manual" : run.TriggerKey!;
             var ctx = new TriggerContext

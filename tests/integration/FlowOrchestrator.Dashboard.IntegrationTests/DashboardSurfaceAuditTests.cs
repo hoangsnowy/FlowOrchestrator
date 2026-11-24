@@ -351,6 +351,77 @@ public sealed class DashboardSurfaceAuditTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    // ── Rerun ────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// WRONG RESULT. Rerun rehydrated headers from <see cref="FlowRunRecord.TriggerHeaders"/>, but no
+    /// store ever populates that property from <c>GetRunAsync</c> (headers live in
+    /// <see cref="IOutputsRepository"/>, which the run-detail endpoint reads). A rerun therefore started
+    /// with NO trigger headers: every <c>@triggerHeaders()['X-Tenant']</c> input resolved null and the
+    /// rerun silently diverged from the run it claims to replay.
+    /// </summary>
+    [Fact]
+    public async Task Rerun_replays_the_original_trigger_headers()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = WebhookFlow(flowId, new Dictionary<string, object?> { ["webhookSlug"] = "orders" });
+        server.Flows = new FlowRegistry(new[] { flow });
+        // Shape of the record every real store returns: TriggerHeaders is never set by GetRunAsync.
+        server.FlowRunStore.GetRunDetailAsync(runId).Returns(new FlowRunRecord
+        {
+            Id = runId, FlowId = flowId, Status = "Succeeded", TriggerKey = "webhook", TriggerDataJson = "{\"orderId\":7}",
+        });
+        server.OutputsRepository.GetTriggerHeadersAsync(runId).Returns(new ValueTask<IReadOnlyDictionary<string, string>?>(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["X-Tenant"] = "acme" }));
+        ITriggerContext? captured = null;
+        server.FlowOrchestrator.TriggerAsync(Arg.Do<ITriggerContext>(c => captured = c), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>((object?)null));
+
+        // Act
+        using var response = await server.Client.PostAsync($"/flows/api/runs/{runId}/rerun", null);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(captured);
+        Assert.NotNull(captured!.Trigger.Headers);
+        Assert.Equal("acme", captured.Trigger.Headers!["X-Tenant"]);
+    }
+
+    /// <summary>
+    /// The rehydrated headers still drop the idempotency header, or the rerun would dedupe onto the
+    /// original run and start nothing.
+    /// </summary>
+    [Fact]
+    public async Task Rerun_strips_the_idempotency_header_from_the_stored_trigger_headers()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        server.Flows = new FlowRegistry(new[] { WebhookFlow(flowId, new Dictionary<string, object?> { ["webhookSlug"] = "orders" }) });
+        server.FlowRunStore.GetRunDetailAsync(runId).Returns(new FlowRunRecord
+        {
+            Id = runId, FlowId = flowId, Status = "Succeeded", TriggerKey = "webhook",
+        });
+        var idempotencyHeader = new FlowOrchestrator.Core.Configuration.FlowRunControlOptions().IdempotencyHeaderName;
+        server.OutputsRepository.GetTriggerHeadersAsync(runId).Returns(new ValueTask<IReadOnlyDictionary<string, string>?>(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["X-Tenant"] = "acme", [idempotencyHeader] = "order-7" }));
+        ITriggerContext? captured = null;
+        server.FlowOrchestrator.TriggerAsync(Arg.Do<ITriggerContext>(c => captured = c), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>((object?)null));
+
+        // Act
+        using var response = await server.Client.PostAsync($"/flows/api/runs/{runId}/rerun", null);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("acme", captured!.Trigger.Headers!["X-Tenant"]);
+        Assert.False(captured.Trigger.Headers.ContainsKey(idempotencyHeader));
+    }
+
     // ── Cancel ───────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
