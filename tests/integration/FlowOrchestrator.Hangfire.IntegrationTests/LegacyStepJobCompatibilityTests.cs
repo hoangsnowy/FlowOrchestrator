@@ -43,13 +43,14 @@ public sealed class LegacyStepJobCompatibilityTests : IAsyncDisposable
 
     private readonly ServiceProvider _provider;
     private readonly CarrierCalls _calls = new();
+    private readonly InMemoryStorage _storage = new();
 
     public LegacyStepJobCompatibilityTests()
     {
         // What the customer's AddHangfire(c => c.UseRecommendedSerializerSettings()) sets: job arguments are
         // read with type-name handling, which is how 1.x jobs carried their interface-typed arguments.
         GlobalConfiguration.Configuration.UseRecommendedSerializerSettings();
-        var storage = new InMemoryStorage();
+        var storage = _storage;
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
         services.AddSingleton<IBackgroundJobClient>(new BackgroundJobClient(storage));
@@ -67,7 +68,11 @@ public sealed class LegacyStepJobCompatibilityTests : IAsyncDisposable
         _provider = services.BuildServiceProvider();
     }
 
-    public async ValueTask DisposeAsync() => await _provider.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _provider.DisposeAsync();
+        _storage.Dispose();
+    }
 
     [Fact]
     public async Task LegacyPollRecheck_WithDestroyedInputs_ResolvesManifestInputsAndCompletesTheStep()

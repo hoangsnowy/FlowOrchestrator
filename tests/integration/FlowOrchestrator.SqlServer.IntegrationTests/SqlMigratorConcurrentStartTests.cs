@@ -57,11 +57,8 @@ public sealed class SqlMigratorConcurrentStartTests : IClassFixture<SqlServerFix
                 await host.BackgroundIndexBuild;
             })).ToArray();
             gate.SetResult();
-            foreach (var start in starts)
-            {
-                if (await OutcomeWithinBudgetAsync(start) is { } failure)
-                    failures.Add($"round {round}: {failure}");
-            }
+            var outcomes = await Task.WhenAll(starts.Select(OutcomeWithinBudgetAsync));
+            failures.AddRange(outcomes.OfType<string>().Select(failure => $"round {round}: {failure}"));
 
             falseBuildFailures += logs.Sum(log => log.Entries.Count(e => e.EventId == 7206));
             foreach (var host in hosts) host.Dispose();
