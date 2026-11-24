@@ -26,7 +26,8 @@ namespace FlowOrchestrator.Core.Expressions;
 /// <see cref="BooleanExpressionComparer"/> (type unification + binary comparison).
 /// </para>
 /// <para>
-/// Type rules: number-vs-number compares as <see cref="decimal"/>; string-vs-string compares
+/// Type rules: number-vs-number compares as <see cref="decimal"/>, or as <see cref="double"/> when
+/// either operand lies outside the decimal range (e.g. a JSON <c>1e300</c>); string-vs-string compares
 /// ordinally; bool-vs-bool compares directly; <see langword="null"/> is only equal/non-equal
 /// to <see langword="null"/>; any other type combination throws <see cref="FlowExpressionException"/>.
 /// </para>

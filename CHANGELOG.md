@@ -165,6 +165,21 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   `ForEach` the iteration never settled and the run stayed `Running` for ever. The continuation now runs
   the blocked-step, loop-advance and `When` passes to a fixpoint. Cascade-skips are transitive as a result
   (`a` fails → `b` and `c` both `Skipped`, where `c` used to have no row); a retry still resets all of them.
+- **A malformed or out-of-range number in a `When` clause no longer strands the run.** `1.2.3` threw
+  `FormatException` from the parser, and a value outside the `decimal` range (`1e300` in a payload, or a
+  36-digit literal) threw `OverflowException` from the comparer. Neither is the `FlowExpressionException`
+  the engine turns into a `When`-skip, so the exception escaped after the upstream step was recorded
+  `Succeeded` and the run stayed `Running`. A malformed literal is now an authoring error (the step is
+  skipped with the message in its trace); an out-of-range number compares correctly, as `double`, against
+  the other operand. In-range numbers still compare as exact `decimal`.
+- **A `When` clause on a `ForEach` body step can reference a sibling in the same iteration.** The `When`
+  resolver did not get the step's runtime key, so `@steps('work').output.ok` on `loop.0.check` looked for a
+  top-level `work`, resolved `null`, and the step was silently skipped. It now resolves in the iteration's
+  scope, exactly like the step's inputs. New overload `WhenClauseEvaluator.EvaluateAsync(ctx, flow,
+  metadata, currentStepKey)`.
+- **A null-conditional in the middle of a path resolves.** Only a leading `?.` was stripped, so
+  `@triggerBody()?.order?.id` looked for a property named `order?` and resolved `null`. `?.` and `?[` are
+  now honoured anywhere in a trigger-body, step-output, `ForEach` source or poll-condition path.
 
 ### Security
 
