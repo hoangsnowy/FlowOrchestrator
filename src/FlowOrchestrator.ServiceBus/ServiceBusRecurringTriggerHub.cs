@@ -636,13 +636,12 @@ internal sealed partial class ServiceBusRecurringTriggerHub
             }
         }
 
-        foreach (var tick in ticks)
+        // Only a still-scheduled message can be cancelled; an active one is dropped by the consumer.
+        // Startup-only (once per job, at its first registration), so the filter reads clearer as a Where.
+        var keepSequence = adopted?.SequenceNumber;
+        foreach (var tick in ticks.Where(t => t.IsScheduled && t.SequenceNumber != keepSequence))
         {
-            // Only a still-scheduled message can be cancelled; an active one is dropped by the consumer.
-            if (tick.IsScheduled && (adopted is not { } keep || tick.SequenceNumber != keep.SequenceNumber))
-            {
-                await TryCancelScheduledAsync(tick.SequenceNumber).ConfigureAwait(false);
-            }
+            await TryCancelScheduledAsync(tick.SequenceNumber).ConfigureAwait(false);
         }
 
         if (adopted is not { } kept)

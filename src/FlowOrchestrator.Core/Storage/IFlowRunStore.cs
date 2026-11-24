@@ -181,6 +181,7 @@ public interface IFlowRunStore
             if (cursorInWindow)
             {
                 var group = await ReadTieGroupAsync(query, search, after.StartedAt).ConfigureAwait(false);
+                // Serves the dashboard's polled run search (CLAUDE.md hot path): foreach + continue, no closure.
                 foreach (var run in group)
                 {
                     if (!after.Precedes(run) || (query.RunId is { } id && run.Id != id))
@@ -277,6 +278,7 @@ public interface IFlowRunStore
             if (batch.Count < size || size > int.MaxValue / 4)
             {
                 var group = new List<FlowRunRecord>(batch.Count);
+                // Polled run-search path (CLAUDE.md hot path): foreach, not .Where with a closure over query.
                 foreach (var run in batch)
                 {
                     if (run.StartedAt == startedAt && (query.RunId is not { } id || run.Id == id))

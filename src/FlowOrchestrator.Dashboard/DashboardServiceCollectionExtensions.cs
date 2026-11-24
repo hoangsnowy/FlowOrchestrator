@@ -2117,6 +2117,7 @@ public static class DashboardServiceCollectionExtensions
         Security.DashboardAccess? access = null;
         Dictionary<string, Security.SignalAccessDecision>? decisions = null;
         Dictionary<string, object>? described = null;
+        // Per dashboard poll (CLAUDE.md hot path): a plain foreach + continue, not .Where with a closure.
         foreach (var step in steps)
         {
             if (!string.Equals(step.Status, nameof(StepStatus.Pending), StringComparison.OrdinalIgnoreCase)

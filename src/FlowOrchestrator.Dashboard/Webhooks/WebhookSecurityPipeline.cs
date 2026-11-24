@@ -731,10 +731,8 @@ public sealed class WebhookSecurityPipeline
     {
         foreach (var flow in registry.Flows)
         {
-            foreach (var (triggerKey, trigger) in flow.Manifest.Triggers)
+            foreach (var (triggerKey, trigger) in flow.Manifest.Triggers.Where(t => t.Value.Type == TriggerType.Webhook))
             {
-                if (trigger.Type != TriggerType.Webhook)
-                    continue;
                 foreach (var input in IntegerInputs)
                 {
                     if (!trigger.Inputs.TryGetValue(input, out var raw) || raw is null)
