@@ -10,6 +10,14 @@ namespace FlowOrchestrator.SqlServer;
 /// </summary>
 internal sealed class SqlFlowSignalStore : IFlowSignalStore
 {
+    /// <summary>
+    /// Upper bound on update / re-read rounds in <see cref="DeliverSignalAsync"/>, as in the PostgreSQL store.
+    /// An extra round only happens when the follow-up read finds a live undelivered waiter the update did
+    /// not take — a concurrent delivery or registration in between — so it is bounded by the number of
+    /// waiters registered for one signal name on one run.
+    /// </summary>
+    private const int MaxDeliveryAttempts = 8;
+
     private readonly string _connectionString;
 
     public SqlFlowSignalStore(string connectionString)
@@ -56,59 +64,85 @@ internal sealed class SqlFlowSignalStore : IFlowSignalStore
         CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connectionString);
+        var args = new { RunId = runId, SignalName = signalName, PayloadJson = payloadJson };
 
-        // Atomic conditional update. The CTE narrows to the single OLDEST UNDELIVERED waiter
-        // (the `AND DeliveredAt IS NULL` filter is essential: without it, a second waiter for
-        // the same RunId+SignalName never receives the signal, because the CTE keeps re-selecting
-        // the first — already-delivered — row). Returns 1 row when delivered, 0 rows when
-        // (a) no waiter matches or (b) every matching waiter is already delivered.
-        var rows = await conn.QueryAsync<DeliveryRow>(
-            new CommandDefinition(
-                """
-                ;WITH target AS (
-                    SELECT TOP (1) *
+        for (var attempt = 0; attempt < MaxDeliveryAttempts; attempt++)
+        {
+            // Atomic conditional update. The CTE narrows to the single OLDEST UNDELIVERED, LIVE waiter.
+            // `DeliveredAt IS NULL` is essential: without it, a second waiter for the same RunId+SignalName
+            // never receives the signal, because the CTE keeps re-selecting the first — already-delivered —
+            // row. The ExpiresAt predicate judges expiry by the DATABASE clock in the same statement that
+            // stamps DeliveredAt, with WaitForSignalHandler's inclusive boundary (now >= ExpiresAt is
+            // expired), so a recorded DeliveredAt is always earlier than the deadline and an expired waiter
+            // neither takes the payload nor blocks a live one behind it. Before this filter a signal landing
+            // between the deadline and the step's safety-net invocation resumed the step past its timeout.
+            var rows = await conn.QueryAsync<DeliveryRow>(
+                new CommandDefinition(
+                    """
+                    ;WITH target AS (
+                        SELECT TOP (1) *
+                        FROM [FlowSignalWaiters]
+                        WHERE RunId = @RunId AND SignalName = @SignalName
+                          AND DeliveredAt IS NULL
+                          AND (ExpiresAt IS NULL OR ExpiresAt > SYSDATETIMEOFFSET())
+                        ORDER BY CreatedAt
+                    )
+                    UPDATE target
+                    SET DeliveredAt = SYSDATETIMEOFFSET(),
+                        PayloadJson = @PayloadJson
+                    OUTPUT inserted.StepKey, inserted.DeliveredAt;
+                    """,
+                    args,
+                    cancellationToken: ct)).ConfigureAwait(false);
+
+            var delivered = rows.FirstOrDefault();
+            if (delivered is { StepKey: { } stepKey, DeliveredAt: { } deliveredAt })
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.Delivered, stepKey, deliveredAt);
+            }
+
+            // No update happened — classify what is there. Ranked live-undelivered, expired-undelivered,
+            // delivered, so the answer names the waiter the signal was meant for: a live row means the update
+            // lost a race (a concurrent delivery took the waiter it had selected, or the waiter registered in
+            // between) and the loop tries again; an expired row means Expired; a delivered row means
+            // AlreadyDelivered; no row means NotFound.
+            var existing = await conn.QueryFirstOrDefaultAsync<ClassifyRow>(
+                new CommandDefinition(
+                    """
+                    SELECT TOP (1) StepKey, DeliveredAt,
+                           CASE WHEN DeliveredAt IS NULL AND ExpiresAt IS NOT NULL AND ExpiresAt <= SYSDATETIMEOFFSET()
+                                THEN 1 ELSE 0 END AS IsExpired
                     FROM [FlowSignalWaiters]
                     WHERE RunId = @RunId AND SignalName = @SignalName
-                      AND DeliveredAt IS NULL
-                    ORDER BY CreatedAt
-                )
-                UPDATE target
-                SET DeliveredAt = SYSDATETIMEOFFSET(),
-                    PayloadJson = @PayloadJson
-                OUTPUT inserted.StepKey, inserted.DeliveredAt;
-                """,
-                new
-                {
-                    RunId = runId,
-                    SignalName = signalName,
-                    PayloadJson = payloadJson
-                },
-                cancellationToken: ct)).ConfigureAwait(false);
+                    ORDER BY CASE
+                                 WHEN DeliveredAt IS NOT NULL THEN 2
+                                 WHEN ExpiresAt IS NOT NULL AND ExpiresAt <= SYSDATETIMEOFFSET() THEN 1
+                                 ELSE 0
+                             END,
+                             CreatedAt;
+                    """,
+                    args,
+                    cancellationToken: ct)).ConfigureAwait(false);
 
-        var delivered = rows.FirstOrDefault();
-        if (delivered is { StepKey: { } stepKey, DeliveredAt: { } deliveredAt })
-        {
-            return new SignalDeliveryResult(SignalDeliveryStatus.Delivered, stepKey, deliveredAt);
+            if (existing is null)
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
+            }
+
+            if (existing.DeliveredAt is { } prior)
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, existing.StepKey, prior);
+            }
+
+            if (existing.IsExpired == 1)
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.Expired, existing.StepKey, null);
+            }
         }
 
-        // No update happened — figure out whether the waiter is missing or already delivered.
-        var existing = await conn.QueryFirstOrDefaultAsync<DeliveryRow>(
-            new CommandDefinition(
-                """
-                SELECT TOP (1) StepKey, DeliveredAt
-                FROM [FlowSignalWaiters]
-                WHERE RunId = @RunId AND SignalName = @SignalName
-                ORDER BY CreatedAt;
-                """,
-                new { RunId = runId, SignalName = signalName },
-                cancellationToken: ct)).ConfigureAwait(false);
-
-        if (existing is { DeliveredAt: { } prior })
-        {
-            return new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, existing.StepKey, prior);
-        }
-
-        return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
+        // Every attempt lost a race to a concurrent delivery of a different waiter of this signal.
+        // Report what is there now rather than spin; the caller treats it like a duplicate delivery.
+        return new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, null, null);
     }
 
     public async ValueTask<FlowSignalWaiter?> GetWaiterAsync(
@@ -142,5 +176,12 @@ internal sealed class SqlFlowSignalStore : IFlowSignalStore
     {
         public string? StepKey { get; set; }
         public DateTimeOffset? DeliveredAt { get; set; }
+    }
+
+    private sealed class ClassifyRow
+    {
+        public string? StepKey { get; set; }
+        public DateTimeOffset? DeliveredAt { get; set; }
+        public int IsExpired { get; set; }
     }
 }

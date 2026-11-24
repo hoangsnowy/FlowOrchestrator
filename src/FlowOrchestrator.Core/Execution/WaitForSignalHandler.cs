@@ -61,6 +61,9 @@ public sealed class WaitForSignalInput
 ///   <item>Second invocation observes <c>DeliveredAt</c> on the waiter and returns <see cref="StepStatus.Succeeded"/>.</item>
 /// </list>
 /// On timeout, the third invocation (scheduled during the first) observes the expired waiter and returns <see cref="StepStatus.Failed"/>.
+/// <para>A signal that arrives at or after the deadline never resumes the step: the store refuses it with
+/// <see cref="SignalDeliveryStatus.Expired"/>, and a payload some older writer recorded after the deadline is
+/// treated as a timeout rather than a success.</para>
 /// </remarks>
 public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
 {
@@ -115,8 +118,21 @@ public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
         // handler idempotent if the engine re-invokes the step later (e.g. a stale polling
         // reschedule queued before delivery): subsequent invocations re-enter this branch and
         // return Succeeded again instead of re-registering a fresh waiter and re-parking.
-        if (waiter is { DeliveredAt: not null })
+        if (waiter is { DeliveredAt: { } deliveredAt })
         {
+            // A payload recorded at or after the deadline was not received within the timeout, so it
+            // never makes the step succeed. Built-in stores refuse such a delivery in the write itself
+            // (SignalDeliveryStatus.Expired, judged by the store's clock in the statement that stamps
+            // DeliveredAt), so for them DeliveredAt < ExpiresAt always holds and this guard cannot fail a
+            // delivery the store accepted, whatever the app/database clock skew. It catches rows the store
+            // did not vet: written by a pre-fix replica during a rolling upgrade, or by a custom store that
+            // ignores ExpiresAt. DeliveredAt is the store's clock and ExpiresAt the app's, so for those rows
+            // the guard is exact only up to that skew.
+            if (waiter.ExpiresAt is { } deadline && deliveredAt >= deadline)
+            {
+                return TimedOut(step.Key, waiter, deadline, input);
+            }
+
             var payload = ParsePayload(waiter.PayloadJson);
             return new StepResult
             {
@@ -129,24 +145,16 @@ public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
         // ── Branch 2: waiter expired without delivery → fail with descriptive reason ──────────
         // Same idempotency reasoning: leave the row with ExpiresAt < now so a stale re-invocation
         // returns Failed again rather than registering a brand-new waiter.
+        // The store refuses a delivery to this waiter from the same instant on, judged by its own clock,
+        // so once this branch fails the step no later signal can be recorded for it. The one residual
+        // window is app/database clock skew with the database behind: the store keeps accepting for that
+        // long past the deadline. The safety-net invocation runs 1 s after the deadline, so the window is
+        // only reachable when the skew exceeds that margin or a stale re-invocation lands inside it; the
+        // caller is then told Delivered while the step stays Failed (its claim is never released on a
+        // terminal status, so the resume nudge cannot re-run it).
         if (waiter is { ExpiresAt: { } expiresAt } && now >= expiresAt)
         {
-            // FlowSignalWaiter.CreatedAt is stamped by the STORE's clock (DateTimeOffset.UtcNow
-            // in memory, SYSDATETIMEOFFSET() / NOW() in the SQL backends) while ExpiresAt was
-            // computed from the injected TimeProvider. Subtracting the two mixes clocks: under
-            // ordinary app/database skew the reported window is off by the skew, and under an
-            // injected or frozen TimeProvider it can even come out negative. Report the configured
-            // timeout instead, falling back to the stored window (clamped at zero) only when the
-            // step no longer declares one.
-            var elapsed = input.TimeoutSeconds is { } configuredSeconds && configuredSeconds > 0
-                ? configuredSeconds
-                : Math.Max(0, (int)Math.Round((expiresAt - waiter.CreatedAt).TotalSeconds, MidpointRounding.AwayFromZero));
-            return new StepResult
-            {
-                Key = step.Key,
-                Status = StepStatus.Failed,
-                FailedReason = $"Signal '{waiter.SignalName}' not received within {elapsed}s."
-            };
+            return TimedOut(step.Key, waiter, expiresAt, input);
         }
 
         // ── Branch 3: not yet registered → register and pend (with timeout schedule if any) ───
@@ -188,6 +196,25 @@ public sealed class WaitForSignalHandler : IStepHandler<WaitForSignalInput>
     }
 
     private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+    private static StepResult TimedOut(string stepKey, FlowSignalWaiter waiter, DateTimeOffset expiresAt, WaitForSignalInput input)
+    {
+        // FlowSignalWaiter.CreatedAt is stamped by the STORE's clock (the injected TimeProvider in
+        // memory, SYSDATETIMEOFFSET() / NOW() in the SQL backends) while ExpiresAt was computed from the
+        // handler's TimeProvider. Subtracting the two mixes clocks: under ordinary app/database skew the
+        // reported window is off by the skew, and under an injected or frozen TimeProvider it can even
+        // come out negative. Report the configured timeout instead, falling back to the stored window
+        // (clamped at zero) only when the step no longer declares one.
+        var elapsed = input.TimeoutSeconds is { } configuredSeconds && configuredSeconds > 0
+            ? configuredSeconds
+            : Math.Max(0, (int)Math.Round((expiresAt - waiter.CreatedAt).TotalSeconds, MidpointRounding.AwayFromZero));
+        return new StepResult
+        {
+            Key = stepKey,
+            Status = StepStatus.Failed,
+            FailedReason = $"Signal '{waiter.SignalName}' not received within {elapsed}s."
+        };
+    }
 
     private static object? ParsePayload(string? payloadJson)
     {

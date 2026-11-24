@@ -2548,6 +2548,10 @@ async function sendSignal(runId, stepKey, ev) {
         await selectRun(runId, true);
       } else if (res.status === 409) {
         showToast('Signal already delivered to step "'+(data.stepKey||stepKey)+'"', 'warning');
+      } else if (res.status === 410) {
+        // The step's timeoutSeconds passed: the server refused the signal and the step is failing.
+        showToast('Wait for signal "'+signalName+'" timed out; signal not delivered', 'warning');
+        await selectRun(runId, true);
       } else {
         showError(data.error || ('Signal delivery failed (status '+res.status+')'));
       }

@@ -6,7 +6,7 @@ namespace FlowOrchestrator.Dashboard.Tests;
 
 /// <summary>
 /// Integration coverage for <c>POST /flows/api/runs/{runId}/signals/{signalName}</c>:
-/// status code matrix (404 missing run, 404 no waiter, 409 already delivered, 400 bad JSON, 200 delivered)
+/// status code matrix (404 missing run, 404 no waiter, 409 already delivered, 410 expired waiter, 400 bad JSON, 200 delivered)
 /// plus the run-status precondition.
 /// </summary>
 public sealed class SignalEndpointTests : IDisposable
@@ -134,6 +134,32 @@ public sealed class SignalEndpointTests : IDisposable
 
         // Assert
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task POST_signal_returns_410_when_the_waiter_has_expired()
+    {
+        // Arrange — the store refused the signal because the step's timeoutSeconds deadline passed.
+        var runId = Guid.NewGuid();
+        _server.FlowRunStore.GetRunDetailAsync(runId)
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
+        _server.SignalDispatcher
+            .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<SignalDeliveryResult>(
+                new SignalDeliveryResult(SignalDeliveryStatus.Expired, "wait_for_approval", null)));
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+        // Act
+        using var response = await _client.PostAsync(
+            $"/flows/api/runs/{runId}/signals/approval",
+            content);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Assert — 410 Gone (final: no retry can resume a timed-out step), never 404 or 200.
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        Assert.Contains("timed out", body, StringComparison.Ordinal);
+        Assert.Contains("wait_for_approval", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"delivered\"", body, StringComparison.Ordinal);
     }
 
     [Fact]

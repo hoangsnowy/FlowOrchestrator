@@ -421,6 +421,10 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       cancel was already requested** (a user cancel wins), and keeps an existing `CancelReason` when
       `reason` is `null`. **`ConfigureRunAsync`** is an upsert that keeps the cancel / timeout fields of an
       existing record.
+- [ ] **`IFlowSignalStore.DeliverSignalAsync`** delivers only to a waiter that is undelivered **and live**
+      (`ExpiresAt` null or later than the store's clock, judged in the same atomic write that stamps
+      `DeliveredAt`), oldest first, and returns `SignalDeliveryStatus.Expired` — writing nothing — when the
+      only undelivered waiters are expired. An expired waiter must not block a live one sharing its name.
 - [ ] Signal names and run-status filters compare case-insensitively (`RunStatusNames.Canonicalize` maps a
       status filter onto the persisted spelling without giving up an index).
 - [ ] The conditional transitions added in 2.0 have **no default implementation**, and each must be one
@@ -556,6 +560,10 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
 - **PostgreSQL:** signal names (`POST {base}/api/runs/{runId}/signals/{name}`) and the run-list status
   filter (`?status=failed`) are case-insensitive, as they already were on SQL Server and InMemory. A
   duplicate signal delivery that races the first one now gets `409` (already delivered) instead of `404`.
+- A signal sent after its `WaitForSignal` step's `timeoutSeconds` deadline is refused on every store:
+  `SignalDeliveryStatus.Expired`, HTTP **`410`**, nothing written. 1.x recorded it, and a signal landing
+  before the step's safety-net invocation resumed the step past its timeout. A `switch` over
+  `SignalDeliveryStatus` needs the new `Expired` case.
 - An idempotency key longer than 256 characters is accepted on SQL Server / PostgreSQL (it returned `500`)
   and stored as a `sha256:` digest; shorter keys are stored exactly as before.
 - A run the user cancelled stays `Cancelled` even when its deadline passes while the cancel is being

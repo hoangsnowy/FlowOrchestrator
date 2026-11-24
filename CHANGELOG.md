@@ -193,6 +193,33 @@ providers only:
   `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
   [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
 
+### Fixed — a signal sent after a `WaitForSignal` timeout no longer resumes the step
+
+- **`IFlowSignalStore.DeliverSignalAsync` refuses an expired waiter** (all three stores). It ignored
+  `ExpiresAt`, so a signal landing between the step's deadline and its safety-net invocation (deadline + 1 s,
+  later under load) was recorded and the step **succeeded past its timeout**; once the step had failed, the
+  caller was still told `Delivered` while nothing ran. The stress harness reproduced it on Hangfire + SQL
+  Server: 7 of 20 runs signalled after expiry resumed and ran their finish step. Delivery now goes to the
+  oldest waiter that is undelivered **and live**, with expiry judged by the store's own clock in the write
+  that stamps `DeliveredAt` (`SYSDATETIMEOFFSET()` / `now()` / the registered `TimeProvider` in memory) and the
+  handler's inclusive boundary; an expired waiter no longer blocks a live one with the same signal name.
+- **New `SignalDeliveryStatus.Expired`**, returned with nothing written; `FlowSignalDispatcher` sends no
+  resume nudge for it. `POST {base}/api/runs/{runId}/signals/{signalName}` answers **`410 Gone`**, and the
+  dashboard's **Send signal** reports the timeout instead of a generic error.
+- **`WaitForSignalHandler` fails a payload recorded at or after the deadline** with the timeout reason
+  instead of succeeding with it — rows a pre-fix replica wrote during a rolling upgrade, or a custom store
+  that ignores `ExpiresAt`. Built-in stores never record one, so clock skew cannot fail a delivery they accepted.
+- **InMemory:** `InMemoryFlowSignalStore` stamps and judges waiters by the registered `TimeProvider`
+  (new constructors take one), so `FlowTestHostBuilder.WithSystemClock` and the handler agree on when a waiter
+  expired; waiters with equal `CreatedAt` are served in registration order.
+
+#### Read before upgrading
+
+- A `switch` over `SignalDeliveryStatus` needs an `Expired` case; callers of the signal endpoint should
+  treat `410` as final (retrying cannot succeed).
+- **Custom stores:** apply the same rule in `DeliverSignalAsync` — see
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
+
 ### Fixed — the storage providers agree on one contract
 
 A storage audit compared SQL Server, PostgreSQL and InMemory call by call; each item below is a place
