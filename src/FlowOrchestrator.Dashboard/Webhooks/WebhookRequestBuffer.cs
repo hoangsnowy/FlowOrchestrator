@@ -90,6 +90,11 @@ public static class WebhookRequestBuffer
         if (IsForm(request.ContentType))
             return ParseForm(bytes);
 
+        // System.Text.Json accepts invalid UTF-8 inside a JSON string and only fails when the string is
+        // transcoded (later, as a 500 in the engine); a JSON body must be UTF-8 (RFC 8259 §8.1).
+        if (!System.Text.Unicode.Utf8.IsValid(bytes))
+            return new BufferedBody(BufferStatus.InvalidJson, bytes, null);
+
         try
         {
             var parsed = JsonSerializer.Deserialize<object>(bytes);

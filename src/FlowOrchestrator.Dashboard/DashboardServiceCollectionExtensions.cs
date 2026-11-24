@@ -1864,6 +1864,13 @@ public static class DashboardServiceCollectionExtensions
                 return (ReadBodyStatus.Ok, null);
             }
 
+            // System.Text.Json accepts invalid UTF-8 inside a JSON string and only fails when the string is
+            // transcoded — later, in the engine, as a 500. Reject it here as the malformed body it is.
+            if (!System.Text.Unicode.Utf8.IsValid(buffered.GetBuffer().AsSpan(0, (int)buffered.Length)))
+            {
+                return (ReadBodyStatus.InvalidJson, null);
+            }
+
             buffered.Position = 0;
             var body = await JsonSerializer.DeserializeAsync<object>(buffered).ConfigureAwait(false);
             return (ReadBodyStatus.Ok, body);

@@ -417,6 +417,11 @@ where one provider behaved differently from the others.
 
 ### Fixed
 
+- **A trigger or webhook body with invalid UTF-8 is a `400`, not a `500`.** `System.Text.Json` accepts invalid
+  UTF-8 inside a JSON string and only fails when the string is transcoded, so the request reached the engine
+  and failed there with `DecoderFallbackException`. The manual-trigger and webhook endpoints now validate the
+  body (`Utf8.IsValid`, allocation-free) before parsing it.
+
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
   on cascade reset, race-safe SQL Server gates, case-insensitive trigger headers, PostgreSQL timeseries /
   synthetic-attempt trace, InMemory outputs retention.

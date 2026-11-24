@@ -383,6 +383,31 @@ public sealed class DashboardSurfaceAuditTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    /// <summary>
+    /// A JSON body whose string holds invalid UTF-8 (here C3 28, a truncated two-byte sequence) parsed
+    /// "successfully" — System.Text.Json validates string bytes only when it transcodes them — and the engine
+    /// then threw DecoderFallbackException while serialising the trigger data: HTTP 500 for a malformed request.
+    /// </summary>
+    [Theory]
+    [InlineData("/flows/api/webhook/utf8")]
+    [InlineData("/flows/api/flows/{id}/trigger")]
+    public async Task Body_with_invalid_utf8_is_rejected_400_before_the_engine(string pathTemplate)
+    {
+        // Arrange
+        using var server = DashboardTestServer.WithServices(s => s.AddFlowDashboard(o => o.AllowAnonymousOperators = true), Environments.Production);
+        var id = Guid.NewGuid();
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?> { ["webhookSlug"] = "utf8" }));
+        byte[] body = [(byte)'{', (byte)'"', (byte)'a', (byte)'"', (byte)':', (byte)'"', 0xC3, 0x28, (byte)'"', (byte)'}'];
+        using var request = JsonPost(pathTemplate.Replace("{id}", id.ToString()), body);
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await server.FlowOrchestrator.DidNotReceiveWithAnyArgs().TriggerAsync(default!, default);
+    }
+
     // ── Rerun ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
