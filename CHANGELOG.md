@@ -329,6 +329,91 @@ where one provider behaved differently from the others.
   timeout (`TaskCanceledException`) on one run escaped `EnforceDueTimeoutsAsync` and skipped the rest of
   the tick. It is now logged per run (EventId 3005) like any other fault; only an OCE while the sweep's own
   token is cancelled propagates.
+- **The timeout and retention sweeps survive an `OperationCanceledException` that is not a shutdown.**
+  Both loops let every `OperationCanceledException` escape their per-tick catch, not just shutdown, so a
+  store that cancels for its own reasons (an HTTP client timeout, a linked token) ended the sweep for the
+  life of the process — and, under the default `BackgroundServiceExceptionBehavior.StopHost`, stopped the
+  host. Only the stopping token's own cancellation ends them now; everything else is logged and retried on
+  the next tick (timeout sweep: new EventId 5010).
+- **InMemory runtime: a step scheduled with a delay that is already in the past is delivered at once.**
+  `ScheduleStepAsync` fed the delay straight to `Task.Delay` in a discarded task: `-1 ms` waited for ever,
+  any other negative value threw, and a delay above ~49.7 days threw — the step was never delivered while
+  its dispatch-ledger row said it was queued. A delay at or below zero now behaves like an immediate
+  enqueue (Hangfire / Service Bus parity), and very long delays are waited out in chunks.
+- **InMemory runtime: a rejected cron override no longer stops every cron job in the process.**
+  `PeriodicTimerRecurringTriggerDispatcher.RegisterOrUpdate` assigned the new cron to the live job before
+  parsing it, so a bad override (accepted by the dashboard, which only checked for blank) replaced the
+  job's schedule anyway; the job's next fire then threw from a `finally` block, out of the shared timer
+  loop, and no cron job fired again until restart. The cron is now parsed first — an unparseable one
+  throws `ArgumentException` and leaves the job on its previous schedule (Hangfire's contract) — and the
+  timer loop isolates each job, so one failing job cannot end it (EventIds 3120-3126).
+- **Dashboard `PUT /api/schedules/{jobId}/cron` answers `400` for an unparseable cron expression** and
+  persists nothing. It validates with Cronos (5- or 6-field), then schedules before persisting, so an
+  expression the runtime itself rejects is not left behind as an override either.
+- **An unparseable persisted cron override no longer aborts host startup.** `RecurringTriggerSync` passed
+  the persisted override straight to the runtime; its rejection propagated out of `FlowSyncHostedService`,
+  so every restart failed until the schedule-state row was edited by hand. A rejected override is now
+  logged (EventId 5011) and the job is registered on the manifest cron instead — the same for Hangfire,
+  the in-memory runtime and Service Bus, which all sync through it. Only a cron rejection
+  (`ArgumentException` / `FormatException`) is absorbed; an invalid manifest cron or any other runtime
+  failure still propagates.
+- **Startup recovery honours `When` clauses.** `When` is evaluated only when a step is scheduled, and
+  recovery dispatched a Ready step from its statuses alone — so a host that died between a parent's
+  completion and its continuation ran a child whose `When` was false on restart (a "refund when
+  amount > 100" step ran for an amount of 5). Recovery now evaluates the clause first and records the
+  step `Skipped` with the same reason and evaluation trace the continuation writes, records dependents
+  whose prerequisites can no longer be met as skipped, and repeats until the run is stable — then closes it
+  if nothing is left.
+- **One failed recovery dispatch no longer abandons the rest of the run.** A dispatch that threw ended the
+  run's recovery pass, so its other ready steps (and loop admissions) waited for the next restart. The
+  failure is now logged (EventId 5026), its ledger row released as before, and the remaining steps are
+  still dispatched; the run is not closed while a dispatch failed. Recovery logs moved to
+  `LoggerMessage` (EventIds 5020-5032).
+- **InMemory runtime over a durable store resumes runs that had queued work at shutdown.** Every
+  dispatched step gets a dispatch-ledger row in the store, but on the in-memory runtime the step itself
+  lives only in the process's channel (or a pending `Task.Delay` for a poll). After a restart recovery read
+  the surviving row as "still queued" and skipped the step, so the run stayed `Running` for ever — with
+  `UseInMemoryRuntime()` + `UseSqlServer()` / `UsePostgreSql()`, the combination the configuration guide
+  documents. New `IStepDispatcher.LosesQueuedStepsOnRestart` (default interface member, `false`; the
+  in-memory dispatcher reports `true`): recovery then re-enqueues every ledgered step that has not started
+  and is not claimed, including a `Pending` poll, without recording a second ledger row; the execution
+  claim still runs it once (EventIds 5033-5034). **Custom runtimes:** nothing to do for a durable one; a
+  dispatcher decorator must forward the property. Run one replica with this combination (see
+  [Configuration](docs/articles/configuration.md)).
+- **InMemory runtime: shutdown waits for the steps already running.** The runner fired each step on a
+  discarded task and stopped as soon as the channel loop saw the stopping token, so the host disposed the
+  DI scope and store connections a running step still needed for its final status write, claim release
+  or poll reschedule. The runner now signals the stopping token to running steps (as Hangfire does) and
+  waits for them to return, bounded by `HostOptions.ShutdownTimeout` (EventIds 3130-3131).
+- **Service Bus cron: a cron change, a pause and a restart no longer leave a second schedule running.**
+  Three defects in the self-perpetuating cron chain:
+  - The consumer computed the next tick from the cron carried in the message, and `RegisterOrUpdate` for an
+    existing job seeded a new chain without retiring the old one — after a dashboard cron change the flow
+    fired on **both** schedules for ever, across restarts.
+  - A tick already in the broker when its job was paused (a tick from before a restart, or a pause made on
+    another replica) still started a run: the consumer called the engine whether or not the job was
+    registered.
+  - Every restart seeded the next tick under the same message id as the tick the previous process left,
+    and duplicate detection (10-minute window) only absorbs it when the surviving tick was sent less than
+    10 minutes earlier — any schedule with a longer period fired twice after each restart.
+
+  Each job now runs exactly one chain, stamped with an epoch (new `chainEpoch` field on the cron message;
+  ticks written before 2.0 rank below any chain seeded since). The consumer drops a tick of an older chain,
+  a second copy of a tick that already fired, a tick for a job that is not registered, and — reading the
+  shared state — a tick for a disabled flow, a trigger the manifest no longer declares, or a schedule paused
+  on any replica (`PersistOverrides`); a replica receiving a newer chain's tick follows it. Re-registering a
+  job with its current cron schedules nothing; a different cron cancels the known pending tick and seeds a
+  newer chain. At startup the hub peeks the cron queue once and adopts the surviving tick instead of seeding
+  a duplicate, and the consumer starts processing only after `ApplicationStarted` (the startup sync has
+  registered every job). An unparseable cron now throws `ArgumentException` with the job untouched. Logs
+  moved to `LoggerMessage` (EventIds 3140-3154). **Read before upgrading:** saving a schedule again with
+  the cron it already runs no longer schedules an extra tick; a chain that died (its tick dead-lettered
+  after `MaxDeliveryCount` failures) is re-seeded by the next restart.
+- **Dashboard `PUT /api/schedules/{jobId}/cron` rejects malformed and oversized bodies.** A non-object
+  body (`[]`), a non-string `cronExpression` (`5`) or malformed JSON threw out of the endpoint (`500`);
+  they now answer `400`. The body cap (`MaxBodyBytes`) was checked only against `Content-Length`, so a
+  chunked body was read without any limit; the endpoint now uses the same streaming, capped reader as the
+  manual-trigger endpoint and answers `413`.
 
 ### Security
 

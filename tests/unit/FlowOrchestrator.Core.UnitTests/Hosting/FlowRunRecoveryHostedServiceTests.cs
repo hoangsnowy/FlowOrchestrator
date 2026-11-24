@@ -171,8 +171,10 @@ public class FlowRunRecoveryHostedServiceTests
         // Act
         await CreateSut().StartAsync(default);
 
-        // Assert
-        Assert.Empty(_dispatcher.ReceivedCalls());
+        // Assert — the substitute reports the default (durable runtime): a ledger row means the runtime
+        // still holds the step. Reading that capability is the only call the dispatcher may see.
+        await _dispatcher.DidNotReceiveWithAnyArgs().EnqueueStepAsync(default!, default!, default!, default);
+        await _dispatcher.DidNotReceiveWithAnyArgs().ScheduleStepAsync(default!, default!, default!, default, default);
     }
 
     [Fact]

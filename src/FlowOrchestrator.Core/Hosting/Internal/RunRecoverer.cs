@@ -1,6 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Execution.Internal;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -23,6 +24,7 @@ internal sealed class RunRecoverer
     private readonly IFlowGraphPlanner _graphPlanner;
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
+    private readonly WhenSkipGate _whenGate;
     private readonly ILogger _logger;
     private readonly TimeSpan? _orphanedClaimTimeout;
 
@@ -32,6 +34,7 @@ internal sealed class RunRecoverer
     /// <param name="graphPlanner">Planner that classifies ready steps.</param>
     /// <param name="dispatcher">Runtime adapter recovered steps are handed to.</param>
     /// <param name="outputsRepository">Outputs repository (trigger data, loop iteration counts).</param>
+    /// <param name="whenGate">Gate that applies a ready step's <c>When</c> clauses before it is dispatched.</param>
     /// <param name="logger">Logger of the host service.</param>
     /// <param name="orphanedClaimTimeout">
     /// Age past which a claim with no step status row is released before the run is evaluated;
@@ -43,6 +46,7 @@ internal sealed class RunRecoverer
         IFlowGraphPlanner graphPlanner,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
+        WhenSkipGate whenGate,
         ILogger logger,
         TimeSpan? orphanedClaimTimeout = null)
     {
@@ -51,6 +55,7 @@ internal sealed class RunRecoverer
         _graphPlanner = graphPlanner;
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
+        _whenGate = whenGate;
         _logger = logger;
         _orphanedClaimTimeout = orphanedClaimTimeout is { } timeout && timeout > TimeSpan.Zero ? timeout : null;
     }
@@ -75,74 +80,133 @@ internal sealed class RunRecoverer
             var released = await _runtimeStore.ReleaseOrphanedClaimsAsync(run.Id, orphanAge).ConfigureAwait(false);
             if (released.Count > 0)
             {
-                _logger.LogWarning(
-                    "FlowRunRecoveryHostedService: released {Count} orphaned claim(s) with no step status for run {RunId}: {Keys}.",
-                    released.Count, run.Id, string.Join(", ", released));
+                HostingLog.RecoveryReleasedOrphanedClaims(_logger, released.Count, run.Id, string.Join(", ", released));
             }
         }
 
         var statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
+        var ledger = await _runStore.GetDispatchedStepKeysAsync(run.Id).ConfigureAwait(false);
 
-        // Loop barriers first: the host can have died between the last iteration completing and
-        // the continuation settling its loop step, which would leave the loop Running forever and
-        // its downstream steps unreachable. Settling here makes them Ready for the pass below.
-        var settledLoops = await LoopBarrier.SettleAsync(
-            flow,
-            run.Id,
-            LoopBarrier.RunningLoopKeys(flow, statuses),
-            statuses,
-            _outputsRepository,
-            _runStore).ConfigureAwait(false);
-
-        if (settledLoops.Count > 0)
-        {
-            _logger.LogInformation(
-                "FlowRunRecoveryHostedService: settled {Count} completed loop step(s) for run {RunId}: {Keys}.",
-                settledLoops.Count, run.Id, string.Join(", ", settledLoops));
-            statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
-        }
-
-        var dispatched = await _runStore.GetDispatchedStepKeysAsync(run.Id).ConfigureAwait(false);
-        var evaluation = _graphPlanner.Evaluate(flow, statuses);
+        // The ledger snapshot plus every key this pass dispatches, so a later sweep of the loop below neither
+        // re-records them nor mistakes them for never-dispatched work.
+        var dispatched = new HashSet<string>(ledger, StringComparer.Ordinal);
 
         var ctx = await BuildContextAsync(run).ConfigureAwait(false);
         var recovered = 0;
+        var failedDispatches = 0;
+        FlowGraphEvaluation evaluation;
 
-        // Throttled loops: the host can have died between an iteration settling and the
-        // continuation admitting the next one. Nothing else recovers that — the loop step is
-        // Running (so the zombie check below leaves the run alone) and the un-admitted iteration
-        // has no status row (so it is never classified Ready). Re-running the admission gate here
-        // is idempotent: it re-derives the same window from the ledger + status map.
-        recovered += await AdmitLoopIterationsAsync(ctx, flow, run, statuses, dispatched, ct).ConfigureAwait(false);
-
-        // 1. Ready steps — re-enqueue if no dispatch record (crash between persist and enqueue).
-        foreach (var stepKey in evaluation.ReadyStepKeys)
+        // A non-durable runtime (the in-process channel) lost every queued and delayed step with the process
+        // that held it, while the ledger rows survived in the store. Without this pass the sweep below reads
+        // those rows as "already in the runtime queue" and skips the steps for good.
+        if (ledger.Count > 0 && _dispatcher.LosesQueuedStepsOnRestart)
         {
-            if (dispatched.Contains(stepKey))
+            var redelivery = await RedeliverLostQueuedStepsAsync(ctx, flow, run, statuses, ledger).ConfigureAwait(false);
+            recovered += redelivery.Dispatched;
+            failedDispatches += redelivery.Failed;
+        }
+
+        // The same fixed point the engine's continuation reaches: a When-skip or blocked-skip recorded in one
+        // sweep can unblock (or block) dependents, settle a loop or free a loop slot, so sweep again until a
+        // sweep writes no status. Bounded like the continuation's loop. Each sweep is O(steps in the run);
+        // recovery runs once per active run at startup, never per step completion.
+        var sweeps = 0;
+        while (true)
+        {
+            // Loop barriers first: the host can have died between the last iteration completing and
+            // the continuation settling its loop step, which would leave the loop Running forever and
+            // its downstream steps unreachable. Settling here makes them Ready for the pass below.
+            var settledLoops = await LoopBarrier.SettleAsync(
+                flow,
+                run.Id,
+                LoopBarrier.RunningLoopKeys(flow, statuses),
+                statuses,
+                _outputsRepository,
+                _runStore).ConfigureAwait(false);
+
+            if (settledLoops.Count > 0)
             {
-                continue;  // already in the runtime queue; the worker will pick it up
+                HostingLog.RecoverySettledLoops(_logger, settledLoops.Count, run.Id, string.Join(", ", settledLoops));
+                statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
             }
 
-            var metadata = flow.Manifest.Steps.FindStep(stepKey);
-            if (metadata is null)
+            evaluation = _graphPlanner.Evaluate(flow, statuses);
+
+            // Throttled loops: the host can have died between an iteration settling and the
+            // continuation admitting the next one. Nothing else recovers that — the loop step is
+            // Running (so the zombie check below leaves the run alone) and the un-admitted iteration
+            // has no status row (so it is never classified Ready). Re-running the admission gate here
+            // is idempotent: it re-derives the same window from the ledger + status map. An admitted
+            // entry step has no in-scope RunAfter, so — exactly as in the engine — no When clause applies.
+            var admission = await AdmitLoopIterationsAsync(ctx, flow, run, statuses, dispatched, ct).ConfigureAwait(false);
+            recovered += admission.Dispatched;
+            failedDispatches += admission.Failed;
+
+            var wroteStatus = false;
+
+            // Blocked steps — a prerequisite finished in a status the clause does not accept and the host
+            // died before the continuation recorded the dependent skipped (or a When-skip in the previous
+            // sweep blocked it). Recorded exactly as the continuation's blocked-step pass does.
+            foreach (var blockedKey in evaluation.BlockedStepKeys)
             {
-                continue;
+                var blockedMetadata = flow.Manifest.Steps.FindStep(blockedKey);
+                if (await _whenGate.TrySkipBlockedAsync(run.Id, blockedKey, blockedMetadata?.Type ?? "Unknown").ConfigureAwait(false))
+                {
+                    wroteStatus = true;
+                    HostingLog.RecoverySkippedBlockedStep(_logger, blockedKey, run.Id);
+                }
             }
 
-            var step = new StepInstance(stepKey, metadata.Type)
+            // Ready steps — re-enqueue if no dispatch record (crash between persist and enqueue).
+            foreach (var stepKey in evaluation.ReadyStepKeys)
             {
-                RunId = run.Id,
-                ScheduledTime = DateTimeOffset.UtcNow,
-                Inputs = new Dictionary<string, object?>(metadata.Inputs)
-            };
+                if (dispatched.Contains(stepKey))
+                {
+                    continue;  // already in the runtime queue; the worker will pick it up
+                }
 
-            if (await TryDispatchAsync(ctx, flow, step, delay: null, ct).ConfigureAwait(false))
-            {
-                recovered++;
-                _logger.LogInformation(
-                    "FlowRunRecoveryHostedService: re-dispatched ready step '{StepKey}' for run {RunId}.",
-                    stepKey, run.Id);
+                var metadata = flow.Manifest.Steps.FindStep(stepKey);
+                if (metadata is null)
+                {
+                    continue;
+                }
+
+                // When is evaluated only at schedule time; RunStepAsync never re-checks it. Recovery is a
+                // scheduling path, so it applies the clause here — otherwise a host that died between a
+                // parent's completion and its continuation runs a child whose When is false on restart.
+                if (await _whenGate.IsFalseAndSkippedAsync(ctx, flow, stepKey, metadata).ConfigureAwait(false))
+                {
+                    wroteStatus = true;
+                    HostingLog.RecoverySkippedWhenFalse(_logger, stepKey, run.Id);
+                    continue;
+                }
+
+                var step = new StepInstance(stepKey, metadata.Type)
+                {
+                    RunId = run.Id,
+                    ScheduledTime = DateTimeOffset.UtcNow,
+                    Inputs = new Dictionary<string, object?>(metadata.Inputs)
+                };
+
+                switch (await TryDispatchIsolatedAsync(ctx, flow, step, ct).ConfigureAwait(false))
+                {
+                    case DispatchOutcome.Dispatched:
+                        dispatched.Add(stepKey);
+                        recovered++;
+                        HostingLog.RecoveryRedispatchedReadyStep(_logger, stepKey, run.Id);
+                        break;
+                    case DispatchOutcome.Failed:
+                        failedDispatches++;
+                        break;
+                }
             }
+
+            if (!wroteStatus || ++sweeps > flow.Manifest.Steps.Count + 4)
+            {
+                break;
+            }
+
+            statuses = await _runtimeStore.GetStepStatusesAsync(run.Id).ConfigureAwait(false);
         }
 
         // NOTE: WaitingStepKeys are deliberately NOT dispatched here. "Waiting" means at least one
@@ -152,8 +216,10 @@ internal sealed class RunRecoverer
         // classified Ready and is recovered by the pass above; a polling step keeps its own status
         // row, so it is never classified Waiting in the first place.
 
-        if (recovered > 0)
+        if (recovered > 0 || failedDispatches > 0)
         {
+            // A failed dispatch released its ledger row, so its step is still Ready: the run is not a zombie,
+            // and the next recovery pass dispatches it again.
             return;
         }
 
@@ -169,8 +235,7 @@ internal sealed class RunRecoverer
             || evaluation.WaitingStepKeys.Count > 0
             || statuses.Count == 0)
         {
-            _logger.LogDebug(
-                "FlowRunRecoveryHostedService: run {RunId} — no orphaned steps detected.", run.Id);
+            HostingLog.RecoveryNothingOrphaned(_logger, run.Id);
             return;
         }
 
@@ -178,14 +243,11 @@ internal sealed class RunRecoverer
         try
         {
             await _runStore.CompleteRunAsync(run.Id, terminalStatus).ConfigureAwait(false);
-            _logger.LogInformation(
-                "FlowRunRecoveryHostedService: closed zombie run {RunId} as {Status} (all steps terminal but run remained Running).",
-                run.Id, terminalStatus);
+            HostingLog.RecoveryClosedZombieRun(_logger, run.Id, terminalStatus);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex,
-                "FlowRunRecoveryHostedService: failed to close zombie run {RunId}.", run.Id);
+            HostingLog.RecoveryZombieCloseFailed(_logger, ex, run.Id);
         }
     }
 
@@ -197,18 +259,19 @@ internal sealed class RunRecoverer
     /// <param name="flow">The flow definition matching the run.</param>
     /// <param name="run">The active run record being recovered.</param>
     /// <param name="statuses">Status map read after the barrier settle pass.</param>
-    /// <param name="dispatched">Step keys with a live dispatch-ledger row for the run.</param>
+    /// <param name="dispatched">Keys with a dispatch-ledger row for the run; extended with every key this pass dispatches.</param>
     /// <param name="ct">Cancellation token from the host's <c>StartAsync</c>.</param>
-    /// <returns>The number of loop-body entry steps this pass enqueued.</returns>
-    private async Task<int> AdmitLoopIterationsAsync(
+    /// <returns>The number of loop-body entry steps this pass enqueued, and the number whose dispatch failed.</returns>
+    private async Task<(int Dispatched, int Failed)> AdmitLoopIterationsAsync(
         IExecutionContext ctx,
         IFlowDefinition flow,
         FlowRunRecord run,
         IReadOnlyDictionary<string, StepStatus> statuses,
-        IReadOnlySet<string> dispatched,
+        HashSet<string> dispatched,
         CancellationToken ct)
     {
         var admitted = 0;
+        var failed = 0;
 
         foreach (var loopKey in LoopBarrier.RunningLoopKeys(flow, statuses))
         {
@@ -234,19 +297,128 @@ internal sealed class RunRecoverer
                     Inputs = new Dictionary<string, object?>(request.Metadata.Inputs)
                 };
 
-                if (!await TryDispatchAsync(ctx, flow, step, delay: null, ct).ConfigureAwait(false))
+                var outcome = await TryDispatchIsolatedAsync(ctx, flow, step, ct).ConfigureAwait(false);
+                if (outcome == DispatchOutcome.Failed)
+                {
+                    failed++;
+                    continue;
+                }
+
+                if (outcome != DispatchOutcome.Dispatched)
                 {
                     continue;
                 }
 
+                dispatched.Add(request.RuntimeStepKey);
                 admitted++;
-                _logger.LogInformation(
-                    "FlowRunRecoveryHostedService: admitted loop '{LoopKey}' iteration {Index} for run {RunId} — enqueued '{StepKey}'.",
-                    loopKey, request.Index, run.Id, request.RuntimeStepKey);
+                HostingLog.RecoveryAdmittedLoopIteration(_logger, loopKey, request.Index, run.Id, request.RuntimeStepKey);
             }
         }
 
-        return admitted;
+        return (admitted, failed);
+    }
+
+    /// <summary>
+    /// Re-enqueues every ledgered step that has not started — no status row, or a <see cref="StepStatus.Pending"/>
+    /// poll whose delayed re-attempt was lost — and that no worker currently claims. Only called for a runtime
+    /// whose queued steps do not survive a restart (<see cref="IStepDispatcher.LosesQueuedStepsOnRestart"/>).
+    /// </summary>
+    /// <param name="ctx">Execution context rebuilt for the run.</param>
+    /// <param name="flow">The flow definition matching the run.</param>
+    /// <param name="run">The active run record being recovered.</param>
+    /// <param name="statuses">Status map read at the start of recovery.</param>
+    /// <param name="ledger">Keys holding a dispatch-ledger row.</param>
+    /// <returns>The number of steps re-enqueued and the number whose re-enqueue threw.</returns>
+    /// <remarks>
+    /// The ledger row already exists, so no second row is recorded: the step goes straight to the runtime.
+    /// "Dispatch many, execute once" still holds — if the step is delivered twice (another replica sharing
+    /// the store still holds it in its own channel), the execution claim lets only one attempt run. A claimed
+    /// step is left alone: its claimer is either still running it or orphaned, and orphaned claims are released
+    /// by the pass above once they are old enough. <c>When</c> is not re-evaluated: a ledgered step passed its
+    /// <c>When</c> gate when it was scheduled. Cost: one claim point-lookup per ledgered, not-yet-terminal key —
+    /// once per active run at startup.
+    /// </remarks>
+    private async Task<(int Dispatched, int Failed)> RedeliverLostQueuedStepsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        FlowRunRecord run,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        IReadOnlySet<string> ledger)
+    {
+        var redelivered = 0;
+        var failed = 0;
+
+        foreach (var stepKey in ledger)
+        {
+            if (statuses.TryGetValue(stepKey, out var status) && status != StepStatus.Pending)
+            {
+                continue;  // terminal, or Running under a claim
+            }
+
+            var metadata = flow.Manifest.Steps.FindStep(stepKey);
+            if (metadata is null)
+            {
+                continue;
+            }
+
+            if (await _runtimeStore.IsStepClaimedAsync(run.Id, stepKey).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            var step = new StepInstance(stepKey, metadata.Type)
+            {
+                RunId = run.Id,
+                ScheduledTime = DateTimeOffset.UtcNow,
+                Inputs = new Dictionary<string, object?>(metadata.Inputs)
+            };
+
+            try
+            {
+                // CancellationToken.None: the ledger row is already durable (RFC 2.0 P-1(d)).
+                await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
+                redelivered++;
+                HostingLog.RecoveryRedeliveredLostStep(_logger, stepKey, run.Id);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The ledger row stays, so the next startup tries again.
+                failed++;
+                HostingLog.RecoveryRedeliveryFailed(_logger, ex, stepKey, run.Id);
+            }
+        }
+
+        return (redelivered, failed);
+    }
+
+    /// <summary>
+    /// <see cref="TryDispatchAsync"/> with per-step fault isolation: a dispatch that throws is logged and
+    /// reported as <see cref="DispatchOutcome.Failed"/>, so the remaining ready steps of the run are still
+    /// recovered instead of the whole run being abandoned until the next restart.
+    /// </summary>
+    /// <param name="ctx">Execution context rebuilt for the run.</param>
+    /// <param name="flow">The flow definition matching the run.</param>
+    /// <param name="step">The step to dispatch.</param>
+    /// <param name="ct">Host token; honoured only before the ledger row is written.</param>
+    /// <returns>What happened to the dispatch.</returns>
+    private async Task<DispatchOutcome> TryDispatchIsolatedAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        IStepInstance step,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await TryDispatchAsync(ctx, flow, step, delay: null, ct).ConfigureAwait(false)
+                ? DispatchOutcome.Dispatched
+                : DispatchOutcome.LostRace;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // TryDispatchAsync already released the ledger row, so the step stays Ready for the next pass.
+            HostingLog.RecoveryDispatchFailed(_logger, ex, step.Key, ctx.RunId);
+            return DispatchOutcome.Failed;
+        }
     }
 
     /// <summary>
@@ -291,8 +463,7 @@ internal sealed class RunRecoverer
             }
             catch (Exception releaseFailure) when (releaseFailure is not OperationCanceledException)
             {
-                _logger.LogError(releaseFailure,
-                    "FlowRunRecoveryHostedService: dispatching step '{StepKey}' failed and its dispatch-ledger row could not be released.", step.Key);
+                HostingLog.RecoveryDispatchReleaseFailed(_logger, releaseFailure, step.Key);
             }
 
             throw;
@@ -306,8 +477,7 @@ internal sealed class RunRecoverer
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex,
-                    "FlowRunRecoveryHostedService: failed to annotate dispatch for step '{StepKey}'.", step.Key);
+                HostingLog.RecoveryDispatchAnnotateFailed(_logger, ex, step.Key);
             }
         }
 
@@ -324,9 +494,21 @@ internal sealed class RunRecoverer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex,
-                "FlowRunRecoveryHostedService: could not restore trigger data for run {RunId}.", run.Id);
+            HostingLog.RecoveryTriggerDataUnavailable(_logger, ex, run.Id);
         }
         return ctx;
+    }
+
+    /// <summary>Result of one recovery dispatch attempt.</summary>
+    private enum DispatchOutcome
+    {
+        /// <summary>This pass recorded the ledger row and handed the step to the runtime.</summary>
+        Dispatched,
+
+        /// <summary>Another replica (or an earlier pass) already holds the ledger row.</summary>
+        LostRace,
+
+        /// <summary>The runtime threw; the ledger row was released and the step stays Ready.</summary>
+        Failed,
     }
 }

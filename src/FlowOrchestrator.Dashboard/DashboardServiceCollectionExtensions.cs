@@ -1453,22 +1453,45 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // The same capped reader as the manual-trigger endpoint: it enforces MaxBodyBytes while streaming,
+            // so a chunked body (no Content-Length) is bounded too, and maps malformed JSON to a status
+            // instead of an unhandled JsonException (500).
             var maxBodyBytes = ResolveMaxBodyBytes(http);
-            if (http.Request.ContentLength > maxBodyBytes)
+            var (bodyStatus, body) = await TryReadJsonBodyAsync(http.Request, maxBodyBytes);
+            if (bodyStatus == ReadBodyStatus.TooLarge)
             {
                 http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
                 await WriteJsonAsync(http.Response,new { error = $"Request body exceeds the configured cap of {maxBodyBytes} bytes." });
                 return;
             }
-
-            var body = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
-            if (!body.TryGetProperty("cronExpression", out var cronProp) || string.IsNullOrWhiteSpace(cronProp.GetString()))
+            if (bodyStatus == ReadBodyStatus.InvalidJson)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response,new { error = "cronExpression is required." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
+                return;
+            }
+
+            // A non-object body or a non-string cronExpression used to throw from TryGetProperty / GetString (500).
+            if (body is not JsonElement { ValueKind: JsonValueKind.Object } bodyObject
+                || !bodyObject.TryGetProperty("cronExpression", out var cronProp)
+                || cronProp.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(cronProp.GetString()))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is required and must be a string." });
                 return;
             }
             var newCron = cronProp.GetString()!;
+
+            // Reject an unparseable expression BEFORE anything is persisted or scheduled: a persisted bad
+            // override is re-applied on every restart, and the in-memory runtime used to stop every cron job
+            // in the process on the first fire of one.
+            if (!Schedules.CronExpressionValidator.IsValid(newCron))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is not a valid 5-field or 6-field cron expression." });
+                return;
+            }
 
             var flow = await store.GetByIdAsync(flowId);
             if (flow?.ManifestJson is null)
@@ -1480,6 +1503,23 @@ public static class DashboardServiceCollectionExtensions
 
             var existing = await scheduleStateStore.GetAsync(jobId);
             var paused = existing?.IsPaused ?? false;
+
+            // Schedule first, persist second: a runtime that still rejects the expression (each one validates
+            // in RegisterOrUpdate and leaves the job untouched) must not leave a persisted override behind.
+            if (!paused)
+            {
+                try
+                {
+                    triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
+                }
+                catch (Exception ex) when (ex is ArgumentException or FormatException)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonAsync(http.Response,new { error = "The runtime rejected cronExpression as an invalid cron expression." });
+                    return;
+                }
+            }
+
             await scheduleStateStore.SaveAsync(new FlowScheduleState
             {
                 JobId = jobId,
@@ -1489,11 +1529,6 @@ public static class DashboardServiceCollectionExtensions
                 IsPaused = paused,
                 CronOverride = newCron
             });
-
-            if (!paused)
-            {
-                triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
-            }
 
             await WriteJsonAsync(http.Response,new { success = true, message = $"Cron updated to '{newCron}'." });
         });

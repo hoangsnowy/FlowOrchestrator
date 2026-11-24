@@ -233,7 +233,7 @@ and replace the dashboard's broadcaster registration. The default
 | `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
 | `POST` | `/flows/api/schedules/{jobId}/pause` | Pause a recurring job |
 | `POST` | `/flows/api/schedules/{jobId}/resume` | Resume a paused recurring job |
-| `PUT` | `/flows/api/schedules/{jobId}/cron` | Update the cron expression |
+| `PUT` | `/flows/api/schedules/{jobId}/cron` | Update the cron expression (`400` when it does not parse) |
 
 ---
 

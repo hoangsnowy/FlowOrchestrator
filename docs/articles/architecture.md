@@ -79,7 +79,7 @@ The sequence from trigger to completion:
 1. Validates each registered `IFlowDefinition` via `IFlowGraphPlanner.Validate` — an invalid manifest throws `InvalidOperationException` and fails startup — then calls `IFlowStore.SaveAsync` to upsert the flow record in the database.
 2. Synchronises cron triggers through `IRecurringTriggerSync.SyncTriggersAsync(flowId, isEnabled)`. Core's single `RecurringTriggerSync` resolves the effective cron — removed for disabled flows and dashboard-paused schedules, the persisted override from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true`, else the manifest cron — and hands it to the runtime's `IRecurringTriggerDispatcher` (Hangfire `IRecurringJobManager`, the in-process `PeriodicTimer` registry, or Service Bus scheduled messages). Job ids come from `RecurringTriggerJobId` (`flow-{flowId}-{triggerKey}`).
 
-`FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart.
+`FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart. Recovery is a scheduling path, so it applies the same rules as the graph continuation before dispatching: a ready step whose `When` clause is false is recorded `Skipped` (with its evaluation trace) instead of running, a step whose prerequisites finished in an unaccepted status is skipped, and a dispatch that throws is logged without abandoning the run's other steps.
 
 This means the database always reflects the code — no manual migration step required when you add or rename a flow.
 
@@ -110,7 +110,7 @@ Swapping in a custom backend (Redis, DynamoDB, CosmosDB, etc.) requires five con
 
 ## Key Design Decisions
 
-**Runtime-agnostic engine** — `FlowOrchestratorEngine` in `FlowOrchestrator.Core` owns all orchestration logic. The `IStepDispatcher` abstraction decouples it from any specific background-job framework. Adding a new runtime adapter requires only an `IStepDispatcher` implementation.
+**Runtime-agnostic engine** — `FlowOrchestratorEngine` in `FlowOrchestrator.Core` owns all orchestration logic. The `IStepDispatcher` abstraction decouples it from any specific background-job framework. Adding a new runtime adapter requires only an `IStepDispatcher` implementation. A runtime whose queue does not survive a process restart (the in-memory channel) reports `IStepDispatcher.LosesQueuedStepsOnRestart = true`; startup recovery then re-enqueues ledgered steps that never started instead of trusting the ledger row to mean "still queued". The default (`false`) suits any runtime backed by durable storage; a dispatcher decorator must forward it.
 
 **Dapper, not EF Core** — all SQL is explicit. No ORM magic, no shadow queries. Queries live in the `SqlServer` / `PostgreSQL` projects and are readable as raw SQL.
 

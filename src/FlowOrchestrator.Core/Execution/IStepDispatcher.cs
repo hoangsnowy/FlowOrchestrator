@@ -43,4 +43,28 @@ public interface IStepDispatcher
         IStepInstance step,
         TimeSpan delay,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Whether a step this dispatcher has accepted (enqueued or scheduled) is LOST when the process that
+    /// accepted it stops — <see langword="true"/> for an in-process queue, <see langword="false"/> for a
+    /// runtime backed by durable storage (Hangfire job storage, a Service Bus queue).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Startup recovery reads this to interpret the dispatch ledger. Every dispatched step carries a ledger
+    /// row in the run store; on a durable runtime a ledger row means "the runtime still holds this step and
+    /// will deliver it", so recovery leaves it alone. On a non-durable runtime the queued work died with the
+    /// process while the row survived (the run store can be durable even when the runtime is not, e.g.
+    /// <c>UseInMemoryRuntime()</c> with <c>UseSqlServer()</c>), so recovery re-enqueues every ledgered step
+    /// that has not started — including a <c>Pending</c> poll whose delayed re-attempt was lost — without
+    /// recording a second ledger row. The execution claim still guarantees a step runs once.
+    /// </para>
+    /// <para>
+    /// Defaults to <see langword="false"/> (durable), so existing runtimes keep their behaviour. The polarity
+    /// is deliberate: a mocking library that returns <c>default(bool)</c> for an un-configured member
+    /// reproduces the durable behaviour every pre-2.0 test was written against. A decorator around another
+    /// dispatcher must forward this property.
+    /// </para>
+    /// </remarks>
+    bool LosesQueuedStepsOnRestart => false;
 }

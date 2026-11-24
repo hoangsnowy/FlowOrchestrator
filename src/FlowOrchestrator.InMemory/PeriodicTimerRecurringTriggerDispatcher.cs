@@ -23,7 +23,7 @@ namespace FlowOrchestrator.InMemory;
 /// through Core's <see cref="RecurringTriggerSync"/>, which resolves the effective cron (pause state,
 /// persisted override) and calls <see cref="RegisterOrUpdate"/> / <see cref="Remove"/>.
 /// </remarks>
-internal sealed class PeriodicTimerRecurringTriggerDispatcher
+internal sealed partial class PeriodicTimerRecurringTriggerDispatcher
     : IRecurringTriggerDispatcher, IRecurringTriggerInspector, IHostedService, IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
@@ -104,14 +104,23 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                     if (state.Paused) continue;
                     if (state.NextExecution > now) continue;
 
-                    await FireAsync(jobId, state, ct).ConfigureAwait(false);
+                    // Per-job isolation: the loop is shared by every cron job in the process, so nothing one
+                    // job does may end it. Only the loop's own cancellation (shutdown) propagates.
+                    try
+                    {
+                        await FireAsync(jobId, state, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                    {
+                        LogJobFireFailed(_logger, ex, Sanitize(jobId), state.FlowId);
+                    }
                 }
             }
         }
-        catch (OperationCanceledException) { /* shutdown */ }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* shutdown */ }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            _logger.LogError(ex, "Recurring-trigger loop terminated unexpectedly.");
+            LogLoopTerminated(_logger, ex);
         }
     }
 
@@ -141,47 +150,95 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             state.LastJobId = jobId;
             state.LastJobState = "Succeeded";
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             state.LastJobId = jobId;
             state.LastJobState = "Failed";
-            _logger.LogError(ex, "Recurring job {JobId} (Flow={FlowId}) failed.", jobId.Replace('\r', '_').Replace('\n', '_'), state.FlowId);
+            LogJobFailed(_logger, ex, Sanitize(jobId), state.FlowId);
             // Swallow so a single failure cannot kill the timer loop.
         }
         finally
         {
-            state.NextExecution = ComputeNext(state.EffectiveCron, _timeProvider.GetUtcNow());
+            // The job's cron was parsed when it was registered (RegisterOrUpdate rejects an unparseable one
+            // without touching the job), so this cannot throw today. It is still guarded: a throw from a
+            // finally block escapes FireAsync, and before per-job isolation it ended the timer loop for every
+            // job in the process. A job whose next occurrence cannot be computed stops firing instead.
+            try
+            {
+                state.NextExecution = ComputeNext(state.ParsedCron, _timeProvider.GetUtcNow());
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                state.NextExecution = DateTimeOffset.MaxValue;
+                LogNextOccurrenceFailed(_logger, ex, Sanitize(jobId));
+            }
         }
     }
 
-    private static DateTimeOffset ComputeNext(string cron, DateTimeOffset baseUtc)
+    /// <summary>
+    /// Parses <paramref name="cron"/> with the same 5-field / 6-field detection every runtime uses.
+    /// </summary>
+    /// <param name="cron">A 5-field (minute precision) or 6-field (second precision) cron expression.</param>
+    /// <returns>The parsed expression.</returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="cron"/> is blank or not a valid cron expression; the inner exception
+    /// carries the parser's reason.
+    /// </exception>
+    internal static CronExpression ParseCron(string cron)
     {
+        if (string.IsNullOrWhiteSpace(cron))
+        {
+            throw new ArgumentException("A cron expression is required.", nameof(cron));
+        }
+
         // Cronos accepts both 5-field (minute-precision) and 6-field (second-precision) expressions.
-        var fields = cron.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var trimmed = cron.Trim();
+        var fields = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var format = fields.Length >= 6 ? CronFormat.IncludeSeconds : CronFormat.Standard;
-        var expr = CronExpression.Parse(cron, format);
+        try
+        {
+            return CronExpression.Parse(trimmed, format);
+        }
+        catch (CronFormatException ex)
+        {
+            throw new ArgumentException($"'{Sanitize(cron)}' is not a valid cron expression: {ex.Message}", nameof(cron), ex);
+        }
+    }
+
+    private static DateTimeOffset ComputeNext(CronExpression expr, DateTimeOffset baseUtc)
+    {
         var next = expr.GetNextOccurrence(baseUtc.UtcDateTime, TimeZoneInfo.Utc);
         return next.HasValue ? new DateTimeOffset(next.Value, TimeSpan.Zero) : DateTimeOffset.MaxValue;
     }
 
+    // Job ids and cron expressions can arrive from dashboard URLs and bodies; strip line breaks so they
+    // cannot forge log entries. Cold path (registration, failures), so the chained Replace is fine.
+    private static string Sanitize(string value) => value.Replace('\r', '_').Replace('\n', '_');
+
     // ── IRecurringTriggerDispatcher ──────────────────────────────────────────
 
     /// <inheritdoc/>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="cronExpression"/> cannot be parsed. The job is left exactly as it was — an
+    /// existing job keeps firing on its previous schedule — the same contract as Hangfire's
+    /// <c>RecurringJobManager.AddOrUpdate</c>.
+    /// </exception>
     public void RegisterOrUpdate(string jobId, Guid flowId, string triggerKey, string cronExpression)
     {
-        var now = _timeProvider.GetUtcNow();
+        // Parse BEFORE touching the job. The update path used to assign the new cron first and parse it
+        // second, so a rejected override still replaced the live job's cron; the next fire then threw from
+        // FireAsync's finally block and ended the timer loop shared by every cron job in the process.
+        var parsed = ParseCron(cronExpression);
+        var nextExecution = ComputeNext(parsed, _timeProvider.GetUtcNow());
 
         _jobs.AddOrUpdate(jobId,
-            _ =>
+            _ => new JobState
             {
-                var fresh = new JobState
-                {
-                    FlowId = flowId,
-                    TriggerKey = triggerKey,
-                    EffectiveCron = cronExpression,
-                };
-                fresh.NextExecution = ComputeNext(fresh.EffectiveCron, now);
-                return fresh;
+                FlowId = flowId,
+                TriggerKey = triggerKey,
+                EffectiveCron = cronExpression,
+                ParsedCron = parsed,
+                NextExecution = nextExecution,
             },
             (_, existing) =>
             {
@@ -191,19 +248,22 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
                 existing.FlowId = flowId;
                 existing.TriggerKey = triggerKey;
                 existing.EffectiveCron = cronExpression;
-                existing.NextExecution = ComputeNext(existing.EffectiveCron, now);
+                existing.ParsedCron = parsed;
+                existing.NextExecution = nextExecution;
                 existing.Paused = false;
                 return existing;
             });
 
-        _logger.LogInformation("Registered recurring job {JobId} with cron '{Cron}'.", jobId.Replace('\r', '_').Replace('\n', '_'), cronExpression.Replace('\r', '_').Replace('\n', '_'));
+        LogRegistered(_logger, Sanitize(jobId), Sanitize(cronExpression));
     }
 
     /// <inheritdoc/>
     public void Remove(string jobId)
     {
         if (_jobs.TryRemove(jobId, out _))
-            _logger.LogInformation("Removed recurring job {JobId}.", jobId.Replace('\r', '_').Replace('\n', '_'));
+        {
+            LogRemoved(_logger, Sanitize(jobId));
+        }
     }
 
     /// <inheritdoc/>
@@ -228,8 +288,7 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "EnqueueTrigger for Flow={FlowId} TriggerKey={TriggerKey} failed.",
-                    flowId, triggerKey);
+                LogEnqueueTriggerFailed(_logger, ex, flowId, Sanitize(triggerKey));
             }
         }, ct);
         return Task.CompletedTask;
@@ -274,11 +333,33 @@ internal sealed class PeriodicTimerRecurringTriggerDispatcher
             : Task.CompletedTask;
     }
 
+    [LoggerMessage(EventId = 3120, Level = LogLevel.Information, Message = "Registered recurring job {JobId} with cron '{Cron}'.")]
+    private static partial void LogRegistered(ILogger logger, string jobId, string cron);
+
+    [LoggerMessage(EventId = 3121, Level = LogLevel.Information, Message = "Removed recurring job {JobId}.")]
+    private static partial void LogRemoved(ILogger logger, string jobId);
+
+    [LoggerMessage(EventId = 3122, Level = LogLevel.Error, Message = "Recurring job {JobId} (Flow={FlowId}) failed.")]
+    private static partial void LogJobFailed(ILogger logger, Exception ex, string jobId, Guid flowId);
+
+    [LoggerMessage(EventId = 3123, Level = LogLevel.Error, Message = "Firing recurring job {JobId} (Flow={FlowId}) threw; the timer loop continues with the other jobs.")]
+    private static partial void LogJobFireFailed(ILogger logger, Exception ex, string jobId, Guid flowId);
+
+    [LoggerMessage(EventId = 3124, Level = LogLevel.Error, Message = "Recurring job {JobId}: the next occurrence could not be computed; the job stops firing until it is re-registered.")]
+    private static partial void LogNextOccurrenceFailed(ILogger logger, Exception ex, string jobId);
+
+    [LoggerMessage(EventId = 3125, Level = LogLevel.Critical, Message = "Recurring-trigger loop terminated unexpectedly; no cron job fires in this process until restart.")]
+    private static partial void LogLoopTerminated(ILogger logger, Exception ex);
+
+    [LoggerMessage(EventId = 3126, Level = LogLevel.Error, Message = "EnqueueTrigger for Flow={FlowId} TriggerKey={TriggerKey} failed.")]
+    private static partial void LogEnqueueTriggerFailed(ILogger logger, Exception ex, Guid flowId, string triggerKey);
+
     private sealed class JobState
     {
         public Guid FlowId;
         public string TriggerKey = "";
         public string EffectiveCron = "";
+        public CronExpression ParsedCron = null!;
         public DateTimeOffset NextExecution;
         public DateTimeOffset? LastExecution;
         public string? LastJobId;
