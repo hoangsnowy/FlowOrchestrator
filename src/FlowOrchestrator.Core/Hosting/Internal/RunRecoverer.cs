@@ -28,6 +28,9 @@ internal sealed class RunRecoverer
     private readonly ILogger _logger;
     private readonly TimeSpan? _orphanedClaimTimeout;
 
+    /// <summary>Step type recorded for a redelivered step whose key the manifest no longer contains.</summary>
+    private const string UnknownStepType = "Unknown";
+
     /// <summary>Initialises the recoverer with the dependencies inherited from the host service.</summary>
     /// <param name="runStore">Run store (dispatch ledger, zombie close).</param>
     /// <param name="runtimeStore">Runtime store (statuses, orphaned claims).</param>
@@ -335,8 +338,9 @@ internal sealed class RunRecoverer
     /// the store still holds it in its own channel), the execution claim lets only one attempt run. A claimed
     /// step is left alone: its claimer is either still running it or orphaned, and orphaned claims are released
     /// by the pass above once they are old enough. <c>When</c> is not re-evaluated: a ledgered step passed its
-    /// <c>When</c> gate when it was scheduled. Cost: one claim point-lookup per ledgered, not-yet-terminal key —
-    /// once per active run at startup.
+    /// <c>When</c> gate when it was scheduled. A ledgered key missing from the manifest is redelivered as well, so
+    /// the engine records it removed instead of the run waiting on it for ever. Cost: one claim point-lookup per
+    /// ledgered, not-yet-terminal key — once per active run at startup.
     /// </remarks>
     private async Task<(int Dispatched, int Failed)> RedeliverLostQueuedStepsAsync(
         IExecutionContext ctx,
@@ -355,22 +359,21 @@ internal sealed class RunRecoverer
                 continue;  // terminal, or Running under a claim
             }
 
-            var metadata = flow.Manifest.Steps.FindStep(stepKey);
-            if (metadata is null)
-            {
-                continue;
-            }
-
             if (await _runtimeStore.IsStepClaimedAsync(run.Id, stepKey).ConfigureAwait(false))
             {
                 continue;
             }
 
-            var step = new StepInstance(stepKey, metadata.Type)
+            // A ledgered key this host's manifest does not contain (the deploy that restarted the host removed
+            // or renamed it) is redelivered too, not dropped: its ledger row with no status row would otherwise
+            // read as in-flight work for ever and the run could never complete. The engine decides it — it is
+            // recorded Skipped as removed, or handed back if another manifest version is still live.
+            var metadata = flow.Manifest.Steps.FindStep(stepKey);
+            var step = new StepInstance(stepKey, metadata?.Type ?? UnknownStepType)
             {
                 RunId = run.Id,
                 ScheduledTime = DateTimeOffset.UtcNow,
-                Inputs = new Dictionary<string, object?>(metadata.Inputs)
+                Inputs = metadata is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(metadata.Inputs)
             };
 
             try

@@ -79,6 +79,15 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3015, Level = LogLevel.Warning, Message = "Graph continuation for run {RunId} stopped after {Passes} passes without converging; the run is left open for recovery instead of being completed under unfinished work.")]
     public static partial void ContinuationPassLimitReached(ILogger logger, Guid runId, int passes);
 
+    [LoggerMessage(EventId = 3020, Level = LogLevel.Information, Message = "Step {StepKey} is not in this worker's manifest of flow {FlowId}, and another manifest version is registered (rolling deploy); handed it back for redelivery in {DelaySeconds} s.")]
+    public static partial void UnknownStepHandedBack(ILogger logger, string stepKey, Guid flowId, double delaySeconds);
+
+    [LoggerMessage(EventId = 3021, Level = LogLevel.Warning, Message = "Step {StepKey} is not in the registered manifest of flow {FlowId}; it was removed from the flow and is recorded Skipped.")]
+    public static partial void UnknownStepRemovedFromManifest(ILogger logger, string stepKey, Guid flowId);
+
+    [LoggerMessage(EventId = 3022, Level = LogLevel.Warning, Message = "Could not read the registered manifest to decide step {StepKey}, which this worker's manifest does not contain; handed it back for redelivery instead of skipping it.")]
+    public static partial void UnknownStepManifestCheckFailed(ILogger logger, Exception ex, string stepKey);
+
     [LoggerMessage(EventId = 1011, Level = LogLevel.Error, Message = "A trigger for run {RunId} failed before dispatching any step, and abandoning that run or releasing its idempotency key failed too; a retry with the same key may be answered as a duplicate of the dead run.")]
     public static partial void IdempotencyKeyReleaseFailed(ILogger logger, Exception ex, Guid runId);
 

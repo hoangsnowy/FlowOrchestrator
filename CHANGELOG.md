@@ -366,6 +366,24 @@ where one provider behaved differently from the others.
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
   on cascade reset, race-safe SQL Server gates, case-insensitive trigger headers, PostgreSQL timeseries /
   synthetic-attempt trace, InMemory outputs retention.
+- **A rolling deploy that adds a step no longer skips it — or the run.** A replica that had not restarted
+  yet and was handed a step of the new manifest (dispatched by a restarted replica's continuation or
+  startup recovery) did not find it in its own manifest and recorded it `Skipped` ("Step metadata not
+  found."), so its dependents were cascade-skipped and the run could end `Skipped` with the new step never
+  run — while the in-memory runtime, which has no mixed-version window, ran the same step. The two
+  runtimes now agree: a worker handed a step its manifest does not contain compares its manifest with the
+  one registered in the flow store; if they differ it hands the step back for redelivery in 5 s without
+  claiming it (EventId 3020), and only a worker holding the registered manifest records the step `Skipped`
+  as removed (EventId 3021; 3022 when the store read fails and the step is handed back). The in-memory
+  runtime's startup recovery now also redelivers a lost queued step that the new manifest removed, instead
+  of leaving its ledger row to keep the run open for ever. Found by the stress harness (`deploy-mid-run`,
+  SQL Server + Hangfire ×2 vs SQL Server + InMemory).
+- **docs: [Versioning Flows](docs/articles/versioning.md) states the real in-flight behaviour.** It claimed
+  in-flight runs "do not retroactively gain" an appended step and "continue with the old graph" after an
+  insert — both false: a run is not pinned to the manifest it started under, and every decision uses the
+  latest manifest, so a new step whose prerequisites are satisfied runs, a new entry step included. The page
+  now gives the outcome for append / insert / rename / remove / new `runAfter` / new entry step, the
+  rolling-deploy rules, and which changes to drain for. Per-run manifest pinning is not provided.
 - **A failed dispatch no longer strands the step.** The engine records the dispatch-ledger row before
   handing the step to the runtime; when the runtime call threw (broker or Hangfire storage blip), the row
   stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
