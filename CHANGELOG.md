@@ -134,7 +134,10 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Schema (PostgreSQL, additive):** `ix_flow_runs_run_search_trgm`, a trigram GIN index on the
   lower-cased run search expression (~47 MB per 200k runs), built `CREATE INDEX CONCURRENTLY` in the
   background after startup — no table rewrite, writers not blocked; an `INVALID` leftover is rebuilt on the
-  next start. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
+  next start. Another replica (or a restarted host) can start while the build is still running: the
+  migrator's `flow_runs` DDL is skipped by a catalog check when there is nothing to change. A plain
+  `IF NOT EXISTS` still takes the table lock, so that replica would have queued behind the build, stalled
+  `flow_runs` writers, and then timed out or hit `40P01` deadlock at startup. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
   (Azure Database for PostgreSQL requires allow-listing it in `azure.extensions`) the migrator logs a
   warning and search runs the same SQL as a scan. PostgreSQL run-column matching is now
   `lower(...) LIKE lower(term)` instead of `ILIKE` per column: same results for ASCII and identifiers.

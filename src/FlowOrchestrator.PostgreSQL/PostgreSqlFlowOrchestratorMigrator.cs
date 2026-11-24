@@ -18,6 +18,10 @@ namespace FlowOrchestrator.PostgreSQL;
 /// the next start. Without <c>pg_trgm</c> (not allow-listed on Azure Database for PostgreSQL, or no
 /// privilege) every trigram step is skipped with a warning and search runs the same SQL as a
 /// sequential scan.</para>
+/// <para><b>Re-running while a build is in flight.</b> Every <c>flow_runs</c> statement is guarded by a catalog
+/// check, so a migration on an up-to-date schema requests no lock on <c>flow_runs</c>. A second replica (or a
+/// restarted host) can therefore start while the index is still being built without stalling writers or
+/// deadlocking with the build.</para>
 /// <para>The <c>flow_steps.output_json</c> trigram index stays on by default: no measurable write cost at
 /// p50 and 200x faster deep search in the default window, at about half the size of the step table.</para>
 /// </remarks>
@@ -339,10 +343,32 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             updated_at_utc TIMESTAMPTZ  NOT NULL DEFAULT NOW()
         );
 
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id ON flow_runs (flow_id);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_status ON flow_runs (status);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_started_at ON flow_runs (started_at DESC);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id_status_started_at ON flow_runs (flow_id, status, started_at DESC);
+        -- flow_runs DDL is guarded by a catalog check, not by IF NOT EXISTS alone: PostgreSQL takes the
+        -- table lock (SHARE for CREATE INDEX, ACCESS EXCLUSIVE for ALTER TABLE) BEFORE it looks for the
+        -- name, so even a no-op request queues behind the SHARE UPDATE EXCLUSIVE lock that a run-search
+        -- index build (CREATE INDEX CONCURRENTLY, this host's or another replica's) holds for its whole
+        -- duration. That wait stalls every flow_runs writer queued behind it, and the build then waits
+        -- for this transaction's snapshot: 40P01 deadlock, aborting either this migration (host start-up
+        -- fails) or the build. A build that outlasts the command timeout fails start-up even without the
+        -- deadlock. The catalog reads take no lock on flow_runs.
+        DO $$
+        DECLARE
+            runs_ns oid := (SELECT relnamespace FROM pg_class WHERE oid = 'flow_runs'::regclass);
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_flow_id' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id ON flow_runs (flow_id);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_status' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_status ON flow_runs (status);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_started_at' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_started_at ON flow_runs (started_at DESC);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_flow_id_status_started_at' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id_status_started_at ON flow_runs (flow_id, status, started_at DESC);
+            END IF;
+        END
+        $$;
         -- INCLUDE mirrors the SQL Server definitions. GetStepStatusesAsync is the engine's single
         -- most frequent query — issued on every step completion and returning every step row in the
         -- run — and without the payload columns in the index Postgres must fetch each row from the
@@ -353,9 +379,19 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
         CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_started_at ON flow_step_attempts (run_id, started_at);
         CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_step_key_attempt_no ON flow_step_attempts (run_id, step_key, attempt_no);
 
-        -- Re-run lineage column (idempotent — Postgres ADD COLUMN IF NOT EXISTS).
-        ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
+        -- Re-run lineage column, guarded like the flow_runs indexes above.
+        DO $$
+        DECLARE
+            runs_ns oid := (SELECT relnamespace FROM pg_class WHERE oid = 'flow_runs'::regclass);
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'flow_runs'::regclass AND attname = 'source_run_id' AND NOT attisdropped) THEN
+                ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_source_run_id' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
+            END IF;
+        END
+        $$;
 
         -- When-clause evaluation trace columns (idempotent), parity with the SQL Server backend.
         ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
@@ -399,8 +435,20 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     // on locked-down roles; a failure must not abort the mandatory schema migration.
     private const string TrigramSql = """
         CREATE EXTENSION IF NOT EXISTS pg_trgm;
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_name_trgm     ON flow_runs  USING gin (flow_name gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_trigger_key_trgm   ON flow_runs  USING gin (trigger_key gin_trgm_ops);
+        -- Guarded for the same reason as the flow_runs indexes in MigrationSql: a plain IF NOT EXISTS
+        -- would wait on (and deadlock with) a concurrent run-search index build.
+        DO $$
+        DECLARE
+            runs_ns oid := (SELECT relnamespace FROM pg_class WHERE oid = 'flow_runs'::regclass);
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_flow_name_trgm' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_name_trgm ON flow_runs USING gin (flow_name gin_trgm_ops);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_trigger_key_trgm' AND relnamespace = runs_ns) THEN
+                CREATE INDEX IF NOT EXISTS ix_flow_runs_trigger_key_trgm ON flow_runs USING gin (trigger_key gin_trgm_ops);
+            END IF;
+        END
+        $$;
         CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_trgm      ON flow_steps USING gin (step_key gin_trgm_ops);
         CREATE INDEX IF NOT EXISTS ix_flow_steps_error_message_trgm ON flow_steps USING gin (error_message gin_trgm_ops);
         CREATE INDEX IF NOT EXISTS ix_flow_steps_output_json_trgm   ON flow_steps USING gin (output_json gin_trgm_ops);
