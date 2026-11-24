@@ -44,4 +44,7 @@ internal static partial class WebhookLog
 
     [LoggerMessage(EventId = 4011, Level = LogLevel.Warning, Message = "Webhook flow {FlowId} ('{TriggerKey}') has both webhookHmacKey and webhookSecret configured; webhookHmacKey wins. Drop webhookSecret to silence this warning.")]
     public static partial void ConflictingKeyFields(ILogger logger, Guid flowId, string triggerKey);
+
+    [LoggerMessage(EventId = 4012, Level = LogLevel.Error, Message = "Webhook flow {FlowId} ('{TriggerKey}') sets webhookSignatureScheme to {Problem}. Its deliveries cannot be verified: rejected in Enforce, recorded and let through in Audit (reason signature_scheme_unknown).")]
+    public static partial void SignatureSchemeUnknown(ILogger logger, Guid flowId, string triggerKey, string problem);
 }
