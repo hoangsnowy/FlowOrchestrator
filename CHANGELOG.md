@@ -180,6 +180,15 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **A null-conditional in the middle of a path resolves.** Only a leading `?.` was stripped, so
   `@triggerBody()?.order?.id` looked for a property named `order?` and resolved `null`. `?.` and `?[` are
   now honoured anywhere in a trigger-body, step-output, `ForEach` source or poll-condition path.
+- **A retry with the same `Idempotency-Key` after a failed trigger starts the run.** The key was
+  registered before the run was started and its entry steps dispatched; when that dispatch threw (broker
+  blip, 5xx to the caller), the caller's retry with the same key was answered "duplicate" of a run that
+  never started work. When a trigger fails before dispatching or skipping any entry step, the engine now
+  cancel-latches the dead run (so a message the broker did accept is skipped, not run twice), completes it
+  `Failed` (so startup recovery does not resurrect it), and releases the key (EventId 1011 if that fails).
+  A trigger that already dispatched an entry keeps its key: that run is alive. **Custom stores:** new
+  `IFlowRunControlStore.ReleaseIdempotencyKeyAsync` (default: no-op returning `false`, which keeps the old
+  behaviour); it must delete the key only while it still maps to the given run.
 
 ### Security
 

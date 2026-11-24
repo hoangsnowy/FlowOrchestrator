@@ -70,4 +70,23 @@ public interface IFlowRunControlStore
     /// <see langword="false"/> if a record with this key already existed (duplicate trigger).
     /// </returns>
     Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId);
+
+    /// <summary>
+    /// Removes the idempotency-key registration for <paramref name="runId"/>, so a later trigger with the
+    /// same key starts a new run. A registration that maps the key to a different run is left alone.
+    /// </summary>
+    /// <param name="flowId">The flow the key was registered for.</param>
+    /// <param name="triggerKey">The trigger the key was registered for.</param>
+    /// <param name="idempotencyKey">The caller-supplied idempotency key.</param>
+    /// <param name="runId">The run the registration must still point at for it to be removed.</param>
+    /// <returns><see langword="true"/> when a registration was removed.</returns>
+    /// <remarks>
+    /// Called by the engine only when a trigger registered the key and then failed before dispatching any
+    /// entry step: without it a caller retrying the failed delivery with the same key was answered
+    /// "duplicate" of a run that never started work. Default implementation is a no-op returning
+    /// <see langword="false"/> so existing custom stores keep compiling; such a store keeps the 1.x
+    /// behaviour (the retry is absorbed as a duplicate of the dead run).
+    /// </remarks>
+    Task<bool> ReleaseIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+        => Task.FromResult(false);
 }

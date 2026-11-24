@@ -1038,6 +1038,29 @@ public sealed class SqlFlowRunStore :
         return runId;
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> ReleaseIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            DELETE FROM FlowIdempotencyKeys
+            WHERE FlowId = @FlowId
+              AND TriggerKey = @TriggerKey
+              AND IdempotencyKey = @IdempotencyKey
+              AND RunId = @RunId
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = triggerKey.Trim().ToLowerInvariant(),
+                IdempotencyKey = idempotencyKey.Trim().ToLowerInvariant(),
+                RunId = runId
+            });
+
+        return affected > 0;
+    }
+
     public async Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
     {
         await using var conn = new SqlConnection(_connectionString);

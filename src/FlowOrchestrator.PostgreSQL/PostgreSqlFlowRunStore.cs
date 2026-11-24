@@ -927,6 +927,29 @@ public sealed class PostgreSqlFlowRunStore :
             });
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> ReleaseIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var affected = await conn.ExecuteAsync(
+            """
+            DELETE FROM flow_idempotency_keys
+            WHERE flow_id = @FlowId
+              AND trigger_key = @TriggerKey
+              AND idempotency_key = @IdempotencyKey
+              AND run_id = @RunId
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = triggerKey.Trim().ToLowerInvariant(),
+                IdempotencyKey = idempotencyKey.Trim().ToLowerInvariant(),
+                RunId = runId
+            });
+
+        return affected > 0;
+    }
+
     public async Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

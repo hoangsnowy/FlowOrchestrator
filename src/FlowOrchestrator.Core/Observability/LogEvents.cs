@@ -25,6 +25,12 @@ public static class LogEvents
     /// <summary>A run start could not be persisted to the run store. Engine continues; log is informational.</summary>
     public static readonly EventId RunStartTrackingFailed = new(1003, nameof(RunStartTrackingFailed));
 
+    /// <summary>
+    /// A trigger failed before dispatching any step and the compensation that frees its idempotency key
+    /// (cancel and fail the dead run, release the key) failed too.
+    /// </summary>
+    public static readonly EventId IdempotencyKeyReleaseFailed = new(1011, nameof(IdempotencyKeyReleaseFailed));
+
     /// <summary>A step transitioned to <c>Running</c>.</summary>
     public static readonly EventId StepStarted = new(2000, nameof(StepStarted));
 

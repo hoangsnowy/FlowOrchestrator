@@ -34,6 +34,29 @@ public sealed class InMemoryFlowRunStoreConditionalWriteTests
     }
 
     [Fact]
+    public async Task ReleaseIdempotencyKeyAsync_RemovesOnlyTheRegistrationOfTheGivenRun()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var owner = Guid.NewGuid();
+        await _sut.TryRegisterIdempotencyKeyAsync(flowId, "webhook", "Order-1", owner);
+
+        // Act
+        var releasedByOther = await _sut.ReleaseIdempotencyKeyAsync(flowId, "webhook", "order-1", Guid.NewGuid());
+        var stillOwned = await _sut.FindRunIdByIdempotencyKeyAsync(flowId, "webhook", "order-1");
+        var releasedByOwner = await _sut.ReleaseIdempotencyKeyAsync(flowId, " WEBHOOK ", "order-1 ", owner);
+        var afterRelease = await _sut.FindRunIdByIdempotencyKeyAsync(flowId, "webhook", "order-1");
+        var reRegistered = await _sut.TryRegisterIdempotencyKeyAsync(flowId, "webhook", "order-1", Guid.NewGuid());
+
+        // Assert
+        Assert.False(releasedByOther);
+        Assert.Equal(owner, stillOwned);
+        Assert.True(releasedByOwner);
+        Assert.Null(afterRelease);
+        Assert.True(reRegistered);
+    }
+
+    [Fact]
     public async Task TryCompleteRunningStepAsync_MovesARunningStepOnce_ThenReportsFalse()
     {
         // Arrange

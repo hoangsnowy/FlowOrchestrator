@@ -45,4 +45,17 @@ public sealed class FlowRunControlStoreDefaultMethodTests
         // Assert
         Assert.False(result);
     }
+
+    [Fact]
+    public async Task ReleaseIdempotencyKeyAsync_DefaultInterfaceMethod_ReturnsFalse()
+    {
+        // Arrange
+        IFlowRunControlStore store = new LegacyControlStore();
+
+        // Act
+        var released = await store.ReleaseIdempotencyKeyAsync(Guid.NewGuid(), "webhook", "order-1", Guid.NewGuid());
+
+        // Assert
+        Assert.False(released);
+    }
 }

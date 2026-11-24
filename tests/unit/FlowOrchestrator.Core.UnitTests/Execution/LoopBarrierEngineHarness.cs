@@ -32,8 +32,19 @@ internal sealed class LoopBarrierEngineHarness
     private readonly List<string> _enqueued = [];
     private Exception? _nextDispatchFault;
 
+    private (string StepKey, Exception Fault)? _keyedDispatchFault;
+
     /// <summary>Makes the next dispatcher call throw <paramref name="fault"/> instead of queueing the step.</summary>
     public void FailNextDispatch(Exception fault) => Volatile.Write(ref _nextDispatchFault, fault);
+
+    /// <summary>Makes the first dispatcher call for <paramref name="stepKey"/> throw <paramref name="fault"/>.</summary>
+    public void FailDispatchOf(string stepKey, Exception fault)
+    {
+        lock (_pending)
+        {
+            _keyedDispatchFault = (stepKey, fault);
+        }
+    }
 
     /// <summary>Creates a harness bound to <paramref name="flow"/>.</summary>
     /// <param name="flow">Flow definition executed by the harness.</param>
@@ -73,6 +84,12 @@ internal sealed class LoopBarrierEngineHarness
             var step = call.Arg<IStepInstance>()!;
             lock (_pending)
             {
+                if (_keyedDispatchFault is { } keyed && string.Equals(keyed.StepKey, step.Key, StringComparison.Ordinal))
+                {
+                    _keyedDispatchFault = null;
+                    return ValueTask.FromException<string?>(keyed.Fault);
+                }
+
                 _enqueued.Add(step.Key);
                 _pending.Add(step);
             }

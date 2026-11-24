@@ -966,6 +966,16 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(added);
     }
 
+    /// <inheritdoc/>
+    public Task<bool> ReleaseIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
+
+        // Conditional on the value: a registration that already points at another run is not ours to drop.
+        var removed = _idempotency.TryRemove(new KeyValuePair<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid>(key, runId));
+        return Task.FromResult(removed);
+    }
+
     public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
         // Strictly-less-than the cutoff, matching both SQL backends (`completed_at < @CutoffUtc`).
