@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Diagnostics;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Dashboard.Webhooks;
@@ -480,6 +481,80 @@ public sealed class DashboardSurfaceAuditTests
 
         // Assert — 200 (empty page) or 400, never 500.
         Assert.NotEqual(HttpStatusCode.InternalServerError, status);
+    }
+
+    /// <summary>
+    /// PERF / CLAUDE.md compression rule. <c>GET /api/flows/{id}/mermaid</c> writes its (multi-KB for real
+    /// flows) text body raw: no <c>Accept-Encoding</c> negotiation and no <c>Vary: Accept-Encoding</c>,
+    /// unlike every other dashboard endpoint. It must negotiate like the JSON endpoints.
+    /// </summary>
+    [Fact]
+    public async Task Mermaid_endpoint_honours_Accept_Encoding_and_sets_Vary()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var id = Guid.NewGuid();
+        var steps = new StepCollection();
+        for (var i = 0; i < 40; i++)
+            steps["step_" + i] = new StepMetadata { Type = "SomeStepType", RunAfter = i == 0 ? new RunAfterCollection() : new RunAfterCollection { ["step_" + (i - 1)] = [StepStatus.Succeeded] } };
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(id);
+        flow.Manifest.Returns(new FlowManifest { Triggers = new FlowTriggerCollection { ["manual"] = new TriggerMetadata { Type = TriggerType.Manual } }, Steps = steps });
+        server.Flows = new FlowRegistry(new[] { flow });
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/flows/api/flows/{id}/mermaid");
+        request.Headers.TryAddWithoutValidation("Accept-Encoding", "br, gzip");
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+        var raw = await response.Content.ReadAsByteArrayAsync();
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(flow.Manifest.ToMermaid().Length > 1024, "fixture must exceed the 1 KB threshold of the compression rule");
+        Assert.NotEmpty(raw);
+        Assert.Contains("Accept-Encoding", response.Headers.Vary);
+        Assert.NotEmpty(response.Content.Headers.ContentEncoding);
+    }
+
+    /// <summary>
+    /// CLAUDE.md compression checklist: the Brotli and Gzip variants of the Mermaid export decompress to
+    /// exactly the bytes of the uncompressed variant.
+    /// </summary>
+    [Theory]
+    [InlineData("br")]
+    [InlineData("gzip")]
+    public async Task Mermaid_endpoint_compressed_variant_decompresses_to_the_uncompressed_bytes(string encoding)
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var id = Guid.NewGuid();
+        var steps = new StepCollection();
+        for (var i = 0; i < 40; i++)
+            steps["step_" + i] = new StepMetadata { Type = "SomeStepType", RunAfter = i == 0 ? new RunAfterCollection() : new RunAfterCollection { ["step_" + (i - 1)] = [StepStatus.Succeeded] } };
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(id);
+        flow.Manifest.Returns(new FlowManifest { Triggers = new FlowTriggerCollection { ["manual"] = new TriggerMetadata { Type = TriggerType.Manual } }, Steps = steps });
+        server.Flows = new FlowRegistry(new[] { flow });
+        using var plainRequest = new HttpRequestMessage(HttpMethod.Get, $"/flows/api/flows/{id}/mermaid");
+        using var compressedRequest = new HttpRequestMessage(HttpMethod.Get, $"/flows/api/flows/{id}/mermaid");
+        compressedRequest.Headers.TryAddWithoutValidation("Accept-Encoding", encoding);
+
+        // Act
+        using var plainResponse = await server.Client.SendAsync(plainRequest);
+        var plain = await plainResponse.Content.ReadAsByteArrayAsync();
+        using var compressedResponse = await server.Client.SendAsync(compressedRequest);
+        await using var compressedBody = await compressedResponse.Content.ReadAsStreamAsync();
+        await using Stream decoder = encoding == "br"
+            ? new System.IO.Compression.BrotliStream(compressedBody, System.IO.Compression.CompressionMode.Decompress)
+            : new System.IO.Compression.GZipStream(compressedBody, System.IO.Compression.CompressionMode.Decompress);
+        using var decompressed = new MemoryStream();
+        await decoder.CopyToAsync(decompressed);
+
+        // Assert
+        Assert.Empty(plainResponse.Content.Headers.ContentEncoding);
+        Assert.Contains("Accept-Encoding", plainResponse.Headers.Vary);
+        Assert.Equal(encoding, Assert.Single(compressedResponse.Content.Headers.ContentEncoding));
+        Assert.Equal(plain, decompressed.ToArray());
     }
 
     // ── Test doubles ─────────────────────────────────────────────────────────────────────────

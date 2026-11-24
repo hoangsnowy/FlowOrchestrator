@@ -358,8 +358,8 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            http.Response.ContentType = "text/plain; charset=utf-8";
-            await http.Response.WriteAsync(flow.ToMermaid());
+            // Multi-KB for real flows and rendered per request: negotiated like the JSON endpoints.
+            await WriteTextAsync(http.Response, flow.ToMermaid(), "text/plain; charset=utf-8");
         });
 
         group.MapPost("/api/flows/{id:guid}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
@@ -1632,6 +1632,47 @@ public static class DashboardServiceCollectionExtensions
         }
 
         await JsonSerializer.SerializeAsync(response.Body, value, _camelCaseOptions).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes a dynamically rendered text body (e.g. the Mermaid export), negotiating Brotli or Gzip per
+    /// the request's <c>Accept-Encoding</c> header and setting <c>Vary: Accept-Encoding</c> on every response.
+    /// </summary>
+    /// <param name="response">The response to write.</param>
+    /// <param name="text">The body; encoded as UTF-8.</param>
+    /// <param name="contentType">The <c>Content-Type</c> header value, including the charset.</param>
+    /// <remarks>
+    /// <see cref="System.IO.Compression.CompressionLevel.Fastest"/>, as for <see cref="WriteJsonAsync{T}"/>:
+    /// the body is rendered on every request, so encoder CPU per request outweighs the last few percent of
+    /// ratio.
+    /// </remarks>
+    internal static async Task WriteTextAsync(HttpResponse response, string text, string contentType)
+    {
+        response.ContentType = contentType;
+        response.Headers.Vary = "Accept-Encoding";
+
+        var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
+        var bytes = Encoding.UTF8.GetBytes(text);
+
+        if (HasEncoding(accept, "br"))
+        {
+            response.Headers.ContentEncoding = "br";
+            await using var brotli = new System.IO.Compression.BrotliStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await brotli.WriteAsync(bytes).ConfigureAwait(false);
+            return;
+        }
+
+        if (HasEncoding(accept, "gzip"))
+        {
+            response.Headers.ContentEncoding = "gzip";
+            await using var gzip = new System.IO.Compression.GZipStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await gzip.WriteAsync(bytes).ConfigureAwait(false);
+            return;
+        }
+
+        await response.Body.WriteAsync(bytes).ConfigureAwait(false);
     }
 
     /// <summary>
