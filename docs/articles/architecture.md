@@ -110,7 +110,7 @@ Swapping in a custom backend (Redis, DynamoDB, CosmosDB, etc.) requires five con
 
 ## Key Design Decisions
 
-**Runtime-agnostic engine** — `FlowOrchestratorEngine` in `FlowOrchestrator.Core` owns all orchestration logic. The `IStepDispatcher` abstraction decouples it from any specific background-job framework. Adding a new runtime adapter requires only an `IStepDispatcher` implementation.
+**Runtime-agnostic engine** — `FlowOrchestratorEngine` in `FlowOrchestrator.Core` owns all orchestration logic. The `IStepDispatcher` abstraction decouples it from any specific background-job framework. Adding a new runtime adapter requires only an `IStepDispatcher` implementation. A runtime whose queue does not survive a process restart (the in-memory channel) reports `IStepDispatcher.LosesQueuedStepsOnRestart = true`; startup recovery then re-enqueues ledgered steps that never started instead of trusting the ledger row to mean "still queued". The default (`false`) suits any runtime backed by durable storage; a dispatcher decorator must forward it.
 
 **Dapper, not EF Core** — all SQL is explicit. No ORM magic, no shadow queries. Queries live in the `SqlServer` / `PostgreSQL` projects and are readable as raw SQL.
 

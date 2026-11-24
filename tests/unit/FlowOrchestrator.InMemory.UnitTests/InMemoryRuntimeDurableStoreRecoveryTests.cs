@@ -76,4 +76,111 @@ public sealed class InMemoryRuntimeDurableStoreRecoveryTests
             "Recovery skipped 'step1' because its dispatch-ledger row survived the restart, but the in-memory channel that held the step did not.");
         Assert.Equal("step1", recovered!.Step.Key);
     }
+
+    private static IFlowDefinition SingleStepFlow(Guid flowId, string stepKey = "step1")
+    {
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(flowId);
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection { [stepKey] = new StepMetadata { Type = "DoWork" } }
+        });
+        return flow;
+    }
+
+    private static FlowRunRecoveryHostedService CreateRecovery(
+        InMemoryFlowRunStore store, IFlowDefinition flow, IStepDispatcher dispatcher) =>
+        new(store, [store], new FlowRegistry([flow]), new FlowGraphPlanner(), dispatcher,
+            new InMemoryOutputsRepository(store), NullLogger<FlowRunRecoveryHostedService>.Instance);
+
+    [Fact]
+    public async Task Recovery_AfterRestart_RedispatchesAPendingPollWhoseDelayedAttemptWasLost()
+    {
+        // Arrange — the poll returned Pending: the engine released the claim, re-reserved the ledger row and
+        // handed the next attempt to a Task.Delay that died with process 1.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = SingleStepFlow(flowId, "poll");
+        var store = new InMemoryFlowRunStore();
+        await store.StartRunAsync(flowId, "Flow", runId, "manual", null, null);
+        Assert.True(await store.TryRecordDispatchAsync(runId, "poll"));
+        Assert.True(await store.TryClaimStepAsync(runId, "poll"));
+        await store.RecordStepStartAsync(runId, "poll", "DoWork", null, null);
+        await store.RecordStepCompleteAsync(runId, "poll", nameof(StepStatus.Pending), null, null);
+        await store.ReleaseStepClaimAsync(runId, "poll");
+
+        var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
+        var recovery = CreateRecovery(store, flow, new InMemoryStepDispatcher(channel.Writer));
+
+        // Act
+        await recovery.StartAsync(CancellationToken.None);
+
+        // Assert — the next poll attempt is queued again; no second ledger row was needed.
+        Assert.True(channel.Reader.TryRead(out var recovered), "The Pending poll was not re-enqueued after the restart.");
+        Assert.Equal("poll", recovered!.Step.Key);
+        Assert.False(channel.Reader.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData(true)]   // claimed and still without a status row: its claimer may still be running it
+    [InlineData(false)]  // already finished: nothing was lost
+    public async Task Recovery_AfterRestart_LeavesAClaimedOrFinishedLedgeredStepAlone(bool claimedWithoutStatus)
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = SingleStepFlow(flowId);
+        var store = new InMemoryFlowRunStore();
+        await store.StartRunAsync(flowId, "Flow", runId, "manual", null, null);
+        Assert.True(await store.TryRecordDispatchAsync(runId, "step1"));
+        Assert.True(await store.TryClaimStepAsync(runId, "step1"));
+        if (!claimedWithoutStatus)
+        {
+            await store.RecordStepStartAsync(runId, "step1", "DoWork", null, null);
+            await store.RecordStepCompleteAsync(runId, "step1", nameof(StepStatus.Succeeded), null, null);
+        }
+
+        var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
+        var recovery = CreateRecovery(store, flow, new InMemoryStepDispatcher(channel.Writer));
+
+        // Act
+        await recovery.StartAsync(CancellationToken.None);
+
+        // Assert
+        Assert.False(channel.Reader.TryRead(out var unexpected), $"Recovery re-enqueued '{unexpected?.Step.Key}'.");
+    }
+
+    [Fact]
+    public async Task Recovery_DurableRuntime_TrustsTheLedgerAndDoesNotRedispatch()
+    {
+        // Arrange — same lost-channel state, but the dispatcher reports a durable queue (the default).
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = SingleStepFlow(flowId);
+        var store = new InMemoryFlowRunStore();
+        await store.StartRunAsync(flowId, "Flow", runId, "manual", null, null);
+        Assert.True(await store.TryRecordDispatchAsync(runId, "step1"));
+        var durable = Substitute.For<IStepDispatcher>();
+        durable.LosesQueuedStepsOnRestart.Returns(false);
+        var recovery = CreateRecovery(store, flow, durable);
+
+        // Act
+        await recovery.StartAsync(CancellationToken.None);
+
+        // Assert — the runtime still holds the step; recovery must not hand it over a second time.
+        await durable.DidNotReceiveWithAnyArgs().EnqueueStepAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public void InMemoryStepDispatcher_ReportsThatQueuedStepsAreLostOnRestart()
+    {
+        // Arrange
+        var sut = new InMemoryStepDispatcher(Channel.CreateUnbounded<InMemoryStepEnvelope>().Writer);
+
+        // Act
+        var loses = ((IStepDispatcher)sut).LosesQueuedStepsOnRestart;
+
+        // Assert
+        Assert.True(loses);
+    }
 }

@@ -75,6 +75,13 @@ builder.Services.AddFlowOrchestrator(options =>
 
 > [!TIP]
 > Storage and runtime are independent. `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but durable run state.
+>
+> Steps queued on the in-memory runtime live in the process (its channel and timers), so they stop with it;
+> the run state does not. On the next start, recovery re-enqueues every step that was dispatched but had not
+> started — including a `Pending` poll or a parked `WaitForSignal` whose delayed re-attempt was lost — and
+> the execution claim still runs each step once. Run **one** replica with this combination: a second replica
+> starting while the first is alive re-enqueues the first one's queued steps too. The claim keeps that safe
+> for ordinary steps, but a `Pending` poll then ends up polled by both replicas.
 
 **Azure Service Bus runtime** (v1.22+ — cloud-native, multi-replica, multi-region):
 

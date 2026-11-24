@@ -190,6 +190,17 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   failure is now logged (EventId 5026), its ledger row released as before, and the remaining steps are
   still dispatched; the run is not closed while a dispatch failed. Recovery logs moved to
   `LoggerMessage` (EventIds 5020-5032).
+- **InMemory runtime over a durable store resumes runs that had queued work at shutdown.** Every
+  dispatched step gets a dispatch-ledger row in the store, but on the in-memory runtime the step itself
+  lives only in the process's channel (or a pending `Task.Delay` for a poll). After a restart recovery read
+  the surviving row as "still queued" and skipped the step, so the run stayed `Running` for ever — with
+  `UseInMemoryRuntime()` + `UseSqlServer()` / `UsePostgreSql()`, the combination the configuration guide
+  documents. New `IStepDispatcher.LosesQueuedStepsOnRestart` (default interface member, `false`; the
+  in-memory dispatcher reports `true`): recovery then re-enqueues every ledgered step that has not started
+  and is not claimed, including a `Pending` poll, without recording a second ledger row; the execution
+  claim still runs it once (EventIds 5033-5034). **Custom runtimes:** nothing to do for a durable one; a
+  dispatcher decorator must forward the property. Run one replica with this combination (see
+  [Configuration](docs/articles/configuration.md)).
 
 ### Security
 

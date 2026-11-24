@@ -96,6 +96,16 @@ internal sealed class RunRecoverer
         var failedDispatches = 0;
         FlowGraphEvaluation evaluation;
 
+        // A non-durable runtime (the in-process channel) lost every queued and delayed step with the process
+        // that held it, while the ledger rows survived in the store. Without this pass the sweep below reads
+        // those rows as "already in the runtime queue" and skips the steps for good.
+        if (ledger.Count > 0 && _dispatcher.LosesQueuedStepsOnRestart)
+        {
+            var redelivery = await RedeliverLostQueuedStepsAsync(ctx, flow, run, statuses, ledger).ConfigureAwait(false);
+            recovered += redelivery.Dispatched;
+            failedDispatches += redelivery.Failed;
+        }
+
         // The same fixed point the engine's continuation reaches: a When-skip or blocked-skip recorded in one
         // sweep can unblock (or block) dependents, settle a loop or free a loop slot, so sweep again until a
         // sweep writes no status. Bounded like the continuation's loop. Each sweep is O(steps in the run);
@@ -306,6 +316,79 @@ internal sealed class RunRecoverer
         }
 
         return (admitted, failed);
+    }
+
+    /// <summary>
+    /// Re-enqueues every ledgered step that has not started — no status row, or a <see cref="StepStatus.Pending"/>
+    /// poll whose delayed re-attempt was lost — and that no worker currently claims. Only called for a runtime
+    /// whose queued steps do not survive a restart (<see cref="IStepDispatcher.LosesQueuedStepsOnRestart"/>).
+    /// </summary>
+    /// <param name="ctx">Execution context rebuilt for the run.</param>
+    /// <param name="flow">The flow definition matching the run.</param>
+    /// <param name="run">The active run record being recovered.</param>
+    /// <param name="statuses">Status map read at the start of recovery.</param>
+    /// <param name="ledger">Keys holding a dispatch-ledger row.</param>
+    /// <returns>The number of steps re-enqueued and the number whose re-enqueue threw.</returns>
+    /// <remarks>
+    /// The ledger row already exists, so no second row is recorded: the step goes straight to the runtime.
+    /// "Dispatch many, execute once" still holds — if the step is delivered twice (another replica sharing
+    /// the store still holds it in its own channel), the execution claim lets only one attempt run. A claimed
+    /// step is left alone: its claimer is either still running it or orphaned, and orphaned claims are released
+    /// by the pass above once they are old enough. <c>When</c> is not re-evaluated: a ledgered step passed its
+    /// <c>When</c> gate when it was scheduled. Cost: one claim point-lookup per ledgered, not-yet-terminal key —
+    /// once per active run at startup.
+    /// </remarks>
+    private async Task<(int Dispatched, int Failed)> RedeliverLostQueuedStepsAsync(
+        IExecutionContext ctx,
+        IFlowDefinition flow,
+        FlowRunRecord run,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        IReadOnlySet<string> ledger)
+    {
+        var redelivered = 0;
+        var failed = 0;
+
+        foreach (var stepKey in ledger)
+        {
+            if (statuses.TryGetValue(stepKey, out var status) && status != StepStatus.Pending)
+            {
+                continue;  // terminal, or Running under a claim
+            }
+
+            var metadata = flow.Manifest.Steps.FindStep(stepKey);
+            if (metadata is null)
+            {
+                continue;
+            }
+
+            if (await _runtimeStore.IsStepClaimedAsync(run.Id, stepKey).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            var step = new StepInstance(stepKey, metadata.Type)
+            {
+                RunId = run.Id,
+                ScheduledTime = DateTimeOffset.UtcNow,
+                Inputs = new Dictionary<string, object?>(metadata.Inputs)
+            };
+
+            try
+            {
+                // CancellationToken.None: the ledger row is already durable (RFC 2.0 P-1(d)).
+                await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
+                redelivered++;
+                HostingLog.RecoveryRedeliveredLostStep(_logger, stepKey, run.Id);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The ledger row stays, so the next startup tries again.
+                failed++;
+                HostingLog.RecoveryRedeliveryFailed(_logger, ex, stepKey, run.Id);
+            }
+        }
+
+        return (redelivered, failed);
     }
 
     /// <summary>

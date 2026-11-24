@@ -73,4 +73,10 @@ internal static partial class HostingLog
 
     [LoggerMessage(EventId = 5032, Level = LogLevel.Warning, Message = "FlowRunRecoveryHostedService: could not restore trigger data for run {RunId}.")]
     public static partial void RecoveryTriggerDataUnavailable(ILogger logger, Exception ex, Guid runId);
+
+    [LoggerMessage(EventId = 5033, Level = LogLevel.Information, Message = "FlowRunRecoveryHostedService: re-enqueued step '{StepKey}' for run {RunId} — it was queued on a runtime whose queue does not survive a restart.")]
+    public static partial void RecoveryRedeliveredLostStep(ILogger logger, string stepKey, Guid runId);
+
+    [LoggerMessage(EventId = 5034, Level = LogLevel.Error, Message = "FlowRunRecoveryHostedService: re-enqueuing step '{StepKey}' of run {RunId} failed; its ledger row is kept and the next startup retries.")]
+    public static partial void RecoveryRedeliveryFailed(ILogger logger, Exception ex, string stepKey, Guid runId);
 }

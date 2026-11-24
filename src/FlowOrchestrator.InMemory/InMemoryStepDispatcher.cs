@@ -44,6 +44,15 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Always <see langword="true"/>: queued and delayed steps live in this process's channel and timers
+    /// only. Startup recovery therefore re-enqueues ledgered steps that never started, which is what makes
+    /// <c>UseInMemoryRuntime()</c> over a durable store (<c>UseSqlServer()</c> / <c>UsePostgreSql()</c>)
+    /// resume a run that had queued work when the process stopped.
+    /// </remarks>
+    public bool LosesQueuedStepsOnRestart => true;
+
+    /// <inheritdoc/>
     public async ValueTask<string?> EnqueueStepAsync(
         IExecutionContext context,
         IFlowDefinition flow,
@@ -87,8 +96,9 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
         // and that ct is cancelled the moment the HTTP response flushes — passing it to the
         // background Task.Delay would silently kill the schedule (observed in v1.26.1 as
         // WaitForSignal never resuming on the InMemory runtime). Host shutdown still tears
-        // down the channel, which makes WriteAsync throw — that path is caught below and
-        // FlowRunRecoveryHostedService re-enqueues on next startup.
+        // down the channel, which makes WriteAsync throw — that path is caught below. The step's
+        // dispatch-ledger row survives in a durable store, and because LosesQueuedStepsOnRestart is
+        // true, FlowRunRecoveryHostedService re-enqueues it on the next startup.
         //
         // Only a slim copy of the context and step is held for the delay (#189). A parked
         // WaitForSignal waits up to its safety-net interval — 24 hours by default — and holding the
@@ -120,7 +130,8 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
         }
         catch (ChannelClosedException)
         {
-            // Host is stopping; recovery hosted service will re-enqueue on next startup.
+            // Host is stopping. Recovery re-enqueues the ledgered step on the next startup
+            // (LosesQueuedStepsOnRestart is true), provided the run store outlives the process.
         }
     }
 
