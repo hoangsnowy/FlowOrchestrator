@@ -38,11 +38,16 @@ internal sealed class LoopBarrierEngineHarness
     /// </param>
     /// <param name="runControlOptions">Run-control options; defaults to no run timeout.</param>
     /// <param name="eventNotifier">Optional lifecycle-event sink, for exactly-once completion assertions.</param>
+    /// <param name="runtimeStore">
+    /// Optional decorator over <see cref="Store"/> handed to the engine as its runtime store, so a test can
+    /// gate one read and force an interleaving. Defaults to <see cref="Store"/> itself.
+    /// </param>
     public LoopBarrierEngineHarness(
         IFlowDefinition flow,
         Func<string, IStepResult> resultForStep,
         FlowRunControlOptions? runControlOptions = null,
-        IFlowEventNotifier? eventNotifier = null)
+        IFlowEventNotifier? eventNotifier = null,
+        Func<InMemoryFlowRunStore, IFlowRunRuntimeStore>? runtimeStore = null)
     {
         _flow = flow;
         Store = new InMemoryFlowRunStore();
@@ -87,7 +92,7 @@ internal sealed class LoopBarrierEngineHarness
             new InMemoryOutputsRepository(),
             Substitute.For<IExecutionContextAccessor>(),
             flowRepo,
-            [Store],
+            [runtimeStore?.Invoke(Store) ?? Store],
             [Store],
             runControlOptions ?? new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableOpenTelemetry = false },

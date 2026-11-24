@@ -143,6 +143,42 @@ public sealed class PostgreSqlFlowRunStore :
         await tx.CommitAsync();
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+
+        // One statement, so one transaction. The first UPDATE's predicate is the compare-and-swap: a
+        // concurrent caller blocks on the row lock, then re-checks the committed row (no longer Running)
+        // and updates nothing; the attempt row is only touched when the step row was.
+        var won = await conn.ExecuteScalarAsync<long>(
+            """
+            WITH won AS (
+                UPDATE flow_steps
+                SET status = @Status, output_json = @OutputJson, error_message = @ErrorMessage, completed_at = NOW()
+                WHERE run_id = @RunId AND step_key = @StepKey AND status = 'Running'
+                RETURNING 1
+            ),
+            latest_attempt AS (
+                UPDATE flow_step_attempts fsa
+                SET status = @Status, output_json = @OutputJson, error_message = @ErrorMessage, completed_at = NOW()
+                FROM (
+                    SELECT attempt_no
+                    FROM flow_step_attempts
+                    WHERE run_id = @RunId AND step_key = @StepKey
+                    ORDER BY attempt_no DESC
+                    LIMIT 1
+                ) AS latest
+                WHERE fsa.run_id = @RunId AND fsa.step_key = @StepKey AND fsa.attempt_no = latest.attempt_no
+                  AND EXISTS (SELECT 1 FROM won)
+            )
+            SELECT COUNT(*) FROM won
+            """,
+            new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage });
+
+        return won > 0;
+    }
+
     public async Task CompleteRunAsync(Guid runId, string status)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

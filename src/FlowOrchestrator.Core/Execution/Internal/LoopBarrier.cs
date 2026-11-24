@@ -24,11 +24,12 @@ namespace FlowOrchestrator.Core.Execution.Internal;
 /// another worker while the fan-out loop is still enqueuing iteration 1.
 /// </para>
 /// <para>
-/// Settling is idempotent rather than exclusive: two workers completing the last two children
-/// concurrently can both observe "all terminal" and both write the same
-/// <see cref="StepStatus.Succeeded"/> row. The write is an UPDATE, and the downstream dispatch
-/// it unblocks is guarded by the dispatch ledger, so the duplicate is harmless. A ledger-based
-/// latch was rejected because a synthetic key never gets a status row and would make
+/// Settling is exclusive: two workers completing the last two children concurrently can both
+/// observe "all terminal", but the settle write is a compare-and-swap
+/// (<see cref="IFlowRunStore.TryCompleteRunningStepAsync"/>, <c>Running → Succeeded</c>), so only
+/// one of them reports the loop as settled and publishes its <c>StepCompletedEvent</c>. Before
+/// 2.0 the write was unconditional and both workers published the event. A ledger-based latch was
+/// rejected because a synthetic key never gets a status row and would make
 /// <c>HasInFlightWorkAsync</c> consider the run permanently in flight.
 /// </para>
 /// </remarks>
@@ -153,7 +154,10 @@ internal static class LoopBarrier
     /// <param name="statuses">Status map as read before this pass; not mutated.</param>
     /// <param name="outputs">Repository the iteration count is read from.</param>
     /// <param name="runStore">Store the settled status is written to.</param>
-    /// <returns>The loop keys that were settled by this call, in the order they settled.</returns>
+    /// <returns>
+    /// The loop keys this call settled, in the order they settled. A loop another caller settled first
+    /// (its compare-and-swap won) is not included, so the caller publishes each loop's completion once.
+    /// </returns>
     public static async Task<IReadOnlyList<string>> SettleAsync(
         IFlowDefinition flow,
         Guid runId,
@@ -196,16 +200,29 @@ internal static class LoopBarrier
                 continue;
             }
 
-            await runStore.RecordStepCompleteAsync(
+            // Compare-and-swap, O(1) per settled loop (one conditional write in place of the old
+            // unconditional one, so no extra round trip per step completion). Two workers that
+            // complete the last two children of a loop concurrently both reach this line; only the
+            // one whose write moves the row out of Running reports the loop as settled, so the loop's
+            // StepCompletedEvent and its graph continuation happen once.
+            var won = await runStore.TryCompleteRunningStepAsync(
                 runId,
                 loopKey,
                 StepStatus.Succeeded.ToString(),
                 JsonSerializer.Serialize(new { iterations }, _webOptions),
                 null).ConfigureAwait(false);
 
+            // Either way the loop is terminal now: a lost swap means another writer already moved it
+            // out of Running (a concurrent settle, or a run-control abandon), and every such writer
+            // writes a terminal status. Recording it in the local view keeps the outer-loop check
+            // below correct for the loser too — the loser may hold a fresher view of the outer
+            // loop's other iterations than the winner did, and its outer settle is itself a swap.
             working ??= new Dictionary<string, StepStatus>(statuses, StringComparer.Ordinal);
             working[loopKey] = StepStatus.Succeeded;
-            (settled ??= []).Add(loopKey);
+            if (won)
+            {
+                (settled ??= []).Add(loopKey);
+            }
         }
 
         return settled is null ? [] : settled;

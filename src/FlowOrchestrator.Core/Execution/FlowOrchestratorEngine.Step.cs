@@ -675,7 +675,9 @@ public sealed partial class FlowOrchestratorEngine
 
             try
             {
-                await _runStore.RecordStepCompleteAsync(
+                // Conditional on Running, like the barrier settle: a loop a concurrent continuation
+                // settled a moment ago keeps its Succeeded row instead of being overwritten.
+                await _runStore.TryCompleteRunningStepAsync(
                     ctx.RunId,
                     loopKey,
                     StepStatus.Skipped.ToString(),

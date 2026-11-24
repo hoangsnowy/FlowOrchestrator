@@ -116,6 +116,12 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   recovery dispatch that threw after recording the row left it behind, so the next recovery skipped the
   step and it never ran.
 - Dashboard-persisted cron overrides are stripped of line breaks before they are logged by the cron sync.
+- **A `ForEach` loop step that two workers finish at the same moment completes once.** When the last two
+  iterations completed concurrently, both continuations saw "all iterations terminal", both wrote the loop
+  step `Succeeded`, and both published its `StepCompletedEvent` (RFC 2.0 P-1(a)). The settle is now a
+  compare-and-swap on `Running`; only the winner publishes and continues the graph. A run-control abandon
+  (`Skipped "Run is Cancelled."`) is conditional the same way, so it no longer overwrites a loop that just
+  settled. **Custom stores:** new `IFlowRunStore.TryCompleteRunningStepAsync` (no default implementation).
 
 ### Security
 

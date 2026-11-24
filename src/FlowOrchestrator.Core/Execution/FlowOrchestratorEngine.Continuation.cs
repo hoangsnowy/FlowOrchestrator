@@ -327,6 +327,8 @@ public sealed partial class FlowOrchestratorEngine
             .SettleAsync(flow, ctx.RunId, candidates, statuses, _outputsRepository, _runStore)
             .ConfigureAwait(false);
 
+        // `settled` holds only the loops whose Running → Succeeded swap THIS call won, so a loop that
+        // two continuations decide at once publishes one event, not two. O(settled loops), no reads.
         foreach (var loopKey in settled)
         {
             await PublishEventSafelyAsync(new StepCompletedEvent

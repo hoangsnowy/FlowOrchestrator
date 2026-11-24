@@ -196,6 +196,65 @@ public sealed class SqlFlowRunStore :
             COMMIT TRANSACTION;
             """;
 
+    /// <inheritdoc/>
+    public async Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+
+        // One round trip, one transaction. The UPDATE's predicate is the compare-and-swap: a second
+        // caller blocks on the first one's row lock and then re-reads a row that is no longer Running.
+        // The token write, when on, runs after the commit and only for the winner.
+        var tokens = _tokenIndex?.TokenizeStep(stepKey, errorMessage, outputJson);
+        var won = tokens is not null
+            ? await conn.ExecuteScalarAsync<int>(TryCompleteRunningStepSql + """
+
+                DECLARE @SearchStartedAt DATETIMEOFFSET = CASE WHEN @Won > 0 THEN (SELECT StartedAt FROM FlowRuns WHERE Id = @RunId) END;
+                DECLARE @SearchRunId UNIQUEIDENTIFIER = @RunId;
+                """ + SqlServerRunSearchTokenIndex.InsertTokensSql + """
+
+                SELECT @Won;
+                """,
+                new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage, SearchTokens = tokens })
+            : await conn.ExecuteScalarAsync<int>(TryCompleteRunningStepSql + "SELECT @Won;",
+                new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage });
+
+        if (won > 0 && _externalIndex is { } index)
+        {
+            var document = new StepSearchDocument(runId, stepKey, status, errorMessage, outputJson);
+            await IndexBestEffortAsync(() => index.IndexStepAsync(document, CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        return won > 0;
+    }
+
+    private const string TryCompleteRunningStepSql = """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
+            UPDATE FlowSteps
+            SET Status = @Status, OutputJson = @OutputJson, ErrorMessage = @ErrorMessage, CompletedAt = SYSDATETIMEOFFSET()
+            WHERE RunId = @RunId AND StepKey = @StepKey AND Status = 'Running';
+
+            DECLARE @Won INT = @@ROWCOUNT;
+
+            IF @Won > 0
+                UPDATE attempts
+                SET Status = @Status, OutputJson = @OutputJson, ErrorMessage = @ErrorMessage, CompletedAt = SYSDATETIMEOFFSET()
+                FROM FlowStepAttempts AS attempts
+                INNER JOIN (
+                    SELECT TOP (1) RunId, StepKey, AttemptNo
+                    FROM FlowStepAttempts
+                    WHERE RunId = @RunId AND StepKey = @StepKey
+                    ORDER BY AttemptNo DESC
+                ) AS latest
+                    ON latest.RunId = attempts.RunId
+                   AND latest.StepKey = attempts.StepKey
+                   AND latest.AttemptNo = attempts.AttemptNo;
+
+            COMMIT TRANSACTION;
+
+            """;
+
     public async Task CompleteRunAsync(Guid runId, string status)
     {
         await using var conn = new SqlConnection(_connectionString);

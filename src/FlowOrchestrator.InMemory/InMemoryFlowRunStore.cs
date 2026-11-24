@@ -162,6 +162,42 @@ public sealed class InMemoryFlowRunStore :
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc/>
+    public Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
+    {
+        if (!_steps.TryGetValue((runId, stepKey), out var step))
+        {
+            return FalseTask;
+        }
+
+        // The record lock serialises every conditional transition of this step (this method and
+        // RetryStepAsync), so two concurrent settles can never both observe Running.
+        lock (step)
+        {
+            if (!string.Equals(step.Status, "Running", StringComparison.Ordinal))
+            {
+                return FalseTask;
+            }
+
+            var completedAt = DateTimeOffset.UtcNow;
+            step.Status = status;
+            step.OutputJson = outputJson;
+            step.ErrorMessage = errorMessage;
+            step.CompletedAt = completedAt;
+
+            if (_stepAttemptCounters.TryGetValue((runId, stepKey), out var latestAttemptNum)
+                && _stepAttempts.TryGetValue((runId, stepKey, latestAttemptNum), out var latestAttempt))
+            {
+                latestAttempt.Status = status;
+                latestAttempt.OutputJson = outputJson;
+                latestAttempt.ErrorMessage = errorMessage;
+                latestAttempt.CompletedAt = completedAt;
+            }
+
+            return TrueTask;
+        }
+    }
+
     public Task CompleteRunAsync(Guid runId, string status)
     {
         if (_runs.TryGetValue(runId, out var run))

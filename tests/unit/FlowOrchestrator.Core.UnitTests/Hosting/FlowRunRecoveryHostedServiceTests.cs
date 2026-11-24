@@ -276,6 +276,8 @@ public class FlowRunRecoveryHostedServiceTests
                 JsonSerializer.SerializeToElement(new { iterations = 2 }, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
         _runStore.GetDispatchedStepKeysAsync(runId)
             .Returns(Task.FromResult(EmptyDispatched()));
+        _runStore.TryCompleteRunningStepAsync(runId, "loop", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(true));
         _runStore.TryRecordDispatchAsync(runId, "after", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
 
@@ -283,7 +285,7 @@ public class FlowRunRecoveryHostedServiceTests
         await CreateSut().StartAsync(default);
 
         // Assert
-        await _runStore.Received(1).RecordStepCompleteAsync(
+        await _runStore.Received(1).TryCompleteRunningStepAsync(
             runId, "loop", nameof(StepStatus.Succeeded), """{"iterations":2}""", null);
         await _dispatcher.Received(1).EnqueueStepAsync(
             Arg.Is<IExecutionContext>(c => c!.RunId == runId),

@@ -90,7 +90,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
 
         // Assert - settling here would let "after" run while an iteration is still outstanding,
         // which is exactly the ordering bug the barrier exists to prevent.
-        await _runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(default, default!, default!, default, default);
+        await _runStore.DidNotReceiveWithAnyArgs().TryCompleteRunningStepAsync(default, default!, default!, default, default);
         await _dispatcher.DidNotReceiveWithAnyArgs().EnqueueStepAsync(default!, default!, default!, default);
         await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
     }
@@ -119,7 +119,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
             Arg.Any<IFlowDefinition>(),
             Arg.Is<IStepInstance>(s => s.Key == "loop.0.child"),
             Arg.Any<CancellationToken>());
-        await _runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(default, default!, default!, default, default);
+        await _runStore.DidNotReceiveWithAnyArgs().TryCompleteRunningStepAsync(default, default!, default!, default, default);
         await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
     }
 
@@ -144,7 +144,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
 
         // Assert
         await _dispatcher.DidNotReceiveWithAnyArgs().EnqueueStepAsync(default!, default!, default!, default);
-        await _runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(default, default!, default!, default, default);
+        await _runStore.DidNotReceiveWithAnyArgs().TryCompleteRunningStepAsync(default, default!, default!, default, default);
         await _runStore.DidNotReceiveWithAnyArgs().CompleteRunAsync(default, default!);
     }
 
@@ -201,6 +201,8 @@ public sealed class FlowRunRecoveryLoopBarrierTests
             JsonSerializer.SerializeToElement(new { iterations = 2 }, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
         _runStore.GetDispatchedStepKeysAsync(runId)
             .Returns(Task.FromResult<IReadOnlySet<string>>(new HashSet<string>(StringComparer.Ordinal)));
+        _runStore.TryCompleteRunningStepAsync(runId, "loop", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(true));
         _runStore.TryRecordDispatchAsync(runId, "after", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
 
@@ -208,7 +210,7 @@ public sealed class FlowRunRecoveryLoopBarrierTests
         await CreateSut().StartAsync(default);
 
         // Assert
-        await _runStore.Received(1).RecordStepCompleteAsync(
+        await _runStore.Received(1).TryCompleteRunningStepAsync(
             runId, "loop", nameof(StepStatus.Succeeded), """{"iterations":2}""", null);
         await _dispatcher.Received(1).EnqueueStepAsync(
             Arg.Is<IExecutionContext>(c => c!.RunId == runId),

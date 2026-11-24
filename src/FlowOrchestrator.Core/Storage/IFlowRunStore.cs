@@ -39,6 +39,30 @@ public interface IFlowRunStore
     Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage);
 
     /// <summary>
+    /// Records the outcome of a step exactly like <see cref="RecordStepCompleteAsync"/>, but only when the
+    /// step is still <see cref="StepStatus.Running"/>, and reports whether this call made the transition.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The runtime step key, e.g. <c>"outer.1.inner"</c>.</param>
+    /// <param name="status">The terminal status to set.</param>
+    /// <param name="outputJson">The step output, or <see langword="null"/>.</param>
+    /// <param name="errorMessage">The failure or skip reason, or <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when this call moved a <c>Running</c> step to <paramref name="status"/>;
+    /// <see langword="false"/> when the step was no longer <c>Running</c> (another writer won, or it has no row).
+    /// </returns>
+    /// <remarks>
+    /// The engine settles a <c>ForEach</c> loop step through this method. A loop step is the only step whose
+    /// completion is decided outside its own handler, by whichever worker completes the loop's last
+    /// outstanding child, so two workers can decide it at the same moment. Only the caller that wins the
+    /// transition publishes the loop's <c>StepCompletedEvent</c> and continues the graph from it. The check
+    /// and the write must be one atomic step (a conditional <c>UPDATE</c> and its row count, or a lock).
+    /// There is deliberately no default implementation: an unconditional fallback would bring the double
+    /// settle back without any compile-time signal.
+    /// </remarks>
+    Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage);
+
+    /// <summary>
     /// Marks the run as complete (status: <c>Succeeded</c>, <c>Failed</c>, or <c>Cancelled</c>)
     /// and sets <see cref="FlowRunRecord.CompletedAt"/>.
     /// </summary>
