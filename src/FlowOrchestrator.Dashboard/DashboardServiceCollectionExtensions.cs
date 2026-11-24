@@ -31,14 +31,6 @@ namespace FlowOrchestrator.Dashboard;
 /// </summary>
 public static class DashboardServiceCollectionExtensions
 {
-    // Headers excluded from trigger capture: sensitive auth/session headers and low-level transport headers
-    private static readonly HashSet<string> _sensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Authorization", "Cookie", "Set-Cookie",
-        "X-Webhook-Key", "Proxy-Authorization",
-        "Connection", "Transfer-Encoding", "Upgrade", "Content-Length"
-    };
-
     /// <summary>
     /// Registers core dashboard services with default options.
     /// </summary>
@@ -417,7 +409,7 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .Where(h => !TriggerHeaderPolicy.IsExcluded(h.Key))
                 .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             var ctx = new TriggerContext
@@ -544,7 +536,7 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .Where(h => !TriggerHeaderPolicy.IsExcluded(h.Key))
                 .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             // Run the webhook security pipeline (signature verification today;
