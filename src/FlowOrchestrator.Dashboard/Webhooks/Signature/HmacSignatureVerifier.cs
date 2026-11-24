@@ -90,9 +90,13 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
             return WebhookSignatureResult.Failure(buildFailure);
 
         // Compute expected digests for current key and (optionally) previous key.
-        var currentDigest = ComputeHmac(spec.Algorithm, context.HmacKey!, signedPayload);
+        if (!TryGetKeyBytes(context.HmacKey!, spec.KeyEncoding, out var currentKey))
+            return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.KeyNotConfigured);
+        var currentDigest = ComputeHmac(spec.Algorithm, currentKey, signedPayload);
+        // An undecodable previous key is treated as absent: the rotation window simply does not apply.
         var previousDigest = !string.IsNullOrEmpty(context.HmacKeyPrevious)
-            ? ComputeHmac(spec.Algorithm, context.HmacKeyPrevious!, signedPayload)
+            && TryGetKeyBytes(context.HmacKeyPrevious!, spec.KeyEncoding, out var previousKey)
+            ? ComputeHmac(spec.Algorithm, previousKey, signedPayload)
             : null;
 
         // Constant-time compare across every candidate × every key.
@@ -143,9 +147,12 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
             var candidate = sigEl.GetString()!;
 
             var signedPayload = SignedPayloadBuilder.TimestampPlusToken(timestamp, token);
-            var currentDigest = ComputeHmac(spec.Algorithm, context.HmacKey!, signedPayload);
+            if (!TryGetKeyBytes(context.HmacKey!, spec.KeyEncoding, out var currentKey))
+                return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.KeyNotConfigured);
+            var currentDigest = ComputeHmac(spec.Algorithm, currentKey, signedPayload);
             var previousDigest = !string.IsNullOrEmpty(context.HmacKeyPrevious)
-                ? ComputeHmac(spec.Algorithm, context.HmacKeyPrevious!, signedPayload)
+                && TryGetKeyBytes(context.HmacKeyPrevious!, spec.KeyEncoding, out var previousKey)
+                ? ComputeHmac(spec.Algorithm, previousKey, signedPayload)
                 : null;
 
             if (!TryDecode(candidate, spec.Encoding, out var candidateBytes))
@@ -338,9 +345,34 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
         }
     }
 
-    private static byte[] ComputeHmac(HmacAlgorithm algorithm, string key, byte[] payload)
+    /// <summary>
+    /// Turns the configured key string into HMAC key bytes per <paramref name="encoding"/>.
+    /// </summary>
+    /// <returns><see langword="false"/> when a <see cref="HmacKeyEncoding.Base64"/> key is not valid base64.</returns>
+    private static bool TryGetKeyBytes(string key, HmacKeyEncoding encoding, out byte[] keyBytes)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(key);
+        if (encoding != HmacKeyEncoding.Base64)
+        {
+            keyBytes = Encoding.UTF8.GetBytes(key);
+            return true;
+        }
+
+        // Microsoft Teams: the HMAC is keyed with the base64-DECODED security token (see the
+        // MicrosoftTeams entry in PartnerSchemeRegistry for the documentation reference).
+        try
+        {
+            keyBytes = Convert.FromBase64String(key.Trim());
+            return keyBytes.Length > 0;
+        }
+        catch (FormatException)
+        {
+            keyBytes = Array.Empty<byte>();
+            return false;
+        }
+    }
+
+    private static byte[] ComputeHmac(HmacAlgorithm algorithm, byte[] keyBytes, byte[] payload)
+    {
         return algorithm switch
         {
             HmacAlgorithm.Sha1 => HMACSHA1.HashData(keyBytes, payload),

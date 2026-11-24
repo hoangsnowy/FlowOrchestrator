@@ -184,6 +184,26 @@ otherwise be exact: an unrecognised name resolves to no spec and the signature
 gate is skipped silently, with no error. See `PartnerSchemeRegistry` for the
 exact spec each one resolves to.
 
+### Microsoft Teams (`Authorization: HMAC …`)
+
+Teams signs the raw body with HMAC-SHA256 and sends the base64 digest in the
+`Authorization` header. Paste the **security token Teams shows when you create
+the outgoing webhook** into `webhookHmacKey` exactly as shown: it is base64, and
+the verifier keys the HMAC with its decoded bytes, as
+[Microsoft documents](https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-outgoing-webhook).
+A key that is not valid base64 is rejected as `KeyNotConfigured`. The
+`Authorization` header is handed to the verifier only — it is still never
+captured as a trigger header or written to the delivery log.
+
+```csharp
+Inputs = new Dictionary<string, object?>
+{
+    ["webhookSlug"] = "teams-bot",
+    ["webhookHmacKey"] = "<security token from the Teams outgoing-webhook dialog>",
+    ["webhookSignatureScheme"] = "MicrosoftTeams",
+}
+```
+
 ### Mailgun (body-resident signature)
 
 Mailgun puts the signature triple (`timestamp`, `token`, `signature`) inside

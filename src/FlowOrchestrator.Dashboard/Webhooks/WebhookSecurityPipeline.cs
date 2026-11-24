@@ -195,7 +195,7 @@ public sealed class WebhookSecurityPipeline
             var sigCtx = new WebhookSignatureContext
             {
                 Body = bodyBytes,
-                Headers = headers,
+                Headers = WithSignatureHeader(http, headers, spec),
                 AbsoluteUrl = BuildAbsoluteUrl(http),
                 FormFields = null,
                 Spec = spec,
@@ -388,6 +388,30 @@ public sealed class WebhookSecurityPipeline
             ProcessingMs = processingMs,
             IsAccepted = isAccepted,
         };
+    }
+
+    /// <summary>
+    /// Returns the header map the signature verifier sees: <paramref name="headers"/> plus the spec's
+    /// signature header read straight from the request when the endpoint stripped it from the captured
+    /// headers (Microsoft Teams signs in <c>Authorization</c>, which is never captured).
+    /// </summary>
+    /// <remarks>
+    /// The re-added value reaches the verifier only — the trigger headers, the delivery log and the log
+    /// lines keep using <paramref name="headers"/>, so a credential header is still never persisted.
+    /// Allocates a copy only for the schemes that need it; every other request returns the same instance.
+    /// </remarks>
+    private static IReadOnlyDictionary<string, string> WithSignatureHeader(
+        HttpContext http,
+        IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec)
+    {
+        var name = spec?.HeaderName;
+        if (string.IsNullOrEmpty(name) || headers.ContainsKey(name))
+            return headers;
+        if (!http.Request.Headers.TryGetValue(name, out var raw) || Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(raw))
+            return headers;
+
+        return new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase) { [name] = raw.ToString() };
     }
 
     private static string? TryGetString(IReadOnlyDictionary<string, object?> map, string key) =>
