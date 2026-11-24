@@ -287,6 +287,37 @@ public sealed class FlowSignalResumeDispatchTests
             Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
     }
 
+    [Fact]
+    public async Task Resume_still_dispatches_when_the_request_aborts_while_the_delivery_write_is_in_flight()
+    {
+        // Arrange — models SqlClient: the delivery UPDATE commits, but a cancel that lands while the
+        // statement is in flight still surfaces as an exception. If the store received the request token,
+        // the waiter would be delivered while DispatchAsync threw before the resume nudge, stranding the
+        // parked step (every retry of the signal is then answered "already delivered").
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        runtimeStore.IsStepClaimedAsync(_runId, StepKey).Returns(Task.FromResult(false));
+        using var aborted = new CancellationTokenSource();
+        _signalStore.DeliverSignalAsync(_runId, SignalName, "{}", Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                aborted.Cancel(); // the client disconnects while the write is in flight; the row is committed
+                var token = call.Arg<CancellationToken>();
+                return token.IsCancellationRequested
+                    ? ValueTask.FromException<SignalDeliveryResult>(new OperationCanceledException(token))
+                    : new ValueTask<SignalDeliveryResult>(
+                        new SignalDeliveryResult(SignalDeliveryStatus.Delivered, StepKey, DateTimeOffset.UtcNow));
+            });
+        var dispatcher = CreateDispatcher(runtimeStore);
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => dispatcher.DispatchAsync(_runId, SignalName, "{}", aborted.Token).AsTask());
+
+        // Assert
+        Assert.Null(ex);
+        await _stepDispatcher.Received(1).EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
+    }
+
     /// <summary>Builds the subject under test with the shared substitutes and the supplied runtime store.</summary>
     private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore? runtimeStore) => new(
         _signalStore,
