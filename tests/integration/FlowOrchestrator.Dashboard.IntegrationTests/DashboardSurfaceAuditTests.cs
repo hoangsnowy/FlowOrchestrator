@@ -470,16 +470,9 @@ public sealed class DashboardSurfaceAuditTests
         using var content = new StringContent("{reason: oops", Encoding.UTF8, "application/json");
 
         // Act
-        HttpStatusCode status;
-        try
-        {
-            using var response = await server.Client.PostAsync($"/flows/api/runs/{runId}/cancel", content);
-            status = response.StatusCode;
-        }
-        catch (Exception)
-        {
-            status = HttpStatusCode.InternalServerError;
-        }
+        // An exception escaping the endpoint fails the test on this call, which is the intended failure.
+        using var response = await server.Client.PostAsync($"/flows/api/runs/{runId}/cancel", content);
+        var status = response.StatusCode;
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, status);
@@ -499,16 +492,9 @@ public sealed class DashboardSurfaceAuditTests
         using var server = new DashboardTestServer();
 
         // Act
-        HttpStatusCode status;
-        try
-        {
-            using var response = await server.Client.GetAsync("/flows/api/runs?search=order&to=0001-01-02T00:00:00Z&includeTotal=true");
-            status = response.StatusCode;
-        }
-        catch (Exception)
-        {
-            status = HttpStatusCode.InternalServerError;
-        }
+        // An exception escaping the endpoint fails the test on this call, which is the intended failure.
+        using var response = await server.Client.GetAsync("/flows/api/runs?search=order&to=0001-01-02T00:00:00Z&includeTotal=true");
+        var status = response.StatusCode;
 
         // Assert — 200 (empty page) or 400, never 500.
         Assert.NotEqual(HttpStatusCode.InternalServerError, status);
@@ -595,6 +581,10 @@ public sealed class DashboardSurfaceAuditTests
     /// stream that fails the way Kestrel does on a client disconnect, then records whether an exception
     /// escaped the endpoint pipeline.
     /// </summary>
+    /// <remarks>
+    /// An escaped exception is recorded and rethrown, so it still reaches the host exactly as it would
+    /// reach Kestrel; TestServer then surfaces it on the client call, which fails the test there.
+    /// </remarks>
     private sealed class EscapeProbe(string onlyPathContaining, AbortingBodyStream.Failure failure) : IStartupFilter
     {
         /// <summary>Completed with the escaped exception, or <see langword="null"/> when none escaped.</summary>
@@ -622,7 +612,7 @@ public sealed class DashboardSurfaceAuditTests
                 catch (Exception ex)
                 {
                     Completed.TrySetResult(ex);
-                    if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 599;
+                    throw;
                 }
             });
             next(app);

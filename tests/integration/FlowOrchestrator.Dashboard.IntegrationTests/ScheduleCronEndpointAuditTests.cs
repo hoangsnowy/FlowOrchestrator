@@ -32,16 +32,9 @@ public sealed class ScheduleCronEndpointAuditTests
         using var content = new StringContent("{\"cronExpression\":\"not a cron\"}", Encoding.UTF8, "application/json");
 
         // Act
-        HttpStatusCode status;
-        try
-        {
-            using var response = await server.Client.PutAsync($"/flows/api/schedules/{jobId}/cron", content);
-            status = response.StatusCode;
-        }
-        catch (Exception)
-        {
-            status = HttpStatusCode.InternalServerError; // TestServer may rethrow the unhandled exception
-        }
+        // An exception escaping the endpoint fails the test on this call, which is the intended failure.
+        using var response = await server.Client.PutAsync($"/flows/api/schedules/{jobId}/cron", content);
+        var status = response.StatusCode;
 
         // Assert — Expected: nothing saved and 400. Actual: the invalid override is persisted, then 500.
         await server.ScheduleStateStore.DidNotReceive().SaveAsync(Arg.Is<FlowScheduleState>(s => s.CronOverride == "not a cron"));
@@ -74,16 +67,9 @@ public sealed class ScheduleCronEndpointAuditTests
             .Do(_ => throw new ArgumentException("CRON expression is invalid."));
 
         // Act
-        HttpStatusCode status;
-        try
-        {
-            using var response = await server.Client.PostAsync($"/flows/api/schedules/{jobId}/resume", content: null);
-            status = response.StatusCode;
-        }
-        catch (Exception)
-        {
-            status = HttpStatusCode.InternalServerError;
-        }
+        // An exception escaping the endpoint fails the test on this call, which is the intended failure.
+        using var response = await server.Client.PostAsync($"/flows/api/schedules/{jobId}/resume", content: null);
+        var status = response.StatusCode;
 
         // Assert — resumed on the manifest cron; the bad override is cleared.
         Assert.Equal(HttpStatusCode.OK, status);
@@ -108,16 +94,9 @@ public sealed class ScheduleCronEndpointAuditTests
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         // Act
-        HttpStatusCode status;
-        try
-        {
-            using var response = await server.Client.PutAsync($"/flows/api/schedules/{jobId}/cron", content);
-            status = response.StatusCode;
-        }
-        catch (Exception)
-        {
-            status = HttpStatusCode.InternalServerError;
-        }
+        // An exception escaping the endpoint fails the test on this call, which is the intended failure.
+        using var response = await server.Client.PutAsync($"/flows/api/schedules/{jobId}/cron", content);
+        var status = response.StatusCode;
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, status);

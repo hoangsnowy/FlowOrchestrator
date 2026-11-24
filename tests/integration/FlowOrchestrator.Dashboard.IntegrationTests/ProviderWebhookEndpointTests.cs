@@ -877,7 +877,7 @@ public sealed partial class ProviderWebhookEndpointTests
             .UseEnforcementMode(WebhookEnforcementMode.Enforce).UseMaxBodyBytes(16 * 1024))));
         var p = Providers["GitHub"];
         Register(server, p);
-        var req = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{p.Slug}")
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{p.Slug}")
         {
             Content = new StreamContent(new MemoryStream(new byte[64 * 1024])),
         };
@@ -948,16 +948,16 @@ public sealed partial class ProviderWebhookEndpointTests
         Register(server, p);
         var req = Post($"/flows/api/webhook/{p.Slug}", new byte[64 * 1024], "application/json");
 
-        // Act — TestServer rethrows a server-side unhandled exception on the client call; swallow it here and
-        // let the probe report it.
+        // Act — TestServer rethrows a server-side unhandled exception on the client call; record it here so
+        // the probe's assertion (which names the escaped type) reports it first.
         HttpStatusCode? status = null;
-        try { (status, _) = await SendAsync(server, req); }
-        catch (Exception) { /* reported through probe.Escaped */ }
+        var clientError = await Record.ExceptionAsync(async () => (status, _) = await SendAsync(server, req));
         await probe.Completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Assert
         await server.FlowOrchestrator.DidNotReceive().TriggerAsync(Arg.Any<ITriggerContext>(), Arg.Any<CancellationToken>());
         Assert.True(probe.Escaped is null, $"endpoint let {probe.Escaped?.GetType().Name} escape: {probe.Escaped?.Message}");
+        Assert.Null(clientError);
         Assert.NotEqual(HttpStatusCode.InternalServerError, status);
     }
 
@@ -996,7 +996,7 @@ public sealed partial class ProviderWebhookEndpointTests
         Register(server, p);
         var content = new StallingContent();
         content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-        var req = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{p.Slug}") { Content = content };
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/flows/api/webhook/{p.Slug}") { Content = content };
         using var client = server.CreateClient();
         using var cts = new CancellationTokenSource();
 
