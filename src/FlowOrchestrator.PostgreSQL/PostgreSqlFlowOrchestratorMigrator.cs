@@ -18,10 +18,11 @@ namespace FlowOrchestrator.PostgreSQL;
 /// the next start. Without <c>pg_trgm</c> (not allow-listed on Azure Database for PostgreSQL, or no
 /// privilege) every trigram step is skipped with a warning and search runs the same SQL as a
 /// sequential scan.</para>
-/// <para><b>Re-running while a build is in flight.</b> Every <c>flow_runs</c> statement is guarded by a catalog
-/// check, so a migration on an up-to-date schema requests no lock on <c>flow_runs</c>. A second replica (or a
-/// restarted host) can therefore start while the index is still being built without stalling writers or
-/// deadlocking with the build.</para>
+/// <para><b>Starting beside running hosts.</b> Every index and column statement is guarded by a catalog check,
+/// so a migration on an up-to-date schema requests no lock on any table. A second replica (or a restarted
+/// host) can therefore start during a rolling deployment, or while the run-search index is still being built,
+/// without stalling writers or deadlocking with the build; and it leaves another host's in-flight build
+/// alone instead of dropping and rebuilding it.</para>
 /// <para>The <c>flow_steps.output_json</c> trigram index stays on by default: no measurable write cost at
 /// p50 and 200x faster deep search in the default window, at about half the size of the step table.</para>
 /// </remarks>
@@ -141,12 +142,30 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     /// <c>INVALID</c> leftover of an interrupted build. Each statement runs as its own command:
     /// <c>CONCURRENTLY</c> refuses to run inside a (multi-statement, implicit) transaction.
     /// </summary>
+    /// <remarks>
+    /// An index that another host is still building is <c>INVALID</c> too, exactly like a leftover. Treating
+    /// it as one dropped the other host's build once it finished and built the index a second time (twice
+    /// the work on a large table, no index in between), so a build in flight on another backend is detected
+    /// through <c>pg_stat_progress_create_index</c> and left alone. That view shows the relation of another
+    /// role's session only to members of <c>pg_read_all_stats</c>; hosts that connect as different roles
+    /// without it fall back to drop-and-rebuild, which is still correct.
+    /// </remarks>
     private async Task BuildRunSearchIndexInBackgroundAsync(CancellationToken cancellationToken)
     {
         try
         {
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            await using (var inFlight = conn.CreateCommand())
+            {
+                inFlight.CommandText = RunSearchIndexBuildInFlightSql;
+                if (await inFlight.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
+                {
+                    LogRunSearchIndexBuildInFlightElsewhere();
+                    return;
+                }
+            }
 
             bool? valid;
             await using (var probe = conn.CreateCommand())
@@ -204,6 +223,20 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
         WHERE c.relname = 'ix_flow_runs_run_search_trgm' AND c.relnamespace = to_regnamespace(current_schema())
         """;
 
+    /// <summary>
+    /// <see langword="true"/> while another backend runs <c>CREATE INDEX CONCURRENTLY</c> for the run-search
+    /// index; <c>index_relid = 0</c> covers the instant before that build has created its catalog entry.
+    /// </summary>
+    internal const string RunSearchIndexBuildInFlightSql = """
+        SELECT EXISTS (
+            SELECT 1 FROM pg_stat_progress_create_index AS p
+            WHERE p.datid = (SELECT oid FROM pg_database WHERE datname = current_database())
+              AND p.pid <> pg_backend_pid()
+              AND p.command = 'CREATE INDEX CONCURRENTLY'
+              AND p.relid = to_regclass('flow_runs')
+              AND (p.index_relid = 0 OR p.index_relid = to_regclass('ix_flow_runs_run_search_trgm')))
+        """;
+
     /// <summary>The run-search expression index; the expression must stay identical to the query's.</summary>
     internal static readonly string CreateRunSearchIndexSql =
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_runs_run_search_trgm ON flow_runs USING gin (("
@@ -218,10 +251,15 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     [LoggerMessage(EventId = 7213, Level = LogLevel.Warning, Message = "Run-search trigram index build failed; quick search keeps working as a scan and the next start retries.")]
     private partial void LogRunSearchIndexFailed(Exception exception);
 
+    [LoggerMessage(EventId = 7215, Level = LogLevel.Information, Message = "Another host is building the run-search trigram index; this host leaves the build to it.")]
+    private partial void LogRunSearchIndexBuildInFlightElsewhere();
+
     [LoggerMessage(EventId = 7214, Level = LogLevel.Warning, Message = "UseRunSearchIndex() is not implemented on PostgreSQL and is ignored: deep search uses the pg_trgm indexes on flow_steps.")]
     private partial void LogTokenIndexNotSupported();
 
-    private const string MigrationSql = """
+    // Every CREATE INDEX / ADD COLUMN below goes through EnsureIndex / EnsureColumn: see EnsureIndex for why a
+    // plain IF NOT EXISTS is not enough. CREATE TABLE IF NOT EXISTS takes no lock on an existing table.
+    private static readonly string MigrationSql = $"""
         CREATE TABLE IF NOT EXISTS flow_definitions (
             id            UUID         NOT NULL PRIMARY KEY,
             name          VARCHAR(256) NOT NULL,
@@ -309,7 +347,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (flow_id, trigger_key, idempotency_key)
         );
 
-        CREATE INDEX IF NOT EXISTS ix_flow_idempotency_keys_run_id ON flow_idempotency_keys (run_id);
+        {EnsureIndex("flow_idempotency_keys", "ix_flow_idempotency_keys_run_id", "(run_id)")}
 
         CREATE TABLE IF NOT EXISTS flow_step_dispatches (
             run_id          UUID         NOT NULL,
@@ -330,8 +368,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (run_id, step_key)
         );
 
-        CREATE INDEX IF NOT EXISTS ix_flow_signal_waiters_run_id_signal_name
-            ON flow_signal_waiters (run_id, signal_name);
+        {EnsureIndex("flow_signal_waiters", "ix_flow_signal_waiters_run_id_signal_name", "(run_id, signal_name)")}
 
         CREATE TABLE IF NOT EXISTS flow_schedule_states (
             job_id         VARCHAR(256) NOT NULL PRIMARY KEY,
@@ -343,59 +380,26 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             updated_at_utc TIMESTAMPTZ  NOT NULL DEFAULT NOW()
         );
 
-        -- flow_runs DDL is guarded by a catalog check, not by IF NOT EXISTS alone: PostgreSQL takes the
-        -- table lock (SHARE for CREATE INDEX, ACCESS EXCLUSIVE for ALTER TABLE) BEFORE it looks for the
-        -- name, so even a no-op request queues behind the SHARE UPDATE EXCLUSIVE lock that a run-search
-        -- index build (CREATE INDEX CONCURRENTLY, this host's or another replica's) holds for its whole
-        -- duration. That wait stalls every flow_runs writer queued behind it, and the build then waits
-        -- for this transaction's snapshot: 40P01 deadlock, aborting either this migration (host start-up
-        -- fails) or the build. A build that outlasts the command timeout fails start-up even without the
-        -- deadlock. The catalog reads take no lock on flow_runs.
-        DO $$
-        DECLARE
-            runs_ns oid := (SELECT relnamespace FROM pg_class WHERE oid = 'flow_runs'::regclass);
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_flow_id' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id ON flow_runs (flow_id);
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_status' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_status ON flow_runs (status);
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_started_at' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_started_at ON flow_runs (started_at DESC);
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_flow_id_status_started_at' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id_status_started_at ON flow_runs (flow_id, status, started_at DESC);
-            END IF;
-        END
-        $$;
+        {EnsureIndex("flow_runs", "ix_flow_runs_flow_id", "(flow_id)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_status", "(status)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_started_at", "(started_at DESC)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_flow_id_status_started_at", "(flow_id, status, started_at DESC)")}
         -- INCLUDE mirrors the SQL Server definitions. GetStepStatusesAsync is the engine's single
         -- most frequent query — issued on every step completion and returning every step row in the
         -- run — and without the payload columns in the index Postgres must fetch each row from the
         -- heap. With them the scan is index-only. Postgres has supported INCLUDE since 11.
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_run_id_started_at ON flow_steps (run_id, started_at)
-            INCLUDE (step_key, step_type, status, job_id, completed_at);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_run_id ON flow_steps (step_key, run_id);
-        CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_started_at ON flow_step_attempts (run_id, started_at);
-        CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_step_key_attempt_no ON flow_step_attempts (run_id, step_key, attempt_no);
+        {EnsureIndex("flow_steps", "ix_flow_steps_run_id_started_at", "(run_id, started_at) INCLUDE (step_key, step_type, status, job_id, completed_at)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_step_key_run_id", "(step_key, run_id)")}
+        {EnsureIndex("flow_step_attempts", "ix_flow_step_attempts_run_id_started_at", "(run_id, started_at)")}
+        {EnsureIndex("flow_step_attempts", "ix_flow_step_attempts_run_id_step_key_attempt_no", "(run_id, step_key, attempt_no)")}
 
-        -- Re-run lineage column, guarded like the flow_runs indexes above.
-        DO $$
-        DECLARE
-            runs_ns oid := (SELECT relnamespace FROM pg_class WHERE oid = 'flow_runs'::regclass);
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'flow_runs'::regclass AND attname = 'source_run_id' AND NOT attisdropped) THEN
-                ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_source_run_id' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
-            END IF;
-        END
-        $$;
+        -- Re-run lineage column.
+        {EnsureColumn("flow_runs", "source_run_id", "UUID NULL")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_source_run_id", "(source_run_id) WHERE source_run_id IS NOT NULL")}
 
         -- When-clause evaluation trace columns (idempotent), parity with the SQL Server backend.
-        ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
-        ALTER TABLE flow_step_attempts ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
+        {EnsureColumn("flow_steps", "evaluation_trace_json", "TEXT NULL")}
+        {EnsureColumn("flow_step_attempts", "evaluation_trace_json", "TEXT NULL")}
 
         -- Webhook hardening tables (v1.25).
         CREATE TABLE IF NOT EXISTS webhook_replay_nonces (
@@ -405,10 +409,10 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             expires_at  TIMESTAMPTZ  NOT NULL,
             PRIMARY KEY (flow_id, trigger_key, nonce)
         );
-        CREATE INDEX IF NOT EXISTS ix_webhook_replay_nonces_expires_at ON webhook_replay_nonces (expires_at);
+        {EnsureIndex("webhook_replay_nonces", "ix_webhook_replay_nonces_expires_at", "(expires_at)")}
         -- Owner token of a replay entry: only the request that recorded it can release it again
         -- (TryForgetAsync). NULL on rows written before the column existed, which never match a release.
-        ALTER TABLE webhook_replay_nonces ADD COLUMN IF NOT EXISTS registration_id UUID NULL;
+        {EnsureColumn("webhook_replay_nonces", "registration_id", "UUID NULL")}
 
         CREATE TABLE IF NOT EXISTS webhook_rejections (
             id              BIGSERIAL    PRIMARY KEY,
@@ -425,32 +429,65 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             processing_ms   DOUBLE PRECISION NULL,
             is_accepted     BOOLEAN      NOT NULL DEFAULT FALSE
         );
-        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_flow_received ON webhook_rejections (flow_id, received_at DESC);
-        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_reason ON webhook_rejections (reason);
-        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_received_at ON webhook_rejections (received_at DESC);
+        {EnsureIndex("webhook_rejections", "ix_webhook_rejections_flow_received", "(flow_id, received_at DESC)")}
+        {EnsureIndex("webhook_rejections", "ix_webhook_rejections_reason", "(reason)")}
+        {EnsureIndex("webhook_rejections", "ix_webhook_rejections_received_at", "(received_at DESC)")}
         """;
 
     // Trigram (pg_trgm) GIN indexes for substring run-search acceleration. Run separately
     // from MigrationSql via TryCreateTrigramIndexesAsync because CREATE EXTENSION may be denied
     // on locked-down roles; a failure must not abort the mandatory schema migration.
-    private const string TrigramSql = """
+    private static readonly string TrigramSql = $"""
         CREATE EXTENSION IF NOT EXISTS pg_trgm;
-        -- Guarded for the same reason as the flow_runs indexes in MigrationSql: a plain IF NOT EXISTS
-        -- would wait on (and deadlock with) a concurrent run-search index build.
+        {EnsureIndex("flow_runs", "ix_flow_runs_flow_name_trgm", "USING gin (flow_name gin_trgm_ops)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_trigger_key_trgm", "USING gin (trigger_key gin_trgm_ops)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_step_key_trgm", "USING gin (step_key gin_trgm_ops)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_error_message_trgm", "USING gin (error_message gin_trgm_ops)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_output_json_trgm", "USING gin (output_json gin_trgm_ops)")}
+        """;
+
+    /// <summary>
+    /// A <c>DO</c> block that creates <paramref name="index"/> on <paramref name="table"/> only when no relation
+    /// of that name exists in the table's schema.
+    /// </summary>
+    /// <remarks>
+    /// <c>CREATE INDEX IF NOT EXISTS</c> alone is not a no-op: PostgreSQL takes SHARE on the table BEFORE it
+    /// looks for the name (<c>ALTER TABLE ... ADD COLUMN IF NOT EXISTS</c> takes ACCESS EXCLUSIVE). On a running
+    /// cluster that request queues behind any in-flight write, autovacuum or <c>CREATE INDEX CONCURRENTLY</c>,
+    /// and every later write to the table queues behind it. Against the run-search index build it also
+    /// deadlocks (40P01): the build waits for this transaction's snapshot. The catalog reads here take no lock
+    /// on the table, so a start on an up-to-date schema requests none. <c>IF NOT EXISTS</c> stays inside for two
+    /// hosts creating the same index on first boot.
+    /// </remarks>
+    /// <param name="table">Table name, resolved through <c>search_path</c> like the DDL itself.</param>
+    /// <param name="index">Index name.</param>
+    /// <param name="definition">Everything after <c>ON table</c>: method, columns, <c>INCLUDE</c>, predicate.</param>
+    private static string EnsureIndex(string table, string index, string definition) => $"""
         DO $$
-        DECLARE
-            runs_ns oid := (SELECT relnamespace FROM pg_class WHERE oid = 'flow_runs'::regclass);
         BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_flow_name_trgm' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_name_trgm ON flow_runs USING gin (flow_name gin_trgm_ops);
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ix_flow_runs_trigger_key_trgm' AND relnamespace = runs_ns) THEN
-                CREATE INDEX IF NOT EXISTS ix_flow_runs_trigger_key_trgm ON flow_runs USING gin (trigger_key gin_trgm_ops);
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '{index}'
+                           AND relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = '{table}'::regclass)) THEN
+                CREATE INDEX IF NOT EXISTS {index} ON {table} {definition};
             END IF;
         END
         $$;
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_trgm      ON flow_steps USING gin (step_key gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_error_message_trgm ON flow_steps USING gin (error_message gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_output_json_trgm   ON flow_steps USING gin (output_json gin_trgm_ops);
+        """;
+
+    /// <summary>
+    /// A <c>DO</c> block that adds <paramref name="column"/> to <paramref name="table"/> only when the column is
+    /// missing; see <see cref="EnsureIndex"/> for why the check is not left to <c>IF NOT EXISTS</c>.
+    /// </summary>
+    /// <param name="table">Table name, resolved through <c>search_path</c> like the DDL itself.</param>
+    /// <param name="column">Column name.</param>
+    /// <param name="type">Column type and nullability, e.g. <c>UUID NULL</c>.</param>
+    private static string EnsureColumn(string table, string column, string type) => $"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                           WHERE attrelid = '{table}'::regclass AND attname = '{column}' AND NOT attisdropped) THEN
+                ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {type};
+            END IF;
+        END
+        $$;
         """;
 }

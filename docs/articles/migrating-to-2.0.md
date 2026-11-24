@@ -654,7 +654,9 @@ ALTER TABLE [FlowRuns] DROP COLUMN [RunSearchText], [IdText];`
 
 No column is added and `flow_runs` is not rewritten: the index is an expression index, built with
 `CREATE INDEX CONCURRENTLY` in the background after startup (log events 7211 / 7212; 7213 on failure,
-retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt.
+retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt; one
+that another host is still building is left to it (7215). Hosts started during the build, as in a rolling
+deployment, neither wait for it nor block writers.
 Until it exists, quick search runs the same SQL as a sequential scan.
 
 Like the trigram indexes 1.x already created, it needs the `pg_trgm` extension. On **Azure Database for
