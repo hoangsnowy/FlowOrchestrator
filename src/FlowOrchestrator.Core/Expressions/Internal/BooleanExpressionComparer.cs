@@ -114,14 +114,31 @@ internal static class BooleanExpressionComparer
         {
             var lf = left is decimal ldd ? (double)ldd : (double)left;
             var rf = right is decimal rdd ? (double)rdd : (double)right;
+
+            // Exact comparison is the intended semantics here (both sides are already the nearest
+            // double), so the result goes through CompareTo rather than ==/!= on doubles. CompareTo
+            // orders NaN below everything and equal to itself, which differs from IEEE operators, so
+            // NaN (only reachable from a CLR float/double output, never from JSON) is handled first
+            // to keep IEEE results: unequal to everything, unordered.
+            if (double.IsNaN(lf) || double.IsNaN(rf))
+            {
+                return op switch
+                {
+                    TokenKind.Neq => true,
+                    TokenKind.Eq or TokenKind.Gt or TokenKind.Lt or TokenKind.Gte or TokenKind.Lte => false,
+                    _ => throw Unreachable(op, source)
+                };
+            }
+
+            var dcmp = lf.CompareTo(rf);
             return op switch
             {
-                TokenKind.Eq => lf == rf,
-                TokenKind.Neq => lf != rf,
-                TokenKind.Gt => lf > rf,
-                TokenKind.Lt => lf < rf,
-                TokenKind.Gte => lf >= rf,
-                TokenKind.Lte => lf <= rf,
+                TokenKind.Eq => dcmp == 0,
+                TokenKind.Neq => dcmp != 0,
+                TokenKind.Gt => dcmp > 0,
+                TokenKind.Lt => dcmp < 0,
+                TokenKind.Gte => dcmp >= 0,
+                TokenKind.Lte => dcmp <= 0,
                 _ => throw Unreachable(op, source)
             };
         }

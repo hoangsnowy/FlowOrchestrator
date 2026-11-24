@@ -33,6 +33,45 @@ public sealed class ExpressionAuditEdgeCaseTests
         Assert.Equal(expected, trace.Result);
     }
 
+    [Theory]
+    [InlineData("@x == 5", false)]
+    [InlineData("@x != 5", true)]
+    [InlineData("@x > 5", false)]
+    [InlineData("@x < 5", false)]
+    [InlineData("@x >= 5", false)]
+    [InlineData("@x <= 5", false)]
+    [InlineData("@x == @x", false)]
+    [InlineData("@x != @x", true)]
+    public async Task Evaluate_NaNOperand_KeepsIeeeSemantics(string expression, bool expected)
+    {
+        // Arrange — NaN only reaches the comparer from a CLR double output, never from JSON.
+        var evaluator = new BooleanExpressionEvaluator();
+
+        // Act
+        var trace = await evaluator.EvaluateAsync(expression, _ => new ValueTask<object?>(double.NaN));
+
+        // Assert
+        Assert.Equal(expected, trace.Result);
+    }
+
+    [Theory]
+    [InlineData("@x == @x", true)]
+    [InlineData("@x != @x", false)]
+    [InlineData("@x >= @x", true)]
+    [InlineData("@x > 5", true)]
+    [InlineData("@x == 5", false)]
+    public async Task Evaluate_InfiniteOperand_ComparesExactly(string expression, bool expected)
+    {
+        // Arrange
+        var evaluator = new BooleanExpressionEvaluator();
+
+        // Act
+        var trace = await evaluator.EvaluateAsync(expression, _ => new ValueTask<object?>(double.PositiveInfinity));
+
+        // Assert
+        Assert.Equal(expected, trace.Result);
+    }
+
     [Fact]
     public async Task Evaluate_LiteralOutsideDecimalRange_ComparesAsDouble()
     {
