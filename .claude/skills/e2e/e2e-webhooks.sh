@@ -68,7 +68,7 @@ check_instance() {
               -H "X-GitHub-Hook-ID: 292430182" -H "X-GitHub-Hook-Installation-Target-ID: 79929171"
               -H "X-GitHub-Hook-Installation-Target-Type: repository" -H "X-Hub-Signature-256: $sig")
   r=$(post "$B/flows/api/webhook/e2e-github" application/json "$f" "${gh_headers[@]}"); code=${r%% *}; body=${r#* }
-  run_id=$(jq -r '.runId // empty' <<<"$body" 2>/dev/null)
+  run_id=$(jq -r '.runId // empty' <<<"$body" 2>/dev/null); local gh_first=$code
   if [ "$code" = 200 ] && [ -n "$run_id" ] && [ "$(wait_run "$run_id")" = Succeeded ]; then
     local th; th=$(run "$run_id" | jq -r '.triggerHeaders["X-GitHub-Event"] // .triggerHeaders["x-github-event"] // empty')
     [ "$th" = ping ] && ok "W.1 GitHub genuine delivery → 200, run Succeeded, headers in run detail" \
@@ -83,7 +83,7 @@ check_instance() {
 
   # W.2 GitHub — identical redelivery (same body, same signature) → 409, accepted once.
   r=$(post "$B/flows/api/webhook/e2e-github" application/json "$TMP/gh.json" "${gh_headers[@]}")
-  [ "${r%% *}" = 409 ] && ok "W.2 GitHub identical redelivery → 409" || bad "W.2 GitHub replay" "${r:0:200}"
+  [ "$gh_first" = 200 ] && [ "${r%% *}" = 409 ] && ok "W.2 GitHub identical redelivery → 409"     || bad "W.2 GitHub replay" "first=$gh_first second=${r:0:160}"
 
   # W.3 GitHub — wrong signature → 401 and listed as REJECTED in the webhook log.
   f=$TMP/gh-bad.json; printf '{"zen":"forged","n":%s}' "$RANDOM$RANDOM" > "$f"
@@ -91,7 +91,7 @@ check_instance() {
         -H "X-GitHub-Event: ping" -H "X-GitHub-Delivery: $(uuid)" -H "X-Hub-Signature-256: $(sign github not-the-secret "$f")")
   if [ "${r%% *}" = 401 ]; then
     local rej; rej=$(curl -fsS "${A[@]}" "$B/flows/api/webhooks/recent?flowId=$FLOW_GITHUB&rejectedOnly=true&take=20" \
-                     | jq '[.items[] | select((.isAccepted|not) and (.statusCode==401))] | length')
+                     | jq '[(if type == "array" then . else .items end)[] | select((.isAccepted|not) and (.statusCode==401))] | length')
     [ "${rej:-0}" -ge 1 ] && ok "W.3 GitHub wrong signature → 401 + REJECTED row in webhook log" \
                           || bad "W.3 GitHub wrong signature" "401 but no rejected row in /api/webhooks/recent"
   else bad "W.3 GitHub wrong signature" "${r:0:200}"; fi
