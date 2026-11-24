@@ -208,6 +208,19 @@ builder.Services.AddFlowOrchestrator(options =>
     // trigger plays the whole job out on the dashboard with no manual signalling.
     options.AddFlow<WarehouseRobotFlow>();
 
+    // Provider webhook flows driven by the e2e webhook matrix (.claude/skills/e2e/e2e-webhooks.sh):
+    // each one is configured the way an operator would wire that provider, so the e2e can send
+    // byte-for-byte what GitHub / Stripe / Slack / Twilio / Teams / Standard Webhooks send.
+    options.AddFlow<GitHubWebhookFlow>();
+    options.AddFlow<StripeWebhookFlow>();
+    options.AddFlow<SlackWebhookFlow>();
+    options.AddFlow<TwilioWebhookFlow>();
+    options.AddFlow<TeamsWebhookFlow>();
+    options.AddFlow<StandardWebhooksFlow>();
+    options.AddFlow<SharedSecretWebhookFlow>();
+    options.AddFlow<RateLimitedWebhookFlow>();
+    options.AddFlow<IpAllowListWebhookFlow>();
+
     if (storageBackend == "sqlserver")
         options.AddFlow<OrderFulfillmentFlow>();
 });
@@ -283,14 +296,19 @@ builder.AddFlowOrchestratorOpenTelemetry(o =>
 
 builder.Services.AddFlowDashboard(builder.Configuration);
 
-// v1.25 webhook hardening pipeline — Audit mode so the sample exercises every
-// gate (HMAC signature → IP allowlist → rate limit → replay → body cap) and
-// writes rejection rows to the DLQ + dashboard "Webhooks" tab, but the
-// endpoint still returns 2xx so legitimate publishers don't break during the
-// dry-run period.
+// v1.25 webhook hardening pipeline. Every gate runs (HMAC signature → IP allowlist → rate limit →
+// replay → body cap) and writes to the DLQ + dashboard "Webhooks" tab. The mode defaults to Audit
+// (violations recorded, endpoint still answers 2xx) so a standalone sample does not break a
+// publisher during a dry run; the AppHost sets Webhooks__EnforcementMode=Enforce on every instance
+// so the e2e webhook matrix can assert real 401 / 403 / 409 / 429 answers.
+var webhookEnforcement = Enum.TryParse<WebhookEnforcementMode>(builder.Configuration["Webhooks:EnforcementMode"], ignoreCase: true, out var configuredMode)
+    ? configuredMode
+    : WebhookEnforcementMode.Audit;
 builder.Services.PostConfigure<FlowDashboardOptions>(opts => opts.UseWebhookSecurity(sec =>
 {
-    sec.UseEnforcementMode(WebhookEnforcementMode.Audit)
+    // Twilio signs with HMAC-SHA1 by default; without this every genuine Twilio delivery is refused.
+    sec.AllowLegacySha1();
+    sec.UseEnforcementMode(webhookEnforcement)
        .UseMaxBodyBytes(1_048_576)
        .UseReplayProtection(toleranceSeconds: 300)
        .UseRateLimit(permitsPerSecond: 50, burstSize: 100, perIp: true)
