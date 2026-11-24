@@ -102,4 +102,7 @@ internal sealed class FaultInjectingRunStore(IFlowRunStore inner) : IFlowRunStor
     public Task<IReadOnlySet<string>> GetDispatchedStepKeysAsync(Guid runId) => inner.GetDispatchedStepKeysAsync(runId);
 
     public Task<bool> IsStepDispatchedAsync(Guid runId, string stepKey) => inner.IsStepDispatchedAsync(runId, stepKey);
+
+    public Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
+        => inner.LeaseUnsentDispatchesAsync(minimumAge, maxCount, ct);
 }

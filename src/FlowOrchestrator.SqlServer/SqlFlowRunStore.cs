@@ -707,6 +707,53 @@ public sealed class SqlFlowRunStore :
         return exists is not null;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One statement: <c>UPDATE TOP … OUTPUT</c> selects and re-stamps the qualifying rows atomically, and
+    /// <c>READPAST</c> on the ledger makes a concurrent caller on another replica skip rows this one holds
+    /// instead of leasing them a second time. The candidate scan is served by the filtered index
+    /// <c>IX_FlowStepDispatches_Unsent</c> (rows with no job id only), so its cost follows the number of
+    /// in-flight or stranded dispatches, not the size of the ledger. Ages are measured on
+    /// <c>SYSDATETIMEOFFSET()</c>, the clock that stamped <c>DispatchedAt</c>.
+    /// </remarks>
+    public async Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
+    {
+        if (maxCount <= 0)
+        {
+            return [];
+        }
+
+        ct.ThrowIfCancellationRequested();
+        await using var conn = new SqlConnection(_connectionString);
+        var ageMs = (int)Math.Clamp(minimumAge.TotalMilliseconds, 0, int.MaxValue);
+        var rows = await conn.QueryAsync<(Guid RunId, Guid FlowId, string StepKey)>(
+            """
+            UPDATE TOP (@MaxCount) d
+            SET d.DispatchedAt = SYSDATETIMEOFFSET()
+            OUTPUT inserted.RunId, r.FlowId, inserted.StepKey
+            FROM FlowStepDispatches AS d WITH (ROWLOCK, READPAST)
+            INNER JOIN FlowRuns AS r ON r.Id = d.RunId
+            WHERE d.DispatchJobId IS NULL
+              AND d.DispatchedAt <= DATEADD(MILLISECOND, -@AgeMs, SYSDATETIMEOFFSET())
+              AND r.Status = 'Running'
+              AND NOT EXISTS (
+                  SELECT 1 FROM FlowStepClaims AS c
+                  WHERE c.RunId = d.RunId AND c.StepKey = d.StepKey)
+              AND NOT EXISTS (
+                  SELECT 1 FROM FlowSteps AS s
+                  WHERE s.RunId = d.RunId AND s.StepKey = d.StepKey AND s.Status <> 'Pending');
+            """,
+            new { MaxCount = maxCount, AgeMs = ageMs }).ConfigureAwait(false);
+
+        var leased = new List<UnsentDispatch>();
+        foreach (var (runId, flowId, stepKey) in rows)
+        {
+            leased.Add(new UnsentDispatch(runId, flowId, stepKey));
+        }
+
+        return leased;
+    }
+
     public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
         await using var conn = new SqlConnection(_connectionString);

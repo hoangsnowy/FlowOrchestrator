@@ -470,4 +470,43 @@ public interface IFlowRunStore
         var dispatched = await GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
         return dispatched.Contains(stepKey);
     }
+
+    /// <summary>
+    /// Finds dispatch-ledger rows whose hand-off to the runtime never completed, and leases them to the
+    /// caller for re-delivery.
+    /// </summary>
+    /// <param name="minimumAge">How long a row must have gone without a runtime job id to qualify.</param>
+    /// <param name="maxCount">Upper bound on the rows returned by one call.</param>
+    /// <param name="ct">Honoured before the lease is written; never after.</param>
+    /// <returns>
+    /// The leased rows; empty when nothing qualifies or the store does not support the lease.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The engine writes a ledger row <em>before</em> it hands the step to the runtime and annotates it
+    /// with the runtime's job/message id (<see cref="AnnotateDispatchAsync"/>) once the hand-off returns.
+    /// A row that still has no id long after it was written means the hand-off never returned: the process
+    /// died mid-send, or the send is hung. Startup recovery skips every ledgered key, so without this lease
+    /// such a step is never dispatched again and its run stays <c>Running</c> for ever.
+    /// </para>
+    /// <para>
+    /// A row qualifies when all of these hold: it has no job id; it is older than
+    /// <paramref name="minimumAge"/>; its run is <c>Running</c>; no worker claims the step; and the step has
+    /// no status row, or only a <see cref="StepStatus.Pending"/> one (a poll whose re-attempt was never
+    /// handed over). Leasing re-stamps the row's dispatch time to now, in the same atomic statement that
+    /// selects it, so concurrent callers (one per replica) never lease the same row twice inside one
+    /// <paramref name="minimumAge"/> window, and a re-delivery that fails again is retried a window later.
+    /// </para>
+    /// <para>
+    /// The store cannot tell "never sent" from "sent, but the process died before the annotation". Both are
+    /// re-delivered; a duplicate message is absorbed by the execution claim
+    /// (<see cref="IFlowRunRuntimeStore.TryClaimStepAsync"/>), whereas a lost one strands the run.
+    /// </para>
+    /// <para>
+    /// The default implementation returns nothing, so existing stores keep compiling and keep the pre-lease
+    /// behaviour.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<UnsentDispatch>>([]);
 }

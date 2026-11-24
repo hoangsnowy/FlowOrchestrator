@@ -79,4 +79,21 @@ internal static partial class HostingLog
 
     [LoggerMessage(EventId = 5034, Level = LogLevel.Error, Message = "FlowRunRecoveryHostedService: re-enqueuing step '{StepKey}' of run {RunId} failed; its ledger row is kept and the next startup retries.")]
     public static partial void RecoveryRedeliveryFailed(ILogger logger, Exception ex, string stepKey, Guid runId);
+
+    // ── Unsent-dispatch sweep (FlowUnsentDispatchRecoveryHostedService): 5040-5049 ───────────────────
+
+    [LoggerMessage(EventId = 5040, Level = LogLevel.Warning, Message = "Re-delivered step '{StepKey}' of run {RunId}: its dispatch-ledger row carried no runtime job id after {TimeoutSeconds} s, so the original hand-off never returned (the process died mid-send, or the send hung).")]
+    public static partial void UnsentDispatchRedelivered(ILogger logger, string stepKey, Guid runId, double timeoutSeconds);
+
+    [LoggerMessage(EventId = 5041, Level = LogLevel.Error, Message = "Re-delivering unsent step '{StepKey}' of run {RunId} failed; the ledger row is kept and the sweep retries it after the next UnsentDispatchTimeout.")]
+    public static partial void UnsentDispatchRedeliveryFailed(ILogger logger, Exception ex, string stepKey, Guid runId);
+
+    [LoggerMessage(EventId = 5042, Level = LogLevel.Warning, Message = "Unsent step '{StepKey}' of run {RunId} references flow {FlowId}, which this host does not register or which no longer declares the step; left for a host that knows it.")]
+    public static partial void UnsentDispatchUnknownStep(ILogger logger, string stepKey, Guid runId, Guid flowId);
+
+    [LoggerMessage(EventId = 5043, Level = LogLevel.Warning, Message = "Re-delivered unsent step '{StepKey}' but could not annotate its dispatch-ledger row.")]
+    public static partial void UnsentDispatchAnnotateFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 5044, Level = LogLevel.Warning, Message = "Unsent-dispatch sweep failed; will retry on the next tick.")]
+    public static partial void UnsentDispatchSweepFailed(ILogger logger, Exception ex);
 }

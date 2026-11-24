@@ -20,7 +20,12 @@ public interface IStepDispatcher
     /// <param name="flow">The flow definition the step belongs to.</param>
     /// <param name="step">The step instance to execute.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>An opaque runtime-specific job or message identifier, or <see langword="null"/> if the runtime does not produce one.</returns>
+    /// <returns>
+    /// An opaque runtime-specific job or message identifier, or <see langword="null"/> if the runtime does not
+    /// produce one. The engine records it on the step's dispatch-ledger row once this call returns; that
+    /// annotation is how a completed hand-off is told apart from one that never returned, which
+    /// <c>FlowUnsentDispatchRecoveryHostedService</c> re-delivers.
+    /// </returns>
     ValueTask<string?> EnqueueStepAsync(
         IExecutionContext context,
         IFlowDefinition flow,
@@ -36,7 +41,7 @@ public interface IStepDispatcher
     /// <param name="step">The step instance to execute.</param>
     /// <param name="delay">How long to wait before the step is eligible to run.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>An opaque runtime-specific job or message identifier.</returns>
+    /// <returns>An opaque runtime-specific job or message identifier, or <see langword="null"/>; recorded as for <see cref="EnqueueStepAsync"/>.</returns>
     ValueTask<string?> ScheduleStepAsync(
         IExecutionContext context,
         IFlowDefinition flow,

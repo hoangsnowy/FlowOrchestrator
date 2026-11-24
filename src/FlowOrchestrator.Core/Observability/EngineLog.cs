@@ -37,7 +37,7 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3001, Level = LogLevel.Warning, Message = "Failed to annotate dispatch for step {StepKey}.")]
     public static partial void DispatchAnnotateFailed(ILogger logger, Exception ex, string stepKey);
 
-    [LoggerMessage(EventId = 3011, Level = LogLevel.Error, Message = "Dispatching step {StepKey} failed and its dispatch-ledger row could not be released; startup recovery will skip it.")]
+    [LoggerMessage(EventId = 3011, Level = LogLevel.Error, Message = "Dispatching step {StepKey} failed and its dispatch-ledger row could not be released; the unsent-dispatch sweep re-delivers it once it is older than UnsentDispatchTimeout.")]
     public static partial void DispatchReleaseAfterFailureFailed(ILogger logger, Exception ex, string stepKey);
 
     // EventId 3002 (EventPersistenceFailed) is retired: persisted run events were removed in 2.0.

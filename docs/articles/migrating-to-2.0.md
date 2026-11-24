@@ -550,6 +550,11 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
   anyway: the engine releases its claim and rethrows, so the runtime retries the job. Startup recovery and
   the timeout sweep release a claim left without a step row by a crashed worker once it is older than
   `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off).
+- A step whose dispatch-ledger row was written but whose send never returned (a replica killed mid-send, a
+  send hung in the broker client) is re-delivered by the new `FlowUnsentDispatchRecoveryHostedService` once
+  the row is older than `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s; `null` turns it off).
+  The SQL Server / PostgreSQL migrator adds one filtered index on the dispatch ledger for it. A custom
+  `IFlowRunStore` opts in by implementing `LeaseUnsentDispatchesAsync`; the default does nothing.
 - `@triggerHeaders()['name']` is case-insensitive in every step on SQL Server / PostgreSQL storage
   (1.34.3); it used to be case-sensitive after the entry step. InMemory storage now does the same even
   when the trigger was raised with an ordinal dictionary.

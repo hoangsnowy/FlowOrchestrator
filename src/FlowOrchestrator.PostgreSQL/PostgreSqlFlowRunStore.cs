@@ -616,6 +616,60 @@ public sealed class PostgreSqlFlowRunStore :
         return exists is not null;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One statement: the CTE picks the qualifying rows with <c>FOR UPDATE OF d SKIP LOCKED</c>, so a
+    /// concurrent caller on another replica skips rows this one holds instead of leasing them a second time,
+    /// and the <c>UPDATE … RETURNING</c> re-stamps them. The candidate scan is served by the partial index
+    /// <c>ix_flow_step_dispatches_unsent</c> (rows with no job id only), so its cost follows the number of
+    /// in-flight or stranded dispatches, not the size of the ledger. Ages are measured on the database clock
+    /// that stamped <c>dispatched_at</c>.
+    /// </remarks>
+    public async Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
+    {
+        if (maxCount <= 0)
+        {
+            return [];
+        }
+
+        ct.ThrowIfCancellationRequested();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(Guid RunId, Guid FlowId, string StepKey)>(
+            """
+            WITH due AS (
+                SELECT d.run_id, d.step_key, r.flow_id
+                FROM flow_step_dispatches d
+                JOIN flow_runs r ON r.id = d.run_id
+                WHERE d.dispatch_job_id IS NULL
+                  AND d.dispatched_at <= NOW() - make_interval(secs => @AgeSeconds)
+                  AND r.status = 'Running'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM flow_step_claims c
+                      WHERE c.run_id = d.run_id AND c.step_key = d.step_key)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM flow_steps s
+                      WHERE s.run_id = d.run_id AND s.step_key = d.step_key AND s.status <> 'Pending')
+                ORDER BY d.dispatched_at
+                LIMIT @MaxCount
+                FOR UPDATE OF d SKIP LOCKED
+            )
+            UPDATE flow_step_dispatches AS d
+            SET dispatched_at = NOW()
+            FROM due
+            WHERE d.run_id = due.run_id AND d.step_key = due.step_key
+            RETURNING d.run_id, due.flow_id, d.step_key
+            """,
+            new { MaxCount = maxCount, AgeSeconds = Math.Max(0d, minimumAge.TotalSeconds) }).ConfigureAwait(false);
+
+        var leased = new List<UnsentDispatch>();
+        foreach (var (runId, flowId, stepKey) in rows)
+        {
+            leased.Add(new UnsentDispatch(runId, flowId, stepKey));
+        }
+
+        return leased;
+    }
+
     public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

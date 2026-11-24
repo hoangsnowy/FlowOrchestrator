@@ -66,10 +66,19 @@ public sealed partial class FlowOrchestratorEngine
     /// best-effort ledger update.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Split out of <see cref="TryScheduleStepAsync"/> so the Pending path can reserve the ledger row
     /// <em>before</em> it releases the execution claim and dispatch only <em>after</em> (#190, race 2).
     /// Every other caller should keep using <see cref="TryScheduleStepAsync"/>, which reserves and
     /// dispatches in one call.
+    /// </para>
+    /// <para>
+    /// The ledger row is durable before this runs, so the runtime call takes <see cref="CancellationToken.None"/>
+    /// and any failure releases the row before it propagates. The annotation is what tells a completed
+    /// hand-off from one that never returned: a row still unannotated after
+    /// <see cref="FlowRunControlOptions.UnsentDispatchTimeout"/> is re-delivered by
+    /// <see cref="Hosting.FlowUnsentDispatchRecoveryHostedService"/>.
+    /// </para>
     /// </remarks>
     private async Task DispatchReservedStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
     {
@@ -80,19 +89,25 @@ public sealed partial class FlowOrchestratorEngine
             if (delay.HasValue)
             {
                 step.ScheduledTime = DateTimeOffset.UtcNow + delay.Value;
-                jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
+                jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, CancellationToken.None).ConfigureAwait(false);
             }
             else
             {
-                jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
+                jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
             }
         }
-        catch (Exception dispatchFailure) when (dispatchFailure is not OperationCanceledException)
+        catch (Exception)
         {
-            // The ledger row was recorded before this call. Left in place it claims "an attempt is queued"
-            // for an attempt that never reached the runtime, and recovery skips ledgered keys, so the step
-            // would never run. Release it so recovery (or a re-run of this continuation) can dispatch again;
-            // a duplicate delivery, if the runtime did accept the message, is absorbed by the step claim.
+            // Catch-all-and-rethrow: never swallowed. The ledger row was recorded before this call. Left in
+            // place it claims "an attempt is queued" for an attempt that never reached the runtime, and
+            // recovery skips ledgered keys, so the step would never run. Release it so recovery (or a re-run
+            // of this continuation) can dispatch again; a duplicate delivery, if the runtime did accept the
+            // message, is absorbed by the step claim.
+            //
+            // OperationCanceledException included. No token reaches the dispatcher, so a cancellation here is
+            // the adapter's own (an SDK or HTTP timeout surfacing as TaskCanceledException), and after the
+            // durable ledger write even a genuine shutdown must not strand the row. Until this fix the filter
+            // excluded it and the row stayed, unannotated, for ever.
             try
             {
                 await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key, CancellationToken.None).ConfigureAwait(false);
@@ -105,17 +120,17 @@ public sealed partial class FlowOrchestratorEngine
             throw;
         }
 
-        // Best-effort: record the runtime job/message ID for observability.
-        if (jobId is not null)
+        // Best-effort: record the runtime job/message ID. Besides observability, the annotation marks the
+        // hand-off as completed; an annotation that fails leaves the row to the unsent-dispatch sweep, which
+        // re-delivers it — a duplicate the execution claim absorbs. A runtime that returns no id still gets a
+        // marker, so the row does not read as unsent.
+        try
         {
-            try
-            {
-                await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
-            }
+            await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, DispatchLedgerMarker.For(jobId)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
         }
     }
 
