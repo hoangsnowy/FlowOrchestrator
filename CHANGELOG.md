@@ -201,6 +201,11 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   claim still runs it once (EventIds 5033-5034). **Custom runtimes:** nothing to do for a durable one; a
   dispatcher decorator must forward the property. Run one replica with this combination (see
   [Configuration](docs/articles/configuration.md)).
+- **InMemory runtime: shutdown waits for the steps already running.** The runner fired each step on a
+  discarded task and stopped as soon as the channel loop saw the stopping token, so the host disposed the
+  DI scope and store connections a running step still needed for its final status write, claim release
+  or poll reschedule. The runner now signals the stopping token to running steps (as Hangfire does) and
+  waits for them to return, bounded by `HostOptions.ShutdownTimeout` (EventIds 3130-3131).
 
 ### Security
 
