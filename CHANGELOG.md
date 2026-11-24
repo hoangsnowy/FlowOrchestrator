@@ -199,6 +199,11 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   tombstone, and the retry reset the step but not the waiter, so the retried attempt failed at once with
   the same "not received within Ns". Retry now removes a waiter that never received a signal (after the
   durable reset, with `CancellationToken.None`), so the attempt registers a fresh wait.
+- **One run's stray `OperationCanceledException` no longer aborts the timeout sweep for every later
+  run.** The per-run catch excluded every `OperationCanceledException`, so an HTTP-backed store's client
+  timeout (`TaskCanceledException`) on one run escaped `EnforceDueTimeoutsAsync` and skipped the rest of
+  the tick. It is now logged per run (EventId 3005) like any other fault; only an OCE while the sweep's own
+  token is cancelled propagates.
 
 ### Security
 

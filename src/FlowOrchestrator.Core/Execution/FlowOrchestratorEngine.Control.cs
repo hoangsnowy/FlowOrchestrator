@@ -379,9 +379,13 @@ public sealed partial class FlowOrchestratorEngine
 
                 await TryCompleteRunAsync(run.Id, terminalStatus).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                // Per-run isolation: a single bad run must never abort the whole sweep.
+                // Per-run isolation: a single bad run must never abort the whole sweep. That includes an
+                // OperationCanceledException the sweep did not ask for — an HTTP-backed store's
+                // TaskCanceledException on a client timeout, a linked CTS inside a custom store: it is a
+                // fault of this run's I/O, not shutdown, and used to end the sweep for every later run.
+                // Only an OCE while the sweep's own token is cancelled propagates.
                 EngineLog.TimeoutEnforcementRunFailed(_logger, ex, run.Id);
             }
         }
