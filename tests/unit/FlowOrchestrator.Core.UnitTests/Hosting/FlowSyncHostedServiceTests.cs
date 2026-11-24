@@ -217,4 +217,31 @@ public class FlowSyncHostedServiceTests
         // Assert
         await Assert.ThrowsAsync<InvalidOperationException>(act);
     }
+    [Fact]
+    public async Task StartAsync_StepKeysDifferingOnlyByCase_ThrowsBeforeTheFlowReachesTheStore()
+    {
+        // Arrange — "Notify" and "notify" are two steps to the ordinal StepCollection but one row on SQL
+        // Server's case-insensitive StepKey primary keys; the flow must never be persisted or run.
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(Guid.NewGuid());
+        flow.Version.Returns("1.0");
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection
+            {
+                ["Notify"] = new StepMetadata { Type = "A" },
+                ["notify"] = new StepMetadata { Type = "B" }
+            }
+        });
+        var store = Substitute.For<IFlowStore>();
+        var sut = CreateSut(new FlowRegistry([flow]), store);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.StartAsync(CancellationToken.None));
+
+        // Assert
+        Assert.Contains("differ only by case", ex.Message);
+        await store.DidNotReceive().SaveAsync(Arg.Any<FlowDefinitionRecord>());
+        await _triggerSync.DidNotReceive().SyncTriggersAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
 }

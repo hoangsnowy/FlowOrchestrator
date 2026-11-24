@@ -96,6 +96,30 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   built in (22% extra storage, asynchronous indexing, hyphenated ids split into common words — see the
   benchmark doc).
 
+### Changed — **breaking:** step keys must be storage-safe
+
+Flow validation (run by the flow-sync hosted service at startup) now rejects three kinds of step key that
+the stores could not keep apart. Each one used to be accepted and fail later, at runtime, on some
+providers only:
+
+- **Keys that differ only by case within one scope** (`Notify` / `notify`, also between the children of one
+  `ForEach`). `StepCollection` is ordinal, but every `StepKey` column on SQL Server inherits the database's
+  case-insensitive collation, so both steps shared one claim, one dispatch row and one status row and the
+  run never finished. Message: `Step keys '…' and '…' differ only by case; …`.
+- **Keys containing `:`**, at any nesting level. `:` separates the outputs-key namespace
+  (`"{stepKey}:input"`, `"__trigger:data"`), so a step named `x:input` overwrote step `x`'s inputs.
+  Message: `Step key '…' contains ':', which is reserved as the outputs-key separator …`.
+- **Keys longer than 250 characters** (`FlowGraphPlanner.MaxStepKeyLength`), measured on the flattened
+  path (`loop.child`). The stores persist `"{stepKey}:input"` in a 256-character column; longer keys failed
+  the write with a truncation error on SQL Server / PostgreSQL. Message: `Step key '…' is N characters long;
+  the maximum is 250 …`.
+
+#### Read before upgrading
+
+- A flow with such a key now **fails startup** instead of misbehaving. Rename the step and every
+  `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
+  [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates

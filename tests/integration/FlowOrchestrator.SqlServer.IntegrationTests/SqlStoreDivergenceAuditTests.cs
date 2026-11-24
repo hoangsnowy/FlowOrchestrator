@@ -1,5 +1,7 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Storage;
+using NSubstitute;
 
 namespace FlowOrchestrator.SqlServer.Tests;
 
@@ -8,7 +10,7 @@ namespace FlowOrchestrator.SqlServer.Tests;
 /// PostgreSQL providers. Each test states the parity expectation; a failure is the defect.
 /// </summary>
 /// <remarks>
-/// The step-key tests depend on the database's default collation. The Testcontainers image uses the
+/// The step-key characterisation test depends on the database's default collation. The Testcontainers image uses the
 /// SQL Server default <c>SQL_Latin1_General_CP1_CI_AS</c>, which is also what most production servers run.
 /// </remarks>
 public sealed class SqlStoreDivergenceAuditTests : IClassFixture<SqlServerFixture>
@@ -23,54 +25,48 @@ public sealed class SqlStoreDivergenceAuditTests : IClassFixture<SqlServerFixtur
     }
 
     [Fact]
-    public async Task TryClaimStep_treats_step_keys_that_differ_only_by_case_as_distinct_steps()
+    public async Task StepKey_primary_keys_compare_case_insensitively_under_the_default_collation()
     {
-        // Arrange — StepCollection is an ordinal Dictionary and FlowGraphPlanner.Validate accepts both
-        // keys, so "Notify" and "notify" are two steps. InMemory and PostgreSQL claim them separately.
+        // Arrange — characterisation of the schema: every StepKey column (FlowSteps, FlowStepClaims,
+        // FlowStepDispatches, FlowOutputs.[Key]) inherits the database's case-insensitive collation, so
+        // "Notify" and "notify" are one row. This is why FlowGraphPlanner.Validate rejects such a pair.
         var runId = Guid.NewGuid();
         await _runs.StartRunAsync(Guid.NewGuid(), "CaseFlow", runId, "manual", null, null);
         Assert.True(await _runs.TryClaimStepAsync(runId, "Notify"));
-
-        // Act
-        var secondClaimed = await _runs.TryClaimStepAsync(runId, "notify");
-
-        // Assert
-        Assert.True(secondClaimed);
-    }
-
-    [Fact]
-    public async Task TryRecordDispatch_treats_step_keys_that_differ_only_by_case_as_distinct_steps()
-    {
-        // Arrange
-        var runId = Guid.NewGuid();
-        await _runs.StartRunAsync(Guid.NewGuid(), "CaseFlow", runId, "manual", null, null);
         Assert.True(await _runs.TryRecordDispatchAsync(runId, "Notify"));
 
         // Act
+        var secondClaimed = await _runs.TryClaimStepAsync(runId, "notify");
         var secondRecorded = await _runs.TryRecordDispatchAsync(runId, "notify");
 
         // Assert
-        Assert.True(secondRecorded);
+        Assert.False(secondClaimed);
+        Assert.False(secondRecorded);
     }
 
     [Fact]
-    public async Task GetStepStatuses_reports_both_steps_whose_keys_differ_only_by_case()
+    public void Validate_rejects_step_keys_that_differ_only_by_case_so_the_collision_cannot_reach_the_store()
     {
-        // Arrange — both steps start and one fails. On a case-insensitive PK the second start MERGEs
-        // into the first step's row, so the planner never sees "notify" at all.
-        var runId = Guid.NewGuid();
-        await _runs.StartRunAsync(Guid.NewGuid(), "CaseFlow", runId, "manual", null, null);
-        await _runs.RecordStepStartAsync(runId, "Notify", "Work", null, null);
-        await _runs.RecordStepCompleteAsync(runId, "Notify", nameof(StepStatus.Succeeded), null, null);
-        await _runs.RecordStepStartAsync(runId, "notify", "Work", null, null);
+        // Arrange — the manifest the original audit used: two steps the ordinal StepCollection treats as
+        // distinct. Validation runs in FlowSyncHostedService before the flow is persisted, so a run of
+        // this flow can never be started against the case-insensitive tables above.
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Id.Returns(Guid.NewGuid());
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection
+            {
+                ["Notify"] = new StepMetadata { Type = "Work" },
+                ["notify"] = new StepMetadata { Type = "Work" },
+            },
+        });
 
         // Act
-        var statuses = await _runs.GetStepStatusesAsync(runId);
+        var result = new FlowGraphPlanner().Validate(flow);
 
         // Assert
-        Assert.Equal(2, statuses.Count);
-        Assert.Equal(StepStatus.Succeeded, statuses["Notify"]);
-        Assert.Equal(StepStatus.Running, statuses["notify"]);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("differ only by case", StringComparison.Ordinal));
     }
 
     [Fact]
