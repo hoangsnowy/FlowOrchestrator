@@ -49,6 +49,7 @@ foreach (var flowId in SampleFlowIds.All)
 // WithEndpoint overrides the port on the existing endpoint created from launchSettings.json
 // (calling WithHttpEndpoint would add a duplicate and throw)
 builder.AddDotnetProject("flow-sqlserver", SampleAppPath)
+       .WithEnvironment("Webhooks__EnforcementMode", "Enforce")
        .WithEnvironment("FLOW_STORAGE", "sqlserver")
        .WithEndpoint("http",  e => e.Port = 5101)
        .WithEndpoint("https", e => e.Port = 7101)
@@ -73,6 +74,7 @@ var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26
 // side, so scripts and the e2e suite keep using -u admin:admin. The OIDC handler loads Keycloak's
 // metadata on the first sign-in, so this instance does not wait for Keycloak to start.
 builder.AddDotnetProject("flow-postgresql", SampleAppPath)
+       .WithEnvironment("Webhooks__EnforcementMode", "Enforce")
        .WithEnvironment("FLOW_STORAGE", "postgresql")
        .WithEnvironment("Keycloak__Authority", "http://localhost:8088/realms/flow-orchestrator")
        .WithEnvironment("Keycloak__ClientId", "flow-dashboard")
@@ -87,6 +89,7 @@ builder.AddDotnetProject("flow-postgresql", SampleAppPath)
 // dispatcher and PeriodicTimer-backed cron, all in-process. /hangfire returns 404
 // because Hangfire is not registered in this mode.
 builder.AddDotnetProject("flow-inmemory", SampleAppPath)
+       .WithEnvironment("Webhooks__EnforcementMode", "Enforce")
        .WithEnvironment("FLOW_STORAGE", "inmemory")
        .WithEnvironment("RUNTIME", "inmemory")
        .WithEndpoint("http",  e => e.Port = 5103)
@@ -99,6 +102,7 @@ builder.AddDotnetProject("flow-inmemory", SampleAppPath)
 // pre-declares all entities. WithReference("servicebus") injects the
 // `ConnectionStrings__servicebus` env var that the SampleApp reads.
 builder.AddDotnetProject("flow-servicebus", SampleAppPath)
+       .WithEnvironment("Webhooks__EnforcementMode", "Enforce")
        .WithEnvironment("FLOW_STORAGE", "inmemory")
        .WithEnvironment("RUNTIME", "servicebus")
        .WithEnvironment("SERVICEBUS_AUTO_CREATE_TOPOLOGY", "false")
@@ -132,5 +136,14 @@ internal static class SampleFlowIds
         new("00000000-0000-0000-0000-000000000012"), // AmountThresholdFlow
         new("00000000-0000-0000-0000-000000000013"), // WarehouseRobotFlow (issue #169 barrier demo)
         new("d1f8a000-0000-0000-0000-000000000125"), // WebhookEnterpriseSampleFlow (v1.25)
+        new("d1f8a000-0000-0000-0000-000000000201"), // GitHubWebhookFlow        (e2e webhook matrix)
+        new("d1f8a000-0000-0000-0000-000000000202"), // StripeWebhookFlow
+        new("d1f8a000-0000-0000-0000-000000000203"), // SlackWebhookFlow
+        new("d1f8a000-0000-0000-0000-000000000204"), // TwilioWebhookFlow
+        new("d1f8a000-0000-0000-0000-000000000205"), // TeamsWebhookFlow
+        new("d1f8a000-0000-0000-0000-000000000206"), // StandardWebhooksFlow
+        new("d1f8a000-0000-0000-0000-000000000207"), // SharedSecretWebhookFlow
+        new("d1f8a000-0000-0000-0000-000000000208"), // RateLimitedWebhookFlow
+        new("d1f8a000-0000-0000-0000-000000000209"), // IpAllowListWebhookFlow
     ];
 }

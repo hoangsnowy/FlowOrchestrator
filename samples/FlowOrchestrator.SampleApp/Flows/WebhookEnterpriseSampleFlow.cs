@@ -13,12 +13,14 @@ namespace FlowOrchestrator.SampleApp.Flows;
 /// curl -X POST http://localhost:5101/flows/api/webhook/github-sample-flow \
 ///   -H "X-Hub-Signature-256: sha256=$(printf '%s' '{"hello":"world"}' | openssl dgst -sha256 -hmac 'mySharedSecret' | cut -d' ' -f2)" \
 ///   -H "X-GitHub-Delivery: $(uuidgen)" \
-///   -H "X-Webhook-Timestamp: $(date +%s)" \
+///   -H "X-GitHub-Event: ping" \
 ///   -H 'Content-Type: application/json' \
 ///   --data '{"hello":"world"}'
 /// </code>
+/// These are the headers GitHub itself sends: no <c>X-Webhook-Key</c>, no timestamp header.
 /// The gates are enforced under the 2.0 default <c>EnforcementMode.Enforce</c>; the sample host runs in
-/// <c>Audit</c> (see <c>Program.cs</c>) so violations are recorded but still accepted.
+/// <c>Audit</c> by default (see <c>Program.cs</c>) so violations are recorded but still accepted; the AppHost
+/// switches every instance to <c>Enforce</c> via <c>Webhooks__EnforcementMode</c>.
 /// </remarks>
 public sealed class WebhookEnterpriseSampleFlow : IFlowDefinition
 {
