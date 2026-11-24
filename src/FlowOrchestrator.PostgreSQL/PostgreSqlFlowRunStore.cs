@@ -290,7 +290,9 @@ public sealed class PostgreSqlFlowRunStore :
             LIMIT @Take OFFSET @Skip
             """;
 
-        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom?.ToUniversalTime(), StartedTo = startedTo?.ToUniversalTime() };
+        // The status filter is case-insensitive on every provider; canonicalising the parameter keeps it an
+        // equality on the bare column so ix_flow_runs_flow_id_status_started_at still serves it.
+        var parameters = new { FlowId = flowId, Status = status is null ? null : RunStatusNames.Canonicalize(status), Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom?.ToUniversalTime(), StartedTo = startedTo?.ToUniversalTime() };
         var totalCount = 0;
         var rows = (await conn.QueryAsync<FlowRunRecord, int, FlowRunRecord>(
             pageSql,
