@@ -497,6 +497,7 @@ public sealed partial class FlowOrchestratorEngine
         // strand the step.
         try
         {
+            await DisarmUndeliveredSignalWaiterAsync(runId, stepKey).ConfigureAwait(false);
             await _runStore.TryRecordDispatchAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
             await DispatchReservedStepAsync(ctx, flow, step, delay: null).ConfigureAwait(false);
         }
@@ -509,6 +510,42 @@ public sealed partial class FlowOrchestratorEngine
         }
 
         return new StepRetryResult(runId, stepKey, StepRetryOutcome.Accepted);
+    }
+
+    /// <summary>
+    /// Removes the signal waiter of a step being retried when no signal was ever delivered to it, so the
+    /// retried <c>WaitForSignal</c> attempt registers a fresh wait instead of re-reading the expired one.
+    /// </summary>
+    /// <param name="runId">The run owning the retried step.</param>
+    /// <param name="stepKey">Runtime key of the retried step.</param>
+    /// <remarks>
+    /// <para>
+    /// <see cref="WaitForSignalHandler"/> leaves an expired waiter in place as a tombstone so a stale
+    /// re-invocation fails again instead of re-parking. That is right for a stray delivery, but a manual
+    /// retry IS a request to wait again: without this, the retried attempt hit the tombstone on its first
+    /// invocation and failed with the same "not received within Ns", so a timed-out wait could never be
+    /// retried. Only a step can be retried that is <see cref="StepStatus.Failed"/>, so its wait is over
+    /// either way; a waiter that did receive its payload is kept, so a retry of a step that failed after
+    /// delivery succeeds with that payload.
+    /// </para>
+    /// <para>
+    /// Runs after the durable reset with <see cref="CancellationToken.None"/>. One point read (and at most
+    /// one delete) per manual retry, for every step type: cheaper and more robust than recognising which
+    /// handlers park on a signal. A no-op when no <see cref="IFlowSignalStore"/> is registered.
+    /// </para>
+    /// </remarks>
+    private async Task DisarmUndeliveredSignalWaiterAsync(Guid runId, string stepKey)
+    {
+        if (_signalStore is null)
+        {
+            return;
+        }
+
+        var waiter = await _signalStore.GetWaiterAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+        if (waiter is { DeliveredAt: null })
+        {
+            await _signalStore.RemoveWaiterAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

@@ -195,6 +195,10 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   kept firing real runs on the old schedule. `TriggerByScheduleAsync` now rejects a key the manifest does
   not declare as a `Cron` trigger: no run, a `null` run id, and a warning (EventId 1012) naming the job to
   remove.
+- **A `WaitForSignal` that timed out can be retried.** The handler keeps the expired waiter as a
+  tombstone, and the retry reset the step but not the waiter, so the retried attempt failed at once with
+  the same "not received within Ns". Retry now removes a waiter that never received a signal (after the
+  durable reset, with `CancellationToken.None`), so the attempt registers a fresh wait.
 
 ### Security
 
