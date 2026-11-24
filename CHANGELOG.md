@@ -230,6 +230,11 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   moved to `LoggerMessage` (EventIds 3140-3154). **Read before upgrading:** saving a schedule again with
   the cron it already runs no longer schedules an extra tick; a chain that died (its tick dead-lettered
   after `MaxDeliveryCount` failures) is re-seeded by the next restart.
+- **Dashboard `PUT /api/schedules/{jobId}/cron` rejects malformed and oversized bodies.** A non-object
+  body (`[]`), a non-string `cronExpression` (`5`) or malformed JSON threw out of the endpoint (`500`);
+  they now answer `400`. The body cap (`MaxBodyBytes`) was checked only against `Content-Length`, so a
+  chunked body was read without any limit; the endpoint now uses the same streaming, capped reader as the
+  manual-trigger endpoint and answers `413`.
 
 ### Security
 

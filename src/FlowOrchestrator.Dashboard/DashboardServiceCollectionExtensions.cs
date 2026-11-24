@@ -1383,19 +1383,32 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // The same capped reader as the manual-trigger endpoint: it enforces MaxBodyBytes while streaming,
+            // so a chunked body (no Content-Length) is bounded too, and maps malformed JSON to a status
+            // instead of an unhandled JsonException (500).
             var maxBodyBytes = ResolveMaxBodyBytes(http);
-            if (http.Request.ContentLength > maxBodyBytes)
+            var (bodyStatus, body) = await TryReadJsonBodyAsync(http.Request, maxBodyBytes);
+            if (bodyStatus == ReadBodyStatus.TooLarge)
             {
                 http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
                 await WriteJsonAsync(http.Response,new { error = $"Request body exceeds the configured cap of {maxBodyBytes} bytes." });
                 return;
             }
-
-            var body = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
-            if (!body.TryGetProperty("cronExpression", out var cronProp) || string.IsNullOrWhiteSpace(cronProp.GetString()))
+            if (bodyStatus == ReadBodyStatus.InvalidJson)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response,new { error = "cronExpression is required." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
+                return;
+            }
+
+            // A non-object body or a non-string cronExpression used to throw from TryGetProperty / GetString (500).
+            if (body is not JsonElement { ValueKind: JsonValueKind.Object } bodyObject
+                || !bodyObject.TryGetProperty("cronExpression", out var cronProp)
+                || cronProp.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(cronProp.GetString()))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is required and must be a string." });
                 return;
             }
             var newCron = cronProp.GetString()!;
