@@ -293,4 +293,30 @@ public sealed class RunListRequestTests
         // Assert
         Assert.Null(request.Query.TotalCountCap);
     }
+
+    [Fact]
+    public void Text_search_with_a_to_bound_near_MinValue_clamps_the_window_instead_of_throwing()
+    {
+        // Arrange
+
+        // Act
+        var request = Parse("?search=order&to=0001-01-02T00:00:00Z");
+
+        // Assert
+        Assert.Equal(DateTimeOffset.MinValue, request.Query.StartedFrom);
+        Assert.True(request.WindowDefaulted);
+    }
+
+    [Fact]
+    public void Text_search_with_an_enormous_configured_window_clamps_to_MinValue()
+    {
+        // Arrange
+        var options = new FlowDashboardOptions { RunSearchWindow = TimeSpan.MaxValue };
+
+        // Act
+        var request = Parse("?search=order", options);
+
+        // Assert
+        Assert.Equal(DateTimeOffset.MinValue, request.Query.StartedFrom);
+    }
 }

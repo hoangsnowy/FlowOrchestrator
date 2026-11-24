@@ -46,7 +46,7 @@ public sealed partial class FlowOrchestratorEngine
             _telemetry.QueueDelayMs.Record(
                 queueDelayMs,
                 new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                new KeyValuePair<string, object?>("step_key", step.Key));
+                new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)));
         }
 
         try
@@ -67,7 +67,7 @@ public sealed partial class FlowOrchestratorEngine
                     _telemetry.StepClaimLostCounter.Add(
                         1,
                         new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                        new KeyValuePair<string, object?>("step_key", step.Key));
+                        new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)));
                 }
 
                 return null;
@@ -183,7 +183,7 @@ public sealed partial class FlowOrchestratorEngine
                 _telemetry.StepDurationMs.Record(
                     stepExecutionMs,
                     new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                    new KeyValuePair<string, object?>("step_key", step.Key),
+                    new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)),
                     new KeyValuePair<string, object?>("status", result.Status.ToString()));
 
                 _telemetry.StepCompletedCounter.Add(
@@ -213,7 +213,7 @@ public sealed partial class FlowOrchestratorEngine
                     _telemetry.StepPollAttemptsCounter.Add(
                         1,
                         new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                        new KeyValuePair<string, object?>("step_key", step.Key));
+                        new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)));
                 }
 
                 var controlAfterPending = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
@@ -461,7 +461,7 @@ public sealed partial class FlowOrchestratorEngine
             _telemetry.StepRetriesCounter.Add(
                 1,
                 new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
-                new KeyValuePair<string, object?>("step_key", stepKey));
+                new KeyValuePair<string, object?>("step_key", MetricStepKey.For(stepKey)));
         }
 
         // When the original failure of this step caused the DAG continuation to eagerly

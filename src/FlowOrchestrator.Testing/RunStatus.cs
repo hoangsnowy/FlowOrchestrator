@@ -19,5 +19,12 @@ public enum RunStatus
     Cancelled = 3,
 
     /// <summary>Run was terminated by the configured run timeout (distinct from the test-host's <c>timeout</c> parameter).</summary>
-    TimedOut = 4
+    TimedOut = 4,
+
+    /// <summary>
+    /// Run finished with every leaf step <see cref="FlowOrchestrator.Core.Abstractions.StepStatus.Skipped"/>
+    /// (for example, each leaf's <c>When</c> clause evaluated to false) — the engine's terminal
+    /// <c>"Skipped"</c> run status.
+    /// </summary>
+    Skipped = 5
 }

@@ -1,9 +1,14 @@
+using System.Security.Cryptography;
 using System.Text;
 using FlowOrchestrator.Dashboard.Webhooks.Signature;
 
 namespace FlowOrchestrator.Dashboard.UnitTests.Signature;
 
 /// <summary>Vector tests for Microsoft Teams outgoing webhook (<c>Authorization: HMAC &lt;base64&gt;</c>).</summary>
+/// <remarks>
+/// Teams keys the HMAC with the base64-decoded security token shown at registration, so the vectors sign
+/// with <c>Convert.FromBase64String(token)</c>, not the token's UTF-8 bytes.
+/// </remarks>
 public sealed class MicrosoftTeamsVectorTests
 {
     private static readonly WebhookSignatureSpec _spec =
@@ -13,9 +18,9 @@ public sealed class MicrosoftTeamsVectorTests
     public void Verify_succeeds_with_HMAC_prefix_in_authorization_header()
     {
         // Arrange
-        const string key = "test-key-from-teams-portal";
+        var key = Convert.ToBase64String(Encoding.UTF8.GetBytes("test-key-from-teams-portal"));
         var body = Encoding.UTF8.GetBytes("{\"text\":\"hello\"}");
-        var digest = SignatureTestHelper.Hmac(HmacAlgorithm.Sha256, key, body);
+        var digest = HMACSHA256.HashData(Convert.FromBase64String(key), body);
         var ctx = SignatureTestHelper.Context(_spec, body,
             new Dictionary<string, string> { ["Authorization"] = "HMAC " + SignatureTestHelper.ToBase64(digest) },
             key);
@@ -32,9 +37,9 @@ public sealed class MicrosoftTeamsVectorTests
     public void Verify_rejects_when_HMAC_prefix_missing()
     {
         // Arrange
-        const string key = "k";
+        const string key = "a2V5";
         var body = Encoding.UTF8.GetBytes("payload");
-        var digest = SignatureTestHelper.Hmac(HmacAlgorithm.Sha256, key, body);
+        var digest = HMACSHA256.HashData(Convert.FromBase64String(key), body);
         var ctx = SignatureTestHelper.Context(_spec, body,
             new Dictionary<string, string> { ["Authorization"] = SignatureTestHelper.ToBase64(digest) },
             key);

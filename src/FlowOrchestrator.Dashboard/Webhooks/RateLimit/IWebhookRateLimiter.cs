@@ -14,7 +14,7 @@ public interface IWebhookRateLimiter
     /// <paramref name="key"/>. Returns the verdict + a non-zero retry-after
     /// hint when rejected.
     /// </summary>
-    /// <param name="key">Composite key (e.g. <c>"flowId|clientIp"</c>).</param>
+    /// <param name="key">Composite key (e.g. <c>"flowId|triggerKey|clientIp"</c>).</param>
     /// <param name="options">Per-flow limit parameters.</param>
     RateLimitDecision TryAcquire(string key, WebhookRateLimitOptions options);
 }

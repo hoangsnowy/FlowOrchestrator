@@ -56,4 +56,20 @@ public sealed class TokenBucketWebhookRateLimiterTests
         Assert.True(b1.Allowed);
         Assert.False(a2.Allowed);
     }
+
+    [Fact]
+    public void Bucket_follows_changed_options_for_the_same_key()
+    {
+        // Arrange — the key was first seen with a 1-token burst, then its trigger asks for 100.
+        using var limiter = new TokenBucketWebhookRateLimiter();
+        var slow = new WebhookRateLimitOptions { PermitsPerSecond = 1, BurstSize = 1 };
+        var fast = new WebhookRateLimitOptions { PermitsPerSecond = 100, BurstSize = 100 };
+        limiter.TryAcquire("flow-1|webhook", slow);
+
+        // Act
+        var results = Enumerable.Range(0, 50).Select(_ => limiter.TryAcquire("flow-1|webhook", fast).Allowed).ToArray();
+
+        // Assert
+        Assert.All(results, Assert.True);
+    }
 }

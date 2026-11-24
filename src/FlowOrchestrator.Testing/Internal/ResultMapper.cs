@@ -50,18 +50,21 @@ internal static class ResultMapper
 
     public static RunStatus ParseRunStatus(string? raw) => raw switch
     {
-        "Succeeded" => RunStatus.Succeeded,
-        "Failed" => RunStatus.Failed,
-        "Cancelled" => RunStatus.Cancelled,
-        "TimedOut" => RunStatus.TimedOut,
+        RunStatusNames.Succeeded => RunStatus.Succeeded,
+        RunStatusNames.Failed => RunStatus.Failed,
+        RunStatusNames.Cancelled => RunStatus.Cancelled,
+        RunStatusNames.TimedOut => RunStatus.TimedOut,
+        RunStatusNames.Skipped => RunStatus.Skipped,
         _ => RunStatus.Running
     };
 
     public static StepStatus ParseStepStatus(string? raw) =>
         Enum.TryParse<StepStatus>(raw, ignoreCase: true, out var parsed) ? parsed : StepStatus.Pending;
 
+    /// <summary>Every run status the engine persists as final (<see cref="RunStatusNames"/>), Skipped included.</summary>
     public static bool IsTerminal(string? status) =>
-        status is "Succeeded" or "Failed" or "Cancelled" or "TimedOut";
+        status is RunStatusNames.Succeeded or RunStatusNames.Failed or RunStatusNames.Cancelled
+            or RunStatusNames.TimedOut or RunStatusNames.Skipped;
 
     private static JsonElement ParseJson(string? json)
     {

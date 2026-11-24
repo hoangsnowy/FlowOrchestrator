@@ -51,13 +51,23 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
     /// Convenience wrapper around <see cref="TriggerAsync"/> for webhook-typed triggers.
     /// Sends the trigger with type <c>"Webhook"</c> and trigger key <paramref name="slug"/>.
     /// </summary>
+    /// <param name="slug">Manifest trigger key of the webhook trigger.</param>
+    /// <param name="body">Trigger body — accessible via <c>@triggerBody()</c> expressions.</param>
+    /// <param name="headers">
+    /// Request headers. Like the dashboard webhook endpoint, credential and transport headers
+    /// (<c>Authorization</c>, <c>Cookie</c>, <c>X-Webhook-Key</c>, … — see <see cref="TriggerHeaderPolicy"/>) are
+    /// dropped, so <c>@triggerHeaders()</c> sees exactly what a production run would.
+    /// </param>
+    /// <param name="timeout">Maximum wall-clock time to wait. Defaults to 30 seconds.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns>A <see cref="FlowTestRunResult"/> snapshot at the time the wait ended.</returns>
     public Task<FlowTestRunResult> TriggerWebhookAsync(
         string slug,
         object? body = null,
         IDictionary<string, string>? headers = null,
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default) =>
-        TriggerInternalAsync(slug, triggerType: "Webhook", body, headers, timeout, cancellationToken);
+        TriggerInternalAsync(slug, triggerType: "Webhook", body, WithoutExcludedHeaders(headers), timeout, cancellationToken);
 
     /// <summary>
     /// Advances the frozen clock supplied via <see cref="FlowTestHostBuilder{TFlow}.WithSystemClock"/>
@@ -144,6 +154,26 @@ public sealed class FlowTestHost<TFlow> : IAsyncDisposable where TFlow : class, 
         return await RunPoller
             .WaitForTerminalAsync(runStore, runId, timeout ?? DefaultTimeout, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Drops the headers an HTTP trigger never captures (<see cref="TriggerHeaderPolicy"/>).</summary>
+    private static IDictionary<string, string>? WithoutExcludedHeaders(IDictionary<string, string>? headers)
+    {
+        if (headers is null)
+        {
+            return null;
+        }
+
+        var kept = new Dictionary<string, string>(headers.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in headers)
+        {
+            if (!TriggerHeaderPolicy.IsExcluded(name))
+            {
+                kept[name] = value;
+            }
+        }
+
+        return kept;
     }
 
     private void ThrowIfDisposed()

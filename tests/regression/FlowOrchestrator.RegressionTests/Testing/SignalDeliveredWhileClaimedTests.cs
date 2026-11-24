@@ -119,7 +119,7 @@ public sealed class SignalDeliveredWhileClaimedTests
         // Arrange — same race on a loop child: the runtime key is "loop.0.wait", which is what the
         // handler registers the waiter under and what the post-release re-check must read.
         var store = new RacingSignalStore(holdUntilNudgeLosesClaim: true);
-        using var claimLost = new ClaimLostListener(LoopApprovalFlow.ChildKey);
+        using var claimLost = new ClaimLostListener(LoopApprovalFlow.ChildMetricKey);
         store.ClaimLost = claimLost.FirstLoss;
         await using var host = await FlowTestHost.For<LoopApprovalFlow>()
             .WithService<IFlowSignalStore>(store)
@@ -147,6 +147,12 @@ public sealed class SignalDeliveredWhileClaimedTests
 
         /// <summary>Runtime key of the single iteration's parked child.</summary>
         public const string ChildKey = "loop.0.wait";
+
+        /// <summary>
+        /// The child's <c>step_key</c> metric tag: the manifest key, since step metrics no longer carry the
+        /// iteration index (one series per loop child, not per iteration).
+        /// </summary>
+        public const string ChildMetricKey = "loop.wait";
 
         /// <inheritdoc/>
         public Guid Id { get; } = new("cccccccc-1901-1901-1901-cccccccccccc");

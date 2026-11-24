@@ -72,40 +72,71 @@ public static class SseEndpointHandler
         await using var registration = broadcaster.Register(connection);
 
         using var heartbeat = new PeriodicTimer(heartbeatInterval ?? HeartbeatInterval);
+
+        // One writer at a time: the heartbeat and the event loop share this response body, and ASP.NET Core
+        // does not support concurrent writes to it (frames interleave, or the pipe throws). A SemaphoreSlim,
+        // not a Monitor lock, because the critical section awaits the write and the flush.
+        using var writeGate = new SemaphoreSlim(1, 1);
+
+        // Ends both loops when either finishes, so the heartbeat never writes after this handler returned.
+        using var loops = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var heartbeatTask = HeartbeatLoopAsync(response, heartbeat, writeGate, loops.Token);
+        var readerTask = ReaderLoopAsync(response, connection, writeGate, loops.Token);
         try
         {
             // Two cooperating loops: one drains events as they arrive, the other emits keep-alive
             // comments. Whichever completes (cancellation, channel closed, write failure) ends the
             // request.
-            var heartbeatTask = HeartbeatLoopAsync(response, heartbeat, ct);
-            var readerTask = ReaderLoopAsync(response, connection, ct);
-
             await Task.WhenAny(heartbeatTask, readerTask).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        finally
         {
-            // Client disconnect or host shutdown — expected, swallow.
-        }
-        catch (IOException)
-        {
-            // Broken pipe — also expected on disconnect.
+            await loops.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await Task.WhenAll(heartbeatTask, readerTask).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Client disconnect or host shutdown — expected, swallow.
+            }
+            catch (IOException)
+            {
+                // Broken pipe — also expected on disconnect.
+            }
         }
     }
 
-    private static async Task HeartbeatLoopAsync(HttpResponse response, PeriodicTimer timer, CancellationToken ct)
+    private static async Task HeartbeatLoopAsync(HttpResponse response, PeriodicTimer timer, SemaphoreSlim writeGate, CancellationToken ct)
     {
         while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
         {
-            await response.WriteAsync(HeartbeatFrame, ct).ConfigureAwait(false);
-            await response.Body.FlushAsync(ct).ConfigureAwait(false);
+            await writeGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await response.WriteAsync(HeartbeatFrame, ct).ConfigureAwait(false);
+                await response.Body.FlushAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                writeGate.Release();
+            }
         }
     }
 
-    private static async Task ReaderLoopAsync(HttpResponse response, SseConnection connection, CancellationToken ct)
+    private static async Task ReaderLoopAsync(HttpResponse response, SseConnection connection, SemaphoreSlim writeGate, CancellationToken ct)
     {
         await foreach (var evt in connection.Reader.ReadAllAsync(ct).ConfigureAwait(false))
         {
-            await WriteEventAsync(response, evt, ct).ConfigureAwait(false);
+            await writeGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await WriteEventAsync(response, evt, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                writeGate.Release();
+            }
         }
     }
 

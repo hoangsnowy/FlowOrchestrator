@@ -169,6 +169,11 @@ public static class PartnerSchemeRegistry
             HeaderValuePrefix = "HMAC ",
             Algorithm = HmacAlgorithm.Sha256,
             Encoding = SignatureEncoding.Base64,
+            // "Base64-decode the security token provided by Teams when you registered the Outgoing Webhook
+            // and use the resulting bytes as the HMAC key." — Microsoft Learn, "Create an Outgoing Webhook",
+            // https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-outgoing-webhook
+            // (reference sample: Convert.FromBase64String(signingKey)).
+            KeyEncoding = HmacKeyEncoding.Base64,
             SignedPayloadStrategy = SignedPayloadStrategy.RawBody,
         });
 

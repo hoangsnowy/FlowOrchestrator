@@ -23,6 +23,12 @@ public sealed record WebhookSignatureSpec
     /// <summary>Wire-format encoding of the digest.</summary>
     public SignatureEncoding Encoding { get; init; } = SignatureEncoding.HexLower;
 
+    /// <summary>
+    /// How the configured key string becomes the HMAC key bytes. <see cref="HmacKeyEncoding.Utf8"/> for every
+    /// built-in scheme except Microsoft Teams, which keys with the base64-decoded security token.
+    /// </summary>
+    public HmacKeyEncoding KeyEncoding { get; init; } = HmacKeyEncoding.Utf8;
+
     /// <summary>Optional prefix stripped from each candidate value before decoding (e.g. <c>"sha256="</c>).</summary>
     public string? Prefix { get; init; }
 

@@ -32,7 +32,7 @@ Every `With*` call returns the same builder for chaining; `BuildAsync()` returns
 | `WithService<TService, TImpl>()` | Registers a singleton implementation resolved from DI. |
 | `WithLogging(builder => ...)` | Configures the logging pipeline (defaults to silent). |
 | `WithSystemClock(now)` | Freezes the clock used by the in-memory cron dispatcher. |
-| `WithFastPolling(maxDelay = null)` | Caps polling reschedule delays so a 30s manifest interval collapses to ~100ms in tests. |
+| `WithFastPolling(maxDelay = null)` | Caps polling reschedule delays so a 30s manifest interval collapses to ~100ms in tests. Only the delay changes: the claim guard and every store behaviour stay those of production. |
 | `WithCustomConfiguration(opts => ...)` | Escape hatch for advanced `FlowOrchestratorBuilder` tweaks. |
 
 ## Triggering a run
@@ -49,8 +49,12 @@ var result = await host.TriggerAsync(
 var result = await host.TriggerWebhookAsync(
     slug: "order-fulfillment",
     body: new { orderId = "ord_123" },
-    headers: new Dictionary<string, string> { ["X-Webhook-Key"] = "secret" });
+    headers: new Dictionary<string, string> { ["X-Request-Id"] = "req-1" });
 ```
+
+`TriggerWebhookAsync` drops the headers the dashboard webhook endpoint never captures — `Authorization`,
+`Cookie`, `Set-Cookie`, `X-Webhook-Key`, `Proxy-Authorization` and the transport headers
+(`TriggerHeaderPolicy`) — so `@triggerHeaders()` sees what a production run would.
 
 The host polls `IFlowRunStore` until the run reaches a terminal status or `timeout` elapses. The default timeout is 30 seconds. `result.TimedOut` is `true` when the timeout fired before completion.
 
@@ -58,7 +62,8 @@ The host polls `IFlowRunStore` until the run reaches a terminal status or `timeo
 
 ```csharp
 result.RunId          // Guid the engine assigned
-result.Status         // Succeeded | Failed | Cancelled | TimedOut | Running
+result.Status         // Succeeded | Failed | Cancelled | TimedOut | Skipped | Running
+                      // (Skipped: every leaf step was skipped, e.g. by a false When clause)
 result.Duration       // Wall-clock time TriggerAsync spent waiting
 result.TimedOut       // true when test-host timeout fired (run may still be in flight)
 result.Events         // Run timeline (run/step started, completed, failed, pending, skipped), derived from step attempts

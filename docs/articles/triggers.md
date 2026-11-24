@@ -135,6 +135,9 @@ X-Webhook-Key: my-secret-key
 { "orderId": "ORD-456", "total": 129.99 }
 ```
 
+- The body may be JSON or `application/x-www-form-urlencoded`. A form body reaches the run as a JSON
+  object (`Body=hi&From=%2B1555` becomes `{ "Body": "hi", "From": "+1555" }`; a repeated field becomes an
+  array), so `@triggerBody()?.From` reads the same either way.
 - `webhookSlug` — URL path segment. Must be unique across all registered webhooks.
 - `webhookSecret` — When set, every incoming request must include `X-Webhook-Key: {secret}`. Requests without or with the wrong secret receive `401 Unauthorized`.
 - If `webhookSecret` is omitted, the endpoint is unauthenticated.
@@ -167,7 +170,10 @@ invalid requests are accepted, you are in `Off`.
 
 Note the asymmetry with the legacy `webhookSecret` / `X-Webhook-Key` check, which runs *outside* the
 pipeline and therefore rejects with `401` whatever the enforcement mode is. `webhookSecret` secures an
-endpoint on its own; `webhookHmacKey` does not.
+endpoint on its own; `webhookHmacKey` does not. The one exception: when the trigger also sets
+`webhookSignatureScheme` and the signature **verified**, `webhookSecret` is acting as the HMAC key and the
+`X-Webhook-Key` check is skipped — publishers such as GitHub never send that header. A signature that did
+not verify (for example under `Audit`) still has to pass the `X-Webhook-Key` check.
 
 Configure per flow via manifest inputs. The full set of v1.25 fields:
 

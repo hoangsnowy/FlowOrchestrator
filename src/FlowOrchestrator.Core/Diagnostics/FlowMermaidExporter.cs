@@ -32,6 +32,7 @@ public static class FlowMermaidExporter
     {
         ArgumentNullException.ThrowIfNull(manifest);
         var opts = options ?? new MermaidExportOptions();
+        var ids = NodeIds.For(manifest, opts.IncludeTriggers);
 
         var sb = new StringBuilder();
         sb.Append("flowchart ").AppendLine(opts.Direction);
@@ -47,29 +48,29 @@ public static class FlowMermaidExporter
 
         if (opts.IncludeTriggers && manifest.Triggers.Count > 0)
         {
-            EmitTriggerNodes(sb, manifest, opts);
+            EmitTriggerNodes(sb, manifest, opts, ids);
             sb.AppendLine();
         }
 
-        EmitStepNodes(sb, manifest.Steps, opts);
+        EmitStepNodes(sb, manifest.Steps, opts, ids);
 
         if (opts.IncludeTriggers && manifest.Triggers.Count > 0)
         {
             sb.AppendLine();
-            EmitTriggerEdges(sb, manifest);
+            EmitTriggerEdges(sb, manifest, ids);
         }
 
         sb.AppendLine();
-        EmitStepEdges(sb, manifest.Steps);
+        EmitStepEdges(sb, manifest.Steps, ids);
 
         return sb.ToString().TrimEnd() + "\n";
     }
 
-    private static void EmitTriggerNodes(StringBuilder sb, FlowManifest manifest, MermaidExportOptions opts)
+    private static void EmitTriggerNodes(StringBuilder sb, FlowManifest manifest, MermaidExportOptions opts, NodeIds ids)
     {
         foreach (var (name, trigger) in manifest.Triggers)
         {
-            var id = "T_" + SafeId(name);
+            var id = ids.Trigger(name);
             var label = BuildTriggerLabel(name, trigger);
             sb.Append("    ").Append(id).Append("[\"").Append(label).Append("\"]");
             if (opts.ApplyStyling)
@@ -80,28 +81,28 @@ public static class FlowMermaidExporter
         }
     }
 
-    private static void EmitStepNodes(StringBuilder sb, StepCollection steps, MermaidExportOptions opts)
+    private static void EmitStepNodes(StringBuilder sb, StepCollection steps, MermaidExportOptions opts, NodeIds ids)
     {
         foreach (var (key, metadata) in steps)
         {
             if (metadata is LoopStepMetadata loop)
             {
-                EmitLoopSubgraph(sb, key, loop, opts);
+                EmitLoopSubgraph(sb, key, loop, opts, ids);
                 continue;
             }
 
-            EmitStepNode(sb, key, metadata, opts, indent: "    ");
+            EmitStepNode(sb, ids.Step(key), key, metadata, opts, indent: "    ");
         }
     }
 
     private static void EmitStepNode(
         StringBuilder sb,
+        string id,
         string key,
         StepMetadata metadata,
         MermaidExportOptions opts,
         string indent)
     {
-        var id = SafeId(key);
         var label = BuildStepLabel(key, metadata, opts);
         sb.Append(indent).Append(id).Append("[\"").Append(label).Append("\"]");
 
@@ -121,9 +122,10 @@ public static class FlowMermaidExporter
         StringBuilder sb,
         string key,
         LoopStepMetadata loop,
-        MermaidExportOptions opts)
+        MermaidExportOptions opts,
+        NodeIds ids)
     {
-        var id = SafeId(key);
+        var id = ids.Step(key);
         var subgraphId = "subgraph_" + id;
         var titleType = string.IsNullOrEmpty(loop.Type) ? "ForEach" : EscapeLabel(loop.Type);
         var title = $"🔁 {EscapeLabel(key)} ({titleType})";
@@ -141,7 +143,7 @@ public static class FlowMermaidExporter
         sb.Append("    subgraph ").Append(subgraphId).Append("[\"").Append(title).Append("\"]").AppendLine();
         foreach (var (childKey, childMeta) in loop.Steps)
         {
-            EmitStepNode(sb, childKey, childMeta, opts, indent: "        ");
+            EmitStepNode(sb, ids.Child(key, childKey), childKey, childMeta, opts, indent: "        ");
         }
         sb.AppendLine("    end");
 
@@ -149,7 +151,7 @@ public static class FlowMermaidExporter
         sb.Append("    ").Append(id).Append(" --> ").Append(subgraphId).AppendLine();
     }
 
-    private static void EmitTriggerEdges(StringBuilder sb, FlowManifest manifest)
+    private static void EmitTriggerEdges(StringBuilder sb, FlowManifest manifest, NodeIds ids)
     {
         var entrySteps = manifest.Steps
             .Where(kvp => kvp.Value.RunAfter.Count == 0)
@@ -161,16 +163,16 @@ public static class FlowMermaidExporter
             return;
         }
 
-        foreach (var triggerId in manifest.Triggers.Keys.Select(t => "T_" + SafeId(t)))
+        foreach (var triggerId in manifest.Triggers.Keys.Select(ids.Trigger))
         {
             foreach (var entry in entrySteps)
             {
-                sb.Append("    ").Append(triggerId).Append(" --> ").Append(SafeId(entry)).AppendLine();
+                sb.Append("    ").Append(triggerId).Append(" --> ").Append(ids.Step(entry)).AppendLine();
             }
         }
     }
 
-    private static void EmitStepEdges(StringBuilder sb, StepCollection steps)
+    private static void EmitStepEdges(StringBuilder sb, StepCollection steps, NodeIds ids)
     {
         foreach (var (key, metadata) in steps)
         {
@@ -198,9 +200,9 @@ public static class FlowMermaidExporter
                 }
 
                 sb.Append("    ")
-                  .Append(SafeId(predecessorKey))
+                  .Append(ids.Step(predecessorKey))
                   .Append(" -- ").Append(string.Join(' ', labelParts)).Append(" --> ")
-                  .Append(SafeId(key))
+                  .Append(ids.Step(key))
                   .AppendLine();
             }
         }
@@ -283,6 +285,96 @@ public static class FlowMermaidExporter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Assigns every node of one export a Mermaid id that no other node shares.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SafeId"/> alone is lossy: <c>fetch-data</c> and <c>fetch_data</c> both become
+    /// <c>fetch_data</c>, and a child key repeated in two loops (or matching a top-level key) would be one
+    /// node — Mermaid then draws a single box carrying the edges of both. Ids are handed out in emission
+    /// order: the first node with a given sanitized id keeps it, so a manifest without collisions renders
+    /// exactly as before. A later loop child is qualified with its loop (<c>refunds__work</c>); any other
+    /// later node gets a stable FNV-1a suffix of its raw key (<c>fetch_data_1a2b3c4d</c>), and a counter
+    /// settles the (theoretical) case where that still collides.
+    /// </remarks>
+    private sealed class NodeIds
+    {
+        private readonly Dictionary<string, string> _triggers = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _steps = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string Loop, string Child), string> _children = new();
+        private readonly HashSet<string> _taken = new(StringComparer.Ordinal);
+
+        public static NodeIds For(FlowManifest manifest, bool includeTriggers)
+        {
+            var ids = new NodeIds();
+            if (includeTriggers)
+            {
+                foreach (var name in manifest.Triggers.Keys)
+                {
+                    ids._triggers[name] = ids.Claim("T_" + SafeId(name), "trigger:" + name, qualified: null);
+                }
+            }
+
+            foreach (var (key, metadata) in manifest.Steps)
+            {
+                ids._steps[key] = ids.Claim(SafeId(key), key, qualified: null);
+                if (metadata is LoopStepMetadata loop)
+                {
+                    foreach (var childKey in loop.Steps.Keys)
+                    {
+                        ids._children[(key, childKey)] = ids.Claim(
+                            SafeId(childKey),
+                            key + "." + childKey,
+                            qualified: SafeId(key) + "__" + SafeId(childKey));
+                    }
+                }
+            }
+
+            return ids;
+        }
+
+        public string Trigger(string name) => _triggers.TryGetValue(name, out var id) ? id : "T_" + SafeId(name);
+
+        /// <summary>Id of a top-level step; a key the manifest does not declare (a dangling RunAfter) keeps its sanitized form.</summary>
+        public string Step(string key) => _steps.TryGetValue(key, out var id) ? id : SafeId(key);
+
+        public string Child(string loopKey, string childKey) => _children[(loopKey, childKey)];
+
+        private string Claim(string preferred, string rawPath, string? qualified)
+        {
+            if (_taken.Add(preferred))
+            {
+                return preferred;
+            }
+
+            if (qualified is not null && _taken.Add(qualified))
+            {
+                return qualified;
+            }
+
+            var hashed = (qualified ?? preferred) + "_" + Fnv1a(rawPath).ToString("x8", System.Globalization.CultureInfo.InvariantCulture);
+            var candidate = hashed;
+            for (var n = 2; !_taken.Add(candidate); n++)
+            {
+                candidate = hashed + "_" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            return candidate;
+        }
+
+        /// <summary>32-bit FNV-1a over the UTF-16 code units: stable across processes, unlike <see cref="string.GetHashCode()"/>.</summary>
+        private static uint Fnv1a(string value)
+        {
+            var hash = 2166136261u;
+            foreach (var ch in value)
+            {
+                hash = (hash ^ ch) * 16777619u;
+            }
+
+            return hash;
+        }
     }
 
     private static string EscapeLabel(string value)

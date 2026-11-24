@@ -221,6 +221,81 @@ where one provider behaved differently from the others.
   copy passed to `ConfigureRunAsync`) to deduplicate exactly like the built-in stores. See
   [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
 
+### Fixed — webhooks, dashboard REST, FlowTestHost and telemetry
+
+- **Microsoft Teams outgoing webhooks verify.** The verifier never saw the `Authorization` header Teams
+  signs in (the endpoint strips it from the captured headers), and it keyed the HMAC with the token's UTF-8
+  bytes instead of the base64-**decoded** security token Microsoft documents. The signature header is now
+  handed to the verifier only — still never captured, stored or logged — and
+  `WebhookSignatureSpec.KeyEncoding` (`HmacKeyEncoding.Base64` for Teams) selects the key bytes.
+- **`webhookSecret` used as the HMAC key works with a signature scheme.** After the signature verified,
+  the endpoint still demanded `X-Webhook-Key` = the key, which GitHub, Stripe & co. never send, so every
+  signed delivery got `401`. The legacy check is skipped when a signature scheme verified the request
+  (`PipelineResult.SignatureVerified`); without a scheme, or when the signature failed under `Audit`, it
+  still applies.
+- **Form-encoded webhook deliveries (Twilio) are accepted.** `application/x-www-form-urlencoded` bodies
+  used to get `400 Invalid JSON payload.` and the verifier received no form fields. The form is now parsed
+  into a JSON-object trigger body (one string per field, an array for a repeated field) and its fields are
+  passed to the verifier (new `WebhookSecurityPipeline.EvaluateAsync` overload,
+  `WebhookRequestBuffer.BufferedBody.FormFields`). A malformed form is `400 Invalid form payload.`
+- **Host-wide replay protection accepts body-only signed publishers** (GitHub, Shopify, Linear, Dropbox,
+  Bitbucket, Atlassian, Teams). They send no timestamp header and were rejected `409 missing_timestamp`. A
+  verified signature without a signed timestamp is now keyed on the body hash for `2 × tolerance`, as
+  `ReplayProtectionGate` documents; unsigned timestamp headers are ignored for it.
+- **Webhook rate limits are per trigger.** The bucket key was the flow id, and a bucket kept the
+  parameters it was first created with, so two webhook triggers of one flow shared the first one's limit.
+  Keys are now `flowId|triggerKey[|clientIp]` and a bucket follows its trigger's inputs.
+- **Rerun replays the original trigger headers.** It read `FlowRunRecord.TriggerHeaders`, which no store
+  fills from `GetRunAsync`, so every `@triggerHeaders()` input of a rerun was `null`. Headers now come from
+  `IOutputsRepository` (idempotency header still stripped).
+- **Client disconnects and truncated bodies no longer surface as unhandled exceptions** on the webhook
+  endpoint (mapped outside the dashboard group, so its disconnect filter never applied) or on any dashboard
+  endpoint (`BadHttpRequestException` was not handled). One shared filter answers `499` when the caller is
+  gone and the exception's own status (`400` / `413`) with a short JSON error when it is not.
+- **`POST /api/runs/{id}/cancel` with a malformed reason body** is `400`, not `500`.
+- **A run search with `to` near year 1** (or a very large `RunSearchWindow`) no longer returns `500`; the
+  default window start clamps to `DateTimeOffset.MinValue`. Same for the webhook-delivery search.
+- **`GET /api/flows/{id}/mermaid` honours `Accept-Encoding`** (Brotli / Gzip, `CompressionLevel.Fastest`)
+  and sends `Vary: Accept-Encoding`, like every other dashboard endpoint.
+- **Mermaid export gives every node a distinct id.** `fetch-data` and `fetch_data`, or a child key used
+  in two loops, collapsed into one node carrying both nodes' edges. The first node keeps its sanitized id
+  (exports without collisions are byte-identical); a later loop child is qualified with its loop
+  (`refunds__work`) and any other later node gets a stable hash suffix.
+- **SSE heartbeats no longer write concurrently with an event frame** on the same response; writes are
+  serialised and the heartbeat stops when the event loop does.
+- **Step metrics tag the manifest step key.** `step_key` on `flow_step_duration_ms`, queue delay, claim
+  lost, poll attempts, retries, skips and signal wait carried the runtime key `loop.N.child`, one time
+  series per ForEach iteration (unbounded cardinality, past the OpenTelemetry 2,000-series default cap). It
+  is now the template key (`loop.child`); spans and logs keep the runtime key. ~60 ns / 0 B per loop-step
+  metric (`docs/benchmarks/metric-step-key-2026-11-24.md`).
+- **`webhookReplayToleranceSeconds` outside `0 … 2147483647` fails `MapFlowDashboard` at startup.** It was
+  truncated to `int`, so `4294967296` became `0` and silently disabled replay protection.
+- **FlowTestHost matches the production runtime.** `RunStatus.Skipped` is new and terminal, so a run whose
+  every leaf was When-skipped completes instead of timing out as `Running`. `WithFastPolling()` no longer
+  replaces the runtime store with a wrapper that granted every claim (a duplicate delivery executed twice)
+  and dropped the When evaluation trace of skipped steps; it now only clamps the reschedule delay.
+  `TriggerWebhookAsync` drops `Authorization`, `Cookie`, `X-Webhook-Key` and transport headers like the
+  dashboard endpoint (shared list: the new `TriggerHeaderPolicy` in Core).
+
+#### Read before upgrading
+
+- **Microsoft Teams:** `webhookHmacKey` must be the security token exactly as Teams shows it (base64). A
+  key that is not valid base64 is rejected as `KeyNotConfigured`.
+- **Rate limits:** a flow with several webhook triggers now gets one budget per trigger instead of one
+  shared budget — the effective flow-wide limit is the sum of its triggers' limits.
+- **Replay protection, body-only schemes:** a byte-identical delivery inside `2 × webhookReplayToleranceSeconds`
+  is rejected `409`, including a publisher's own manual redelivery of the same payload. An unsigned
+  timestamp header sent alongside such a signature no longer causes `409 skew_exceeded`.
+- **Webhook bodies:** a request declaring `application/x-www-form-urlencoded` is parsed as a form, not as
+  JSON, so `@triggerBody()` is the field object.
+- **Dashboards & alerts on step metrics:** `step_key` values of loop children change from `loop.N.child`
+  to `loop.child`; queries filtering on a specific iteration index must move to traces.
+- **Tests on FlowTestHost:** a run that ends `Skipped` now returns `RunStatus.Skipped` with
+  `TimedOut = false` (it used to return `Running` / `TimedOut = true`). Under `WithFastPolling()` a duplicate
+  delivery of the same step is now absorbed by the claim guard, as in production.
+- **Startup:** an out-of-range `webhookReplayToleranceSeconds` (negative, or above `int.MaxValue`) now
+  throws from `MapFlowDashboard`.
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates

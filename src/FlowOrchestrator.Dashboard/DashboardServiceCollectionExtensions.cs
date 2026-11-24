@@ -31,14 +31,6 @@ namespace FlowOrchestrator.Dashboard;
 /// </summary>
 public static class DashboardServiceCollectionExtensions
 {
-    // Headers excluded from trigger capture: sensitive auth/session headers and low-level transport headers
-    private static readonly HashSet<string> _sensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Authorization", "Cookie", "Set-Cookie",
-        "X-Webhook-Key", "Proxy-Authorization",
-        "Connection", "Transfer-Encoding", "Upgrade", "Content-Length"
-    };
-
     /// <summary>
     /// Registers core dashboard services with default options.
     /// </summary>
@@ -245,35 +237,11 @@ public static class DashboardServiceCollectionExtensions
 
         // A caller that goes away mid-request — a load balancer timing out, a closed browser tab, a
         // fire-and-forget webhook — cancels HttpContext.RequestAborted, and every store call that
-        // honours it then throws. Without this filter that exception reaches the diagnostics
-        // middleware and is counted as an unhandled fault, so `aspnetcore.diagnostics.exceptions`
-        // climbs and the app reads as broken when nothing is. Swallow it only when the request was
-        // genuinely aborted: there is no response to write at that point, and a cancellation from
-        // any other source must still surface. Registered before the auth filter so it also covers
-        // a disconnect during authentication.
-        group.AddEndpointFilter(async (ctx, next) =>
-        {
-            try
-            {
-                return await next(ctx);
-            }
-            catch (OperationCanceledException) when (ctx.HttpContext.RequestAborted.IsCancellationRequested)
-            {
-                // No body can reach the caller — the socket is already gone — but the status code is
-                // still what access logs and http.server.request.duration record for this request.
-                // Leaving it at the default 200 would file an abandoned request as a success and
-                // hide disconnect rates entirely. 499 is nginx's "client closed request": not an
-                // IANA code, but the conventional one, and unambiguous in a latency histogram.
-                // Guarded because the status is immutable once the response has started, which is
-                // the normal case for the SSE stream.
-                if (!ctx.HttpContext.Response.HasStarted)
-                {
-                    ctx.HttpContext.Response.StatusCode = 499;
-                }
-
-                return Results.Empty;
-            }
-        });
+        // honours it then throws; a body read cut short throws BadHttpRequestException. Without this
+        // filter either reaches the diagnostics middleware as an unhandled fault. Registered before the
+        // auth filter so it also covers a disconnect during authentication, and on the webhook endpoint,
+        // which is mapped outside this group.
+        group.AddEndpointFilter(ClientDisconnectFilter);
 
         // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side. With
         // neither configured, anonymous callers are operators only in Development (or when the host
@@ -382,8 +350,8 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            http.Response.ContentType = "text/plain; charset=utf-8";
-            await http.Response.WriteAsync(flow.ToMermaid());
+            // Multi-KB for real flows and rendered per request: negotiated like the JSON endpoints.
+            await WriteTextAsync(http.Response, flow.ToMermaid(), "text/plain; charset=utf-8");
         });
 
         group.MapPost("/api/flows/{id:guid}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
@@ -441,7 +409,7 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .Where(h => !TriggerHeaderPolicy.IsExcluded(h.Key))
                 .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             var ctx = new TriggerContext
@@ -560,30 +528,41 @@ public static class DashboardServiceCollectionExtensions
                 await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
                 return;
             }
+            if (buffered.Status == WebhookRequestBuffer.BufferStatus.InvalidForm)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Invalid form payload." });
+                return;
+            }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .Where(h => !TriggerHeaderPolicy.IsExcluded(h.Key))
                 .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             // Run the webhook security pipeline (signature verification today;
             // replay / rate-limit / IP allowlist plug into the same gate chain
             // in later phases).
             var pipeline = http.RequestServices.GetService<WebhookSecurityPipeline>();
+            var signatureVerified = false;
             if (pipeline is not null && triggerInputs is not null)
             {
                 var inputsRo = (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>(triggerInputs, StringComparer.OrdinalIgnoreCase);
-                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, http.RequestAborted);
+                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, buffered.FormFields, http.RequestAborted);
                 if (verdict.Decision == WebhookSecurityPipeline.Decision.Reject)
                 {
                     http.Response.StatusCode = verdict.StatusCode;
                     await WriteJsonAsync(http.Response, new { error = "Webhook rejected by security pipeline.", reason = verdict.Reason });
                     return;
                 }
+                signatureVerified = verdict.SignatureVerified;
             }
 
             // Backwards-compat shared-secret check (kept after the pipeline so flows
             // that haven't migrated to webhookSignatureScheme still authenticate).
-            if (!string.IsNullOrEmpty(expectedSecret))
+            // Skipped when a signature scheme verified the request: webhookSecret is then the
+            // legacy alias of the HMAC key, and the publisher (GitHub, Stripe, …) never sends it
+            // back as X-Webhook-Key, so demanding it would reject every correctly signed delivery.
+            if (!string.IsNullOrEmpty(expectedSecret) && !signatureVerified)
             {
                 var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
                     ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
@@ -619,7 +598,7 @@ public static class DashboardServiceCollectionExtensions
             if (webhookLogger is not null)
                 WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
             await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
-        });
+        }).AddEndpointFilter(ClientDisconnectFilter);
 
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
         {
@@ -670,7 +649,7 @@ public static class DashboardServiceCollectionExtensions
             {
                 var options = http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
                 var clock = http.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System;
-                receivedFrom = clock.GetUtcNow() - options.EffectiveRunSearchWindow;
+                receivedFrom = RunListRequest.WindowStart(clock.GetUtcNow(), options.EffectiveRunSearchWindow);
                 windowDefaulted = true;
             }
 
@@ -968,7 +947,18 @@ public static class DashboardServiceCollectionExtensions
                     return;
                 }
 
-                var payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                JsonElement payload;
+                try
+                {
+                    payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                }
+                catch (JsonException)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
+                    return;
+                }
+
                 if (payload.ValueKind == JsonValueKind.Object
                     && payload.TryGetProperty("reason", out var reasonProp)
                     && reasonProp.ValueKind == JsonValueKind.String)
@@ -1227,7 +1217,14 @@ public static class DashboardServiceCollectionExtensions
             // Idempotency-Key would hit the engine's dedup path, return the original
             // RunId, and silently drop the rerun (the user would see the success message
             // but no new run would actually start).
-            var rehydratedHeaders = StripIdempotencyHeader(run.TriggerHeaders, runControlOptions.IdempotencyHeaderName);
+            // Headers live in IOutputsRepository (run detail reads them from there too); no store fills
+            // FlowRunRecord.TriggerHeaders from GetRunAsync, so reading only the record replayed none and
+            // every @triggerHeaders() input of the rerun resolved null. Resolved with a fallback per the
+            // dashboard DI rule.
+            var originalHeaders = run.TriggerHeaders;
+            if (originalHeaders is null && http.RequestServices.GetService<IOutputsRepository>() is { } outputs)
+                originalHeaders = await outputs.GetTriggerHeadersAsync(runId);
+            var rehydratedHeaders = StripIdempotencyHeader(originalHeaders, runControlOptions.IdempotencyHeaderName);
 
             var triggerKey = string.IsNullOrWhiteSpace(run.TriggerKey) ? "manual" : run.TriggerKey!;
             var ctx = new TriggerContext
@@ -1548,6 +1545,65 @@ public static class DashboardServiceCollectionExtensions
         return endpoints;
     }
 
+    /// <summary>
+    /// Endpoint filter that turns a client disconnect into a quiet, correctly-logged response instead of
+    /// an unhandled exception, on every dashboard endpoint and the webhook receiver.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="OperationCanceledException"/> is swallowed only when <see cref="HttpContext.RequestAborted"/>
+    /// fired — a cancellation from any other source must still surface. No body can reach the caller, but
+    /// the status code is still what access logs and <c>http.server.request.duration</c> record: leaving it
+    /// at the default 200 would file an abandoned request as a success. 499 is nginx's "client closed
+    /// request": not an IANA code, but the conventional one.
+    /// </para>
+    /// <para>
+    /// <see cref="BadHttpRequestException"/> is what Kestrel throws from the request body when the client
+    /// stops sending mid-upload ("Unexpected end of request content") or exceeds the server's body limit.
+    /// It becomes its own status (400 / 413) with a short JSON error when the caller is still connected,
+    /// and 499 with no body when it is not.
+    /// </para>
+    /// <para>
+    /// Status writes are guarded because the status is immutable once the response has started, which is
+    /// the normal case for the SSE stream.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<object?> ClientDisconnectFilter(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var http = ctx.HttpContext;
+        try
+        {
+            return await next(ctx);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            if (!http.Response.HasStarted)
+                http.Response.StatusCode = 499;
+            return Results.Empty;
+        }
+        catch (BadHttpRequestException ex)
+        {
+            if (http.Response.HasStarted)
+                return Results.Empty;
+            if (http.RequestAborted.IsCancellationRequested)
+            {
+                http.Response.StatusCode = 499;
+                return Results.Empty;
+            }
+
+            http.Response.StatusCode = ex.StatusCode;
+            try
+            {
+                await WriteJsonAsync(http.Response, new { error = "The request body could not be read." });
+            }
+            catch (Exception writeFailure) when (writeFailure is IOException or OperationCanceledException)
+            {
+                // The client went away while we answered; nothing more to do.
+            }
+            return Results.Empty;
+        }
+    }
+
     // We deliberately avoid HttpResponse.WriteAsJsonAsync — that helper writes
     // through HttpResponse.BodyWriter (a PipeWriter), and ASP.NET Core TestHost's
     // ResponseBodyPipeWriter did not implement PipeWriter.UnflushedBytes until
@@ -1615,6 +1671,47 @@ public static class DashboardServiceCollectionExtensions
         }
 
         await JsonSerializer.SerializeAsync(response.Body, value, _camelCaseOptions).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes a dynamically rendered text body (e.g. the Mermaid export), negotiating Brotli or Gzip per
+    /// the request's <c>Accept-Encoding</c> header and setting <c>Vary: Accept-Encoding</c> on every response.
+    /// </summary>
+    /// <param name="response">The response to write.</param>
+    /// <param name="text">The body; encoded as UTF-8.</param>
+    /// <param name="contentType">The <c>Content-Type</c> header value, including the charset.</param>
+    /// <remarks>
+    /// <see cref="System.IO.Compression.CompressionLevel.Fastest"/>, as for <see cref="WriteJsonAsync{T}"/>:
+    /// the body is rendered on every request, so encoder CPU per request outweighs the last few percent of
+    /// ratio.
+    /// </remarks>
+    internal static async Task WriteTextAsync(HttpResponse response, string text, string contentType)
+    {
+        response.ContentType = contentType;
+        response.Headers.Vary = "Accept-Encoding";
+
+        var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
+        var bytes = Encoding.UTF8.GetBytes(text);
+
+        if (HasEncoding(accept, "br"))
+        {
+            response.Headers.ContentEncoding = "br";
+            await using var brotli = new System.IO.Compression.BrotliStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await brotli.WriteAsync(bytes).ConfigureAwait(false);
+            return;
+        }
+
+        if (HasEncoding(accept, "gzip"))
+        {
+            response.Headers.ContentEncoding = "gzip";
+            await using var gzip = new System.IO.Compression.GZipStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await gzip.WriteAsync(bytes).ConfigureAwait(false);
+            return;
+        }
+
+        await response.Body.WriteAsync(bytes).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1831,9 +1928,14 @@ public static class DashboardServiceCollectionExtensions
         // Restricted WaitForSignal steps: a malformed restriction or an unknown policy fails here, like an
         // unknown ViewPolicy / OperatePolicy, rather than as a 403 on the first approval. Flows are read from
         // the root provider; a host that registers its FlowRegistry per scope is checked per request instead.
-        var restrictedSignals = services.GetService<FlowRegistry>() is { } registry
+        var startupRegistry = services.GetService<FlowRegistry>();
+        var restrictedSignals = startupRegistry is { } registry
             ? Security.SignalAuthorization.ValidateFlows(registry, services)
             : 0;
+        // Webhook inputs read as int (webhookReplayToleranceSeconds): an out-of-range value fails here
+        // rather than being misread on every delivery.
+        if (startupRegistry is not null)
+            WebhookSecurityPipeline.ValidateTriggerInputs(startupRegistry);
         if (restrictedSignals > 0 && !authorization.IsEnabled && logger is not null)
             Security.DashboardAuthLog.RestrictedSignalsWithoutIdentitySignIn(logger, restrictedSignals);
         if (authorization.UnregisteredFlowSignals == UnregisteredFlowSignalMode.OperatorRule && logger is not null)

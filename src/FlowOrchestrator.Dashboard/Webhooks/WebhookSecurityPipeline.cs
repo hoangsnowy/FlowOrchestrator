@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Dashboard.Webhooks.Logging;
@@ -98,7 +99,16 @@ public sealed class WebhookSecurityPipeline
     }
 
     /// <summary>Verdict including the HTTP status code and a precise reason chip.</summary>
-    public readonly record struct PipelineResult(Decision Decision, int StatusCode, string Reason, bool UsedRotationKey);
+    public readonly record struct PipelineResult(Decision Decision, int StatusCode, string Reason, bool UsedRotationKey)
+    {
+        /// <summary>
+        /// <see langword="true"/> when a signature scheme configured on the trigger verified this request
+        /// (built-in or DI-registered custom verifier). The endpoint skips the legacy <c>X-Webhook-Key</c>
+        /// shared-secret check in that case: the signature already authenticated the sender, and a
+        /// <c>webhookSecret</c> used as the HMAC key is never sent back as a header by the publisher.
+        /// </summary>
+        public bool SignatureVerified { get; init; }
+    }
 
     /// <summary>
     /// Runs the active gate chain (signature → replay). Caller passes the
@@ -111,6 +121,33 @@ public sealed class WebhookSecurityPipeline
     /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
     /// <param name="headers">Inbound request headers (case-insensitive).</param>
     /// <param name="ct">Cancellation token.</param>
+    public ValueTask<PipelineResult> EvaluateAsync(
+        HttpContext http,
+        Guid flowId,
+        string triggerKey,
+        IReadOnlyDictionary<string, object?> triggerInputs,
+        ReadOnlyMemory<byte> bodyBytes,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken ct = default)
+        => EvaluateAsync(http, flowId, triggerKey, triggerInputs, bodyBytes, headers, formFields: null, ct);
+
+    /// <summary>
+    /// Runs the active gate chain for a request whose body may be form-encoded. Caller passes the
+    /// resolved flow / trigger info, the buffered body bytes and — for an
+    /// <c>application/x-www-form-urlencoded</c> body — its decoded fields.
+    /// </summary>
+    /// <param name="http">HTTP context (used for client IP, absolute URL, activity tags).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key (manifest key).</param>
+    /// <param name="triggerInputs">Manifest inputs for the matching webhook trigger.</param>
+    /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
+    /// <param name="headers">Inbound request headers (case-insensitive).</param>
+    /// <param name="formFields">
+    /// Decoded form fields (<see cref="WebhookRequestBuffer.BufferedBody.FormFields"/>), handed to the
+    /// verifier for schemes that sign them (Twilio's <see cref="SignedPayloadStrategy.UrlPlusSortedForm"/>);
+    /// <see langword="null"/> for a JSON body.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
     public async ValueTask<PipelineResult> EvaluateAsync(
         HttpContext http,
         Guid flowId,
@@ -118,6 +155,7 @@ public sealed class WebhookSecurityPipeline
         IReadOnlyDictionary<string, object?> triggerInputs,
         ReadOnlyMemory<byte> bodyBytes,
         IReadOnlyDictionary<string, string> headers,
+        IReadOnlyDictionary<string, string>? formFields,
         CancellationToken ct = default)
     {
         var stopwatch = ValueStopwatch.StartNew();
@@ -140,15 +178,17 @@ public sealed class WebhookSecurityPipeline
         if (ipVerdict is { } reason)
             return await PersistRejectIpAsync(flowId, triggerKey, clientIp, reason, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
 
-        // ── Rate-limit gate (per flow [+ IP]) ──
+        // ── Rate-limit gate (per flow + trigger [+ IP]) ──
         if (_rateLimiter is not null)
         {
             var rateOpts = ResolveRateLimit(triggerInputs);
             if (rateOpts.IsEnabled)
             {
+                // Keyed per trigger, not per flow: two webhook triggers of one flow may declare different
+                // webhookRateLimit* inputs, and a shared bucket would hold both to whichever was hit first.
                 var key = rateOpts.PerIp && clientIp is not null
-                    ? $"{flowId}|{clientIp}"
-                    : flowId.ToString();
+                    ? $"{flowId}|{triggerKey}|{clientIp}"
+                    : $"{flowId}|{triggerKey}";
                 var rl = _rateLimiter.TryAcquire(key, rateOpts);
                 if (!rl.Allowed)
                     return await PersistRejectRateLimitAsync(flowId, triggerKey, key, rl.RetryAfter, clientIp, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
@@ -195,9 +235,9 @@ public sealed class WebhookSecurityPipeline
             var sigCtx = new WebhookSignatureContext
             {
                 Body = bodyBytes,
-                Headers = headers,
+                Headers = WithSignatureHeader(http, headers, spec),
                 AbsoluteUrl = BuildAbsoluteUrl(http),
-                FormFields = null,
+                FormFields = formFields,
                 Spec = spec,
                 HmacKey = key ?? string.Empty,
                 HmacKeyPrevious = previous,
@@ -258,7 +298,7 @@ public sealed class WebhookSecurityPipeline
 
         Activity.Current?.SetTag("flow.webhook.result", "accepted");
         EmitAccept(flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, spec?.HeaderName);
-        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation);
+        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation) { SignatureVerified = signatureVerified };
     }
 
     private async ValueTask<PipelineResult> PersistRejectSignatureAsync(
@@ -390,6 +430,30 @@ public sealed class WebhookSecurityPipeline
         };
     }
 
+    /// <summary>
+    /// Returns the header map the signature verifier sees: <paramref name="headers"/> plus the spec's
+    /// signature header read straight from the request when the endpoint stripped it from the captured
+    /// headers (Microsoft Teams signs in <c>Authorization</c>, which is never captured).
+    /// </summary>
+    /// <remarks>
+    /// The re-added value reaches the verifier only — the trigger headers, the delivery log and the log
+    /// lines keep using <paramref name="headers"/>, so a credential header is still never persisted.
+    /// Allocates a copy only for the schemes that need it; every other request returns the same instance.
+    /// </remarks>
+    private static IReadOnlyDictionary<string, string> WithSignatureHeader(
+        HttpContext http,
+        IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec)
+    {
+        var name = spec?.HeaderName;
+        if (string.IsNullOrEmpty(name) || headers.ContainsKey(name))
+            return headers;
+        if (!http.Request.Headers.TryGetValue(name, out var raw) || Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(raw))
+            return headers;
+
+        return new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase) { [name] = raw.ToString() };
+    }
+
     private static string? TryGetString(IReadOnlyDictionary<string, object?> map, string key) =>
         map.TryGetValue(key, out var v) && v is not null ? v as string ?? v.ToString() : null;
 
@@ -418,10 +482,54 @@ public sealed class WebhookSecurityPipeline
         return value switch
         {
             int i => i,
-            long l => (int)l,
+            // Clamp, never truncate: (int)4294967296L is 0, which silently disabled replay protection.
+            // ValidateTriggerInputs rejects such a value at startup; this guards flows it never saw.
+            long l => (int)Math.Clamp(l, int.MinValue, int.MaxValue),
             string s when int.TryParse(s, out var p) => p,
             _ => null,
         };
+    }
+
+    /// <summary>Integer-valued webhook trigger inputs that the pipeline reads as <see cref="int"/>.</summary>
+    private static readonly string[] IntegerInputs = ["webhookReplayToleranceSeconds"];
+
+    /// <summary>
+    /// Fails fast when a registered webhook trigger declares an integer input outside the
+    /// <see cref="int"/> range, instead of letting it be misread on every request.
+    /// </summary>
+    /// <param name="registry">The flows registered on the dashboard host.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a webhook trigger's <c>webhookReplayToleranceSeconds</c> is an integer (or integer string)
+    /// outside <c>0 … 2147483647</c>.
+    /// </exception>
+    /// <remarks>Startup-only: one pass over the registered triggers.</remarks>
+    internal static void ValidateTriggerInputs(FlowRegistry registry)
+    {
+        foreach (var flow in registry.Flows)
+        {
+            foreach (var (triggerKey, trigger) in flow.Manifest.Triggers)
+            {
+                if (trigger.Type != TriggerType.Webhook)
+                    continue;
+                foreach (var input in IntegerInputs)
+                {
+                    if (!trigger.Inputs.TryGetValue(input, out var raw) || raw is null)
+                        continue;
+                    long? value = raw switch
+                    {
+                        int i => i,
+                        long l => l,
+                        string s when long.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+                        _ => null,
+                    };
+                    if (value is { } v && (v < 0 || v > int.MaxValue))
+                    {
+                        throw new InvalidOperationException(
+                            $"Flow '{flow.Id}' webhook trigger '{triggerKey}' sets {input} = {v}, outside 0 … {int.MaxValue}. Use 0 to disable replay protection or a positive number of seconds.");
+                    }
+                }
+            }
+        }
     }
 
     private static string BuildAbsoluteUrl(HttpContext http)
