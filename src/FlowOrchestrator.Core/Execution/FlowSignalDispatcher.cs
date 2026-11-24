@@ -99,7 +99,13 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
             return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
         }
 
-        var result = await _signalStore.DeliverSignalAsync(runId, signalName.Trim(), payloadJson, ct).ConfigureAwait(false);
+        // CancellationToken.None, not `ct`: this IS the durable write, and `ct` is the dashboard request's
+        // RequestAborted. SqlClient reports a cancel that arrives while the UPDATE is in flight by throwing
+        // even when the statement has already committed, so the waiter ended up delivered while this method
+        // threw before the resume nudge below — the step stayed parked until its timeout and every retry of
+        // the signal was answered "already delivered". The stress harness measured 51 of 630 runs stranded
+        // that way on SQL Server (0 on PostgreSQL). Cancellation is honoured nowhere after this point.
+        var result = await _signalStore.DeliverSignalAsync(runId, signalName.Trim(), payloadJson, CancellationToken.None).ConfigureAwait(false);
         if (result.Status != SignalDeliveryStatus.Delivered || result.StepKey is null)
         {
             return result;
