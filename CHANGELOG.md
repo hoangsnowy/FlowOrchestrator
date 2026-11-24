@@ -666,10 +666,15 @@ where one provider behaved differently from the others.
   Each job now runs exactly one chain, stamped with an epoch (new `chainEpoch` field on the cron message;
   ticks written before 2.0 rank below any chain seeded since). The consumer drops a tick of an older chain,
   a second copy of a tick that already fired, a tick for a job that is not registered, and — reading the
-  shared state — a tick for a disabled flow, a trigger the manifest no longer declares, or a schedule paused
-  on any replica (`PersistOverrides`); a replica receiving a newer chain's tick follows it. Re-registering a
-  job with its current cron schedules nothing; a different cron cancels the known pending tick and seeds a
-  newer chain. At startup the hub peeks the cron queue once and adopts the surviving tick instead of seeding
+  shared state — a tick for a disabled flow, a trigger the manifest no longer declares, a schedule paused
+  on any replica, or a tick whose cron differs from the persisted cron override (`PersistOverrides`; so a
+  replica that has not yet seen a cron change does not fire the replaced chain); a replica receiving a newer
+  chain's tick follows it. Re-registering a job with its current cron schedules nothing; a different cron
+  cancels the known pending tick and seeds a newer chain. A recurring tick's message id carries its chain
+  epoch (`{flowId}:{triggerKey}:{fireAt}:{epochTicks}`; one-off fires keep `{flowId}:{triggerKey}:{fireAt}`),
+  so a new chain whose first tick falls on the instant of the replaced chain's pending tick — e.g. `* * * * *`
+  changed to `*/2 * * * *` at 12:19 with 12:20 already scheduled — is not discarded by duplicate detection;
+  the 2.0 pre-release stress run caught exactly that, the schedule going silent after a cron change. At startup the hub peeks the cron queue once and adopts the surviving tick instead of seeding
   a duplicate, and the consumer starts processing only after `ApplicationStarted` (the startup sync has
   registered every job). An unparseable cron now throws `ArgumentException` with the job untouched. Logs
   moved to `LoggerMessage` (EventIds 3140-3154). **Read before upgrading:** saving a schedule again with

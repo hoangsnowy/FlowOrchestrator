@@ -28,7 +28,9 @@ namespace FlowOrchestrator.ServiceBus;
 ///         cron trigger, or the job is paused on the dashboard (with <see cref="FlowSchedulerOptions.PersistOverrides"/>,
 ///         so a pause made on another replica counts);</item>
 ///   <item>the job is not registered in this process and no persisted state says otherwise;</item>
-///   <item>the tick belongs to a chain the job has replaced (a cron change, a restart, a resume);</item>
+///   <item>the tick belongs to a chain the job has replaced (a cron change, a restart, a resume) — known
+///         locally from the chain epoch, or on any replica from a persisted cron override that differs from
+///         the tick's cron;</item>
 ///   <item>the same tick already fired here (a redelivery, or a second copy of one tick).</item>
 /// </list>
 /// <para>
@@ -218,6 +220,15 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
             return true;
         }
 
+        if (authority == ScheduleAuthority.Superseded)
+        {
+            // The persisted schedule runs on another cron: this tick belongs to a replaced chain. Every replica
+            // sharing the store reaches the same answer, so a replica that has not yet seen the new chain does
+            // not fire (and perpetuate) the old one. The job itself stays registered — it lives on the new chain.
+            LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "its cron differs from the schedule's persisted cron override (the chain was replaced)");
+            return true;
+        }
+
         var verdict = _hub.ObserveTick(envelope, registerIfMissing: authority == ScheduleAuthority.Active);
         switch (verdict)
         {
@@ -282,12 +293,39 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
             }
 
             var state = await stateStore.GetAsync(envelope.JobId).ConfigureAwait(false);
-            return state?.IsPaused == true ? ScheduleAuthority.Inactive : ScheduleAuthority.Active;
+            if (state?.IsPaused == true)
+            {
+                return ScheduleAuthority.Inactive;
+            }
+
+            // A valid persisted override is the job's cron on every replica. An unparseable one is ignored, as
+            // the startup sync ignores it (the job then runs on the manifest cron).
+            if (!string.IsNullOrWhiteSpace(state?.CronOverride)
+                && !string.Equals(state.CronOverride, envelope.Cron, StringComparison.Ordinal)
+                && IsParseable(state.CronOverride))
+            {
+                return ScheduleAuthority.Superseded;
+            }
+
+            return ScheduleAuthority.Active;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             LogAuthorityUnavailable(_logger, ex, Sanitize(envelope.JobId));
             return ScheduleAuthority.Unknown;
+        }
+    }
+
+    private bool IsParseable(string cron)
+    {
+        try
+        {
+            ServiceBusRecurringTriggerHub.ComputeNext(cron, _timeProvider.GetUtcNow());
+            return true;
+        }
+        catch (Cronos.CronFormatException)
+        {
+            return false;
         }
     }
 
@@ -325,5 +363,8 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
 
         /// <summary>The shared state says the job must not fire.</summary>
         Inactive,
+
+        /// <summary>The shared state says the job runs on another cron: the tick belongs to a replaced chain.</summary>
+        Superseded,
     }
 }

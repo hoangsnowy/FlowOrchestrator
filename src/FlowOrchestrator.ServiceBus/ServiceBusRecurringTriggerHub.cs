@@ -484,8 +484,15 @@ internal sealed partial class ServiceBusRecurringTriggerHub
         };
         var msg = new ServiceBusMessage(JsonSerializer.SerializeToUtf8Bytes(envelope))
         {
-            // Deterministic id: makes restart-time re-sync idempotent thanks to topic dedup.
-            MessageId = $"{flowId}:{triggerKey}:{fireAt.UtcDateTime:O}",
+            // Deterministic id, so the same tick of the same chain scheduled twice (a redelivered tick
+            // perpetuated again, replicas seeding the same chain at once) collapses under duplicate detection.
+            // A recurring tick's id carries its chain epoch: without it a new chain whose first tick falls on
+            // the same instant as the replaced chain's pending tick (a cron change to "*/2" while "* * * * *"
+            // has 12:20 scheduled) got the same id, the broker discarded it as a duplicate, and once the old
+            // tick was cancelled or dropped the job had no chain left. One-off fires keep the plain form.
+            MessageId = string.IsNullOrEmpty(cron)
+                ? $"{flowId}:{triggerKey}:{fireAt.UtcDateTime:O}"
+                : $"{flowId}:{triggerKey}:{fireAt.UtcDateTime:O}:{chainEpoch.UtcTicks}",
             ContentType = "application/json",
             Subject = jobId,
         };
