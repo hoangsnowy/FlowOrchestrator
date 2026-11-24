@@ -199,7 +199,21 @@ viewer_check() {
   page=$(curl -s -c "$jar" -b "$jar" -L -H 'Accept: text/html' "$B/flows/")
   action=$(grep -o 'action="[^"]*"' <<<"$page" | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')
   if [ -z "$action" ]; then skp "W.15 viewer masking" "could not reach the Keycloak login form"; return; fi
-  curl -s -c "$jar" -b "$jar" -L -o /dev/null -d "username=viewer&password=viewer-demo-pass&credentialId=" "$action"
+  # The dashboard uses response_mode=form_post: after the login Keycloak answers with an auto-submitting HTML
+  # form that a browser POSTs back to /flows/signin-oidc. curl runs no JavaScript, so replay that form by hand.
+  # Keycloak spreads the <form>/<input> attributes over several lines: join them before matching.
+  local post back tag name value
+  post=$(curl -s -c "$jar" -b "$jar" -L -d "username=viewer&password=viewer-demo-pass&credentialId=" "$action" | tr '\r\n' '  ')
+  # Keycloak writes this page in upper case (<FORM ACTION=…>, <INPUT TYPE="HIDDEN" NAME=…>): match case-insensitively.
+  back=$(grep -io '<form[^>]*action="[^"]*"' <<<"$post" | head -1 | sed -e 's/.*action="//I' -e 's/"$//' -e 's/&amp;/\&/g')
+  local -a fields=()
+  while IFS= read -r tag; do
+    name=$(sed -n 's/.*name="\([^"]*\)".*/\1/Ip' <<<"$tag")
+    value=$(sed -n 's/.*value="\([^"]*\)".*/\1/Ip' <<<"$tag" | sed -e 's/&amp;/\&/g')
+    [ -n "$name" ] && fields+=(--data-urlencode "$name=$value")
+  done < <(grep -io '<input[^>]*type="hidden"[^>]*>' <<<"$post")
+  if [ -z "$back" ] || [ ${#fields[@]} -eq 0 ]; then bad "W.15 viewer masking" "Keycloak did not return the form_post page"; return; fi
+  curl -s -c "$jar" -b "$jar" -L -o /dev/null "${fields[@]}" "$back"
   local id masked clear
   id=$(curl -fsS "${A[@]}" "$B/flows/api/runs?flowId=$FLOW_GITHUB&take=1" | jq -r '.[0].id')
   masked=$(curl -s -b "$jar" "$B/flows/api/runs/$id" | jq -r '.triggerHeaders["X-Hub-Signature-256"] // .triggerHeaders["x-hub-signature-256"] // "absent"')
