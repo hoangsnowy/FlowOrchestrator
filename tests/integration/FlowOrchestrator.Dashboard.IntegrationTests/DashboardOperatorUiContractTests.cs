@@ -132,6 +132,29 @@ public sealed class DashboardOperatorUiContractTests : IDisposable
         Assert.DoesNotContain("openFlowDetail(\\''+f.id+'\\')", html, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Restricted_signal_button_follows_run_detail_and_survives_view_only_mode()
+    {
+        // Arrange — run detail carries signalAuthorization for parked restricted steps; the page must offer
+        // "Send signal" only when canSignal is set, and keep it visible for an approver without operator rights.
+        var html = await _body.Value;
+
+        // Act
+        var css = InlineCss(html);
+        var script = InlineScript(html);
+
+        // Assert
+        Assert.Contains("function renderSignalAction(runId, stepKey, restriction)", script, StringComparison.Ordinal);
+        Assert.Contains("restriction.canSignal", script, StringComparison.Ordinal);
+        Assert.Contains("renderTimeline(steps, run.id, run.signalAuthorization)", script, StringComparison.Ordinal);
+        Assert.Contains("'Requires '", script, StringComparison.Ordinal);
+        Assert.Contains(".fo-readonly [data-signal-approver]{display:inline-flex}", css, StringComparison.Ordinal);
+        Assert.True(
+            css.IndexOf(".fo-readonly [data-signal-approver]", StringComparison.Ordinal)
+            > css.IndexOf(".fo-readonly [onclick*=\"sendSignal(\"]", StringComparison.Ordinal),
+            "the approver override must come after the view-only rule that hides sendSignal buttons");
+    }
+
     private static string InlineCss(string html)
     {
         var start = html.IndexOf("<style>", StringComparison.Ordinal) + "<style>".Length;

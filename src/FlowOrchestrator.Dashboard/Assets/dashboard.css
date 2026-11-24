@@ -838,3 +838,5 @@ th.num,td.num{text-align:right;white-space:nowrap}
 .fo-readonly [onclick*="triggerScheduledJob("],
 .fo-readonly [onclick*="pauseScheduledJob("],
 .fo-readonly [onclick*="resumeScheduledJob("]{display:none}
+/* A restricted signal's approver may deliver it without the operator role (run detail says so per step). */
+.fo-readonly [data-signal-approver]{display:inline-flex}

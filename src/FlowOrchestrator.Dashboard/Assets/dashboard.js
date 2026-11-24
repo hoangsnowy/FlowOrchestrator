@@ -1766,14 +1766,14 @@ function renderActiveTab(run, manifest, view) {
         +'</div>';
     case 'events':
       return '<div class="run-tab-pad">'
-        +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
+        +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id, run.signalAuthorization))
         +'</div>';
     case 'timeline':
     default: {
       // Steps first; the trigger payload is reference material and sits collapsed below them.
       const triggerPanels = renderRunTriggerPanels(run);
       return '<div class="run-tab-pad">'
-        +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id))
+        +(steps.length===0?'<div class="empty-msg">No steps recorded yet.</div>':renderTimeline(steps, run.id, run.signalAuthorization))
         +(triggerPanels ? '<div class="section-label" style="margin-top:16px">Trigger</div>' + triggerPanels : '')
         +'</div>';
     }
@@ -2436,10 +2436,28 @@ async function loadLineage(runId, signal) {
   } catch(e) { /* lineage is optional and might be aborted on navigation */ }
 }
 
+// "Send signal" for a parked WaitForSignal step. A restricted signal (allowedRoles /
+// authorizationPolicy on the step; run detail carries it in signalAuthorization) shows the
+// button only to callers the server would accept — with data-signal-approver so view-only
+// mode does not hide it from an approver who is not an operator — and otherwise names who
+// may approve. The server enforces the same check; this only avoids offering a 403.
+function renderSignalAction(runId, stepKey, restriction) {
+  const button = (approver) => '<button class="btn-retry"'+(approver?' data-signal-approver':'')
+    +' onclick="sendSignal(\''+escJsAttr(runId)+'\',\''+escJsAttr(stepKey)+'\', event)">'+ICON_SEND+'Send signal</button>';
+  if (!restriction) return button(false);
+  if (restriction.canSignal) return button(true);
+  const roles = restriction.allowedRoles || [];
+  const parts = [];
+  if (roles.length) parts.push((roles.length === 1 ? 'role: ' : 'one of: ') + roles.join(', '));
+  if (restriction.policy) parts.push('policy: ' + restriction.policy);
+  const label = restriction.misconfigured ? 'Signal restriction misconfigured' : 'Requires ' + parts.join(' + ');
+  return '<span class="chip chip--readonly" title="'+esc(restriction.requirement || label)+'">'+esc(label)+'</span>';
+}
+
 // One row per step: status glyph, key + type, then start time · duration and the step's
 // actions on the right. I/O panels sit collapsed under the row; a failed step opens its
 // error panel by default.
-function renderTimeline(steps, runId) {
+function renderTimeline(steps, runId, signalAuthorization) {
   const total = steps.length;
   const failed = steps.filter(s => s.status === 'Failed').length;
   let html = '<div class="section-label">Steps <span class="count">'+total+(failed ? ' · '+failed+' failed' : '')+'</span></div>'
@@ -2464,7 +2482,7 @@ function renderTimeline(steps, runId) {
       +when
       +'<span class="step-badge '+esc(status)+'">'+esc(stepStatusLabel(status))+'</span>'
       +(status==='Failed'?'<button class="btn-retry" onclick="retryStep(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">'+ICON_RETRY+'Retry</button>':'')
-      +(status==='Pending' && s.stepType==='WaitForSignal'?'<button class="btn-retry" onclick="sendSignal(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\', event)">'+ICON_SEND+'Send signal</button>':'')
+      +(status==='Pending' && s.stepType==='WaitForSignal'?renderSignalAction(runId, s.stepKey, signalAuthorization && signalAuthorization[s.stepKey]):'')
       +(status!=='Skipped'?'<button class="btn-copy-icon" onclick="copyStepLink(\''+escJsAttr(runId)+'\',\''+escJsAttr(s.stepKey)+'\')" title="Copy link to this step" aria-label="Copy link to step '+esc(s.stepKey)+'">'+ICON_LINK+'</button>':'')
       +'</div></div>'
       +renderStepDebugPanels(s)
