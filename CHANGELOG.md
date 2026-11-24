@@ -6,9 +6,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.6] - 2026-11-24
+
+Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
+[GHSA-q3pv-v2mj-hrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-q3pv-v2mj-hrmj):
+read-only dashboard views did not mask common API-key header and input names. Hosts that give read-only
+dashboard access (`flow-viewer`, or anonymous access outside `Development`) should upgrade.
+
 ### Security
 
-- **Read-only dashboard callers no longer see credentials whose names use separators.** Values are masked
+- **Read-only dashboard callers no longer see credentials whose names use separators**
+  ([GHSA-q3pv-v2mj-hrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-q3pv-v2mj-hrmj)). Values are masked
   for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
   name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
   `Ocp-Apim-Subscription-Key`, `pwd` and similar names were served unmasked in run detail, run lists,
