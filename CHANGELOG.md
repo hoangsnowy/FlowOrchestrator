@@ -22,6 +22,80 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   of uppercase pills, and the DAG / Gantt colours now follow the dark theme. No API, route or JSON
   change; new tokens are listed in `DESIGN.md` §10.
 
+### Changed — run search is index-backed on SQL Server / Azure SQL and PostgreSQL
+
+Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-measured on the same
+200k-run / 2M-step data set (section "Implementation (2.0)", p50, default 7-day window):
+
+- **SQL Server / Azure SQL:** quick search **88-178 ms → 5-7 ms**; an 8-character run id from the run
+  list **67 ms → 7.8 ms, and found at any age** (before: not found outside the window); deep (step
+  payload) search **14.5 s → 1.2 s** with no schema change; run-list page 2,000 **189 → 33 ms** with the
+  new cursor; the run-list total **11.0 → 1.2 ms** when capped. No measurable write cost.
+- **PostgreSQL:** every quick search **~1-3.5 ms** (was 16-150 ms), windowed or not, including the run-id
+  prefix at any age, through a trigram index on the lower-cased run search expression; deep search for a
+  common word **33 s → 4.5 ms** (correlated `EXISTS` instead of `IN`), rare terms unchanged or faster
+  (19-68 ms, thanks to the `output_json` trigram index the migrator keeps creating); page 2,000
+  **14-29 → 1 ms** with the cursor. No measurable write cost.
+
+#### Read before upgrading
+
+- **Case-insensitive matching is now binary after lower-casing on SQL Server** (`LOWER(col) COLLATE
+  Latin1_General_100_BIN2 LIKE @lowerTerm`). Identifiers, codes and ASCII text match exactly as before.
+  Linguistic equivalences of the database's `CI_AS` collation no longer apply: the search is **accent-
+  and width-sensitive** (`é` ≠ `e`, `ß` ≠ `ss`, full-width ≠ half-width).
+- **A hex-shaped term (4-35 characters of `0-9a-f` and `-`) also matches run ids that start with it,
+  regardless of the search window** (every built-in provider; hyphens only where the canonical id has them). Searching `bbdafe3e` now finds that
+  60-day-old run instead of nothing. The window still bounds every other kind of match.
+- **Schema (SQL Server, additive):** two non-persisted computed columns on `FlowRuns` (`IdText`,
+  `RunSearchText`, metadata-only) and two indexes (`IX_FlowRuns_IdText`,
+  `IX_FlowRuns_StartedAt_Search`, ~56 MB per 200k runs). On Azure SQL Database, Managed Instance and
+  Enterprise/Developer the indexes build **online in the background** after startup; on other editions
+  they build at startup while `FlowRuns` has at most 2M rows, and above that a warning names the two
+  statements to run in a maintenance window. Search works (more slowly) until they exist. 1.34.x keeps
+  working against the upgraded database. See
+  [Migrating to 2.0 → Database](docs/articles/migrating-to-2.0.md#step-8--database).
+- **Indexed computed columns need the standard `SET` options** (`QUOTED_IDENTIFIER`, `ANSI_NULLS`,
+  `ANSI_PADDING`, `ANSI_WARNINGS`, `CONCAT_NULL_YIELDS_NULL` ON) on any connection that writes
+  `FlowRuns`. SqlClient and SSMS set them; `sqlcmd` without `-I` does not — scripts that insert or update
+  `FlowRuns` must run with `QUOTED_IDENTIFIER ON`.
+- **Schema (PostgreSQL, additive):** `ix_flow_runs_run_search_trgm`, a trigram GIN index on the
+  lower-cased run search expression (~47 MB per 200k runs), built `CREATE INDEX CONCURRENTLY` in the
+  background after startup — no table rewrite, writers not blocked; an `INVALID` leftover is rebuilt on the
+  next start. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
+  (Azure Database for PostgreSQL requires allow-listing it in `azure.extensions`) the migrator logs a
+  warning and search runs the same SQL as a scan. PostgreSQL run-column matching is now
+  `lower(...) LIKE lower(term)` instead of `ILIKE` per column: same results for ASCII and identifiers.
+  The older `ix_flow_runs_flow_name_trgm` / `ix_flow_runs_trigger_key_trgm` are no longer used by
+  FlowOrchestrator's queries; they are left in place (drop them if nothing of yours uses them).
+- **Run-list order gained a tie-break:** `StartedAt DESC, Id` on every provider (runs that started in the
+  same tick are now in a stable order).
+- **Dashboard total is capped:** `FlowDashboardOptions.RunListTotalCountCap` (default 10,000; `0` counts
+  exactly). Above it `/api/runs` returns `total: 10000, totalCapped: true` and the run list shows
+  "10,000+".
+
+#### Added
+
+- `RunSearchQuery.After` (`RunSearchCursor`: `StartedAt` + `Id`, opaque base64url `Encode()` /
+  `TryParse()`), `RunSearchQuery.TotalCountCap`, `RunSearchPage.NextCursor`,
+  `RunSearchPage.TotalIsLowerBound`, `RunSearchPage.FromRows`, `RunSearchQuery.IsRunIdPrefix`. `Skip`
+  still works. `GET /api/runs` accepts `after=` and returns `nextCursor` / `totalCapped`; the SPA pages
+  forward by cursor, so a page no longer shifts while new runs start.
+- **Experimental, opt-in, SQL Server only:** `options.UseRunSearchIndex()` — a token index for deep search on SQL Server
+  (`FlowRunSearchTokens`; measured deep search 8 ms against 1.2 s (7-day window) and 84 ms against 98 s
+  (no window), 1.3 GB and an 8-minute back-fill per 200k runs). Written in the run-start / step-completion round trip as a best-effort statement, back-filled
+  newest-first in the background (resumable, one replica at a time); payload and error text match by
+  **token prefix** instead of substring. It **adds one commit per step completion and per run start**
+  (measured +5.4 ms p50, roughly doubling `RecordStepCompleteAsync`); read
+  `RunSearchIndexOptions` before enabling it. Requires database compatibility level 130+, and must be
+  enabled on every instance that writes runs. PostgreSQL ignores it and logs warning 7214: its trigram
+  indexes already answer deep search, and the measured token table there is 2.2 GB per 200k runs (the key
+  is stored twice) for 0.8-4 ms against 18-75 ms.
+- `IRunSearchIndex` (+ `RunSearchCapabilities`, `RunSearchIndexQuery`, `RunSearchDocument`,
+  `StepSearchDocument`, `RunSearchTokenizer`): plug an external engine (Full-Text Search, Azure AI
+  Search, Elasticsearch) into the SQL Server store's deep search. SQL Server Full-Text Search is **not**
+  built in (22% extra storage, asynchronous indexing, hyphenated ids split into common words — see the
+  benchmark doc).
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
@@ -32,6 +106,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
   before rethrowing (EventId 3011 if that release also fails). The `Pending` re-poll path still re-asserts
   it afterwards so the runtime's job retry can re-claim.
+- **A signal delivered by a client that disconnects no longer strands the waiting step.** With
+  OpenTelemetry on, `FlowSignalDispatcher` read the waiter for the wait-time metric with the request
+  token *after* the signal was durably delivered; on SQL Server / PostgreSQL an aborted request threw
+  there, before the resume dispatch, and the `WaitForSignal` step stayed parked until its timeout (up to
+  24 h). The read now uses `CancellationToken.None`, like the dispatch itself. Found by the new stress
+  harness (client-disconnect scenario); same failure class as v1.26.1 and #188.
+- **Startup recovery releases the ledger row when its own dispatch fails**, like the engine does: a
+  recovery dispatch that threw after recording the row left it behind, so the next recovery skipped the
+  step and it never ran.
 - Dashboard-persisted cron overrides are stripped of line breaks before they are logged by the cron sync.
 
 ### Security

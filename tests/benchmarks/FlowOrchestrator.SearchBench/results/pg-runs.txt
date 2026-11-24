@@ -1,0 +1,388 @@
+d7dd3cd4f07eaf223523174d082062991e7152a67d68fc77aa58b193ddc38d39
+=== 15:39:44 pg-seed 200000
+copied 200,000 runs / 1,988,322 steps / 4,304,458 events in 00:01:11.4351458
+indexes (incl. pg_trgm GIN) rebuilt by the migrator in 00:03:06.5094965
+Unhandled exception. Npgsql.PostgresException (0x80004005): 25001: VACUUM cannot run inside a transaction block
+!!! failed: pg-seed 200000
+=== 15:44:03 pg-sizes
+flow_events              flow_events                                       554.2 MB
+flow_events              flow_events_pkey                                   92.2 MB
+flow_events              ix_flow_events_run_id_sequence                    166.7 MB
+flow_runs                flow_runs                                          74.5 MB
+flow_runs                flow_runs_pkey                                      8.4 MB
+flow_runs                ix_flow_runs_flow_id                                1.4 MB
+flow_runs                ix_flow_runs_flow_id_status_started_at             11.1 MB
+flow_runs                ix_flow_runs_flow_name_trgm                         7.5 MB
+flow_runs                ix_flow_runs_source_run_id                          0.0 MB
+flow_runs                ix_flow_runs_started_at                             4.3 MB
+flow_runs                ix_flow_runs_status                                 1.4 MB
+flow_runs                ix_flow_runs_trigger_key_trgm                       6.3 MB
+flow_steps               flow_steps                                      2,316.4 MB
+flow_steps               flow_steps_pkey                                   126.5 MB
+flow_steps               ix_flow_steps_error_message_trgm                   18.6 MB
+flow_steps               ix_flow_steps_output_json_trgm                  1,138.1 MB
+flow_steps               ix_flow_steps_run_id_started_at                   215.2 MB
+flow_steps               ix_flow_steps_step_key_run_id                      96.6 MB
+flow_steps               ix_flow_steps_step_key_trgm                        55.2 MB
+=== 15:44:03 pg-base quick
+pg-base        runId prefix, recent [7d]                                  n= 20 p50=     21.26 ms p95=     21.91 ms min=    20.08 rows=   1 
+pg-base        runId prefix, 60d old [7d]                                 n= 20 p50=     21.59 ms p95=     24.37 ms min=    20.07 rows=   0 
+pg-base        flow name, common 'Invoice' [7d]                           n= 20 p50=      1.27 ms p95=      1.75 ms min=     1.15 rows=  51 
+pg-base        flow name, rare 'Gdpr' [7d]                                n= 20 p50=     20.36 ms p95=     21.83 ms min=    19.00 rows=  16 
+pg-base        trigger key, common 'order-created' [7d]                   n= 20 p50=      1.64 ms p95=      2.42 ms min=     1.54 rows=  51 
+pg-base        trigger key, rare 'backfill' [7d]                          n= 20 p50=     16.04 ms p95=     17.87 ms min=    13.87 rows=  51 
+pg-base        no match 'zq-nomatch-7731' [7d]                            n= 20 p50=     22.01 ms p95=     23.57 ms min=    20.87 rows=   0 
+pg-base        runId prefix, recent [all]                                 n= 20 p50=    151.75 ms p95=    156.74 ms min=   142.87 rows=   1 
+pg-base        runId prefix, 60d old [all]                                n= 20 p50=    107.04 ms p95=    119.36 ms min=   101.49 rows=   1 
+pg-base        flow name, common 'Invoice' [all]                          n= 20 p50=      7.27 ms p95=      7.67 ms min=     6.73 rows=  51 
+pg-base        flow name, rare 'Gdpr' [all]                               n= 20 p50=     73.83 ms p95=     78.50 ms min=    67.43 rows=  51 
+pg-base        trigger key, common 'order-created' [all]                  n= 20 p50=      7.57 ms p95=      8.36 ms min=     6.67 rows=  51 
+pg-base        trigger key, rare 'backfill' [all]                         n= 20 p50=     21.75 ms p95=     23.58 ms min=    20.91 rows=  51 
+pg-base        no match 'zq-nomatch-7731' [all]                           n= 20 p50=    108.92 ms p95=    110.68 ms min=   107.83 rows=   0 
+pg-base        status word 'Failed' (+total)                              n= 20 p50=      1.03 ms p95=      1.14 ms min=     0.97 rows=  51 
+pg-base        status word 'TimedOut' (+total)                            n= 20 p50=      1.00 ms p95=      1.11 ms min=     0.89 rows=  51 
+pg-base        full run id (old)                                          n= 20 p50=      0.61 ms p95=      0.66 ms min=     0.52 rows=   1 
+pg-base        unfiltered first page (+total)                             n= 20 p50=      4.84 ms p95=      6.07 ms min=     4.31 rows=  51 
+pg-base        unfiltered first page (no total)                           n= 20 p50=      0.64 ms p95=      1.38 ms min=     0.60 rows=  51 
+pg-base        unfiltered page 50 OFFSET (+total)                         n= 20 p50=      4.94 ms p95=      6.15 ms min=     4.55 rows=  51 
+pg-base        unfiltered page 2000 OFFSET                                n= 20 p50=      7.90 ms p95=      9.33 ms min=     6.90 rows=  51 
+=== 15:44:18 pg-keyset
+pg-keyset      unfiltered page 50 keyset                                  n= 20 p50=      1.82 ms p95=      2.57 ms min=     1.42 rows=  51 
+pg-keyset      unfiltered page 2000 keyset                                n= 20 p50=      1.47 ms p95=      2.00 ms min=     1.19 rows=  51 
+pg-count       COUNT(*) flow_runs                                         n= 20 p50=      4.90 ms p95=      6.03 ms min=     4.21 rows=   1 
+pg-count       COUNT(*) WHERE status='Failed'                             n= 20 p50=      0.73 ms p95=      0.77 ms min=     0.65 rows=   1 
+pg-count       reltuples estimate                                         n= 20 p50=      0.58 ms p95=      0.80 ms min=     0.52 rows=   1 
+=== 15:44:18 pg-write baseline-with-output-trgm 200
+--- pg baseline-with-output-trgm 2026-11-23T15:45:14.2808726Z
+StartRunAsync                      n=  200 p50=   3.550 ms p95=   4.873 ms mean=   4.212 ms
+event run.started                  n=  200 p50=   3.366 ms p95=   4.152 ms mean=   3.276 ms
+RTT SELECT 1                       n= 1887 p50=   0.351 ms p95=   0.669 ms mean=   0.398 ms
+TryRecordDispatchAsync             n= 1887 p50=   3.167 ms p95=   4.122 ms mean=   3.409 ms
+TryClaimStepAsync                  n= 1887 p50=   3.044 ms p95=   4.074 ms mean=   3.268 ms
+RecordStepStartAsync               n= 1887 p50=   4.951 ms p95=   6.125 ms mean=   5.218 ms
+event step.started                 n= 1887 p50=   3.038 ms p95=   4.078 ms mean=   3.284 ms
+SaveStepOutputAsync                n= 1887 p50=   3.068 ms p95=   4.118 ms mean=   3.437 ms
+RecordStepCompleteAsync            n= 1887 p50=   4.114 ms p95=   6.082 ms mean=   4.940 ms
+event step.completed               n= 1887 p50=   3.044 ms p95=   4.066 ms mean=   3.284 ms
+GetStepStatusesAsync               n= 1887 p50=   0.479 ms p95=   0.838 ms mean=   0.538 ms
+CompleteRunAsync                   n=  200 p50=   3.468 ms p95=   4.726 ms mean=   3.862 ms
+event run.completed                n=  200 p50=   3.053 ms p95=   4.091 ms mean=   3.347 ms
+=== 15:45:14 pg-base deep
+pg-base        deep output: invoice, 3d old [7d]                          n= 20 p50=     75.54 ms p95=     79.36 ms min=    73.08 rows=   1 
+pg-base        deep output: invoice, 60d old [7d]                         n= 20 p50=     71.26 ms p95=     81.81 ms min=    66.40 rows=   0 
+pg-base        deep output: orderId, 3d old [7d]                          n= 20 p50=    661.55 ms p95=    691.89 ms min=   652.98 rows=   1 
+pg-base        deep output: common 'express' [7d]                         n=  3 p50=  33313.92 ms p95=  34954.44 ms min= 33100.01 rows=  51 
+pg-base        deep error: shipment, 3d old [7d]                          n= 20 p50=     50.70 ms p95=     57.79 ms min=    48.94 rows=   1 
+pg-base        deep error: 'deadlock victim' [7d]                         n= 20 p50=     18.48 ms p95=     20.39 ms min=    17.56 rows=  51 
+pg-base        deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=     25.44 ms p95=     27.34 ms min=    24.85 rows=   0 
+pg-base        deep output: invoice, 60d old [all]                        n= 20 p50=    340.25 ms p95=    365.65 ms min=   317.98 rows=   1 
+pg-base        deep output: common 'express' [all]                        n=  3 p50=  36310.43 ms p95=  36503.36 ms min= 36093.04 rows=  51 
+pg-base        deep error: 'deadlock victim' [all]                        n= 20 p50=     19.17 ms p95=     23.75 ms min=    17.12 rows=  51 
+pg-base        deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=    300.75 ms p95=    310.81 ms min=   274.26 rows=   0 
+=== 15:50:32 pg-cand uuid-range
+pg-uuid-range  runId prefix, recent [7d]                                  n= 20 p50=     21.72 ms p95=     29.94 ms min=    21.09 rows=   1 
+pg-uuid-range  runId prefix, 60d old [7d]                                 n= 20 p50=     21.98 ms p95=     30.26 ms min=    21.39 rows=   1 
+pg-uuid-range  flow name, common 'Invoice' [7d]                           n= 20 p50=      1.27 ms p95=      1.74 ms min=     1.09 rows=  51 
+pg-uuid-range  flow name, rare 'Gdpr' [7d]                                n= 20 p50=     20.91 ms p95=     22.39 ms min=    20.26 rows=  17 
+pg-uuid-range  trigger key, common 'order-created' [7d]                   n= 20 p50=      1.62 ms p95=      2.17 ms min=     1.42 rows=  51 
+pg-uuid-range  trigger key, rare 'backfill' [7d]                          n= 20 p50=     14.46 ms p95=     15.16 ms min=    13.92 rows=  51 
+pg-uuid-range  no match 'zq-nomatch-7731' [7d]                            n= 20 p50=     23.17 ms p95=     25.14 ms min=    22.31 rows=   0 
+pg-uuid-range  runId prefix, recent [all]                                 n= 20 p50=     99.86 ms p95=    107.06 ms min=    98.48 rows=   1 
+pg-uuid-range  runId prefix, 60d old [all]                                n= 20 p50=    102.08 ms p95=    106.16 ms min=   100.77 rows=   1 
+pg-uuid-range  flow name, common 'Invoice' [all]                          n= 20 p50=      7.59 ms p95=      9.16 ms min=     6.62 rows=  51 
+pg-uuid-range  flow name, rare 'Gdpr' [all]                               n= 20 p50=     71.24 ms p95=     78.40 ms min=    67.18 rows=  51 
+pg-uuid-range  trigger key, common 'order-created' [all]                  n= 20 p50=      7.21 ms p95=      8.08 ms min=     6.71 rows=  51 
+pg-uuid-range  trigger key, rare 'backfill' [all]                         n= 20 p50=     20.74 ms p95=     22.93 ms min=    19.59 rows=  51 
+pg-uuid-range  no match 'zq-nomatch-7731' [all]                           n= 20 p50=    107.46 ms p95=    109.46 ms min=   106.23 rows=   0 
+=== 15:50:44 pg-cand trgm-deep-windowed
+pg-trgm-deep-windowed deep output: invoice, 3d old [7d]                          n= 20 p50=     75.98 ms p95=     76.86 ms min=    74.58 rows=   1 
+pg-trgm-deep-windowed deep output: invoice, 60d old [7d]                         n= 20 p50=     70.04 ms p95=     74.06 ms min=    67.03 rows=   0 
+pg-trgm-deep-windowed deep output: orderId, 3d old [7d]                          n= 20 p50=    675.65 ms p95=    724.79 ms min=   655.11 rows=   1 
+pg-trgm-deep-windowed deep output: common 'express' [7d]                         n= 20 p50=      5.06 ms p95=      5.26 ms min=     4.78 rows=  51 
+pg-trgm-deep-windowed deep error: shipment, 3d old [7d]                          n= 20 p50=     50.62 ms p95=     55.70 ms min=    48.32 rows=   1 
+pg-trgm-deep-windowed deep error: 'deadlock victim' [7d]                         n= 20 p50=     18.64 ms p95=     20.16 ms min=    17.88 rows=  51 
+pg-trgm-deep-windowed deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=     25.57 ms p95=     26.40 ms min=    24.95 rows=   0 
+pg-trgm-deep-windowed deep output: invoice, 60d old [all]                        n= 20 p50=    323.99 ms p95=    353.19 ms min=   320.49 rows=   1 
+pg-trgm-deep-windowed deep output: common 'express' [all]                        n=  3 p50=  33761.15 ms p95=  34731.91 ms min= 33577.22 rows=  51 
+pg-trgm-deep-windowed deep error: 'deadlock victim' [all]                        n= 20 p50=     19.19 ms p95=     20.91 ms min=    18.30 rows=  51 
+pg-trgm-deep-windowed deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=    277.81 ms p95=    278.99 ms min=   276.75 rows=   0 
+=== 15:53:36 pg-setup trgm-run
+setup trgm-run: 00:00:03.2429774
+=== 15:53:39 pg-cand trgm-run
+pg-trgm-run    runId prefix, recent [7d]                                  n= 20 p50=      1.00 ms p95=      1.26 ms min=     0.91 rows=   1 
+pg-trgm-run    runId prefix, 60d old [7d]                                 n= 20 p50=      1.03 ms p95=      1.44 ms min=     0.93 rows=   1 
+pg-trgm-run    flow name, common 'Invoice' [7d]                           n= 20 p50=      0.95 ms p95=      1.49 ms min=     0.84 rows=  51 
+pg-trgm-run    flow name, rare 'Gdpr' [7d]                                n= 20 p50=      1.02 ms p95=      1.65 ms min=     0.92 rows=  17 
+pg-trgm-run    trigger key, common 'order-created' [7d]                   n= 20 p50=      0.99 ms p95=      1.69 ms min=     0.79 rows=  51 
+pg-trgm-run    trigger key, rare 'backfill' [7d]                          n= 20 p50=      1.98 ms p95=      2.39 ms min=     1.80 rows=  51 
+pg-trgm-run    no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      0.76 ms p95=      0.84 ms min=     0.69 rows=   0 
+pg-trgm-run    runId prefix, recent [all]                                 n= 20 p50=      0.95 ms p95=      1.25 ms min=     0.89 rows=   1 
+pg-trgm-run    runId prefix, 60d old [all]                                n= 20 p50=      0.98 ms p95=      1.22 ms min=     0.89 rows=   1 
+pg-trgm-run    flow name, common 'Invoice' [all]                          n= 20 p50=      0.81 ms p95=      0.89 ms min=     0.73 rows=  51 
+pg-trgm-run    flow name, rare 'Gdpr' [all]                               n= 20 p50=      1.08 ms p95=      1.24 ms min=     0.99 rows=  51 
+pg-trgm-run    trigger key, common 'order-created' [all]                  n= 20 p50=      1.05 ms p95=      1.56 ms min=     0.75 rows=  51 
+pg-trgm-run    trigger key, rare 'backfill' [all]                         n= 20 p50=      2.19 ms p95=      2.72 ms min=     2.06 rows=  51 
+pg-trgm-run    no match 'zq-nomatch-7731' [all]                           n= 20 p50=      0.75 ms p95=      0.77 ms min=     0.68 rows=   0 
+=== 15:53:40 pg-write with-run-trgm 200
+--- pg with-run-trgm 2026-11-23T15:54:29.0403389Z
+StartRunAsync                      n=  200 p50=   3.493 ms p95=   4.664 ms mean=   3.808 ms
+event run.started                  n=  200 p50=   3.453 ms p95=   4.534 ms mean=   3.386 ms
+RTT SELECT 1                       n= 1775 p50=   0.342 ms p95=   0.623 ms mean=   0.380 ms
+TryRecordDispatchAsync             n= 1775 p50=   3.139 ms p95=   3.738 ms mean=   3.054 ms
+TryClaimStepAsync                  n= 1775 p50=   3.030 ms p95=   3.922 ms mean=   3.060 ms
+RecordStepStartAsync               n= 1775 p50=   4.912 ms p95=   5.961 ms mean=   4.706 ms
+event step.started                 n= 1775 p50=   3.043 ms p95=   3.917 ms mean=   3.047 ms
+SaveStepOutputAsync                n= 1775 p50=   3.055 ms p95=   4.060 ms mean=   3.152 ms
+RecordStepCompleteAsync            n= 1775 p50=   4.080 ms p95=   5.523 ms mean=   4.911 ms
+event step.completed               n= 1775 p50=   3.041 ms p95=   3.974 ms mean=   3.072 ms
+GetStepStatusesAsync               n= 1775 p50=   0.465 ms p95=   0.793 ms mean=   0.519 ms
+CompleteRunAsync                   n=  200 p50=   3.263 ms p95=   3.665 ms mean=   3.067 ms
+event run.completed                n=  200 p50=   3.035 ms p95=   3.815 ms mean=   3.024 ms
+=== 15:54:29 pg-tokens 200000 payload
+setup tokens: 00:00:00.1539949
+Unhandled exception. Npgsql.PostgresException (0x80004005): 25001: VACUUM cannot run inside a transaction block
+!!! failed: pg-tokens 200000 payload
+=== 15:55:01 pg-cand tokens-quick
+pg-tokens-quick runId prefix, recent [7d]                                  n= 20 p50=    234.84 ms p95=    242.58 ms min=   216.46 rows=   1 
+pg-tokens-quick runId prefix, 60d old [7d]                                 n= 20 p50=    239.91 ms p95=    256.99 ms min=   232.25 rows=   0 
+pg-tokens-quick flow name, common 'Invoice' [7d]                           n= 20 p50=    268.92 ms p95=    307.67 ms min=   261.74 rows=  51 
+pg-tokens-quick flow name, rare 'Gdpr' [7d]                                n= 20 p50=    357.82 ms p95=    380.47 ms min=   334.23 rows=  16 
+pg-tokens-quick trigger key, common 'order-created' [7d]                   n= 20 p50=    241.41 ms p95=    274.12 ms min=   224.40 rows=  51 
+pg-tokens-quick trigger key, rare 'backfill' [7d]                          n= 20 p50=    222.39 ms p95=    255.05 ms min=   214.61 rows=  51 
+pg-tokens-quick no match 'zq-nomatch-7731' [7d]                            n= 20 p50=    218.24 ms p95=    223.20 ms min=   215.29 rows=   0 
+pg-tokens-quick runId prefix, recent [all]                                 n= 20 p50=    220.28 ms p95=    224.54 ms min=   210.40 rows=   1 
+pg-tokens-quick runId prefix, 60d old [all]                                n= 20 p50=    211.83 ms p95=    214.80 ms min=   206.74 rows=   1 
+pg-tokens-quick flow name, common 'Invoice' [all]                          n= 20 p50=    918.46 ms p95=    959.58 ms min=   879.07 rows=  51 
+pg-tokens-quick flow name, rare 'Gdpr' [all]                               n= 20 p50=    206.22 ms p95=    214.96 ms min=   202.70 rows=  51 
+pg-tokens-quick trigger key, common 'order-created' [all]                  n= 20 p50=    462.46 ms p95=    501.33 ms min=   450.55 rows=  51 
+pg-tokens-quick trigger key, rare 'backfill' [all]                         n= 20 p50=    301.35 ms p95=    334.82 ms min=   294.65 rows=  51 
+pg-tokens-quick no match 'zq-nomatch-7731' [all]                           n= 20 p50=    211.68 ms p95=    238.32 ms min=   205.21 rows=   0 
+=== 15:56:45 pg-cand tokens
+pg-tokens      deep output: invoice, 3d old [7d]                          n= 20 p50=    202.68 ms p95=    219.22 ms min=   198.19 rows=   1 
+pg-tokens      deep output: invoice, 60d old [7d]                         n= 20 p50=    215.95 ms p95=    218.91 ms min=   203.03 rows=   0 
+pg-tokens      deep output: orderId, 3d old [7d]                          n= 20 p50=    213.16 ms p95=    222.33 ms min=   197.52 rows=   1 
+pg-tokens      deep output: common 'express' [7d]                         n= 20 p50=    207.19 ms p95=    211.52 ms min=   204.97 rows=   0 
+pg-tokens      deep error: shipment, 3d old [7d]                          n= 20 p50=    207.15 ms p95=    222.58 ms min=   203.24 rows=   1 
+pg-tokens      deep error: 'deadlock victim' [7d]                         n= 20 p50=    386.98 ms p95=    425.35 ms min=   380.20 rows=  51 
+pg-tokens      deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=    211.11 ms p95=    228.13 ms min=   196.82 rows=   0 
+pg-tokens      deep output: invoice, 60d old [all]                        n= 20 p50=    214.51 ms p95=    222.50 ms min=   203.28 rows=   1 
+pg-tokens      deep output: common 'express' [all]                        n= 20 p50=    211.35 ms p95=    231.74 ms min=   197.83 rows=   0 
+pg-tokens      deep error: 'deadlock victim' [all]                        n= 20 p50=    294.83 ms p95=    307.49 ms min=   281.17 rows=  51 
+pg-tokens      deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=    211.34 ms p95=    216.02 ms min=   197.64 rows=   0 
+=== 15:57:45 pg-write tokens 200 tokens
+=== 15:59:03 pg-exec DELETE FROM flow_run_search_tokens WHERE started_at > '2026-11-23T00:00:00Z'
+exec (15890 rows) in 00:00:00.5604160: DELETE FROM flow_run_search_tokens WHERE started_at > '2026-11-23T00:00:00Z'
+=== 15:59:03 pg-exec ALTER TABLE flow_run_search_tokens ADD PRIMARY KEY (token, started_at, run_id, source)
+exec (-1 rows) in 00:00:10.3412308: ALTER TABLE flow_run_search_tokens ADD PRIMARY KEY (token, started_at, run_id, source)
+=== 15:59:14 pg-exec VACUUM ANALYZE flow_run_search_tokens
+exec (-1 rows) in 00:00:00.3011543: VACUUM ANALYZE flow_run_search_tokens
+=== 15:59:14 pg-exec VACUUM ANALYZE flow_runs
+exec (-1 rows) in 00:00:00.4761698: VACUUM ANALYZE flow_runs
+=== 15:59:15 pg-exec VACUUM ANALYZE flow_steps
+exec (-1 rows) in 00:00:02.8216046: VACUUM ANALYZE flow_steps
+=== 15:59:18 pg-sizes
+flow_events              flow_events                                       555.2 MB
+flow_events              flow_events_pkey                                   92.4 MB
+flow_events              ix_flow_events_run_id_sequence                    168.3 MB
+flow_run_search_tokens   flow_run_search_tokens                          1,150.8 MB
+flow_run_search_tokens   flow_run_search_tokens_pkey                     1,011.8 MB
+flow_runs                flow_runs                                          92.7 MB
+flow_runs                flow_runs_pkey                                      6.0 MB
+flow_runs                ix_flow_runs_flow_id                                1.4 MB
+flow_runs                ix_flow_runs_flow_id_status_started_at             11.1 MB
+flow_runs                ix_flow_runs_flow_name_trgm                         7.9 MB
+flow_runs                ix_flow_runs_search_text_trgm                      45.0 MB
+flow_runs                ix_flow_runs_source_run_id                          0.0 MB
+flow_runs                ix_flow_runs_started_at                             4.3 MB
+flow_runs                ix_flow_runs_status                                 1.4 MB
+flow_runs                ix_flow_runs_trigger_key_trgm                       6.6 MB
+flow_steps               flow_steps                                      2,320.9 MB
+flow_steps               flow_steps_pkey                                   127.0 MB
+flow_steps               ix_flow_steps_error_message_trgm                   19.2 MB
+flow_steps               ix_flow_steps_output_json_trgm                  1,144.1 MB
+flow_steps               ix_flow_steps_run_id_started_at                   218.4 MB
+flow_steps               ix_flow_steps_step_key_run_id                      97.1 MB
+flow_steps               ix_flow_steps_step_key_trgm                        57.3 MB
+=== 15:59:18 pg-cand tokens-quick
+pg-tokens-quick runId prefix, recent [7d]                                  n= 20 p50=      0.80 ms p95=      0.93 ms min=     0.74 rows=   1 
+pg-tokens-quick runId prefix, 60d old [7d]                                 n= 20 p50=      0.76 ms p95=      0.87 ms min=     0.70 rows=   0 
+pg-tokens-quick flow name, common 'Invoice' [7d]                           n= 20 p50=      4.85 ms p95=      6.14 ms min=     4.63 rows=  51 
+pg-tokens-quick flow name, rare 'Gdpr' [7d]                                n= 20 p50=      0.93 ms p95=      1.13 ms min=     0.82 rows=  16 
+pg-tokens-quick trigger key, common 'order-created' [7d]                   n= 20 p50=      4.34 ms p95=      6.08 ms min=     3.80 rows=  51 
+pg-tokens-quick trigger key, rare 'backfill' [7d]                          n= 20 p50=      1.17 ms p95=      1.93 ms min=     1.03 rows=  51 
+pg-tokens-quick no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      0.79 ms p95=      1.20 ms min=     0.72 rows=   0 
+pg-tokens-quick runId prefix, recent [all]                                 n= 20 p50=      0.77 ms p95=      1.22 ms min=     0.68 rows=   1 
+pg-tokens-quick runId prefix, 60d old [all]                                n= 20 p50=      0.76 ms p95=      0.88 ms min=     0.66 rows=   1 
+pg-tokens-quick flow name, common 'Invoice' [all]                          n= 20 p50=     39.78 ms p95=     42.72 ms min=    37.57 rows=  51 
+pg-tokens-quick flow name, rare 'Gdpr' [all]                               n= 20 p50=      1.37 ms p95=      2.66 ms min=     1.22 rows=  51 
+pg-tokens-quick trigger key, common 'order-created' [all]                  n= 20 p50=     30.38 ms p95=     32.98 ms min=    28.83 rows=  51 
+pg-tokens-quick trigger key, rare 'backfill' [all]                         n= 20 p50=      2.18 ms p95=      2.35 ms min=     2.01 rows=  51 
+pg-tokens-quick no match 'zq-nomatch-7731' [all]                           n= 20 p50=      0.80 ms p95=      0.89 ms min=     0.70 rows=   0 
+=== 15:59:21 pg-cand tokens
+pg-tokens      deep output: invoice, 3d old [7d]                          n= 20 p50=      0.85 ms p95=      0.99 ms min=     0.75 rows=   1 
+pg-tokens      deep output: invoice, 60d old [7d]                         n= 20 p50=      0.90 ms p95=      1.11 ms min=     0.80 rows=   0 
+pg-tokens      deep output: orderId, 3d old [7d]                          n= 20 p50=      0.93 ms p95=      1.34 ms min=     0.70 rows=   1 
+pg-tokens      deep output: common 'express' [7d]                         n= 20 p50=      0.99 ms p95=      1.42 ms min=     0.85 rows=   0 
+pg-tokens      deep error: shipment, 3d old [7d]                          n= 20 p50=      1.00 ms p95=      1.16 ms min=     0.82 rows=   1 
+pg-tokens      deep error: 'deadlock victim' [7d]                         n= 20 p50=      1.68 ms p95=      1.92 ms min=     1.37 rows=  51 
+pg-tokens      deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=      0.91 ms p95=      1.04 ms min=     0.80 rows=   0 
+pg-tokens      deep output: invoice, 60d old [all]                        n= 20 p50=      0.86 ms p95=      0.98 ms min=     0.68 rows=   1 
+pg-tokens      deep output: common 'express' [all]                        n= 20 p50=      0.79 ms p95=      0.92 ms min=     0.73 rows=   0 
+pg-tokens      deep error: 'deadlock victim' [all]                        n= 20 p50=      4.28 ms p95=      5.12 ms min=     4.13 rows=  51 
+pg-tokens      deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=      0.78 ms p95=      1.06 ms min=     0.69 rows=   0 
+=== 15:59:21 pg-write with-run-trgm-again 200
+--- pg with-run-trgm-again 2026-11-23T16:00:12.2820986Z
+StartRunAsync                      n=  200 p50=   3.529 ms p95=   4.957 ms mean=   3.971 ms
+event run.started                  n=  200 p50=   3.384 ms p95=   4.387 ms mean=   3.285 ms
+RTT SELECT 1                       n= 1806 p50=   0.359 ms p95=   0.688 ms mean=   0.421 ms
+TryRecordDispatchAsync             n= 1806 p50=   3.093 ms p95=   3.745 ms mean=   3.050 ms
+TryClaimStepAsync                  n= 1806 p50=   3.008 ms p95=   3.994 ms mean=   3.038 ms
+RecordStepStartAsync               n= 1806 p50=   4.952 ms p95=   6.863 ms mean=   5.036 ms
+event step.started                 n= 1806 p50=   3.007 ms p95=   3.914 ms mean=   3.019 ms
+SaveStepOutputAsync                n= 1806 p50=   3.037 ms p95=   4.074 ms mean=   3.117 ms
+RecordStepCompleteAsync            n= 1806 p50=   4.081 ms p95=   6.037 ms mean=   5.034 ms
+event step.completed               n= 1806 p50=   3.010 ms p95=   3.931 ms mean=   3.039 ms
+GetStepStatusesAsync               n= 1806 p50=   0.488 ms p95=   0.931 ms mean=   0.566 ms
+CompleteRunAsync                   n=  200 p50=   3.216 ms p95=   3.916 ms mean=   3.068 ms
+event run.completed                n=  200 p50=   2.955 ms p95=   3.950 ms mean=   3.025 ms
+=== 16:00:12 pg-write tokens 200 tokens
+--- pg tokens 2026-11-23T16:01:43.2740559Z
+StartRunAsync                      n=  200 p50=   3.621 ms p95=   6.419 ms mean=   4.461 ms
+event run.started                  n=  200 p50=   4.231 ms p95=  18.576 ms mean=   7.465 ms
+tokens run (run+trigger)           n=  200 p50=   3.973 ms p95=   6.968 ms mean=   5.155 ms
+RTT SELECT 1                       n= 1875 p50=   0.443 ms p95=   1.263 ms mean=   0.732 ms
+TryRecordDispatchAsync             n= 1875 p50=   2.891 ms p95=   7.378 ms mean=   4.491 ms
+TryClaimStepAsync                  n= 1875 p50=   3.028 ms p95=   8.048 ms mean=   4.740 ms
+RecordStepStartAsync               n= 1875 p50=   5.399 ms p95=  23.846 ms mean=   8.668 ms
+event step.started                 n= 1875 p50=   3.045 ms p95=   6.509 ms mean=   4.393 ms
+SaveStepOutputAsync                n= 1875 p50=   3.071 ms p95=   6.456 ms mean=   4.707 ms
+RecordStepCompleteAsync            n= 1875 p50=   4.894 ms p95=  13.876 ms mean=   7.729 ms
+event step.completed               n= 1875 p50=   3.052 ms p95=   8.030 ms mean=   4.301 ms
+GetStepStatusesAsync               n= 1875 p50=   0.602 ms p95=   1.520 ms mean=   0.941 ms
+tokens step                        n= 1875 p50=   3.479 ms p95=   7.381 ms mean=   4.916 ms
+CompleteRunAsync                   n=  200 p50=   3.059 ms p95=   9.011 ms mean=   4.406 ms
+event run.completed                n=  200 p50=   3.026 ms p95=   5.614 ms mean=   4.124 ms
+=== 16:01:43 pg-setup drop-output-trgm
+setup drop-output-trgm: 00:00:00.4832261
+=== 16:01:44 pg-write without-output-trgm 200
+--- pg without-output-trgm 2026-11-23T16:02:49.0406809Z
+StartRunAsync                      n=  200 p50=   3.529 ms p95=   5.740 ms mean=   5.566 ms
+event run.started                  n=  200 p50=   3.353 ms p95=   7.410 ms mean=   4.022 ms
+RTT SELECT 1                       n= 1914 p50=   0.364 ms p95=   0.851 ms mean=   0.470 ms
+TryRecordDispatchAsync             n= 1914 p50=   3.037 ms p95=   4.150 ms mean=   3.508 ms
+TryClaimStepAsync                  n= 1914 p50=   2.959 ms p95=   4.218 ms mean=   3.783 ms
+RecordStepStartAsync               n= 1914 p50=   4.942 ms p95=   9.400 ms mean=   6.145 ms
+event step.started                 n= 1914 p50=   2.972 ms p95=   5.393 ms mean=   3.897 ms
+SaveStepOutputAsync                n= 1914 p50=   2.980 ms p95=   4.591 ms mean=   3.832 ms
+RecordStepCompleteAsync            n= 1914 p50=   4.056 ms p95=   7.868 ms mean=   5.370 ms
+event step.completed               n= 1914 p50=   2.970 ms p95=   5.209 ms mean=   4.034 ms
+GetStepStatusesAsync               n= 1914 p50=   0.501 ms p95=   1.051 ms mean=   0.627 ms
+CompleteRunAsync                   n=  200 p50=   2.900 ms p95=   3.956 ms mean=   3.028 ms
+event run.completed                n=  200 p50=   2.935 ms p95=   4.477 ms mean=   4.935 ms
+=== 16:02:49 pg-setup tsv
+setup tsv: 00:07:25.5805500
+=== 16:10:14 pg-cand tsv
+pg-tsv         deep output: invoice, 3d old [7d]                          n= 20 p50=     72.64 ms p95=     78.04 ms min=    68.94 rows=   0 
+pg-tsv         deep output: invoice, 60d old [7d]                         n= 20 p50=     71.30 ms p95=     76.54 ms min=    68.56 rows=   0 
+pg-tsv         deep output: orderId, 3d old [7d]                          n= 20 p50=    152.96 ms p95=    182.06 ms min=   147.08 rows=   0 
+pg-tsv         deep output: common 'express' [7d]                         n=  3 p50=  13969.50 ms p95=  19847.87 ms min= 13375.61 rows=  51 
+pg-tsv         deep error: shipment, 3d old [7d]                          n= 20 p50=     25.78 ms p95=     29.00 ms min=    24.91 rows=   1 
+pg-tsv         deep error: 'deadlock victim' [7d]                         n= 20 p50=     16.56 ms p95=     19.19 ms min=    13.50 rows=  51 
+pg-tsv         deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=     25.25 ms p95=     27.23 ms min=    24.30 rows=   0 
+pg-tsv         deep output: invoice, 60d old [all]                        n= 20 p50=    339.49 ms p95=    354.27 ms min=   334.55 rows=   0 
+pg-tsv         deep output: common 'express' [all]                        n=  3 p50=  14328.27 ms p95=  18104.16 ms min= 13407.92 rows=  51 
+pg-tsv         deep error: 'deadlock victim' [all]                        n= 20 p50=     14.22 ms p95=     20.29 ms min=    13.28 rows=  51 
+pg-tsv         deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=    297.86 ms p95=    304.50 ms min=   290.67 rows=   0 
+=== 16:12:42 pg-write with-tsv-no-output-trgm 200
+--- pg with-tsv-no-output-trgm 2026-11-23T16:13:39.4329730Z
+StartRunAsync                      n=  200 p50=   3.717 ms p95=   5.420 ms mean=   4.334 ms
+event run.started                  n=  200 p50=   3.490 ms p95=   4.559 ms mean=   3.700 ms
+RTT SELECT 1                       n= 1948 p50=   0.357 ms p95=   0.724 ms mean=   0.413 ms
+TryRecordDispatchAsync             n= 1948 p50=   3.151 ms p95=   4.007 ms mean=   3.193 ms
+TryClaimStepAsync                  n= 1948 p50=   3.027 ms p95=   4.059 ms mean=   3.140 ms
+RecordStepStartAsync               n= 1948 p50=   5.058 ms p95=   6.975 ms mean=   5.283 ms
+event step.started                 n= 1948 p50=   3.033 ms p95=   4.056 ms mean=   3.121 ms
+SaveStepOutputAsync                n= 1948 p50=   3.068 ms p95=   4.116 ms mean=   3.268 ms
+RecordStepCompleteAsync            n= 1948 p50=   4.444 ms p95=   6.092 ms mean=   5.503 ms
+event step.completed               n= 1948 p50=   3.047 ms p95=   4.065 ms mean=   3.146 ms
+GetStepStatusesAsync               n= 1948 p50=   0.482 ms p95=   0.851 ms mean=   0.540 ms
+CompleteRunAsync                   n=  200 p50=   3.466 ms p95=   4.436 ms mean=   3.373 ms
+event run.completed                n=  200 p50=   3.028 ms p95=   3.964 ms mean=   3.116 ms
+=== 16:13:39 pg-sizes
+flow_events              flow_events                                       557.3 MB
+flow_events              flow_events_pkey                                   92.8 MB
+flow_events              ix_flow_events_run_id_sequence                    170.8 MB
+flow_run_search_tokens   flow_run_search_tokens                          1,152.0 MB
+flow_run_search_tokens   flow_run_search_tokens_pkey                     1,013.8 MB
+flow_runs                flow_runs                                          92.7 MB
+flow_runs                flow_runs_pkey                                      6.0 MB
+flow_runs                ix_flow_runs_flow_id                                1.4 MB
+flow_runs                ix_flow_runs_flow_id_status_started_at             11.3 MB
+flow_runs                ix_flow_runs_flow_name_trgm                         8.3 MB
+flow_runs                ix_flow_runs_search_text_trgm                      46.6 MB
+flow_runs                ix_flow_runs_source_run_id                          0.0 MB
+flow_runs                ix_flow_runs_started_at                             4.4 MB
+flow_runs                ix_flow_runs_status                                 1.4 MB
+flow_runs                ix_flow_runs_trigger_key_trgm                       6.9 MB
+flow_steps               flow_steps                                      5,998.0 MB
+flow_steps               flow_steps_pkey                                    97.0 MB
+flow_steps               ix_flow_steps_error_message_trgm                   19.2 MB
+flow_steps               ix_flow_steps_run_id_started_at                   217.7 MB
+flow_steps               ix_flow_steps_search_tsv                          629.3 MB
+flow_steps               ix_flow_steps_step_key_run_id                      97.3 MB
+flow_steps               ix_flow_steps_step_key_trgm                        58.1 MB
+=== 16:13:39 done
+pg-tsv         deep output: invoice, 3d old [7d]                          n= 20 p50=     78.99 ms p95=     81.42 ms min=    73.84 rows=   1 
+pg-tsv         deep output: invoice, 60d old [7d]                         n= 20 p50=     77.77 ms p95=     80.35 ms min=    73.17 rows=   0 
+pg-tsv         deep output: orderId, 3d old [7d]                          n= 20 p50=    288.78 ms p95=    313.82 ms min=   274.86 rows=   1 
+pg-tsv         deep output: common 'express' [7d]                         n=  3 p50=  13808.08 ms p95=  14336.60 ms min= 13475.58 rows=  51 
+pg-tsv         deep error: shipment, 3d old [7d]                          n= 20 p50=     30.42 ms p95=     63.49 ms min=    27.01 rows=   1 
+pg-tsv         deep error: 'deadlock victim' [7d]                         n= 20 p50=     16.67 ms p95=     22.97 ms min=    14.17 rows=  51 
+pg-tsv         deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=     29.58 ms p95=     34.90 ms min=    25.11 rows=   0 
+pg-tsv         deep output: invoice, 60d old [all]                        n= 20 p50=    670.14 ms p95=    899.63 ms min=   385.12 rows=   1 
+pg-tsv         deep output: common 'express' [all]                        n=  3 p50=  13142.47 ms p95=  15377.01 ms min= 13052.29 rows=  51 
+pg-tsv         deep error: 'deadlock victim' [all]                        n= 20 p50=     14.54 ms p95=     21.40 ms min=    13.36 rows=  51 
+pg-tsv         deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=    298.53 ms p95=    321.83 ms min=   289.53 rows=   0 
+=== 16:16:26 pg-exec DROP INDEX IF EXISTS ix_flow_steps_search_tsv
+exec (-1 rows) in 00:00:00.2096945: DROP INDEX IF EXISTS ix_flow_steps_search_tsv
+=== 16:16:27 pg-exec ALTER TABLE flow_steps DROP COLUMN IF EXISTS search_tsv
+exec (-1 rows) in 00:00:00.1746924: ALTER TABLE flow_steps DROP COLUMN IF EXISTS search_tsv
+=== 16:16:27 pg-exec VACUUM FULL flow_steps
+exec (-1 rows) in 00:00:19.7946654: VACUUM FULL flow_steps
+=== 16:16:47 pg-exec VACUUM ANALYZE flow_steps
+exec (-1 rows) in 00:00:07.6377095: VACUUM ANALYZE flow_steps
+=== 16:16:54 pg-sizes
+flow_events              flow_events                                       557.3 MB
+flow_events              flow_events_pkey                                   92.8 MB
+flow_events              ix_flow_events_run_id_sequence                    170.8 MB
+flow_run_search_tokens   flow_run_search_tokens                          1,152.0 MB
+flow_run_search_tokens   flow_run_search_tokens_pkey                     1,013.8 MB
+flow_runs                flow_runs                                          92.7 MB
+flow_runs                flow_runs_pkey                                      6.0 MB
+flow_runs                ix_flow_runs_flow_id                                1.4 MB
+flow_runs                ix_flow_runs_flow_id_status_started_at             11.3 MB
+flow_runs                ix_flow_runs_flow_name_trgm                         8.3 MB
+flow_runs                ix_flow_runs_search_text_trgm                      46.6 MB
+flow_runs                ix_flow_runs_source_run_id                          0.0 MB
+flow_runs                ix_flow_runs_started_at                             4.4 MB
+flow_runs                ix_flow_runs_status                                 1.4 MB
+flow_runs                ix_flow_runs_trigger_key_trgm                       6.9 MB
+flow_steps               flow_steps                                      2,073.5 MB
+flow_steps               flow_steps_pkey                                    97.1 MB
+flow_steps               ix_flow_steps_error_message_trgm                   18.7 MB
+flow_steps               ix_flow_steps_run_id_started_at                   216.5 MB
+flow_steps               ix_flow_steps_step_key_run_id                      97.2 MB
+flow_steps               ix_flow_steps_step_key_trgm                        54.3 MB
+=== 16:16:55 pg-base deep
+pg-base-no-output-trgm deep output: invoice, 3d old [7d]                          n=  3 p50=  14980.15 ms p95=  15100.24 ms min= 14563.83 rows=   1 
+pg-base-no-output-trgm deep output: invoice, 60d old [7d]                         n=  3 p50=  14712.98 ms p95=  14778.78 ms min= 14569.46 rows=   0 
+pg-base-no-output-trgm deep output: orderId, 3d old [7d]                          n=  3 p50=  14782.92 ms p95=  14816.45 ms min= 14599.41 rows=   1 
+pg-base-no-output-trgm deep output: common 'express' [7d]                         n=  3 p50=  38320.63 ms p95=  38509.17 ms min= 38186.18 rows=  51 
+pg-base-no-output-trgm deep error: shipment, 3d old [7d]                          n=  3 p50=  16481.11 ms p95=  21670.87 ms min= 14863.75 rows=   1 
+pg-base-no-output-trgm deep error: 'deadlock victim' [7d]                         n=  3 p50=  14422.43 ms p95=  14556.73 ms min= 14310.43 rows=  51 
+pg-base-no-output-trgm deep no match 'zq-nomatch-7731' [7d]                       n=  3 p50=  13961.69 ms p95=  13980.34 ms min= 13935.39 rows=   0 
+pg-base-no-output-trgm deep output: invoice, 60d old [all]                        n=  3 p50=  15208.95 ms p95=  15237.87 ms min= 15030.32 rows=   1 
+pg-base-no-output-trgm deep output: common 'express' [all]                        n=  3 p50=  38599.84 ms p95=  39487.86 ms min= 38509.34 rows=  51 
+pg-base-no-output-trgm deep error: 'deadlock victim' [all]                        n=  3 p50=  14485.91 ms p95=  14496.84 ms min= 14291.95 rows=  51 
+pg-base-no-output-trgm deep no match 'zq-nomatch-7731' [all]                      n=  3 p50=  14092.04 ms p95=  14118.89 ms min= 13961.94 rows=   0 
+=== 16:31:08 done

@@ -20,4 +20,11 @@
     <ProjectReference Include="..\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FlowOrchestrator.PostgreSQL.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.PostgreSQL.IntegrationTests" />
+    <!-- The run-search harness measures the shipped query text and waits for the background index build. -->
+    <InternalsVisibleTo Include="FlowOrchestrator.SearchBench" />
+  </ItemGroup>
+
 </Project>

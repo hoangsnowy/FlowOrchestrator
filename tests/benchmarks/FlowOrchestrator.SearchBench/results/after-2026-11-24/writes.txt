@@ -1,0 +1,60 @@
+--- mssql pre-migrate 2026-11-23T18:25:53.1744250Z
+StartRunAsync                      n=  200 p50=   7.718 ms p95=  10.557 ms mean=   8.122 ms
+RTT SELECT 1                       n= 1848 p50=   0.767 ms p95=   1.210 ms mean=   0.790 ms
+TryRecordDispatchAsync             n= 1848 p50=   5.939 ms p95=   8.538 ms mean=   6.365 ms
+TryClaimStepAsync                  n= 1848 p50=   6.018 ms p95=   8.334 ms mean=   6.360 ms
+RecordStepStartAsync               n= 1848 p50=   6.074 ms p95=   8.968 ms mean=   6.565 ms
+SaveStepOutputAsync                n= 1848 p50=   6.099 ms p95=   9.000 ms mean=   6.676 ms
+RecordStepCompleteAsync            n= 1848 p50=   6.174 ms p95=   9.101 ms mean=   6.878 ms
+GetStepStatusesAsync               n= 1848 p50=   0.788 ms p95=   1.209 ms mean=   0.809 ms
+CompleteRunAsync                   n=  200 p50=   6.227 ms p95=   9.755 ms mean=   6.738 ms
+--- mssql after-no-tokens 2026-11-23T18:40:21.7019190Z
+StartRunAsync                      n=  200 p50=   6.544 ms p95=   8.951 ms mean=   7.087 ms
+RTT SELECT 1                       n= 1912 p50=   0.577 ms p95=   1.002 ms mean=   0.646 ms
+TryRecordDispatchAsync             n= 1912 p50=   5.058 ms p95=   7.319 ms mean=   5.435 ms
+TryClaimStepAsync                  n= 1912 p50=   5.020 ms p95=   7.121 ms mean=   5.390 ms
+RecordStepStartAsync               n= 1912 p50=   5.896 ms p95=   8.008 ms mean=   5.883 ms
+SaveStepOutputAsync                n= 1912 p50=   5.096 ms p95=   7.723 ms mean=   5.662 ms
+RecordStepCompleteAsync            n= 1912 p50=   5.827 ms p95=   7.940 ms mean=   5.850 ms
+GetStepStatusesAsync               n= 1912 p50=   0.554 ms p95=   1.002 ms mean=   0.636 ms
+CompleteRunAsync                   n=  200 p50=   5.514 ms p95=   8.035 ms mean=   5.996 ms
+--- mssql after-shipped-tokens 2026-11-23T18:41:39.0474681Z
+StartRunAsync                      n=  200 p50=  11.937 ms p95=  17.553 ms mean=  13.213 ms
+RTT SELECT 1                       n= 1872 p50=   0.756 ms p95=   1.208 ms mean=   0.769 ms
+TryRecordDispatchAsync             n= 1872 p50=   5.567 ms p95=   9.030 ms mean=   6.135 ms
+TryClaimStepAsync                  n= 1872 p50=   5.740 ms p95=   8.885 ms mean=   6.037 ms
+RecordStepStartAsync               n= 1872 p50=   5.996 ms p95=   9.253 ms mean=   6.417 ms
+SaveStepOutputAsync                n= 1872 p50=   5.992 ms p95=   9.063 ms mean=   6.372 ms
+RecordStepCompleteAsync            n= 1872 p50=  11.204 ms p95=  17.270 ms mean=  12.497 ms
+GetStepStatusesAsync               n= 1872 p50=   0.806 ms p95=   1.298 ms mean=   0.826 ms
+CompleteRunAsync                   n=  200 p50=   5.855 ms p95=   8.785 ms mean=   6.273 ms
+--- pg pre-migrate 2026-11-23T18:57:48.9013808Z
+StartRunAsync                      n=  200 p50=   3.442 ms p95=   4.372 ms mean=   3.694 ms
+RTT SELECT 1                       n= 1907 p50=   0.326 ms p95=   0.502 ms mean=   0.351 ms
+TryRecordDispatchAsync             n= 1907 p50=   2.723 ms p95=   3.382 ms mean=   2.763 ms
+TryClaimStepAsync                  n= 1907 p50=   2.974 ms p95=   3.208 ms mean=   2.970 ms
+RecordStepStartAsync               n= 1907 p50=   4.079 ms p95=   5.308 ms mean=   4.374 ms
+SaveStepOutputAsync                n= 1907 p50=   3.016 ms p95=   3.946 ms mean=   3.053 ms
+RecordStepCompleteAsync            n= 1907 p50=   4.060 ms p95=   5.873 ms mean=   4.635 ms
+GetStepStatusesAsync               n= 1907 p50=   0.437 ms p95=   0.691 ms mean=   0.477 ms
+CompleteRunAsync                   n=  200 p50=   2.598 ms p95=   3.589 ms mean=   2.726 ms
+--- pg after 2026-11-23T19:01:24.6945368Z
+StartRunAsync                      n=  200 p50=   3.461 ms p95=   4.421 ms mean=   3.739 ms
+RTT SELECT 1                       n= 1804 p50=   0.331 ms p95=   0.547 ms mean=   0.364 ms
+TryRecordDispatchAsync             n= 1804 p50=   2.832 ms p95=   3.381 ms mean=   2.766 ms
+TryClaimStepAsync                  n= 1804 p50=   2.983 ms p95=   3.238 ms mean=   2.971 ms
+RecordStepStartAsync               n= 1804 p50=   4.080 ms p95=   5.525 ms mean=   4.399 ms
+SaveStepOutputAsync                n= 1804 p50=   3.027 ms p95=   3.914 ms mean=   3.032 ms
+RecordStepCompleteAsync            n= 1804 p50=   4.055 ms p95=   5.384 ms mean=   5.007 ms
+GetStepStatusesAsync               n= 1804 p50=   0.445 ms p95=   0.716 ms mean=   0.485 ms
+CompleteRunAsync                   n=  200 p50=   2.627 ms p95=   3.582 ms mean=   2.763 ms
+--- pg with-stored-column 2026-11-23T19:02:06.8740650Z
+StartRunAsync                      n=  200 p50=   3.429 ms p95=   4.454 ms mean=   3.700 ms
+RTT SELECT 1                       n= 1789 p50=   0.331 ms p95=   0.577 ms mean=   0.370 ms
+TryRecordDispatchAsync             n= 1789 p50=   2.790 ms p95=   3.402 ms mean=   2.743 ms
+TryClaimStepAsync                  n= 1789 p50=   2.990 ms p95=   3.230 ms mean=   2.969 ms
+RecordStepStartAsync               n= 1789 p50=   4.085 ms p95=   5.868 ms mean=   4.464 ms
+SaveStepOutputAsync                n= 1789 p50=   3.030 ms p95=   3.945 ms mean=   3.110 ms
+RecordStepCompleteAsync            n= 1789 p50=   4.053 ms p95=   5.884 ms mean=   4.987 ms
+GetStepStatusesAsync               n= 1789 p50=   0.439 ms p95=   0.728 ms mean=   0.487 ms
+CompleteRunAsync                   n=  200 p50=   2.651 ms p95=   3.662 ms mean=   2.878 ms

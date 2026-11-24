@@ -15,14 +15,14 @@ Idempotency dedupe is not a pipeline gate — it runs later, inside
 delivery.
 
 Each gate is opt-in via manifest fields and is a no-op when not configured.
-With the default `WebhookEnforcementMode = Off` the endpoint behaves exactly
-as in v1.24 — every gate is skipped.
+The default `WebhookEnforcementMode` is `Enforce` (since 2.0): every configured gate rejects violating
+requests. With `Off` (the 1.x default) the endpoint behaves exactly as in v1.24 — every gate is skipped.
 
 ## Three enforcement modes
 
 | Mode | Gate behaviour | HTTP response | When to use |
 |------|----------------|---------------|-------------|
-| `Off` | Skipped | Same as v1.24 | Greenfield + flows that haven't migrated |
+| `Off` | Skipped | Same as v1.24 | Explicit opt-out (the 1.x default) while a publisher is being fixed |
 | `Audit` | Run + log + metrics + DLQ | Always 200 (accept) — except an oversized body, which is capped before the pipeline and still returns 413 | One release before flipping to `Enforce` to confirm legitimate traffic still validates |
 | `Enforce` | Run + log + metrics + DLQ + reject | 4xx on failure | Production lock-down |
 
@@ -240,7 +240,7 @@ aliases for the same rotation pair — see
 [Migrating from v1.24](#migrating-from-v124).
 
 ## Replay protection
-> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under the default `Off` nothing below takes effect at all.
+> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under `Off` nothing below takes effect at all. `Enforce` is the default since 2.0.
 
 Two complementary defences:
 
@@ -260,7 +260,7 @@ PostgreSQL backend (see [Storage](storage.md#webhook-hardening-backends-v125))
 on a second replica.
 
 ## Rate limiting
-> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under the default `Off` nothing below takes effect at all.
+> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under `Off` nothing below takes effect at all. `Enforce` is the default since 2.0.
 
 Token-bucket limiter built on `System.Threading.RateLimiting`, keyed
 per-flow or per `flowId|clientIp` when `webhookRateLimitPerIp = true`.
@@ -276,7 +276,7 @@ not sent as a `Retry-After` header — it is exposed on the
 `flow.webhook.rate_limit.retry_after_ms` span tag.
 
 ## IP allow / deny list
-> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under the default `Off` nothing below takes effect at all.
+> Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under `Off` nothing below takes effect at all. `Enforce` is the default since 2.0.
 
 `CidrMatcher` accepts every common notation for an IP allow / deny list,
 mix-and-match in the same array:

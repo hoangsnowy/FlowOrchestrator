@@ -213,6 +213,22 @@ public sealed class DashboardJsContractTests : IDisposable
         Assert.DoesNotContain("Search run, step, error, output", html);
     }
 
+    [Fact]
+    public async Task GET_root_run_list_pages_forward_by_cursor_and_shows_a_capped_total()
+    {
+        // Arrange — Next sends the server's nextCursor as ?after= (keyset, stable while runs start);
+        // a count that stopped at the cap is shown as "N+" and does not end the pager.
+
+        // Act
+        var html = await _body.Value;
+
+        // Assert
+        Assert.Contains("if (typeof page.nextCursor === 'string' && page.nextCursor) runsCursors[runsPage + 1] = page.nextCursor;", html);
+        Assert.Contains("(cursor ? '&after='+encodeURIComponent(cursor) : '&skip='+skip)", html);
+        Assert.Contains("runsCountCap = runsTotalExact && page.totalCapped ? page.total : 0;", html);
+        Assert.Contains("esc(runsCountCap.toLocaleString())+'+'", html);
+    }
+
     // ── Run status filter covers every terminal status ───────────────────────
 
     [Fact]

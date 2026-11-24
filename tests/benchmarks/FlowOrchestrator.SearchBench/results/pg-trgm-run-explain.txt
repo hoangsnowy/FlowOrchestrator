@@ -1,0 +1,340 @@
+### runId prefix, recent [7d]
+Limit  (cost=214.18..214.19 rows=3 width=354) (actual time=0.306..0.308 rows=1.00 loops=1)
+  Buffers: shared hit=31
+  ->  Sort  (cost=214.18..214.19 rows=3 width=354) (actual time=0.306..0.307 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=31
+        ->  Nested Loop  (cost=181.20..214.15 rows=3 width=354) (actual time=0.287..0.291 rows=1.00 loops=1)
+              Buffers: shared hit=31
+              ->  Unique  (cost=180.78..188.84 rows=3 width=16) (actual time=0.271..0.274 rows=1.00 loops=1)
+                    Buffers: shared hit=27
+                    ->  Merge Append  (cost=180.78..188.83 rows=3 width=16) (actual time=0.269..0.271 rows=2.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Buffers: shared hit=27
+                          ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.030..0.030 rows=1.00 loops=1)
+                                Index Cond: ((id >= 'bbdafe3e-0000-0000-0000-000000000000'::uuid) AND (id <= 'bbdafe3e-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                Heap Fetches: 1
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Sort  (cost=180.35..180.35 rows=2 width=16) (actual time=0.239..0.239 rows=1.00 loops=1)
+                                Sort Key: fr_1.id
+                                Sort Method: quicksort  Memory: 25kB
+                                Buffers: shared hit=23
+                                ->  Bitmap Heap Scan on flow_runs fr_1  (cost=102.51..180.34 rows=2 width=16) (actual time=0.227..0.228 rows=1.00 loops=1)
+                                      Recheck Cond: (search_text ~~ '%bbdafe3e%'::text)
+                                      Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+                                      Heap Blocks: exact=1
+                                      Buffers: shared hit=23
+                                      ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.216..0.216 rows=1.00 loops=1)
+                                            Index Cond: (search_text ~~ '%bbdafe3e%'::text)
+                                            Index Searches: 1
+                                            Buffers: shared hit=22
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.014..0.014 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.351 ms
+Execution Time: 0.397 ms
+
+### runId prefix, 60d old [7d]
+Limit  (cost=214.18..214.19 rows=3 width=354) (actual time=0.273..0.274 rows=1.00 loops=1)
+  Buffers: shared hit=32
+  ->  Sort  (cost=214.18..214.19 rows=3 width=354) (actual time=0.273..0.274 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=32
+        ->  Nested Loop  (cost=181.20..214.15 rows=3 width=354) (actual time=0.260..0.262 rows=1.00 loops=1)
+              Buffers: shared hit=32
+              ->  Unique  (cost=180.78..188.84 rows=3 width=16) (actual time=0.248..0.249 rows=1.00 loops=1)
+                    Buffers: shared hit=28
+                    ->  Merge Append  (cost=180.78..188.83 rows=3 width=16) (actual time=0.247..0.248 rows=1.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Buffers: shared hit=28
+                          ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.017..0.017 rows=1.00 loops=1)
+                                Index Cond: ((id >= 'f41296b2-0000-0000-0000-000000000000'::uuid) AND (id <= 'f41296b2-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                Heap Fetches: 1
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Sort  (cost=180.35..180.35 rows=2 width=16) (actual time=0.229..0.229 rows=0.00 loops=1)
+                                Sort Key: fr_1.id
+                                Sort Method: quicksort  Memory: 25kB
+                                Buffers: shared hit=24
+                                ->  Bitmap Heap Scan on flow_runs fr_1  (cost=102.51..180.34 rows=2 width=16) (actual time=0.221..0.221 rows=0.00 loops=1)
+                                      Recheck Cond: (search_text ~~ '%f41296b2%'::text)
+                                      Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+                                      Rows Removed by Filter: 1
+                                      Heap Blocks: exact=1
+                                      Buffers: shared hit=24
+                                      ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.209..0.209 rows=1.00 loops=1)
+                                            Index Cond: (search_text ~~ '%f41296b2%'::text)
+                                            Index Searches: 1
+                                            Buffers: shared hit=23
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.010..0.011 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.203 ms
+Execution Time: 0.347 ms
+
+### flow name, common 'Invoice' [7d]
+Limit  (cost=0.42..30.88 rows=51 width=354) (actual time=0.024..0.077 rows=51.00 loops=1)
+  Buffers: shared hit=23
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1402.20 rows=2347 width=354) (actual time=0.023..0.074 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (search_text ~~ '%invoice%'::text)
+        Rows Removed by Filter: 237
+        Index Searches: 1
+        Buffers: shared hit=23
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.139 ms
+Execution Time: 0.095 ms
+
+### flow name, rare 'Gdpr' [7d]
+Limit  (cost=112.08..112.08 rows=2 width=354) (actual time=0.318..0.320 rows=17.00 loops=1)
+  Buffers: shared hit=206
+  ->  Sort  (cost=112.08..112.08 rows=2 width=354) (actual time=0.318..0.319 rows=17.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 33kB
+        Buffers: shared hit=206
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=34.24..112.07 rows=2 width=354) (actual time=0.298..0.306 rows=17.00 loops=1)
+              Recheck Cond: (search_text ~~ '%gdpr%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Rows Removed by Filter: 177
+              Heap Blocks: exact=193
+              Buffers: shared hit=206
+              ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..34.24 rows=20 width=0) (actual time=0.199..0.199 rows=194.00 loops=1)
+                    Index Cond: (search_text ~~ '%gdpr%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=13
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.184 ms
+Execution Time: 0.352 ms
+
+### trigger key, common 'order-created' [7d]
+Limit  (cost=0.42..25.81 rows=51 width=354) (actual time=0.020..0.107 rows=51.00 loops=1)
+  Buffers: shared hit=33
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..1402.20 rows=2816 width=354) (actual time=0.020..0.103 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (search_text ~~ '%order-created%'::text)
+        Rows Removed by Filter: 392
+        Index Searches: 1
+        Buffers: shared hit=33
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.127 ms
+Execution Time: 0.129 ms
+
+### trigger key, rare 'backfill' [7d]
+Limit  (cost=180.35..180.35 rows=2 width=354) (actual time=1.134..1.138 rows=51.00 loops=1)
+  Buffers: shared hit=853
+  ->  Sort  (cost=180.35..180.35 rows=2 width=354) (actual time=1.133..1.135 rows=51.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 66kB
+        Buffers: shared hit=853
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=102.51..180.34 rows=2 width=354) (actual time=1.066..1.106 rows=82.00 loops=1)
+              Recheck Cond: (search_text ~~ '%backfill%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Rows Removed by Filter: 761
+              Heap Blocks: exact=813
+              Buffers: shared hit=853
+              ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.642..0.642 rows=843.00 loops=1)
+                    Index Cond: (search_text ~~ '%backfill%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=40
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.135 ms
+Execution Time: 1.186 ms
+
+### no match 'zq-nomatch-7731' [7d]
+Limit  (cost=299.82..299.83 rows=2 width=354) (actual time=0.160..0.161 rows=0.00 loops=1)
+  Buffers: shared hit=47
+  ->  Sort  (cost=299.82..299.83 rows=2 width=354) (actual time=0.160..0.160 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=47
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=221.98..299.81 rows=2 width=354) (actual time=0.159..0.159 rows=0.00 loops=1)
+              Recheck Cond: (search_text ~~ '%zq-nomatch-7731%'::text)
+              Filter: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+              Buffers: shared hit=47
+              ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..221.98 rows=20 width=0) (actual time=0.156..0.156 rows=0.00 loops=1)
+                    Index Cond: (search_text ~~ '%zq-nomatch-7731%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=47
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.118 ms
+Execution Time: 0.193 ms
+
+### runId prefix, recent [all]
+Limit  (cost=367.14..367.19 rows=21 width=354) (actual time=0.249..0.251 rows=1.00 loops=1)
+  Buffers: shared hit=31
+  ->  Sort  (cost=367.14..367.19 rows=21 width=354) (actual time=0.249..0.250 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=31
+        ->  Nested Loop  (cost=181.58..366.68 rows=21 width=354) (actual time=0.239..0.242 rows=1.00 loops=1)
+              Buffers: shared hit=31
+              ->  Unique  (cost=181.16..189.49 rows=21 width=16) (actual time=0.227..0.229 rows=1.00 loops=1)
+                    Buffers: shared hit=27
+                    ->  Merge Append  (cost=181.16..189.44 rows=21 width=16) (actual time=0.226..0.227 rows=2.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Buffers: shared hit=27
+                          ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.017..0.018 rows=1.00 loops=1)
+                                Index Cond: ((id >= 'bbdafe3e-0000-0000-0000-000000000000'::uuid) AND (id <= 'bbdafe3e-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                Heap Fetches: 1
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Sort  (cost=180.73..180.78 rows=20 width=16) (actual time=0.208..0.208 rows=1.00 loops=1)
+                                Sort Key: fr_1.id
+                                Sort Method: quicksort  Memory: 25kB
+                                Buffers: shared hit=23
+                                ->  Bitmap Heap Scan on flow_runs fr_1  (cost=102.51..180.29 rows=20 width=16) (actual time=0.198..0.198 rows=1.00 loops=1)
+                                      Recheck Cond: (search_text ~~ '%bbdafe3e%'::text)
+                                      Heap Blocks: exact=1
+                                      Buffers: shared hit=23
+                                      ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.192..0.192 rows=1.00 loops=1)
+                                            Index Cond: (search_text ~~ '%bbdafe3e%'::text)
+                                            Index Searches: 1
+                                            Buffers: shared hit=22
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.011..0.011 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.246 ms
+Execution Time: 0.324 ms
+
+### runId prefix, 60d old [all]
+Limit  (cost=367.14..367.19 rows=21 width=354) (actual time=0.262..0.264 rows=1.00 loops=1)
+  Buffers: shared hit=32
+  ->  Sort  (cost=367.14..367.19 rows=21 width=354) (actual time=0.262..0.263 rows=1.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=32
+        ->  Nested Loop  (cost=181.58..366.68 rows=21 width=354) (actual time=0.255..0.258 rows=1.00 loops=1)
+              Buffers: shared hit=32
+              ->  Unique  (cost=181.16..189.49 rows=21 width=16) (actual time=0.246..0.248 rows=1.00 loops=1)
+                    Buffers: shared hit=28
+                    ->  Merge Append  (cost=181.16..189.44 rows=21 width=16) (actual time=0.245..0.247 rows=2.00 loops=1)
+                          Sort Key: flow_runs.id
+                          Buffers: shared hit=28
+                          ->  Index Only Scan using flow_runs_pkey on flow_runs  (cost=0.42..8.44 rows=1 width=16) (actual time=0.030..0.031 rows=1.00 loops=1)
+                                Index Cond: ((id >= 'f41296b2-0000-0000-0000-000000000000'::uuid) AND (id <= 'f41296b2-ffff-ffff-ffff-ffffffffffff'::uuid))
+                                Heap Fetches: 1
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Sort  (cost=180.73..180.78 rows=20 width=16) (actual time=0.214..0.215 rows=1.00 loops=1)
+                                Sort Key: fr_1.id
+                                Sort Method: quicksort  Memory: 25kB
+                                Buffers: shared hit=24
+                                ->  Bitmap Heap Scan on flow_runs fr_1  (cost=102.51..180.29 rows=20 width=16) (actual time=0.206..0.206 rows=1.00 loops=1)
+                                      Recheck Cond: (search_text ~~ '%f41296b2%'::text)
+                                      Heap Blocks: exact=1
+                                      Buffers: shared hit=24
+                                      ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.197..0.197 rows=1.00 loops=1)
+                                            Index Cond: (search_text ~~ '%f41296b2%'::text)
+                                            Index Searches: 1
+                                            Buffers: shared hit=23
+              ->  Index Scan using flow_runs_pkey on flow_runs fr  (cost=0.42..8.44 rows=1 width=354) (actual time=0.008..0.008 rows=1.00 loops=1)
+                    Index Cond: (id = flow_runs.id)
+                    Index Searches: 1
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.179 ms
+Execution Time: 0.327 ms
+
+### flow name, common 'Invoice' [all]
+Limit  (cost=0.42..29.93 rows=51 width=354) (actual time=0.016..0.069 rows=51.00 loops=1)
+  Buffers: shared hit=23
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..17550.92 rows=30333 width=354) (actual time=0.015..0.066 rows=51.00 loops=1)
+        Filter: (search_text ~~ '%invoice%'::text)
+        Rows Removed by Filter: 237
+        Index Searches: 1
+        Buffers: shared hit=23
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.117 ms
+Execution Time: 0.089 ms
+
+### flow name, rare 'Gdpr' [all]
+Limit  (cost=112.46..112.51 rows=20 width=354) (actual time=0.358..0.362 rows=51.00 loops=1)
+  Buffers: shared hit=206
+  ->  Sort  (cost=112.46..112.51 rows=20 width=354) (actual time=0.357..0.359 rows=51.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=206
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=34.24..112.02 rows=20 width=354) (actual time=0.196..0.294 rows=194.00 loops=1)
+              Recheck Cond: (search_text ~~ '%gdpr%'::text)
+              Heap Blocks: exact=193
+              Buffers: shared hit=206
+              ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..34.24 rows=20 width=0) (actual time=0.178..0.178 rows=194.00 loops=1)
+                    Index Cond: (search_text ~~ '%gdpr%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=13
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.114 ms
+Execution Time: 0.389 ms
+
+### trigger key, common 'order-created' [all]
+Limit  (cost=0.42..25.01 rows=51 width=354) (actual time=0.017..0.091 rows=51.00 loops=1)
+  Buffers: shared hit=33
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..17550.92 rows=36400 width=354) (actual time=0.016..0.088 rows=51.00 loops=1)
+        Filter: (search_text ~~ '%order-created%'::text)
+        Rows Removed by Filter: 392
+        Index Searches: 1
+        Buffers: shared hit=33
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.112 ms
+Execution Time: 0.113 ms
+
+### trigger key, rare 'backfill' [all]
+Limit  (cost=180.73..180.78 rows=20 width=354) (actual time=1.260..1.264 rows=51.00 loops=1)
+  Buffers: shared hit=853
+  ->  Sort  (cost=180.73..180.78 rows=20 width=354) (actual time=1.259..1.261 rows=51.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: top-N heapsort  Memory: 77kB
+        Buffers: shared hit=853
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=102.51..180.29 rows=20 width=354) (actual time=0.682..1.085 rows=843.00 loops=1)
+              Recheck Cond: (search_text ~~ '%backfill%'::text)
+              Heap Blocks: exact=813
+              Buffers: shared hit=853
+              ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..102.51 rows=20 width=0) (actual time=0.625..0.625 rows=843.00 loops=1)
+                    Index Cond: (search_text ~~ '%backfill%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=40
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.186 ms
+Execution Time: 1.311 ms
+
+### no match 'zq-nomatch-7731' [all]
+Limit  (cost=300.20..300.25 rows=20 width=354) (actual time=0.178..0.178 rows=0.00 loops=1)
+  Buffers: shared hit=47
+  ->  Sort  (cost=300.20..300.25 rows=20 width=354) (actual time=0.177..0.178 rows=0.00 loops=1)
+        Sort Key: fr.started_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=47
+        ->  Bitmap Heap Scan on flow_runs fr  (cost=221.98..299.77 rows=20 width=354) (actual time=0.176..0.176 rows=0.00 loops=1)
+              Recheck Cond: (search_text ~~ '%zq-nomatch-7731%'::text)
+              Buffers: shared hit=47
+              ->  Bitmap Index Scan on ix_flow_runs_search_text_trgm  (cost=0.00..221.98 rows=20 width=0) (actual time=0.173..0.174 rows=0.00 loops=1)
+                    Index Cond: (search_text ~~ '%zq-nomatch-7731%'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=47
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.133 ms
+Execution Time: 0.210 ms
+

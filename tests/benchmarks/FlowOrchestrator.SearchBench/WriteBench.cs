@@ -56,10 +56,16 @@ public static class WriteBench
     /// <param name="label">Schema state being measured, written to the report.</param>
     /// <param name="runs">Number of synthetic runs to write.</param>
     /// <param name="tokens">Also insert the step search tokens (prototype d) as a separate statement.</param>
-    public static async Task MsSqlAsync(string label, int runs, bool tokens)
+    /// <param name="shippedTokens">
+    /// Use the shipped 2.0 token index (UseRunSearchIndex): the token statements ride inside StartRunAsync /
+    /// RecordStepCompleteAsync, so compare those two rows against a run without it. Needs `mssql-migrate tokens`.
+    /// </param>
+    public static async Task MsSqlAsync(string label, int runs, bool tokens, bool shippedTokens = false)
     {
         var db = MsSqlSeeder.Db;
-        var store = new SqlFlowRunStore(db);
+        var store = shippedTokens
+            ? new SqlFlowRunStore(db, new SqlServerRunSearchTokenIndex(db, new FlowOrchestrator.Core.Configuration.RunSearchIndexOptions { Enabled = true }))
+            : new SqlFlowRunStore(db);
         IOutputsRepository outputs = (IOutputsRepository)Activator.CreateInstance(
             typeof(SqlFlowRunStore).Assembly.GetType("FlowOrchestrator.SqlServer.SqlOutputsRepository", throwOnError: true)!,
             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, [db], null)!;

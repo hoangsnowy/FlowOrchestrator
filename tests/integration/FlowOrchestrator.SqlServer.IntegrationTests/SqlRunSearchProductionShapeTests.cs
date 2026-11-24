@@ -272,8 +272,9 @@ public sealed class SqlRunSearchProductionShapeTests : IClassFixture<SqlRunSearc
         public async ValueTask InitializeAsync()
         {
             await SqlServerStartHelper.StartWithRetryAsync(_container);
-            await new FlowOrchestratorSqlMigrator(ConnectionString, NullLogger<FlowOrchestratorSqlMigrator>.Instance)
-                .StartAsync(CancellationToken.None);
+            var migrator = new FlowOrchestratorSqlMigrator(ConnectionString, NullLogger<FlowOrchestratorSqlMigrator>.Instance);
+            await migrator.StartAsync(CancellationToken.None);
+            await migrator.BackgroundIndexBuild;
             await SeedAsync();
         }
 

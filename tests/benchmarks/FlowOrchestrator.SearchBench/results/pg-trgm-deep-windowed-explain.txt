@@ -1,0 +1,350 @@
+### deep output: invoice, 3d old [7d]
+Limit  (cost=0.42..18105.77 rows=51 width=354) (actual time=61.262..73.777 rows=1.00 loops=1)
+  Buffers: shared hit=2470
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..2739589.06 rows=7717 width=354) (actual time=61.261..73.775 rows=1.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%INV-001353358%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%INV-001353358%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%INV-001353358%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%INV-001353358%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%INV-001353358%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 15755
+        Index Searches: 1
+        Buffers: shared hit=2470
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=1811.41..2500.02 rows=175 width=16) (actual time=51.509..51.642 rows=1.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%INV-001353358%'::text) OR (error_message ~~* '%INV-001353358%'::text) OR (output_json ~~* '%INV-001353358%'::text))
+                Rows Removed by Index Recheck: 6
+                Heap Blocks: exact=7
+                Buffers: shared hit=1669
+                ->  BitmapOr  (cost=1811.41..1811.41 rows=175 width=0) (actual time=50.927..50.927 rows=0.00 loops=1)
+                      Buffers: shared hit=1642
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1050.35 rows=15 width=0) (actual time=0.569..0.569 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%INV-001353358%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=85
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..176.36 rows=2 width=0) (actual time=0.492..0.492 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%INV-001353358%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=61
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..584.57 rows=157 width=0) (actual time=49.865..49.865 rows=7.00 loops=1)
+                            Index Cond: (output_json ~~* '%INV-001353358%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=1496
+Planning:
+  Buffers: shared hit=7
+Planning Time: 3.064 ms
+Execution Time: 73.914 ms
+
+### deep output: invoice, 60d old [7d]
+Limit  (cost=0.42..18105.77 rows=51 width=354) (actual time=64.698..64.702 rows=0.00 loops=1)
+  Buffers: shared hit=2525
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..2739589.06 rows=7717 width=354) (actual time=64.697..64.700 rows=0.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%INV-000466682%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%INV-000466682%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 15756
+        Index Searches: 1
+        Buffers: shared hit=2525
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=1811.41..2500.02 rows=175 width=16) (actual time=42.694..42.734 rows=2.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%INV-000466682%'::text) OR (error_message ~~* '%INV-000466682%'::text) OR (output_json ~~* '%INV-000466682%'::text))
+                Rows Removed by Index Recheck: 6
+                Heap Blocks: exact=8
+                Buffers: shared hit=1724
+                ->  BitmapOr  (cost=1811.41..1811.41 rows=175 width=0) (actual time=42.167..42.168 rows=0.00 loops=1)
+                      Buffers: shared hit=1700
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1050.35 rows=15 width=0) (actual time=0.533..0.533 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%INV-000466682%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=85
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..176.36 rows=2 width=0) (actual time=0.534..0.535 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%INV-000466682%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=65
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..584.57 rows=157 width=0) (actual time=41.099..41.099 rows=8.00 loops=1)
+                            Index Cond: (output_json ~~* '%INV-000466682%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=1550
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.745 ms
+Execution Time: 64.852 ms
+
+### deep output: orderId, 3d old [7d]
+Limit  (cost=0.42..18105.77 rows=51 width=354) (actual time=678.967..693.049 rows=1.00 loops=1)
+  Buffers: shared hit=13535
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..2739589.06 rows=7717 width=354) (actual time=678.965..693.045 rows=1.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%ORD-2026-0193334%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 15755
+        Index Searches: 1
+        Buffers: shared hit=13535
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=2137.16..2825.77 rows=175 width=16) (actual time=602.331..667.983 rows=7.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%ORD-2026-0193334%'::text) OR (error_message ~~* '%ORD-2026-0193334%'::text) OR (output_json ~~* '%ORD-2026-0193334%'::text))
+                Rows Removed by Index Recheck: 1349
+                Heap Blocks: exact=1339
+                Buffers: shared hit=12734
+                ->  BitmapOr  (cost=2137.16..2137.16 rows=175 width=0) (actual time=98.071..98.073 rows=0.00 loops=1)
+                      Buffers: shared hit=4478
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1265.74 rows=15 width=0) (actual time=0.589..0.590 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%ORD-2026-0193334%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=91
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..206.60 rows=2 width=0) (actual time=0.569..0.569 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%ORD-2026-0193334%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=84
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..664.69 rows=157 width=0) (actual time=96.911..96.911 rows=1356.00 loops=1)
+                            Index Cond: (output_json ~~* '%ORD-2026-0193334%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=4303
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.673 ms
+Execution Time: 693.324 ms
+
+### deep output: common 'express' [7d]
+Limit  (cost=0.42..1557.93 rows=51 width=354) (actual time=0.087..3.142 rows=51.00 loops=1)
+  Buffers: shared hit=339
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..235673.62 rows=7717 width=354) (actual time=0.086..3.136 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%express%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%express%'::text) OR EXISTS(SubPlan 1))
+        Rows Removed by Filter: 9
+        Index Searches: 1
+        Buffers: shared hit=339
+        SubPlan 1
+          ->  Index Scan using flow_steps_pkey on flow_steps fs  (cost=0.43..177.50 rows=12 width=0) (actual time=0.046..0.046 rows=0.85 loops=60)
+                Index Cond: (run_id = fr.id)
+                Filter: (((step_key)::text ~~* '%express%'::text) OR (error_message ~~* '%express%'::text) OR (output_json ~~* '%express%'::text))
+                Rows Removed by Filter: 1
+                Index Searches: 60
+                Buffers: shared hit=331
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.541 ms
+Execution Time: 3.182 ms
+
+### deep error: shipment, 3d old [7d]
+Limit  (cost=0.42..18105.77 rows=51 width=354) (actual time=34.430..46.913 rows=1.00 loops=1)
+  Buffers: shared hit=1742
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..2739589.06 rows=7717 width=354) (actual time=34.429..46.910 rows=1.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%SHP0000580067%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 15755
+        Index Searches: 1
+        Buffers: shared hit=1742
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=1698.70..2387.31 rows=175 width=16) (actual time=24.550..24.888 rows=1.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%SHP0000580067%'::text) OR (error_message ~~* '%SHP0000580067%'::text) OR (output_json ~~* '%SHP0000580067%'::text))
+                Rows Removed by Index Recheck: 6
+                Heap Blocks: exact=7
+                Buffers: shared hit=941
+                ->  BitmapOr  (cost=1698.70..1698.70 rows=175 width=0) (actual time=24.239..24.242 rows=0.00 loops=1)
+                      Buffers: shared hit=914
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..975.80 rows=15 width=0) (actual time=0.522..0.522 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%SHP0000580067%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=83
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..167.66 rows=2 width=0) (actual time=0.256..0.256 rows=1.00 loops=1)
+                            Index Cond: (error_message ~~* '%SHP0000580067%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=46
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..555.11 rows=157 width=0) (actual time=23.460..23.461 rows=6.00 loops=1)
+                            Index Cond: (output_json ~~* '%SHP0000580067%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=785
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.947 ms
+Execution Time: 47.115 ms
+
+### deep error: 'deadlock victim' [7d]
+Limit  (cost=0.42..18105.77 rows=51 width=354) (actual time=5.626..16.182 rows=51.00 loops=1)
+  Buffers: shared hit=2403
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..2739589.06 rows=7717 width=354) (actual time=5.625..16.178 rows=51.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%deadlock victim%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%deadlock victim%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 7406
+        Index Searches: 1
+        Buffers: shared hit=2403
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=2041.81..8626.30 rows=1759 width=16) (actual time=1.991..5.230 rows=1751.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%deadlock victim%'::text) OR (error_message ~~* '%deadlock victim%'::text) OR (output_json ~~* '%deadlock victim%'::text))
+                Heap Blocks: exact=1740
+                Buffers: shared hit=2020
+                ->  BitmapOr  (cost=2041.81..2041.81 rows=1759 width=0) (actual time=1.860..1.860 rows=0.00 loops=1)
+                      Buffers: shared hit=280
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1195.32 rows=15 width=0) (actual time=0.617..0.617 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%deadlock victim%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=89
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..205.81 rows=1586 width=0) (actual time=0.977..0.977 rows=1751.00 loops=1)
+                            Index Cond: (error_message ~~* '%deadlock victim%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=80
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..639.36 rows=157 width=0) (actual time=0.265..0.266 rows=0.00 loops=1)
+                            Index Cond: (output_json ~~* '%deadlock victim%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=111
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.647 ms
+Execution Time: 16.352 ms
+
+### deep no match 'zq-nomatch-7731' [7d]
+Limit  (cost=0.42..18105.77 rows=51 width=354) (actual time=23.349..23.352 rows=0.00 loops=1)
+  Buffers: shared hit=1081
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..2739589.06 rows=7717 width=354) (actual time=23.347..23.350 rows=0.00 loops=1)
+        Index Cond: (started_at >= '2026-11-16 00:00:00+00'::timestamp with time zone)
+        Filter: (((id)::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 15756
+        Index Searches: 1
+        Buffers: shared hit=1081
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=2032.70..2721.31 rows=175 width=16) (actual time=1.571..1.573 rows=0.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%zq-nomatch-7731%'::text) OR (error_message ~~* '%zq-nomatch-7731%'::text) OR (output_json ~~* '%zq-nomatch-7731%'::text))
+                Buffers: shared hit=280
+                ->  BitmapOr  (cost=2032.70..2032.70 rows=175 width=0) (actual time=1.567..1.568 rows=0.00 loops=1)
+                      Buffers: shared hit=280
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1195.32 rows=15 width=0) (actual time=0.712..0.712 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%zq-nomatch-7731%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=97
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..197.89 rows=2 width=0) (actual time=0.331..0.331 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%zq-nomatch-7731%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=56
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..639.36 rows=157 width=0) (actual time=0.522..0.522 rows=0.00 loops=1)
+                            Index Cond: (output_json ~~* '%zq-nomatch-7731%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=127
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.454 ms
+Execution Time: 23.612 ms
+
+### deep output: invoice, 60d old [all]
+Limit  (cost=0.42..18105.74 rows=51 width=354) (actual time=246.983..349.513 rows=1.00 loops=1)
+  Buffers: shared hit=11812
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..35552111.07 rows=100145 width=354) (actual time=246.981..349.508 rows=1.00 loops=1)
+        Filter: (((id)::text ~~* '%INV-000466682%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%INV-000466682%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%INV-000466682%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 200199
+        Index Searches: 1
+        Buffers: shared hit=11812
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=1811.41..2500.02 rows=175 width=16) (actual time=43.233..43.267 rows=2.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%INV-000466682%'::text) OR (error_message ~~* '%INV-000466682%'::text) OR (output_json ~~* '%INV-000466682%'::text))
+                Rows Removed by Index Recheck: 6
+                Heap Blocks: exact=8
+                Buffers: shared hit=1724
+                ->  BitmapOr  (cost=1811.41..1811.41 rows=175 width=0) (actual time=42.718..42.724 rows=0.00 loops=1)
+                      Buffers: shared hit=1700
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1050.35 rows=15 width=0) (actual time=0.525..0.525 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%INV-000466682%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=85
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..176.36 rows=2 width=0) (actual time=0.493..0.493 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%INV-000466682%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=65
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..584.57 rows=157 width=0) (actual time=41.700..41.700 rows=8.00 loops=1)
+                            Index Cond: (output_json ~~* '%INV-000466682%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=1550
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.607 ms
+Execution Time: 349.697 ms
+
+### deep output: common 'express' [all]
+Limit  (cost=0.42..1557.67 rows=51 width=354) (actual time=32769.017..32769.144 rows=51.00 loops=1)
+  Buffers: shared hit=655381 read=237824
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..3057859.25 rows=100145 width=354) (actual time=32769.015..32769.138 rows=51.00 loops=1)
+        Filter: (((id)::text ~~* '%express%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%express%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%express%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 9
+        Index Searches: 1
+        Buffers: shared hit=655381 read=237824
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=5001.88..245281.64 rows=539925 width=16) (actual time=199.837..32505.015 rows=1031786.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%express%'::text) OR (error_message ~~* '%express%'::text) OR (output_json ~~* '%express%'::text))
+                Heap Blocks: exact=230666
+                Buffers: shared hit=655377 read=237821
+                ->  BitmapOr  (cost=5001.88..5001.88 rows=539929 width=0) (actual time=166.749..166.751 rows=0.00 loops=1)
+                      Buffers: shared hit=599 read=907
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..615.44 rows=15 width=0) (actual time=0.587..0.587 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%express%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=72 read=1
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..124.15 rows=2 width=0) (actual time=0.306..0.306 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%express%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=29 read=8
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..3857.35 rows=539912 width=0) (actual time=165.855..165.855 rows=1031786.00 loops=1)
+                            Index Cond: (output_json ~~* '%express%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=498 read=898
+Planning:
+  Buffers: shared hit=7
+Planning Time: 3.533 ms
+Execution Time: 32771.373 ms
+
+### deep error: 'deadlock victim' [all]
+Limit  (cost=0.42..18105.74 rows=51 width=354) (actual time=6.059..16.628 rows=51.00 loops=1)
+  Buffers: shared hit=2403
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..35552111.07 rows=100145 width=354) (actual time=6.058..16.623 rows=51.00 loops=1)
+        Filter: (((id)::text ~~* '%deadlock victim%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%deadlock victim%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%deadlock victim%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 7406
+        Index Searches: 1
+        Buffers: shared hit=2403
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=2041.81..8626.30 rows=1759 width=16) (actual time=2.247..5.650 rows=1751.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%deadlock victim%'::text) OR (error_message ~~* '%deadlock victim%'::text) OR (output_json ~~* '%deadlock victim%'::text))
+                Heap Blocks: exact=1740
+                Buffers: shared hit=2020
+                ->  BitmapOr  (cost=2041.81..2041.81 rows=1759 width=0) (actual time=2.117..2.119 rows=0.00 loops=1)
+                      Buffers: shared hit=280
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1195.32 rows=15 width=0) (actual time=0.689..0.689 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%deadlock victim%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=89
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..205.81 rows=1586 width=0) (actual time=1.156..1.156 rows=1751.00 loops=1)
+                            Index Cond: (error_message ~~* '%deadlock victim%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=80
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..639.36 rows=157 width=0) (actual time=0.272..0.272 rows=0.00 loops=1)
+                            Index Cond: (output_json ~~* '%deadlock victim%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=111
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.789 ms
+Execution Time: 16.818 ms
+
+### deep no match 'zq-nomatch-7731' [all]
+Limit  (cost=0.42..18105.74 rows=51 width=354) (actual time=280.118..280.122 rows=0.00 loops=1)
+  Buffers: shared hit=10368
+  ->  Index Scan using ix_flow_runs_started_at on flow_runs fr  (cost=0.42..35552111.07 rows=100145 width=354) (actual time=280.116..280.120 rows=0.00 loops=1)
+        Filter: (((id)::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(flow_name, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(trigger_key, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(status, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR ((COALESCE(background_job_id, ''::character varying))::text ~~* '%zq-nomatch-7731%'::text) OR (ANY (id = (hashed SubPlan 2).col1)))
+        Rows Removed by Filter: 200200
+        Index Searches: 1
+        Buffers: shared hit=10368
+        SubPlan 2
+          ->  Bitmap Heap Scan on flow_steps fs  (cost=2032.70..2721.31 rows=175 width=16) (actual time=1.652..1.654 rows=0.00 loops=1)
+                Recheck Cond: (((step_key)::text ~~* '%zq-nomatch-7731%'::text) OR (error_message ~~* '%zq-nomatch-7731%'::text) OR (output_json ~~* '%zq-nomatch-7731%'::text))
+                Buffers: shared hit=280
+                ->  BitmapOr  (cost=2032.70..2032.70 rows=175 width=0) (actual time=1.647..1.649 rows=0.00 loops=1)
+                      Buffers: shared hit=280
+                      ->  Bitmap Index Scan on ix_flow_steps_step_key_trgm  (cost=0.00..1195.32 rows=15 width=0) (actual time=0.785..0.786 rows=0.00 loops=1)
+                            Index Cond: ((step_key)::text ~~* '%zq-nomatch-7731%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=97
+                      ->  Bitmap Index Scan on ix_flow_steps_error_message_trgm  (cost=0.00..197.89 rows=2 width=0) (actual time=0.343..0.343 rows=0.00 loops=1)
+                            Index Cond: (error_message ~~* '%zq-nomatch-7731%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=56
+                      ->  Bitmap Index Scan on ix_flow_steps_output_json_trgm  (cost=0.00..639.36 rows=157 width=0) (actual time=0.518..0.518 rows=0.00 loops=1)
+                            Index Cond: (output_json ~~* '%zq-nomatch-7731%'::text)
+                            Index Searches: 1
+                            Buffers: shared hit=127
+Planning:
+  Buffers: shared hit=7
+Planning Time: 2.730 ms
+Execution Time: 280.423 ms
+

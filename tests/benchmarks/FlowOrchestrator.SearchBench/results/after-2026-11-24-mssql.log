@@ -1,0 +1,220 @@
+805a70a209b4019167293a339f5afa7b72a69c6b15cb3e9e69a5c5b59c33a574
+=== 18:20:29 mssql-seed 200000
+  2,000 runs / 19,914 steps / 42 M chars output / 0 events - 00:02
+  4,000 runs / 39,941 steps / 86 M chars output / 0 events - 00:05
+  6,000 runs / 59,853 steps / 127 M chars output / 0 events - 00:07
+  8,000 runs / 79,722 steps / 170 M chars output / 0 events - 00:10
+  10,000 runs / 99,678 steps / 213 M chars output / 0 events - 00:13
+  12,000 runs / 119,606 steps / 255 M chars output / 0 events - 00:15
+  14,000 runs / 139,582 steps / 297 M chars output / 0 events - 00:17
+  16,000 runs / 159,442 steps / 339 M chars output / 0 events - 00:20
+  18,000 runs / 179,303 steps / 382 M chars output / 0 events - 00:22
+  20,000 runs / 199,050 steps / 424 M chars output / 0 events - 00:24
+  22,000 runs / 218,880 steps / 465 M chars output / 0 events - 00:27
+  24,000 runs / 238,826 steps / 508 M chars output / 0 events - 00:29
+  26,000 runs / 258,754 steps / 549 M chars output / 0 events - 00:32
+  28,000 runs / 278,653 steps / 590 M chars output / 0 events - 00:34
+  30,000 runs / 298,512 steps / 632 M chars output / 0 events - 00:36
+  32,000 runs / 318,419 steps / 674 M chars output / 0 events - 00:39
+  34,000 runs / 338,237 steps / 716 M chars output / 0 events - 00:41
+  36,000 runs / 358,154 steps / 757 M chars output / 0 events - 00:44
+  38,000 runs / 378,079 steps / 799 M chars output / 0 events - 00:46
+  40,000 runs / 397,881 steps / 840 M chars output / 0 events - 00:48
+  42,000 runs / 417,812 steps / 882 M chars output / 0 events - 00:51
+  44,000 runs / 437,771 steps / 924 M chars output / 0 events - 00:53
+  46,000 runs / 457,683 steps / 966 M chars output / 0 events - 00:56
+  48,000 runs / 477,567 steps / 1,008 M chars output / 0 events - 00:58
+  50,000 runs / 497,445 steps / 1,049 M chars output / 0 events - 01:00
+  52,000 runs / 517,211 steps / 1,092 M chars output / 0 events - 01:03
+  54,000 runs / 537,108 steps / 1,134 M chars output / 0 events - 01:05
+  56,000 runs / 556,935 steps / 1,176 M chars output / 0 events - 01:08
+  58,000 runs / 576,730 steps / 1,218 M chars output / 0 events - 01:10
+  60,000 runs / 596,596 steps / 1,260 M chars output / 0 events - 01:13
+  62,000 runs / 616,506 steps / 1,302 M chars output / 0 events - 01:15
+  64,000 runs / 636,469 steps / 1,343 M chars output / 0 events - 01:17
+  66,000 runs / 656,517 steps / 1,386 M chars output / 0 events - 01:20
+  68,000 runs / 676,364 steps / 1,428 M chars output / 0 events - 01:23
+  70,000 runs / 696,230 steps / 1,470 M chars output / 0 events - 01:25
+  72,000 runs / 716,046 steps / 1,511 M chars output / 0 events - 01:27
+  74,000 runs / 735,829 steps / 1,553 M chars output / 0 events - 01:30
+  76,000 runs / 755,680 steps / 1,595 M chars output / 0 events - 01:32
+  78,000 runs / 775,598 steps / 1,636 M chars output / 0 events - 01:35
+  80,000 runs / 795,443 steps / 1,679 M chars output / 0 events - 01:37
+  82,000 runs / 815,405 steps / 1,721 M chars output / 0 events - 01:39
+  84,000 runs / 835,290 steps / 1,763 M chars output / 0 events - 01:42
+  86,000 runs / 855,232 steps / 1,805 M chars output / 0 events - 01:44
+  88,000 runs / 874,955 steps / 1,847 M chars output / 0 events - 01:46
+  90,000 runs / 894,813 steps / 1,888 M chars output / 0 events - 01:49
+  92,000 runs / 914,609 steps / 1,930 M chars output / 0 events - 01:51
+  94,000 runs / 934,475 steps / 1,973 M chars output / 0 events - 01:53
+  96,000 runs / 954,279 steps / 2,015 M chars output / 0 events - 01:56
+  98,000 runs / 974,205 steps / 2,057 M chars output / 0 events - 01:58
+  100,000 runs / 994,055 steps / 2,099 M chars output / 0 events - 02:01
+  102,000 runs / 1,013,857 steps / 2,142 M chars output / 0 events - 02:03
+  104,000 runs / 1,033,765 steps / 2,184 M chars output / 0 events - 02:05
+  106,000 runs / 1,053,793 steps / 2,226 M chars output / 0 events - 02:08
+  108,000 runs / 1,073,663 steps / 2,268 M chars output / 0 events - 02:10
+  110,000 runs / 1,093,395 steps / 2,310 M chars output / 0 events - 02:12
+  112,000 runs / 1,113,268 steps / 2,353 M chars output / 0 events - 02:15
+  114,000 runs / 1,133,210 steps / 2,395 M chars output / 0 events - 02:17
+  116,000 runs / 1,153,175 steps / 2,438 M chars output / 0 events - 02:20
+  118,000 runs / 1,172,999 steps / 2,480 M chars output / 0 events - 02:23
+  120,000 runs / 1,192,861 steps / 2,523 M chars output / 0 events - 02:25
+  122,000 runs / 1,212,691 steps / 2,565 M chars output / 0 events - 02:27
+  124,000 runs / 1,232,545 steps / 2,606 M chars output / 0 events - 02:29
+  126,000 runs / 1,252,546 steps / 2,647 M chars output / 0 events - 02:32
+  128,000 runs / 1,272,315 steps / 2,689 M chars output / 0 events - 02:34
+  130,000 runs / 1,292,138 steps / 2,730 M chars output / 0 events - 02:37
+  132,000 runs / 1,312,099 steps / 2,772 M chars output / 0 events - 02:39
+  134,000 runs / 1,332,063 steps / 2,814 M chars output / 0 events - 02:42
+  136,000 runs / 1,351,953 steps / 2,857 M chars output / 0 events - 02:44
+  138,000 runs / 1,371,928 steps / 2,899 M chars output / 0 events - 02:47
+  140,000 runs / 1,391,836 steps / 2,942 M chars output / 0 events - 02:50
+  142,000 runs / 1,411,766 steps / 2,984 M chars output / 0 events - 02:52
+  144,000 runs / 1,431,632 steps / 3,026 M chars output / 0 events - 02:55
+  146,000 runs / 1,451,551 steps / 3,068 M chars output / 0 events - 02:58
+  148,000 runs / 1,471,354 steps / 3,111 M chars output / 0 events - 03:00
+  150,000 runs / 1,491,221 steps / 3,151 M chars output / 0 events - 03:03
+  152,000 runs / 1,511,034 steps / 3,191 M chars output / 0 events - 03:05
+  154,000 runs / 1,530,894 steps / 3,233 M chars output / 0 events - 03:07
+  156,000 runs / 1,550,890 steps / 3,275 M chars output / 0 events - 03:10
+  158,000 runs / 1,570,690 steps / 3,316 M chars output / 0 events - 03:12
+  160,000 runs / 1,590,561 steps / 3,357 M chars output / 0 events - 03:15
+  162,000 runs / 1,610,467 steps / 3,400 M chars output / 0 events - 03:17
+  164,000 runs / 1,630,364 steps / 3,442 M chars output / 0 events - 03:20
+  166,000 runs / 1,650,228 steps / 3,484 M chars output / 0 events - 03:23
+  168,000 runs / 1,670,178 steps / 3,526 M chars output / 0 events - 03:25
+  170,000 runs / 1,690,067 steps / 3,567 M chars output / 0 events - 03:28
+  172,000 runs / 1,709,943 steps / 3,609 M chars output / 0 events - 03:31
+  174,000 runs / 1,729,822 steps / 3,651 M chars output / 0 events - 03:34
+  176,000 runs / 1,749,598 steps / 3,692 M chars output / 0 events - 03:36
+  178,000 runs / 1,769,469 steps / 3,735 M chars output / 0 events - 03:39
+  180,000 runs / 1,789,349 steps / 3,777 M chars output / 0 events - 03:42
+  182,000 runs / 1,809,227 steps / 3,818 M chars output / 0 events - 03:44
+  184,000 runs / 1,829,208 steps / 3,860 M chars output / 0 events - 03:47
+  186,000 runs / 1,848,981 steps / 3,902 M chars output / 0 events - 03:50
+  188,000 runs / 1,868,847 steps / 3,944 M chars output / 0 events - 03:52
+  190,000 runs / 1,888,767 steps / 3,987 M chars output / 0 events - 03:55
+  192,000 runs / 1,908,717 steps / 4,029 M chars output / 0 events - 03:58
+  194,000 runs / 1,928,741 steps / 4,071 M chars output / 0 events - 04:01
+  196,000 runs / 1,948,631 steps / 4,114 M chars output / 0 events - 04:04
+  198,000 runs / 1,968,472 steps / 4,157 M chars output / 0 events - 04:07
+  200,000 runs / 1,988,322 steps / 4,198 M chars output / 0 events - 04:10
+seeded 200,000 runs / 1,988,322 steps / 4,198 M chars output / 0 events in 00:04:10.5982057
+statistics updated in 00:00:04.2493699
+=== 18:24:46 mssql-write pre-migrate 200
+--- mssql pre-migrate 2026-11-23T18:25:53.1744250Z
+StartRunAsync                      n=  200 p50=   7.718 ms p95=  10.557 ms mean=   8.122 ms
+RTT SELECT 1                       n= 1848 p50=   0.767 ms p95=   1.210 ms mean=   0.790 ms
+TryRecordDispatchAsync             n= 1848 p50=   5.939 ms p95=   8.538 ms mean=   6.365 ms
+TryClaimStepAsync                  n= 1848 p50=   6.018 ms p95=   8.334 ms mean=   6.360 ms
+RecordStepStartAsync               n= 1848 p50=   6.074 ms p95=   8.968 ms mean=   6.565 ms
+SaveStepOutputAsync                n= 1848 p50=   6.099 ms p95=   9.000 ms mean=   6.676 ms
+RecordStepCompleteAsync            n= 1848 p50=   6.174 ms p95=   9.101 ms mean=   6.878 ms
+GetStepStatusesAsync               n= 1848 p50=   0.788 ms p95=   1.209 ms mean=   0.809 ms
+CompleteRunAsync                   n=  200 p50=   6.227 ms p95=   9.755 ms mean=   6.738 ms
+=== 18:25:53 mssql-migrate tokens
+migrate(tokens=True): startup blocked 00:00:00.2224147, indexes ready after 00:00:00.9206202
+=== 18:25:54 mssql-sizes
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,200       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,200       60.3 MB
+FlowRuns               IX_FlowRuns_IdText                       rows=     200,200       13.5 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,200       39.7 MB
+FlowRuns               IX_FlowRuns_StartedAt_Search             rows=     200,200       51.4 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,200       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07FE19BDF5           rows=     200,200      199.4 MB
+FlowRunSearchTokens    PK_FlowRunSearchTokens                   rows=           0        0.0 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,990,170      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,990,170      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,990,170   11,269.1 MB
+=== 18:25:54 mssql-base quick
+mssql-after    runId prefix, recent [7d]                                  n= 20 p50=      7.80 ms p95=      9.32 ms min=     6.73 rows=   2 
+mssql-after    runId prefix, 60d old [7d]                                 n= 20 p50=      7.24 ms p95=      8.39 ms min=     6.58 rows=   1 
+mssql-after    flow name, common 'Invoice' [7d]                           n= 20 p50=      1.38 ms p95=      1.82 ms min=     1.00 rows=  51 
+mssql-after    flow name, rare 'Gdpr' [7d]                                n= 20 p50=      6.67 ms p95=      8.30 ms min=     6.05 rows=  16 
+mssql-after    trigger key, common 'order-created' [7d]                   n= 20 p50=      1.33 ms p95=      1.85 ms min=     1.10 rows=  51 
+mssql-after    trigger key, rare 'backfill' [7d]                          n= 20 p50=      5.02 ms p95=      5.74 ms min=     4.77 rows=  51 
+mssql-after    no match 'zq-nomatch-7731' [7d]                            n= 20 p50=      6.49 ms p95=      7.08 ms min=     6.01 rows=   0 
+mssql-after    runId prefix, recent [all]                                 n= 20 p50=     83.10 ms p95=     91.59 ms min=    80.67 rows=   2 
+mssql-after    runId prefix, 60d old [all]                                n= 20 p50=     83.72 ms p95=     92.93 ms min=    80.02 rows=   2 
+mssql-after    flow name, common 'Invoice' [all]                          n= 20 p50=      1.04 ms p95=      2.14 ms min=     0.94 rows=  51 
+mssql-after    flow name, rare 'Gdpr' [all]                               n= 20 p50=     22.92 ms p95=     25.69 ms min=    20.32 rows=  51 
+mssql-after    trigger key, common 'order-created' [all]                  n= 20 p50=      1.07 ms p95=      1.43 ms min=     1.00 rows=  51 
+mssql-after    trigger key, rare 'backfill' [all]                         n= 20 p50=      5.05 ms p95=      5.84 ms min=     4.68 rows=  51 
+mssql-after    no match 'zq-nomatch-7731' [all]                           n= 20 p50=     78.58 ms p95=     85.32 ms min=    73.49 rows=   0 
+mssql-after    status word 'Failed' (+total)                              n= 20 p50=      1.81 ms p95=      2.14 ms min=     1.68 rows=  51 
+mssql-after    status word 'TimedOut' (+total)                            n= 20 p50=      1.86 ms p95=      2.45 ms min=     1.72 rows=  51 
+mssql-after    full run id (old)                                          n= 20 p50=      0.59 ms p95=      0.67 ms min=     0.51 rows=   1 
+mssql-after    unfiltered first page (+total)                             n= 20 p50=     13.36 ms p95=     17.24 ms min=    11.67 rows=  51 
+mssql-after    unfiltered first page (no total)                           n= 20 p50=      1.18 ms p95=      1.82 ms min=     0.98 rows=  51 
+mssql-after    unfiltered page 50 OFFSET (+total)                         n= 20 p50=     17.53 ms p95=     21.34 ms min=    16.40 rows=  51 
+mssql-after    unfiltered page 2000 OFFSET                                n= 20 p50=    180.36 ms p95=    183.93 ms min=   176.51 rows=  51 
+=== 18:26:08 mssql-base deep
+mssql-after    deep output: invoice, 3d old [7d]                          n= 20 p50=   1232.61 ms p95=   1270.90 ms min=  1206.75 rows=   1 
+mssql-after    deep output: invoice, 60d old [7d]                         n= 20 p50=   1289.38 ms p95=   1316.20 ms min=  1214.56 rows=   0 
+mssql-after    deep output: orderId, 3d old [7d]                          n= 20 p50=   1228.47 ms p95=   1301.82 ms min=  1203.69 rows=   1 
+mssql-after    deep output: common 'express' [7d]                         n= 20 p50=      1.57 ms p95=      2.14 ms min=     1.41 rows=  51 
+mssql-after    deep error: shipment, 3d old [7d]                          n= 20 p50=   1253.24 ms p95=   1297.88 ms min=  1180.35 rows=   1 
+mssql-after    deep error: 'deadlock victim' [7d]                         n= 20 p50=    574.42 ms p95=    596.88 ms min=   536.25 rows=  51 
+mssql-after    deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=   1073.87 ms p95=   1082.23 ms min=  1009.78 rows=   0 
+mssql-after    deep output: invoice, 60d old [all]                        n=  3 p50=  98052.15 ms p95= 121660.81 ms min= 96241.15 rows=   1 
+mssql-after    deep output: common 'express' [all]                        n= 20 p50=      1.95 ms p95=      2.26 ms min=     1.71 rows=  51 
+mssql-after    deep error: 'deadlock victim' [all]                        n= 20 p50=    579.93 ms p95=    599.49 ms min=   563.71 rows=  51 
+mssql-after    deep no match 'zq-nomatch-7731' [all]                      n=  3 p50=  98927.26 ms p95= 104368.89 ms min= 95987.52 rows=   0 
+=== 18:39:20 mssql-keyset
+mssql-keyset   unfiltered page 50 keyset                                  n= 20 p50=      2.52 ms p95=      3.42 ms min=     2.24 rows=  51 
+mssql-keyset   unfiltered page 2000 keyset                                n= 20 p50=     32.83 ms p95=     40.23 ms min=    29.51 rows=  51 
+mssql-count    COUNT(*) FlowRuns                                          n= 20 p50=     11.02 ms p95=     17.25 ms min=     9.74 rows=   1 
+mssql-count    COUNT(*) WHERE Status='Failed'                             n= 20 p50=      0.99 ms p95=      1.09 ms min=     0.91 rows=   1 
+mssql-count    capped COUNT (TOP 10001)                                   n= 20 p50=      1.16 ms p95=      1.23 ms min=     1.03 rows=   1 
+mssql-count    dm_db_partition_stats row_count                            n= 20 p50=      0.57 ms p95=      0.60 ms min=     0.51 rows=   1 
+=== 18:39:22 mssql-write after-no-tokens 200
+--- mssql after-no-tokens 2026-11-23T18:40:21.7019190Z
+StartRunAsync                      n=  200 p50=   6.544 ms p95=   8.951 ms mean=   7.087 ms
+RTT SELECT 1                       n= 1912 p50=   0.577 ms p95=   1.002 ms mean=   0.646 ms
+TryRecordDispatchAsync             n= 1912 p50=   5.058 ms p95=   7.319 ms mean=   5.435 ms
+TryClaimStepAsync                  n= 1912 p50=   5.020 ms p95=   7.121 ms mean=   5.390 ms
+RecordStepStartAsync               n= 1912 p50=   5.896 ms p95=   8.008 ms mean=   5.883 ms
+SaveStepOutputAsync                n= 1912 p50=   5.096 ms p95=   7.723 ms mean=   5.662 ms
+RecordStepCompleteAsync            n= 1912 p50=   5.827 ms p95=   7.940 ms mean=   5.850 ms
+GetStepStatusesAsync               n= 1912 p50=   0.554 ms p95=   1.002 ms mean=   0.636 ms
+CompleteRunAsync                   n=  200 p50=   5.514 ms p95=   8.035 ms mean=   5.996 ms
+=== 18:40:21 mssql-write after-shipped-tokens 200 shipped-tokens
+--- mssql after-shipped-tokens 2026-11-23T18:41:39.0474681Z
+StartRunAsync                      n=  200 p50=  11.937 ms p95=  17.553 ms mean=  13.213 ms
+RTT SELECT 1                       n= 1872 p50=   0.756 ms p95=   1.208 ms mean=   0.769 ms
+TryRecordDispatchAsync             n= 1872 p50=   5.567 ms p95=   9.030 ms mean=   6.135 ms
+TryClaimStepAsync                  n= 1872 p50=   5.740 ms p95=   8.885 ms mean=   6.037 ms
+RecordStepStartAsync               n= 1872 p50=   5.996 ms p95=   9.253 ms mean=   6.417 ms
+SaveStepOutputAsync                n= 1872 p50=   5.992 ms p95=   9.063 ms mean=   6.372 ms
+RecordStepCompleteAsync            n= 1872 p50=  11.204 ms p95=  17.270 ms mean=  12.497 ms
+GetStepStatusesAsync               n= 1872 p50=   0.806 ms p95=   1.298 ms mean=   0.826 ms
+CompleteRunAsync                   n=  200 p50=   5.855 ms p95=   8.785 ms mean=   6.273 ms
+=== 18:41:39 mssql-backfill 500
+backfill(batch=500): 00:07:57.6594393, 14,368,824 token rows
+=== 18:49:37 mssql-base deep
+mssql-after-tokens deep output: invoice, 3d old [7d]                          n= 20 p50=      8.34 ms p95=     10.12 ms min=     7.35 rows=   1 
+mssql-after-tokens deep output: invoice, 60d old [7d]                         n= 20 p50=      7.46 ms p95=     10.12 ms min=     6.52 rows=   0 
+mssql-after-tokens deep output: orderId, 3d old [7d]                          n= 20 p50=      7.85 ms p95=     10.32 ms min=     6.23 rows=   1 
+mssql-after-tokens deep output: common 'express' [7d]                         n= 20 p50=      7.51 ms p95=     10.74 ms min=     6.81 rows=   0 
+mssql-after-tokens deep error: shipment, 3d old [7d]                          n= 20 p50=      6.74 ms p95=      9.57 ms min=     6.25 rows=   1 
+mssql-after-tokens deep error: 'deadlock victim' [7d]                         n= 20 p50=     10.98 ms p95=     13.00 ms min=     9.67 rows=  51 
+mssql-after-tokens deep no match 'zq-nomatch-7731' [7d]                       n= 20 p50=      7.34 ms p95=      9.32 ms min=     6.46 rows=   0 
+mssql-after-tokens deep output: invoice, 60d old [all]                        n= 20 p50=     83.57 ms p95=    109.10 ms min=    79.10 rows=   1 
+mssql-after-tokens deep output: common 'express' [all]                        n= 20 p50=     88.96 ms p95=     96.29 ms min=    85.71 rows=   0 
+mssql-after-tokens deep error: 'deadlock victim' [all]                        n= 20 p50=    100.24 ms p95=    112.89 ms min=    98.16 rows=  51 
+mssql-after-tokens deep no match 'zq-nomatch-7731' [all]                      n= 20 p50=     79.69 ms p95=     82.67 ms min=    76.53 rows=   0 
+=== 18:49:48 mssql-sizes
+FlowRuns               IX_FlowRuns_FlowId                       rows=     200,600       14.1 MB
+FlowRuns               IX_FlowRuns_FlowId_Status_StartedAt      rows=     200,600       60.3 MB
+FlowRuns               IX_FlowRuns_IdText                       rows=     200,600       14.9 MB
+FlowRuns               IX_FlowRuns_SourceRunId                  rows=           0        0.0 MB
+FlowRuns               IX_FlowRuns_StartedAt                    rows=     200,600       39.7 MB
+FlowRuns               IX_FlowRuns_StartedAt_Search             rows=     200,600       51.5 MB
+FlowRuns               IX_FlowRuns_Status                       rows=     200,600       15.7 MB
+FlowRuns               PK__FlowRuns__3214EC07FE19BDF5           rows=     200,600      199.5 MB
+FlowRunSearchTokens    PK_FlowRunSearchTokens                   rows=  14,368,824    1,319.3 MB
+FlowSteps              IX_FlowSteps_RunId_StartedAt             rows=   1,993,954      508.8 MB
+FlowSteps              IX_FlowSteps_StepKey_RunId               rows=   1,993,954      164.2 MB
+FlowSteps              PK_FlowSteps                             rows=   1,993,954   11,270.4 MB

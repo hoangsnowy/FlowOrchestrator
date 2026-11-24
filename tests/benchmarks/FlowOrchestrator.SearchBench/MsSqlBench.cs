@@ -29,11 +29,11 @@ public static partial class MsSqlBench
         foreach (var (name, query) in scenarios)
         {
             var cmd = Measure.ShippedCommand(typeof(SqlFlowRunStore), query);
-            var t = await Measure.RunAsync("mssql-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal),
+            var t = await Measure.RunAsync(Environment.GetEnvironmentVariable("SB_SUITE") ?? "mssql-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal),
                 budget: TimeSpan.FromSeconds(deep ? 180 : 60));
             if (t.Min < 60_000) plans.Append(await CaptureAsync(name, cmd.Sql, cmd.Parameters));
         }
-        await Measure.WriteArtifactAsync($"mssql-baseline-{(deep ? "deep" : "quick")}-io.txt", plans.ToString());
+        await Measure.WriteArtifactAsync($"{Environment.GetEnvironmentVariable("SB_SUITE") ?? "mssql-baseline"}-{(deep ? "deep" : "quick")}-io.txt", plans.ToString());
     }
 
     public static async Task<Needles> NeedlesAsync()
@@ -46,9 +46,11 @@ public static partial class MsSqlBench
     {
         await using var conn = new SqlConnection(Db);
         using var grid = await conn.QueryMultipleAsync(new CommandDefinition(sql, parameters, commandTimeout: 900));
-        var rows = (await grid.ReadAsync()).Count();
-        if (countsTotal) await grid.ReadSingleAsync<int>();
-        return rows;
+        // Drain every result set: the shipped 2.0 batch may hold an id-prefix and a token statement too.
+        var rows = 0;
+        while (!grid.IsConsumed)
+            rows += (await grid.ReadAsync()).Count();
+        return countsTotal ? rows - 1 : rows;
     }
 
     private static async Task<int> RunAsync(string sql, object? parameters)

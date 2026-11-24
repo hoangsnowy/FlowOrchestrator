@@ -22,6 +22,8 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
             ConnectionString,
             NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance);
         await migrator.StartAsync(CancellationToken.None);
+        // The run-search trigram index builds CONCURRENTLY in the background; wait so every test sees it.
+        await migrator.BackgroundIndexBuild;
     }
 
     public async ValueTask DisposeAsync()

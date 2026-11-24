@@ -19,8 +19,12 @@ public sealed class SqlServerFixture : IAsyncLifetime
         await SqlServerStartHelper.StartWithRetryAsync(_container);
         var migrator = new FlowOrchestratorSqlMigrator(
             ConnectionString,
-            NullLogger<FlowOrchestratorSqlMigrator>.Instance);
+            NullLogger<FlowOrchestratorSqlMigrator>.Instance,
+            runSearchIndexEnabled: true);
         await migrator.StartAsync(CancellationToken.None);
+        // Developer edition builds the run-search indexes online in the background; wait so every test
+        // sees the final schema instead of racing the build.
+        await migrator.BackgroundIndexBuild;
     }
 
     public async ValueTask DisposeAsync()

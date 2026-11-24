@@ -36,7 +36,10 @@ public static class PostgreSqlServiceCollectionExtensions
 
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new PostgreSqlFlowScheduleStateStore(connectionString));
         builder.Services.AddHostedService(sp =>
-            new PostgreSqlFlowOrchestratorMigrator(connectionString, sp.GetRequiredService<ILogger<PostgreSqlFlowOrchestratorMigrator>>()));
+            new PostgreSqlFlowOrchestratorMigrator(
+                connectionString,
+                sp.GetRequiredService<ILogger<PostgreSqlFlowOrchestratorMigrator>>(),
+                runSearchIndexRequested: sp.GetService<RunSearchIndexOptions>()?.Enabled == true));
         return builder;
     }
 

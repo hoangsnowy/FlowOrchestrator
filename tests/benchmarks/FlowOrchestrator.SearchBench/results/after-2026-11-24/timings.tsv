@@ -1,0 +1,132 @@
+2026-11-23T18:25:55.1080426Z	mssql-after	runId prefix, recent [7d]	20	7.80	9.32	6.73	9.46	2	
+2026-11-23T18:25:55.2983242Z	mssql-after	runId prefix, 60d old [7d]	20	7.24	8.39	6.58	8.94	1	
+2026-11-23T18:25:55.3530948Z	mssql-after	flow name, common 'Invoice' [7d]	20	1.38	1.82	1.00	1.85	51	
+2026-11-23T18:25:55.5112714Z	mssql-after	flow name, rare 'Gdpr' [7d]	20	6.67	8.30	6.05	8.62	16	
+2026-11-23T18:25:55.5618487Z	mssql-after	trigger key, common 'order-created' [7d]	20	1.33	1.85	1.10	2.71	51	
+2026-11-23T18:25:55.6853876Z	mssql-after	trigger key, rare 'backfill' [7d]	20	5.02	5.74	4.77	6.11	51	
+2026-11-23T18:25:55.8379177Z	mssql-after	no match 'zq-nomatch-7731' [7d]	20	6.49	7.08	6.01	7.17	0	
+2026-11-23T18:25:57.7092357Z	mssql-after	runId prefix, recent [all]	20	83.10	91.59	80.67	92.66	2	
+2026-11-23T18:25:59.6681452Z	mssql-after	runId prefix, 60d old [all]	20	83.72	92.93	80.02	102.70	2	
+2026-11-23T18:25:59.7911520Z	mssql-after	flow name, common 'Invoice' [all]	20	1.04	2.14	0.94	2.15	51	
+2026-11-23T18:26:00.3168109Z	mssql-after	flow name, rare 'Gdpr' [all]	20	22.92	25.69	20.32	25.76	51	
+2026-11-23T18:26:00.3690448Z	mssql-after	trigger key, common 'order-created' [all]	20	1.07	1.43	1.00	1.62	51	
+2026-11-23T18:26:00.5117524Z	mssql-after	trigger key, rare 'backfill' [all]	20	5.05	5.84	4.68	7.04	51	
+2026-11-23T18:26:02.2833995Z	mssql-after	no match 'zq-nomatch-7731' [all]	20	78.58	85.32	73.49	88.24	0	
+2026-11-23T18:26:02.4402762Z	mssql-after	status word 'Failed' (+total)	20	1.81	2.14	1.68	2.32	51	
+2026-11-23T18:26:02.5128523Z	mssql-after	status word 'TimedOut' (+total)	20	1.86	2.45	1.72	2.72	51	
+2026-11-23T18:26:02.5722204Z	mssql-after	full run id (old)	20	0.59	0.67	0.51	0.68	1	
+2026-11-23T18:26:02.9260665Z	mssql-after	unfiltered first page (+total)	20	13.36	17.24	11.67	18.30	51	
+2026-11-23T18:26:02.9830346Z	mssql-after	unfiltered first page (no total)	20	1.18	1.82	0.98	2.78	51	
+2026-11-23T18:26:03.4438891Z	mssql-after	unfiltered page 50 OFFSET (+total)	20	17.53	21.34	16.40	23.59	51	
+2026-11-23T18:26:08.1500562Z	mssql-after	unfiltered page 2000 OFFSET	20	180.36	183.93	176.51	185.72	51	
+2026-11-23T18:26:43.6352816Z	mssql-after	deep output: invoice, 3d old [7d]	20	1232.61	1270.90	1206.75	1320.32	1	
+2026-11-23T18:27:13.0696518Z	mssql-after	deep output: invoice, 60d old [7d]	20	1289.38	1316.20	1214.56	1340.88	0	
+2026-11-23T18:27:41.5563645Z	mssql-after	deep output: orderId, 3d old [7d]	20	1228.47	1301.82	1203.69	1313.30	1	
+2026-11-23T18:27:42.8371404Z	mssql-after	deep output: common 'express' [7d]	20	1.57	2.14	1.41	2.92	51	
+2026-11-23T18:28:10.0191753Z	mssql-after	deep error: shipment, 3d old [7d]	20	1253.24	1297.88	1180.35	1304.35	1	
+2026-11-23T18:28:23.8918833Z	mssql-after	deep error: 'deadlock victim' [7d]	20	574.42	596.88	536.25	629.39	51	
+2026-11-23T18:28:47.7383854Z	mssql-after	deep no match 'zq-nomatch-7731' [7d]	20	1073.87	1082.23	1009.78	1090.96	0	
+2026-11-23T18:34:07.4368835Z	mssql-after	deep output: invoice, 60d old [all]	3	98052.15	121660.81	96241.15	124283.99	1	
+2026-11-23T18:34:07.4872420Z	mssql-after	deep output: common 'express' [all]	20	1.95	2.26	1.71	2.36	51	
+2026-11-23T18:34:20.3504667Z	mssql-after	deep error: 'deadlock victim' [all]	20	579.93	599.49	563.71	601.27	51	
+2026-11-23T18:39:20.8074184Z	mssql-after	deep no match 'zq-nomatch-7731' [all]	3	98927.26	104368.89	95987.52	104973.51	0	
+2026-11-23T18:39:21.2460528Z	mssql-keyset	unfiltered page 50 keyset	20	2.52	3.42	2.24	3.44	51	
+2026-11-23T18:39:22.0049383Z	mssql-keyset	unfiltered page 2000 keyset	20	32.83	40.23	29.51	45.77	51	
+2026-11-23T18:39:22.2792173Z	mssql-count	COUNT(*) FlowRuns	20	11.02	17.25	9.74	17.61	1	
+2026-11-23T18:39:22.3094047Z	mssql-count	COUNT(*) WHERE Status='Failed'	20	0.99	1.09	0.91	1.16	1	
+2026-11-23T18:39:22.3370372Z	mssql-count	capped COUNT (TOP 10001)	20	1.16	1.23	1.03	1.28	1	
+2026-11-23T18:39:22.3592812Z	mssql-count	dm_db_partition_stats row_count	20	0.57	0.60	0.51	0.69	1	
+2026-11-23T18:49:38.5100930Z	mssql-after-tokens	deep output: invoice, 3d old [7d]	20	8.34	10.12	7.35	10.35	1	
+2026-11-23T18:49:38.7155202Z	mssql-after-tokens	deep output: invoice, 60d old [7d]	20	7.46	10.12	6.52	10.74	0	
+2026-11-23T18:49:38.9203995Z	mssql-after-tokens	deep output: orderId, 3d old [7d]	20	7.85	10.32	6.23	12.21	1	
+2026-11-23T18:49:39.1134315Z	mssql-after-tokens	deep output: common 'express' [7d]	20	7.51	10.74	6.81	11.95	0	
+2026-11-23T18:49:39.2995797Z	mssql-after-tokens	deep error: shipment, 3d old [7d]	20	6.74	9.57	6.25	9.99	1	
+2026-11-23T18:49:39.5699470Z	mssql-after-tokens	deep error: 'deadlock victim' [7d]	20	10.98	13.00	9.67	13.38	51	
+2026-11-23T18:49:39.7698418Z	mssql-after-tokens	deep no match 'zq-nomatch-7731' [7d]	20	7.34	9.32	6.46	12.15	0	
+2026-11-23T18:49:41.8194392Z	mssql-after-tokens	deep output: invoice, 60d old [all]	20	83.57	109.10	79.10	118.61	1	
+2026-11-23T18:49:43.8982987Z	mssql-after-tokens	deep output: common 'express' [all]	20	88.96	96.29	85.71	99.29	0	
+2026-11-23T18:49:46.2697356Z	mssql-after-tokens	deep error: 'deadlock victim' [all]	20	100.24	112.89	98.16	113.71	51	
+2026-11-23T18:49:48.1372427Z	mssql-after-tokens	deep no match 'zq-nomatch-7731' [all]	20	79.69	82.67	76.53	93.10	0	
+2026-11-23T18:57:52.7876983Z	pg-after	runId prefix, recent [7d]	20	1.28	2.55	0.86	11.54	2	
+2026-11-23T18:57:52.8159493Z	pg-after	runId prefix, 60d old [7d]	20	0.93	1.25	0.87	1.26	1	
+2026-11-23T18:57:53.5539042Z	pg-after	flow name, common 'Invoice' [7d]	20	32.11	34.76	31.22	45.14	51	
+2026-11-23T18:57:53.8572907Z	pg-after	flow name, rare 'Gdpr' [7d]	20	12.16	12.97	11.35	13.13	16	
+2026-11-23T18:57:54.6830567Z	pg-after	trigger key, common 'order-created' [7d]	20	36.77	38.23	36.06	38.58	51	
+2026-11-23T18:57:54.7873481Z	pg-after	trigger key, rare 'backfill' [7d]	20	2.55	3.39	2.15	9.20	51	
+2026-11-23T18:57:54.8153136Z	pg-after	no match 'zq-nomatch-7731' [7d]	20	1.07	1.51	0.79	1.70	0	
+2026-11-23T18:57:54.8506141Z	pg-after	runId prefix, recent [all]	20	1.04	2.07	0.87	9.77	2	
+2026-11-23T18:57:54.8781627Z	pg-after	runId prefix, 60d old [all]	20	1.18	1.33	0.90	1.36	2	
+2026-11-23T18:57:55.6330201Z	pg-after	flow name, common 'Invoice' [all]	20	33.60	35.38	32.97	37.14	51	
+2026-11-23T18:57:56.5229421Z	pg-after	flow name, rare 'Gdpr' [all]	20	38.53	39.89	37.47	43.00	51	
+2026-11-23T18:57:57.4580028Z	pg-after	trigger key, common 'order-created' [all]	20	39.77	45.22	38.31	47.56	51	
+2026-11-23T18:57:57.5562880Z	pg-after	trigger key, rare 'backfill' [all]	20	2.37	2.95	2.11	3.04	51	
+2026-11-23T18:57:57.5763956Z	pg-after	no match 'zq-nomatch-7731' [all]	20	0.66	0.88	0.57	1.79	0	
+2026-11-23T18:57:57.6013016Z	pg-after	status word 'Failed' (+total)	20	0.97	1.05	0.85	1.14	51	
+2026-11-23T18:57:57.6263477Z	pg-after	status word 'TimedOut' (+total)	20	0.95	1.42	0.82	2.04	51	
+2026-11-23T18:57:57.6382965Z	pg-after	full run id (old)	20	0.42	0.54	0.37	0.79	1	
+2026-11-23T18:57:57.7457624Z	pg-after	unfiltered first page (+total)	20	4.64	4.99	4.51	5.03	51	
+2026-11-23T18:57:57.7638010Z	pg-after	unfiltered first page (no total)	20	0.55	1.44	0.48	1.74	51	
+2026-11-23T18:57:57.8786101Z	pg-after	unfiltered page 50 OFFSET (+total)	20	5.06	5.43	4.74	5.68	51	
+2026-11-23T18:57:58.1929525Z	pg-after	unfiltered page 2000 OFFSET	20	13.84	15.56	12.92	16.16	51	
+2026-11-23T18:57:59.9126128Z	pg-after	deep output: invoice, 3d old [7d]	20	60.99	64.22	59.31	64.66	1	
+2026-11-23T18:58:01.2178393Z	pg-after	deep output: invoice, 60d old [7d]	20	56.12	60.09	53.96	60.10	0	
+2026-11-23T18:58:16.3453482Z	pg-after	deep output: orderId, 3d old [7d]	20	682.03	701.61	651.01	707.96	1	
+2026-11-23T18:58:17.1329161Z	pg-after	deep output: common 'express' [7d]	20	4.26	5.60	3.81	5.75	51	
+2026-11-23T18:58:18.0486257Z	pg-after	deep error: shipment, 3d old [7d]	20	40.65	45.42	38.13	49.01	1	
+2026-11-23T18:58:18.4536881Z	pg-after	deep error: 'deadlock victim' [7d]	20	15.24	22.29	13.97	25.42	51	
+2026-11-23T18:58:18.8756306Z	pg-after	deep no match 'zq-nomatch-7731' [7d]	20	17.34	21.99	15.83	23.65	0	
+2026-11-23T18:58:23.2008008Z	pg-after	deep output: invoice, 60d old [all]	20	193.81	211.33	184.03	232.45	1	
+2026-11-23T19:00:10.3787554Z	pg-after	deep output: common 'express' [all]	3	35011.32	37312.74	34399.69	37568.46	51	
+2026-11-23T19:00:44.6237225Z	pg-after	deep error: 'deadlock victim' [all]	20	14.99	20.91	13.79	21.72	51	
+2026-11-23T19:00:47.8297110Z	pg-after	deep no match 'zq-nomatch-7731' [all]	20	140.15	151.48	137.40	155.70	0	
+2026-11-23T19:00:48.5009904Z	pg-keyset	unfiltered page 50 keyset	20	0.96	1.66	0.85	3.53	51	
+2026-11-23T19:00:48.5501945Z	pg-keyset	unfiltered page 2000 keyset	20	0.95	1.12	0.86	1.13	51	
+2026-11-23T19:00:48.6542288Z	pg-count	COUNT(*) flow_runs	20	4.40	5.18	4.17	5.45	1	
+2026-11-23T19:00:48.6736668Z	pg-count	COUNT(*) WHERE status='Failed'	20	0.76	0.88	0.68	0.91	1	
+2026-11-23T19:00:48.6868718Z	pg-count	reltuples estimate	20	0.55	0.63	0.45	0.69	1	
+2026-11-23T19:01:30.6129716Z	pg-trgm-run	runId prefix, recent [7d]	20	0.99	2.09	0.88	2.49	1	
+2026-11-23T19:01:30.6476417Z	pg-trgm-run	runId prefix, 60d old [7d]	20	1.28	1.98	0.95	2.40	1	
+2026-11-23T19:01:30.6874992Z	pg-trgm-run	flow name, common 'Invoice' [7d]	20	1.23	1.53	1.10	3.51	51	
+2026-11-23T19:01:30.7188949Z	pg-trgm-run	flow name, rare 'Gdpr' [7d]	20	1.19	1.31	1.09	1.35	16	
+2026-11-23T19:01:30.7451555Z	pg-trgm-run	trigger key, common 'order-created' [7d]	20	1.03	1.53	0.96	1.61	51	
+2026-11-23T19:01:30.8008449Z	pg-trgm-run	trigger key, rare 'backfill' [7d]	20	2.20	2.77	1.86	3.66	51	
+2026-11-23T19:01:30.8219712Z	pg-trgm-run	no match 'zq-nomatch-7731' [7d]	20	0.75	0.82	0.72	0.87	0	
+2026-11-23T19:01:30.8469360Z	pg-trgm-run	runId prefix, recent [all]	20	0.99	1.23	0.92	1.39	1	
+2026-11-23T19:01:30.8748057Z	pg-trgm-run	runId prefix, 60d old [all]	20	1.02	1.74	0.93	2.54	1	
+2026-11-23T19:01:30.8978037Z	pg-trgm-run	flow name, common 'Invoice' [all]	20	0.89	1.15	0.83	1.18	51	
+2026-11-23T19:01:30.9277958Z	pg-trgm-run	flow name, rare 'Gdpr' [all]	20	1.21	1.51	1.10	1.74	51	
+2026-11-23T19:01:30.9492756Z	pg-trgm-run	trigger key, common 'order-created' [all]	20	0.89	0.96	0.80	0.98	51	
+2026-11-23T19:01:31.0012590Z	pg-trgm-run	trigger key, rare 'backfill' [all]	20	2.17	2.34	1.92	2.64	51	
+2026-11-23T19:01:31.0223707Z	pg-trgm-run	no match 'zq-nomatch-7731' [all]	20	0.77	0.86	0.69	0.89	0	
+2026-11-23T19:04:42.0442411Z	pg-after-analyzed	runId prefix, recent [7d]	20	1.64	2.89	1.32	12.20	2	
+2026-11-23T19:04:42.0795741Z	pg-after-analyzed	runId prefix, 60d old [7d]	20	1.25	1.63	1.02	1.77	1	
+2026-11-23T19:04:42.1177285Z	pg-after-analyzed	flow name, common 'Invoice' [7d]	20	1.26	1.82	1.10	5.25	51	
+2026-11-23T19:04:42.1532312Z	pg-after-analyzed	flow name, rare 'Gdpr' [7d]	20	1.36	1.83	1.14	1.88	16	
+2026-11-23T19:04:42.1833132Z	pg-after-analyzed	trigger key, common 'order-created' [7d]	20	1.21	1.47	1.10	1.86	51	
+2026-11-23T19:04:42.2698941Z	pg-after-analyzed	trigger key, rare 'backfill' [7d]	20	3.49	5.39	2.75	5.41	51	
+2026-11-23T19:04:42.2973532Z	pg-after-analyzed	no match 'zq-nomatch-7731' [7d]	20	1.05	1.22	0.96	1.25	0	
+2026-11-23T19:04:42.3283443Z	pg-after-analyzed	runId prefix, recent [all]	20	1.28	1.57	1.08	1.58	2	
+2026-11-23T19:04:42.3598526Z	pg-after-analyzed	runId prefix, 60d old [all]	20	1.26	1.78	1.06	2.07	2	
+2026-11-23T19:04:42.3954126Z	pg-after-analyzed	flow name, common 'Invoice' [all]	20	1.43	2.03	1.18	2.46	51	
+2026-11-23T19:04:42.4285392Z	pg-after-analyzed	flow name, rare 'Gdpr' [all]	20	1.35	1.54	1.21	1.68	51	
+2026-11-23T19:04:42.4546775Z	pg-after-analyzed	trigger key, common 'order-created' [all]	20	1.05	1.25	0.93	1.51	51	
+2026-11-23T19:04:42.5218129Z	pg-after-analyzed	trigger key, rare 'backfill' [all]	20	2.78	3.12	2.59	3.95	51	
+2026-11-23T19:04:42.5435397Z	pg-after-analyzed	no match 'zq-nomatch-7731' [all]	20	0.74	0.98	0.68	1.03	0	
+2026-11-23T19:04:42.5743642Z	pg-after-analyzed	status word 'Failed' (+total)	20	1.19	1.60	1.01	1.71	51	
+2026-11-23T19:04:42.6022313Z	pg-after-analyzed	status word 'TimedOut' (+total)	20	1.12	1.29	0.99	1.29	51	
+2026-11-23T19:04:42.6188895Z	pg-after-analyzed	full run id (old)	20	0.67	0.72	0.60	0.74	1	
+2026-11-23T19:04:42.7384462Z	pg-after-analyzed	unfiltered first page (+total)	20	5.27	5.58	4.85	5.68	51	
+2026-11-23T19:04:42.7656475Z	pg-after-analyzed	unfiltered first page (no total)	20	1.10	1.39	0.88	1.40	51	
+2026-11-23T19:04:42.9002458Z	pg-after-analyzed	unfiltered page 50 OFFSET (+total)	20	5.90	6.69	5.52	6.72	51	
+2026-11-23T19:04:43.5657772Z	pg-after-analyzed	unfiltered page 2000 OFFSET	20	29.15	32.72	27.79	35.45	51	
+2026-11-23T19:04:45.4499701Z	pg-after-analyzed	deep output: invoice, 3d old [7d]	20	67.71	73.00	60.84	74.15	1	
+2026-11-23T19:04:46.7991265Z	pg-after-analyzed	deep output: invoice, 60d old [7d]	20	56.97	61.14	55.14	62.71	0	
+2026-11-23T19:05:01.3426707Z	pg-after-analyzed	deep output: orderId, 3d old [7d]	20	657.34	691.45	634.70	703.26	1	
+2026-11-23T19:05:02.0873627Z	pg-after-analyzed	deep output: common 'express' [7d]	20	4.54	5.14	4.25	6.67	51	
+2026-11-23T19:05:03.0744142Z	pg-after-analyzed	deep error: shipment, 3d old [7d]	20	43.28	51.62	41.25	54.53	1	
+2026-11-23T19:05:03.5695214Z	pg-after-analyzed	deep error: 'deadlock victim' [7d]	20	19.64	23.79	18.07	25.17	51	
+2026-11-23T19:05:04.0301574Z	pg-after-analyzed	deep no match 'zq-nomatch-7731' [7d]	20	19.80	20.63	18.64	20.73	0	
+2026-11-23T19:05:08.3768604Z	pg-after-analyzed	deep output: invoice, 60d old [all]	20	195.50	203.53	189.82	213.99	1	
+2026-11-23T19:06:52.1586652Z	pg-after-analyzed	deep output: common 'express' [all]	3	34604.20	34719.65	34247.85	34732.47	51	
+2026-11-23T19:07:25.8575440Z	pg-after-analyzed	deep error: 'deadlock victim' [all]	20	18.30	20.93	16.51	21.56	51	
+2026-11-23T19:07:29.1356066Z	pg-after-analyzed	deep no match 'zq-nomatch-7731' [all]	20	146.56	151.64	144.14	152.06	0	

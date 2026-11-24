@@ -759,7 +759,11 @@ public static class DashboardServiceCollectionExtensions
                         items = RunsForCaller(http, page.Runs),
                         // null for a text / run-id search: those report hasMore instead of counting.
                         total = page.TotalCount,
+                        // true when the count stopped at FlowDashboardOptions.RunListTotalCountCap: "10,000+".
+                        totalCapped = page.TotalIsLowerBound,
                         hasMore = page.HasMore,
+                        // Opaque keyset cursor for the next page (?after=…): stable while new runs start.
+                        nextCursor = page.NextCursor?.Encode(),
                         skip = request.Query.Skip,
                         take = request.Query.Take,
                         search = request.DescribeSearch(),

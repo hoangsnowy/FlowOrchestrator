@@ -55,3 +55,10 @@ docker rm -f fo-search-pg
 ```
 
 `stats` prints the data-shape summary and the needles without touching a database.
+
+## 2.0 "after" runs (shipped code)
+
+`run-mssql-after.sh [image] [results-dir]` and `run-pg-after.sh [results-dir]` re-seed, measure the per-step
+write cost on the 1.x schema, apply the shipped 2.0 migrator (`mssql-migrate tokens` / `pg-migrate`), then
+time the shipped query text (`SB_SUITE` names the suite; `SB_TOKENS=1` times the SQL Server token-table
+deep-search shape after `mssql-backfill`). Results of 2026-11-24: `results/after-2026-11-24/`.

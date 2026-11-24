@@ -21,20 +21,78 @@ public sealed class SqlFlowRunStore :
 {
     private readonly string _connectionString;
 
+    /// <summary>The built-in token index, when <c>UseRunSearchIndex()</c> is on; its writes are folded into this store's batches.</summary>
+    private readonly SqlServerRunSearchTokenIndex? _tokenIndex;
+
+    /// <summary>A host-registered <see cref="IRunSearchIndex"/> (not the built-in one), fed after durable writes and asked for deep searches.</summary>
+    private readonly IRunSearchIndex? _externalIndex;
+
+    private readonly SqlRunSearchSchemaCache _searchSchema;
+
+    /// <summary>Creates the store with the default run search (no token index).</summary>
+    /// <param name="connectionString">The FlowOrchestrator database.</param>
     public SqlFlowRunStore(string connectionString)
+        : this(connectionString, searchIndex: null)
+    {
+    }
+
+    /// <summary>Creates the store with an optional run-search index.</summary>
+    /// <param name="connectionString">The FlowOrchestrator database.</param>
+    /// <param name="searchIndex">
+    /// <see cref="SqlServerRunSearchTokenIndex"/> to maintain and query the built-in token table, any other
+    /// <see cref="IRunSearchIndex"/> to feed and query an external index, or <see langword="null"/>.
+    /// </param>
+    public SqlFlowRunStore(string connectionString, IRunSearchIndex? searchIndex)
     {
         _connectionString = connectionString;
+        _tokenIndex = searchIndex as SqlServerRunSearchTokenIndex;
+        _externalIndex = _tokenIndex is null ? searchIndex : null;
+        _searchSchema = new SqlRunSearchSchemaCache(connectionString, tokensEnabled: _tokenIndex is not null);
     }
 
     public async Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null)
     {
         await using var conn = new SqlConnection(_connectionString);
-        await conn.ExecuteAsync("""
-            INSERT INTO FlowRuns (Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, SourceRunId)
-            VALUES (@Id, @FlowId, @FlowName, 'Running', @TriggerKey, @TriggerDataJson, @BackgroundJobId, SYSDATETIMEOFFSET(), @SourceRunId)
-            """, new { Id = runId, FlowId = flowId, FlowName = flowName, TriggerKey = triggerKey, TriggerDataJson = triggerData, BackgroundJobId = jobId, SourceRunId = sourceRunId });
+        var tokens = _tokenIndex?.TokenizeRun(triggerData);
+        if (tokens is null)
+        {
+            await conn.ExecuteAsync("""
+                INSERT INTO FlowRuns (Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, SourceRunId)
+                VALUES (@Id, @FlowId, @FlowName, 'Running', @TriggerKey, @TriggerDataJson, @BackgroundJobId, SYSDATETIMEOFFSET(), @SourceRunId)
+                """, new { Id = runId, FlowId = flowId, FlowName = flowName, TriggerKey = triggerKey, TriggerDataJson = triggerData, BackgroundJobId = jobId, SourceRunId = sourceRunId });
+        }
+        else
+        {
+            // Same round trip; the token insert is its own best-effort statement after the run row.
+            await conn.ExecuteAsync("""
+                DECLARE @SearchStartedAt DATETIMEOFFSET = SYSDATETIMEOFFSET();
+                INSERT INTO FlowRuns (Id, FlowId, FlowName, Status, TriggerKey, TriggerDataJson, BackgroundJobId, StartedAt, SourceRunId)
+                VALUES (@SearchRunId, @FlowId, @FlowName, 'Running', @TriggerKey, @TriggerDataJson, @BackgroundJobId, @SearchStartedAt, @SourceRunId);
+                """ + SqlServerRunSearchTokenIndex.InsertTokensSql,
+                new { SearchRunId = runId, FlowId = flowId, FlowName = flowName, TriggerKey = triggerKey, TriggerDataJson = triggerData, BackgroundJobId = jobId, SourceRunId = sourceRunId, SearchTokens = tokens });
+        }
 
-        return (await GetRunCoreAsync(conn, runId))!;
+        var run = (await GetRunCoreAsync(conn, runId))!;
+        if (_externalIndex is { } index)
+        {
+            var document = new RunSearchDocument(run.Id, run.StartedAt, run.FlowName, run.TriggerKey, run.BackgroundJobId, run.TriggerDataJson);
+            await IndexBestEffortAsync(() => index.IndexRunAsync(document, CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        return run;
+    }
+
+    /// <summary>Awaits a write to an external search index and swallows its failure: an index must never fail the durable write it follows.</summary>
+    private static async ValueTask IndexBestEffortAsync(Func<ValueTask> write)
+    {
+        try
+        {
+            await write().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Best effort by contract (IRunSearchIndex remarks): the index may lag, the run state may not.
+        }
     }
 
     public async Task<IReadOnlyList<FlowRunRecord>> GetDerivedRunsAsync(Guid sourceRunId)
@@ -87,7 +145,35 @@ public sealed class SqlFlowRunStore :
     public async Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
     {
         await using var conn = new SqlConnection(_connectionString);
-        await conn.ExecuteAsync("""
+
+        // Token index (opt-in): O(size of this step's key, error and output) to tokenize, plus one
+        // statement in the same round trip AFTER the commit — never inside the step's transaction, so a
+        // duplicate-key wait between concurrent steps of one run cannot hold the step's row locks. Off:
+        // one null check.
+        var tokens = _tokenIndex?.TokenizeStep(stepKey, errorMessage, outputJson);
+        if (tokens is not null)
+        {
+            await conn.ExecuteAsync(RecordStepCompleteSql + """
+
+                DECLARE @SearchStartedAt DATETIMEOFFSET = (SELECT StartedAt FROM FlowRuns WHERE Id = @RunId);
+                DECLARE @SearchRunId UNIQUEIDENTIFIER = @RunId;
+                """ + SqlServerRunSearchTokenIndex.InsertTokensSql,
+                new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage, SearchTokens = tokens });
+        }
+        else
+        {
+            await conn.ExecuteAsync(RecordStepCompleteSql,
+                new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage });
+        }
+
+        if (_externalIndex is { } index)
+        {
+            var document = new StepSearchDocument(runId, stepKey, status, errorMessage, outputJson);
+            await IndexBestEffortAsync(() => index.IndexStepAsync(document, CancellationToken.None)).ConfigureAwait(false);
+        }
+    }
+
+    private const string RecordStepCompleteSql = """
             BEGIN TRANSACTION;
 
             UPDATE FlowSteps
@@ -108,8 +194,7 @@ public sealed class SqlFlowRunStore :
                AND latest.AttemptNo = attempts.AttemptNo
 
             COMMIT TRANSACTION;
-            """, new { RunId = runId, StepKey = stepKey, Status = status, OutputJson = outputJson, ErrorMessage = errorMessage });
-    }
+            """;
 
     public async Task CompleteRunAsync(Guid runId, string status)
     {
@@ -170,7 +255,7 @@ public sealed class SqlFlowRunStore :
         var searchLike = (string?)null;
         if (!string.IsNullOrWhiteSpace(search))
         {
-            searchLike = $"%{EscapeLikePattern(search)}%";
+            searchLike = $"%{EscapeLikePattern(search.ToLowerInvariant())}%";
             // Always match the cheap top-level run columns. The per-step EXISTS scan
             // (incl. OutputJson; FlowStepAttempts is excluded as duplicated history) is only
             // added for deep search — quick search stays index-friendlier for typeahead.
@@ -182,20 +267,20 @@ public sealed class SqlFlowRunStore :
                         FROM FlowSteps AS fs
                         WHERE fs.RunId = fr.Id
                           AND (
-                                ISNULL(fs.StepKey, '') LIKE @SearchLike ESCAPE '\'
-                                OR ISNULL(fs.ErrorMessage, '') LIKE @SearchLike ESCAPE '\'
-                                OR ISNULL(fs.OutputJson, '') LIKE @SearchLike ESCAPE '\'
+                                LOWER(fs.StepKey) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
+                                OR LOWER(fs.ErrorMessage) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
+                                OR LOWER(fs.OutputJson) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
                               )
                     )
                     """
                 : string.Empty;
             whereClauses.Add("""
                 (
-                    CAST(fr.Id AS NVARCHAR(36)) LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.FlowName, '') LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.TriggerKey, '') LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.Status, '') LIKE @SearchLike ESCAPE '\'
-                    OR ISNULL(fr.BackgroundJobId, '') LIKE @SearchLike ESCAPE '\'
+                    LOWER(CONVERT(NVARCHAR(36), fr.Id)) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
+                    OR LOWER(fr.FlowName) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
+                    OR LOWER(fr.TriggerKey) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
+                    OR LOWER(fr.Status) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
+                    OR LOWER(fr.BackgroundJobId) COLLATE Latin1_General_100_BIN2 LIKE @SearchLike ESCAPE '\'
                 """ + stepExists + """
 
                 )
@@ -227,127 +312,101 @@ public sealed class SqlFlowRunStore :
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The batch comes from <see cref="SqlRunSearchCommandBuilder"/> (shape rules and measurements there),
+    /// built against a cached snapshot of which search structures exist, so a database whose indexes are
+    /// still being built (or were never built) gets fallback shapes instead of an error. A hex-shaped term
+    /// also seeks the run-id prefix at any age; deep search uses the token index when it is enabled.
+    /// </remarks>
     public async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var command = BuildSearchRunsCommand(query);
-
-        await using var conn = new SqlConnection(_connectionString);
-        using var grid = await conn.QueryMultipleAsync(new CommandDefinition(
-            command.Sql, command.Parameters, cancellationToken: cancellationToken));
-        var rows = (await grid.ReadAsync<FlowRunRecord>()).AsList();
-        int? total = command.CountsTotal ? await grid.ReadSingleAsync<int>() : null;
-
-        var take = ClampTake(query.Take);
-        var hasMore = rows.Count > take;
-        if (hasMore)
-            rows.RemoveRange(take, rows.Count - take);
-        return new RunSearchPage(rows, hasMore, total);
+        var schema = await _searchSchema.GetAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await SearchRunsCoreAsync(query, schema, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SqlException ex) when (IsMissingSearchStructure(ex))
+        {
+            // A structure the snapshot promised is gone (dropped by hand, restored backup): forget the
+            // snapshot and run the shape that needs none of them.
+            _searchSchema.Invalidate();
+            return await SearchRunsCoreAsync(query, SqlRunSearchSchema.None, cancellationToken).ConfigureAwait(false);
+        }
     }
 
-    /// <summary>Clamps a page size to <c>[0, int.MaxValue - 1]</c> so <c>Take + 1</c> neither goes negative nor overflows.</summary>
-    private static int ClampTake(int take) => Math.Clamp(take, 0, int.MaxValue - 1);
+    /// <summary>Invalid column (207), invalid object (208), missing index in a hint (308).</summary>
+    private static bool IsMissingSearchStructure(SqlException ex) => ex.Number is 207 or 208 or 308;
 
-    /// <summary>
-    /// Builds the SQL batch for <see cref="SearchRunsAsync"/>: the page query, followed by an exact
-    /// <c>COUNT(*)</c> only when <see cref="RunSearchQuery.CountsTotal"/> is set.
-    /// </summary>
-    /// <param name="query">The structured run query.</param>
-    /// <returns>The batch text, its parameters, and whether the batch returns a second (count) result set.</returns>
-    /// <remarks>
-    /// Shape rules, each one a fix for the production search that took ~2 minutes on 15k runs:
-    /// <list type="bullet">
-    /// <item>A run id is <c>fr.Id = @RunId</c>, a clustered-key seek. A GUID-shaped text term compares the
-    /// id by equality too, never <c>CAST(fr.Id AS NVARCHAR(36)) LIKE</c>.</item>
-    /// <item>No <c>COUNT(*) OVER()</c>: it forced the predicate over every row in retention. The page reads
-    /// <c>Take + 1</c> rows instead and the caller derives <c>HasMore</c>; the exact count is a separate
-    /// statement over the plain filters only, which <c>IX_FlowRuns_Status</c> /
-    /// <c>IX_FlowRuns_FlowId_Status_StartedAt</c> / <c>IX_FlowRuns_StartedAt</c> answer without touching
-    /// the clustered index.</item>
-    /// <item>Text matches the run's own columns, all covered by <c>IX_FlowRuns_StartedAt</c>, so a
-    /// windowed search is a range seek plus a residual filter that stops after <c>Take + 1</c> hits.</item>
-    /// <item>The <c>FlowSteps</c> payload probe (LOB reads of <c>OutputJson</c>) is added only when
-    /// <see cref="RunSearchQuery.IncludeStepPayloads"/> is set.</item>
-    /// </list>
-    /// User input only ever reaches the batch as parameters; <c>ESCAPE '\'</c> keeps <c>%</c>, <c>_</c>
-    /// and <c>[</c> literal.
-    /// </remarks>
-    internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query)
+    private async Task<RunSearchPage> SearchRunsCoreAsync(RunSearchQuery query, SqlRunSearchSchema schema, CancellationToken cancellationToken)
     {
-        var filters = new List<string>(4);
-        if (query.FlowId.HasValue)
-            filters.Add("fr.FlowId = @FlowId");
-        if (!string.IsNullOrWhiteSpace(query.Status))
-            filters.Add("fr.Status = @Status");
-        if (query.StartedFrom.HasValue)
-            filters.Add("fr.StartedAt >= @StartedFrom");
-        if (query.StartedTo.HasValue)
-            filters.Add("fr.StartedAt <= @StartedTo");
+        var command = SqlRunSearchCommandBuilder.Build(query, schema, hasExternalIndex: _externalIndex is not null);
+        var take = SqlRunSearchCommandBuilder.ClampTake(query.Take);
 
-        // The count only ever covers the plain filters above: CountsTotal is false whenever a text or
-        // run-id term is present.
-        var countsTotal = query.CountsTotal;
-        var countWhere = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
-
-        if (query.RunId.HasValue)
-            filters.Add("fr.Id = @RunId");
-
-        string? searchLike = null;
-        Guid? textId = null;
-        if (query.HasText)
+        await using var conn = new SqlConnection(_connectionString);
+        List<FlowRunRecord> rows;
+        int? total = null;
+        using (var grid = await conn.QueryMultipleAsync(new CommandDefinition(
+            command.Sql, command.Parameters, cancellationToken: cancellationToken)).ConfigureAwait(false))
         {
-            var text = query.Text!.Trim();
-            searchLike = "%" + EscapeLikePattern(text) + "%";
-            textId = Guid.TryParse(text, out var parsed) ? parsed : null;
-            var idMatch = textId.HasValue
-                ? "fr.Id = @TextId"
-                : "CAST(fr.Id AS NVARCHAR(36)) LIKE @SearchLike ESCAPE '\\'";
-            var stepMatch = query.IncludeStepPayloads
-                ? """
+            if (!command.Merge)
+            {
+                rows = (await grid.ReadAsync<FlowRunRecord>().ConfigureAwait(false)).AsList();
+                if (command.CountsTotal)
+                    total = await grid.ReadSingleAsync<int>().ConfigureAwait(false);
+                return RunSearchPage.FromRows(rows, take, total, query.EffectiveTotalCountCap);
+            }
 
-                        OR EXISTS (
-                            SELECT 1
-                            FROM FlowSteps AS fs
-                            WHERE fs.RunId = fr.Id
-                              AND (
-                                    ISNULL(fs.StepKey, '') LIKE @SearchLike ESCAPE '\'
-                                    OR ISNULL(fs.ErrorMessage, '') LIKE @SearchLike ESCAPE '\'
-                                    OR ISNULL(fs.OutputJson, '') LIKE @SearchLike ESCAPE '\'
-                                  )
-                        )
-                  """
-                : string.Empty;
-            filters.Add($"""
-                (
-                        {idMatch}
-                        OR ISNULL(fr.FlowName, '') LIKE @SearchLike ESCAPE '\'
-                        OR ISNULL(fr.TriggerKey, '') LIKE @SearchLike ESCAPE '\'
-                        OR ISNULL(fr.Status, '') LIKE @SearchLike ESCAPE '\'
-                        OR ISNULL(fr.BackgroundJobId, '') LIKE @SearchLike ESCAPE '\'{stepMatch}
-                    )
-                """);
+            var sets = new List<IReadOnlyList<FlowRunRecord>>(command.RowSets + 1);
+            for (var i = 0; i < command.RowSets; i++)
+                sets.Add((await grid.ReadAsync<FlowRunRecord>().ConfigureAwait(false)).AsList());
+
+            if (command.ExternalIndexText is { } text && _externalIndex is { } index)
+                sets.Add(await SearchExternalIndexAsync(conn, index, query, text, cancellationToken).ConfigureAwait(false));
+
+            rows = SqlRunSearchCommandBuilder.Merge(sets, query.Skip, take);
         }
 
-        var where = filters.Count > 0 ? " WHERE " + string.Join(" AND ", filters) : string.Empty;
-        var sql = "SELECT fr.Id, fr.FlowId, fr.FlowName, fr.Status, fr.TriggerKey, fr.TriggerDataJson, fr.BackgroundJobId, fr.StartedAt, fr.CompletedAt, fr.SourceRunId FROM FlowRuns AS fr"
-            + where
-            + " ORDER BY fr.StartedAt DESC OFFSET @Skip ROWS FETCH NEXT @TakePlusOne ROWS ONLY;";
-        if (countsTotal)
-            sql += " SELECT COUNT(*) FROM FlowRuns AS fr" + countWhere + ";";
+        return RunSearchPage.FromRows(rows, take, total, query.EffectiveTotalCountCap);
+    }
 
-        var parameters = new
-        {
-            query.FlowId,
-            query.Status,
-            query.RunId,
-            TextId = textId,
-            SearchLike = searchLike,
-            StartedFrom = query.StartedFrom?.ToUniversalTime(),   // same instant; kept in UTC like the PostgreSQL store
-            StartedTo = query.StartedTo?.ToUniversalTime(),
-            Skip = Math.Max(0, query.Skip),
-            TakePlusOne = ClampTake(query.Take) + 1,
-        };
-        return (sql, parameters, countsTotal);
+    /// <summary>Asks the external index for run ids, then reads those runs by primary key under the query's filters.</summary>
+    private static async Task<IReadOnlyList<FlowRunRecord>> SearchExternalIndexAsync(
+        SqlConnection conn, IRunSearchIndex index, RunSearchQuery query, string text, CancellationToken cancellationToken)
+    {
+        var limit = (int)Math.Min((long)Math.Max(0, query.Skip) + SqlRunSearchCommandBuilder.ClampTake(query.Take) + 1, MaxExternalHits);
+        var result = await index.SearchAsync(
+            new RunSearchIndexQuery(text, IncludeStepPayloads: true, query.StartedFrom, query.StartedTo, limit), cancellationToken).ConfigureAwait(false);
+        if (result.Hits.Count == 0)
+            return [];
+
+        var ids = new Guid[result.Hits.Count];
+        for (var i = 0; i < ids.Length; i++) ids[i] = result.Hits[i].RunId;
+        var (sql, parameters) = SqlRunSearchCommandBuilder.BuildHydrate(query, ids);
+        return (await conn.QueryAsync<FlowRunRecord>(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken)).ConfigureAwait(false)).AsList();
+    }
+
+    /// <summary>Most ids hydrated from an external index per search; one parameter each, well under SQL Server's 2,100.</summary>
+    private const int MaxExternalHits = 1_000;
+
+    /// <summary>
+    /// The batch <see cref="SearchRunsAsync"/> sends when every quick-search structure exists — the shape
+    /// benchmarks and I/O tests measure.
+    /// </summary>
+    /// <param name="query">The structured run query.</param>
+    /// <returns>The batch text, its parameters, and whether a count result set follows the rows.</returns>
+    internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query)
+        => BuildSearchRunsCommand(query, tokenIndex: false);
+
+    /// <summary>As <see cref="BuildSearchRunsCommand(RunSearchQuery)"/>, optionally with a fully back-filled token index.</summary>
+    /// <param name="query">The structured run query.</param>
+    /// <param name="tokenIndex">Build the deep-search shape that probes <c>FlowRunSearchTokens</c>.</param>
+    /// <returns>The batch text, its parameters, and whether a count result set follows the rows.</returns>
+    internal static (string Sql, object Parameters, bool CountsTotal) BuildSearchRunsCommand(RunSearchQuery query, bool tokenIndex)
+    {
+        var schema = tokenIndex ? SqlRunSearchSchema.Complete with { TokenTable = true } : SqlRunSearchSchema.Complete;
+        var command = SqlRunSearchCommandBuilder.Build(query, schema);
+        return (command.Sql, command.Parameters, command.CountsTotal);
     }
 
     /// <inheritdoc/>
@@ -874,8 +933,33 @@ public sealed class SqlFlowRunStore :
         await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        await conn.ExecuteAsync(
-            """
+        // The built-in token index is swept by its own background service (tokens of deleted runs are
+        // never returned by a search: the probe joins FlowRuns). An external index is told which runs went.
+        if (_externalIndex is { } index)
+        {
+            var deleted = (await conn.QueryAsync<Guid>(CleanupReturningIdsSql, new { CutoffUtc = cutoffUtc }, tx).ConfigureAwait(false)).AsList();
+            await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+            if (deleted.Count > 0)
+            {
+                try
+                {
+                    await index.RemoveRunsAsync(deleted, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    // Best effort: an orphaned document only costs the index space; the hydrate joins FlowRuns.
+                }
+            }
+
+            return;
+        }
+
+        await conn.ExecuteAsync(CleanupSql, new { CutoffUtc = cutoffUtc }, tx).ConfigureAwait(false);
+        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Retention: every table keyed by run, children first; the runs themselves follow in <see cref="CleanupSql"/>.</summary>
+    private const string CleanupChildrenSql = """
             DELETE fsc
             FROM FlowStepClaims fsc
             INNER JOIN FlowRuns fr ON fr.Id = fsc.RunId
@@ -928,15 +1012,13 @@ public sealed class SqlFlowRunStore :
             WHERE fr.CompletedAt IS NOT NULL
               AND fr.CompletedAt < @CutoffUtc;
 
-            DELETE FROM FlowRuns
-            WHERE CompletedAt IS NOT NULL
-              AND CompletedAt < @CutoffUtc;
-            """,
-            new { CutoffUtc = cutoffUtc },
-            tx).ConfigureAwait(false);
+            """;
 
-        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
-    }
+    private const string CleanupSql = CleanupChildrenSql
+        + "DELETE FROM FlowRuns WHERE CompletedAt IS NOT NULL AND CompletedAt < @CutoffUtc;";
+
+    private const string CleanupReturningIdsSql = CleanupChildrenSql
+        + "DELETE FROM FlowRuns OUTPUT deleted.Id WHERE CompletedAt IS NOT NULL AND CompletedAt < @CutoffUtc;";
 
     private static async Task<FlowRunRecord?> GetRunCoreAsync(SqlConnection conn, Guid runId)
     {

@@ -23,7 +23,12 @@ public static class SqlServerServiceCollectionExtensions
     {
         builder.Services.AddSingleton<IFlowStore>(_ => new SqlFlowStore(connectionString));
 
-        builder.Services.AddSingleton<SqlFlowRunStore>(_ => new SqlFlowRunStore(connectionString));
+        // Run search: the built-in token index when UseRunSearchIndex() is on (the options singleton is
+        // registered by AddFlowOrchestrator and read lazily, so call order does not matter), otherwise any
+        // IRunSearchIndex the host registered, otherwise none.
+        builder.Services.TryAddSingleton(sp => new SqlServerRunSearchTokenIndex(
+            connectionString, sp.GetService<RunSearchIndexOptions>() ?? new RunSearchIndexOptions()));
+        builder.Services.AddSingleton<SqlFlowRunStore>(sp => new SqlFlowRunStore(connectionString, ResolveSearchIndex(sp)));
         builder.Services.AddSingleton<IFlowRunStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
         builder.Services.AddSingleton<IFlowRunRuntimeStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
         builder.Services.AddSingleton<IFlowRunControlStore>(sp => sp.GetRequiredService<SqlFlowRunStore>());
@@ -36,8 +41,26 @@ public static class SqlServerServiceCollectionExtensions
 
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new SqlFlowScheduleStateStore(connectionString));
         builder.Services.AddHostedService(sp =>
-            new FlowOrchestratorSqlMigrator(connectionString, sp.GetRequiredService<ILogger<FlowOrchestratorSqlMigrator>>()));
+            new FlowOrchestratorSqlMigrator(
+                connectionString,
+                sp.GetRequiredService<ILogger<FlowOrchestratorSqlMigrator>>(),
+                runSearchIndexEnabled: sp.GetService<RunSearchIndexOptions>()?.Enabled == true));
+
+        // After the migrator: hosted services start in registration order, so the token tables exist.
+        // Returns immediately unless UseRunSearchIndex() is on.
+        builder.Services.AddHostedService(sp => new SqlRunSearchIndexBackfillService(
+            connectionString,
+            sp.GetRequiredService<SqlServerRunSearchTokenIndex>(),
+            sp.GetRequiredService<ILogger<SqlRunSearchIndexBackfillService>>(),
+            sp.GetService<TimeProvider>()));
         return builder;
+    }
+
+    private static IRunSearchIndex? ResolveSearchIndex(IServiceProvider sp)
+    {
+        if (sp.GetService<RunSearchIndexOptions>() is { Enabled: true })
+            return sp.GetRequiredService<SqlServerRunSearchTokenIndex>();
+        return sp.GetService<IRunSearchIndex>();
     }
 
     /// <summary>

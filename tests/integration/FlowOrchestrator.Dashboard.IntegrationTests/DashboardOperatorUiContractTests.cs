@@ -8,7 +8,7 @@ namespace FlowOrchestrator.Dashboard.Tests;
 /// <c>:root</c> palette, the single-sans typography rule, the "needs attention" Overview, the
 /// failure summary on run detail, and the escaping of the new inline handlers.
 /// </summary>
-public sealed partial class DashboardOperatorUiContractTests : IDisposable
+public sealed class DashboardOperatorUiContractTests : IDisposable
 {
     private readonly DashboardTestServer _server = new();
     private readonly HttpClient _client;
@@ -146,12 +146,15 @@ public sealed partial class DashboardOperatorUiContractTests : IDisposable
         return html[start..end];
     }
 
-    [GeneratedRegex(@"(?<=[:\s,(])#[0-9a-fA-F]{3,8}\b")]
-    private static partial Regex HexColourInValue();
+    // Plain Regex instances, not [GeneratedRegex]: the source generator writes code into obj/, which
+    // CodeQL then analyses and flags (cs/useless-assignment-to-local, cs/useless-cast-to-self) as ours.
+    private static readonly Regex HexColourInValueRegex = new(@"(?<=[:\s,(])#[0-9a-fA-F]{3,8}\b", RegexOptions.CultureInvariant);
+    private static readonly Regex RgbFunctionRegex = new(@"\brgba?\(", RegexOptions.CultureInvariant);
+    private static readonly Regex HexColourStringRegex = new(@"[""']#[0-9a-fA-F]{6}[""']", RegexOptions.CultureInvariant);
 
-    [GeneratedRegex(@"\brgba?\(")]
-    private static partial Regex RgbFunction();
+    private static Regex HexColourInValue() => HexColourInValueRegex;
 
-    [GeneratedRegex(@"[""']#[0-9a-fA-F]{6}[""']")]
-    private static partial Regex HexColourString();
+    private static Regex RgbFunction() => RgbFunctionRegex;
+
+    private static Regex HexColourString() => HexColourStringRegex;
 }

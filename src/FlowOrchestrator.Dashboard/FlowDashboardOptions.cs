@@ -92,6 +92,21 @@ public sealed class FlowDashboardOptions
     internal TimeSpan EffectiveRunSearchWindow => RunSearchWindow > TimeSpan.Zero ? RunSearchWindow : DefaultRunSearchWindow;
 
     /// <summary>
+    /// Largest run-list total the dashboard counts exactly. Above it the run list shows "10,000+" and
+    /// pages on with <c>hasMore</c>. Defaults to <see cref="DefaultRunListTotalCountCap"/>; zero or
+    /// negative counts every matching run on every page load.
+    /// </summary>
+    /// <remarks>
+    /// The run list asks for a total on every load (and on every 5-second auto-refresh). An exact
+    /// <c>COUNT(*)</c> grows with retention — 10.7 ms of an 11.9 ms page at 200k runs on SQL Server — while
+    /// a count capped at 10,000 stops there (1.1 ms). Sent to the store as <see cref="FlowOrchestrator.Core.Storage.RunSearchQuery.TotalCountCap"/>.
+    /// </remarks>
+    public int RunListTotalCountCap { get; set; } = DefaultRunListTotalCountCap;
+
+    /// <summary>Default for <see cref="RunListTotalCountCap"/>: 10,000.</summary>
+    public const int DefaultRunListTotalCountCap = 10_000;
+
+    /// <summary>
     /// Configures the webhook hardening pipeline through a fluent builder.
     /// </summary>
     /// <param name="configure">Configuration callback receiving a <see cref="WebhookSecurityOptionsBuilder"/>.</param>

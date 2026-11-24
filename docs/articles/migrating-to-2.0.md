@@ -493,9 +493,115 @@ builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhook
 
 ## Step 8 — Database
 
-The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database they
-**change nothing**, so the same database works for 1.34.3 and 2.0 — which is what makes the
+The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database both
+only **add** the run-search indexes (and, on SQL Server, two computed columns) described below; 1.34.3 keeps working against the upgraded database, which is what makes the
 [rollback](#rollback) below possible.
+
+### Run-search columns and indexes (SQL Server / Azure SQL)
+
+| Object | What | Cost |
+|---|---|---|
+| `FlowRuns.IdText` | computed `CONVERT(CHAR(36), Id)`, not persisted | metadata only, instant |
+| `FlowRuns.RunSearchText` | computed, lower-cased, `Latin1_General_100_BIN2`: id, flow name, trigger key, status, job id | metadata only, instant |
+| `IX_FlowRuns_IdText` | run-id prefix seek at any age | ~13 MB per 200k runs |
+| `IX_FlowRuns_StartedAt_Search` | `(StartedAt DESC) INCLUDE (RunSearchText, FlowId, Status)` — quick search | ~43 MB per 200k runs |
+
+The two columns are added synchronously at startup. The two indexes (measured 0.9 s together at 200k
+runs) are built:
+
+- **Azure SQL Database, Managed Instance, Enterprise / Developer:** online (`ONLINE = ON`) in the
+  background after startup — no startup delay, writers are not blocked. Log events 7204 / 7205 mark
+  start and end; 7206 a failure (retried on the next start).
+- **Standard / Express / Web:** offline at startup while `FlowRuns` has at most 2,000,000 rows (seconds).
+  Above that the migrator skips them and logs warning 7207 with the statements; run them in a maintenance
+  window:
+
+  ```sql
+  CREATE INDEX [IX_FlowRuns_IdText] ON [FlowRuns]([IdText]);
+  CREATE INDEX [IX_FlowRuns_StartedAt_Search] ON [FlowRuns]([StartedAt] DESC)
+      INCLUDE ([RunSearchText], [FlowId], [Status]);
+  ```
+
+To avoid any startup work, create the two columns and indexes ahead of the deployment with the same
+statements (`FlowOrchestratorSqlMigrator` skips whatever exists). Until the indexes exist, run search
+uses query shapes that do not need them: correct, only slower.
+
+Indexed computed columns require the standard `SET` options (`QUOTED_IDENTIFIER ON` and friends) on
+every connection that inserts or updates `FlowRuns`. SqlClient and SSMS set them; run maintenance
+scripts with `sqlcmd -I`.
+
+**Rollback:** 1.34.x ignores the new columns and indexes. To remove them anyway:
+`DROP INDEX [IX_FlowRuns_StartedAt_Search] ON [FlowRuns]; DROP INDEX [IX_FlowRuns_IdText] ON [FlowRuns];
+ALTER TABLE [FlowRuns] DROP COLUMN [RunSearchText], [IdText];`
+
+### Run search behaviour (SQL Server)
+
+- Matching is still case-insensitive, but binary after lower-casing (BIN2): accent- and width-sensitive
+  (`é` ≠ `e`, `ß` ≠ `ss`). Identifiers and ASCII text match as before.
+- A hex-shaped term (4-35 hex digits / hyphens) also matches run ids that start with it at any age,
+  ignoring the search window — the 8 characters the run list shows now find old runs.
+- `/api/runs` caps its total at `FlowDashboardOptions.RunListTotalCountCap` (10,000) and returns
+  `totalCapped: true` above it; set the option to `0` for an exact count.
+- Custom `IFlowRunStore` implementations get `RunSearchQuery.After` / `TotalCountCap` through the default
+  `SearchRunsAsync`; override it to page with a real keyset predicate.
+
+### Run-search index (PostgreSQL)
+
+| Object | What | Cost |
+|---|---|---|
+| `ix_flow_runs_run_search_trgm` | trigram GIN index on `lower(id::text \|\| '\|' \|\| flow_name \|\| … \|\| background_job_id)` — every quick search and the run-id prefix | ~47 MB per 200k runs |
+
+No column is added and `flow_runs` is not rewritten: the index is an expression index, built with
+`CREATE INDEX CONCURRENTLY` in the background after startup (log events 7211 / 7212; 7213 on failure,
+retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt.
+Until it exists, quick search runs the same SQL as a sequential scan.
+
+Like the trigram indexes 1.x already created, it needs the `pg_trgm` extension. On **Azure Database for
+PostgreSQL (Flexible Server)** allow-list it first (server parameter `azure.extensions` must include
+`PG_TRGM`); otherwise the migrator logs a warning, skips every trigram index, and search stays correct but
+scans. To build it ahead of the deployment:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_runs_run_search_trgm ON flow_runs USING gin ((
+  lower(id::text || '|' || coalesce(flow_name, '') || '|' || coalesce(trigger_key, '') || '|' || status || '|' || coalesce(background_job_id, ''))
+) gin_trgm_ops);
+```
+
+The expression must stay exactly as above: PostgreSQL only uses an expression index for a query that
+repeats it.
+
+Other PostgreSQL changes:
+
+- Deep search probes the step rows with a correlated `EXISTS` (was `IN`): common words 33 s → 5 ms in the
+  default window; rare terms unchanged.
+- `ix_flow_steps_output_json_trgm` stays and is still created on new databases: no measurable step write
+  cost, 200x faster deep search, but about half the size of `flow_steps`. A host that never uses the
+  "search step output / errors" box can drop it.
+- `ix_flow_runs_flow_name_trgm` and `ix_flow_runs_trigger_key_trgm` are no longer used by FlowOrchestrator's
+  queries (the new index covers both columns). They are left in place; drop them if nothing of yours uses
+  them: `DROP INDEX CONCURRENTLY IF EXISTS ix_flow_runs_flow_name_trgm;` (same for `trigger_key`).
+- `UseRunSearchIndex()` is ignored on PostgreSQL (warning 7214).
+
+**Rollback:** 1.34.x ignores the index; `DROP INDEX CONCURRENTLY IF EXISTS ix_flow_runs_run_search_trgm;`
+removes it.
+
+### Optional: the run-search token index (experimental, SQL Server)
+
+`options.UseRunSearchIndex()` adds `FlowRunSearchTokens` and `FlowRunSearchIndexState` (created empty at
+startup) and turns deep search into a token-index seek. Existing runs are back-filled newest-first by a
+background service (log events 7301-7306); until it completes, deep search still scans the not-yet-indexed
+part of the window with `LIKE`, so results stay complete. Budget roughly 72 token rows / ~6.6 KB per run
+(1.3 GB and an 8-minute back-fill per 200k runs, measured), and one extra commit per step completion and
+per run start (+5.4 ms p50 on the benchmark disk). Payload and error text then match by token prefix, not
+substring. Enable it on **every** instance that writes runs; if you disable it later and enable it again,
+reset the back-fill so runs written in between are indexed:
+
+```sql
+UPDATE FlowRunSearchIndexState SET BackfillAfterStartedAt = NULL, BackfillAfterId = NULL, BackfillCompletedAt = NULL;
+```
+
+To remove it: `DROP TABLE [FlowRunSearchTokens]; DROP TABLE [FlowRunSearchIndexState];`
 
 ### The run events table is no longer used
 
@@ -553,7 +659,8 @@ large tables, and how to run it ahead of the deployment.
 
 ## Rollback
 
-Because 2.0 changes nothing in an existing database yet, rolling back to **1.34.3** is a redeploy:
+Because 2.0 only adds to an existing database (the run-search columns and indexes, which 1.34.3
+ignores), rolling back to **1.34.3** is a redeploy:
 
 1. Pause cron triggers and hold webhook traffic.
 2. **Hangfire hosts:** wait until no 2.0 step job is Enqueued or Processing — a 1.x worker cannot run
@@ -584,8 +691,6 @@ each when it lands:
   backends will need changes; the built-in ones carry them.
 - **One input shape for untyped handlers.** Hangfire, InMemory and Service Bus will hand untyped
   handlers the same JSON-shaped values; typed handlers are unaffected.
-- **Run search.** A faster search for the dashboard (full-text / trigram backed on Azure SQL /
-  PostgreSQL), based on measurements in progress.
 
 ---
 

@@ -238,4 +238,59 @@ public sealed class RunListRequestTests
         Assert.Equal(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), request.Query.StartedFrom);
         Assert.Equal(TimeSpan.Zero, request.Query.StartedTo!.Value.Offset);
     }
+
+    [Fact]
+    public void After_cursor_is_decoded_and_disables_the_plain_listing()
+    {
+        // Arrange
+        var cursor = new FlowOrchestrator.Core.Storage.RunSearchCursor(Now.AddMinutes(-5), Guid.NewGuid());
+
+        // Act
+        var request = Parse("?after=" + Uri.EscapeDataString(cursor.Encode()));
+
+        // Assert
+        Assert.Equal(cursor.Id, request.Query.After!.Value.Id);
+        Assert.Equal(cursor.StartedAt.UtcTicks, request.Query.After!.Value.StartedAt.UtcTicks);
+        Assert.False(request.IsPlainListing);
+    }
+
+    [Fact]
+    public void Unparsable_cursor_is_ignored()
+    {
+        // Arrange
+
+        // Act
+        var request = Parse("?after=garbage&skip=40");
+
+        // Assert
+        Assert.Null(request.Query.After);
+        Assert.Equal(40, request.Query.Skip);
+    }
+
+    [Fact]
+    public void Total_is_capped_at_the_configured_default()
+    {
+        // Arrange
+
+        // Act
+        var request = Parse("?includeTotal=true");
+
+        // Assert
+        Assert.Equal(FlowDashboardOptions.DefaultRunListTotalCountCap, request.Query.TotalCountCap);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Non_positive_cap_counts_exactly(int cap)
+    {
+        // Arrange
+        var options = new FlowDashboardOptions { RunListTotalCountCap = cap };
+
+        // Act
+        var request = Parse("?includeTotal=true", options);
+
+        // Assert
+        Assert.Null(request.Query.TotalCountCap);
+    }
 }

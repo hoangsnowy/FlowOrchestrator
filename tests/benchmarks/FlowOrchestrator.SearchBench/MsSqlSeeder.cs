@@ -27,7 +27,21 @@ public static class MsSqlSeeder
                 """, commandTimeout: 600);
         }
 
-        await new FlowOrchestratorSqlMigrator(Db, NullLogger<FlowOrchestratorSqlMigrator>.Instance).StartAsync(CancellationToken.None);
+        using (var migrator = new FlowOrchestratorSqlMigrator(Db, NullLogger<FlowOrchestratorSqlMigrator>.Instance))
+        {
+            await migrator.StartAsync(CancellationToken.None);
+            await migrator.BackgroundIndexBuild;
+        }
+
+        // Load into the 1.x run-table shape: `mssql-migrate` then measures the 2.0 migration on the loaded table.
+        await using (var pre = new SqlConnection(Db))
+        {
+            await pre.ExecuteAsync("""
+                DROP INDEX IF EXISTS IX_FlowRuns_IdText ON FlowRuns;
+                DROP INDEX IF EXISTS IX_FlowRuns_StartedAt_Search ON FlowRuns;
+                ALTER TABLE FlowRuns DROP COLUMN IF EXISTS RunSearchText, IdText;
+                """);
+        }
 
         await using var conn = new SqlConnection(Db);
         await conn.OpenAsync();
@@ -66,7 +80,7 @@ public static class MsSqlSeeder
         await conn.ExecuteAsync("INSERT INTO SearchBenchMeta (Name, Value) VALUES ('runCount', @v)", new { v = runCount.ToString(System.Globalization.CultureInfo.InvariantCulture) });
 
         sw.Restart();
-        await conn.ExecuteAsync("UPDATE STATISTICS FlowRuns WITH FULLSCAN; UPDATE STATISTICS FlowSteps WITH FULLSCAN; UPDATE STATISTICS FlowEvents WITH FULLSCAN;", commandTimeout: 3_600);
+        await conn.ExecuteAsync("UPDATE STATISTICS FlowRuns WITH FULLSCAN; UPDATE STATISTICS FlowSteps WITH FULLSCAN; IF OBJECT_ID('FlowEvents') IS NOT NULL UPDATE STATISTICS FlowEvents WITH FULLSCAN;", commandTimeout: 3_600);
         Console.WriteLine($"statistics updated in {sw.Elapsed}");
     }
 

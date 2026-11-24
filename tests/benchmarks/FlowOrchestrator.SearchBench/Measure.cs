@@ -83,12 +83,11 @@ public static class Measure
     }
 
     /// <summary>Invokes the store's internal <c>BuildSearchRunsCommand</c>, so the baseline is the shipped SQL verbatim.</summary>
+    /// <remarks>SB_TOKENS=1 measures the SQL Server deep-search shape that probes the (back-filled) token table.</remarks>
     public static (string Sql, object Parameters, bool CountsTotal) ShippedCommand(Type storeType, RunSearchQuery query)
-    {
-        var method = storeType.GetMethod("BuildSearchRunsCommand", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"{storeType.Name}.BuildSearchRunsCommand not found");
-        return ((string, object, bool))method.Invoke(null, [query])!;
-    }
+        => storeType == typeof(FlowOrchestrator.SqlServer.SqlFlowRunStore)
+            ? FlowOrchestrator.SqlServer.SqlFlowRunStore.BuildSearchRunsCommand(query, Environment.GetEnvironmentVariable("SB_TOKENS") == "1")
+            : FlowOrchestrator.PostgreSQL.PostgreSqlFlowRunStore.BuildSearchRunsCommand(query);
 }
 
 /// <summary>The run-search scenarios measured on both backends, built from the generated needles.</summary>

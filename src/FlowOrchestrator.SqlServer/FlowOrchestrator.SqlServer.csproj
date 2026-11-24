@@ -23,6 +23,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.UnitTests" />
     <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.IntegrationTests" />
+    <!-- The run-search harness drives the migrator's background index build and the token back-fill. -->
+    <InternalsVisibleTo Include="FlowOrchestrator.SearchBench" />
   </ItemGroup>
 
 </Project>

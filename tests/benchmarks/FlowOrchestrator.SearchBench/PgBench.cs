@@ -34,7 +34,11 @@ public static class PgBench
             await admin.ExecuteAsync("CREATE DATABASE flowsearch;");
         }
 
-        await new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance).StartAsync(CancellationToken.None);
+        using (var first = new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance))
+        {
+            await first.StartAsync(CancellationToken.None);
+            await first.BackgroundIndexBuild;
+        }
 
         await using var conn = new NpgsqlConnection(Db);
         await conn.OpenAsync();
@@ -44,7 +48,7 @@ public static class PgBench
             DROP INDEX IF EXISTS ix_flow_runs_flow_name_trgm, ix_flow_runs_trigger_key_trgm, ix_flow_steps_step_key_trgm,
                 ix_flow_steps_error_message_trgm, ix_flow_steps_output_json_trgm, ix_flow_runs_flow_id, ix_flow_runs_status,
                 ix_flow_runs_started_at, ix_flow_runs_flow_id_status_started_at, ix_flow_steps_run_id_started_at,
-                ix_flow_steps_step_key_run_id, ix_flow_events_run_id_sequence;
+                ix_flow_steps_step_key_run_id, ix_flow_events_run_id_sequence, ix_flow_runs_run_search_trgm;
             """);
 
         var gen = new DataGenerator(runCount);
@@ -74,11 +78,19 @@ public static class PgBench
 
         sw.Restart();
         await conn.ExecuteAsync("SET maintenance_work_mem = '1GB';");
-        await new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance).StartAsync(CancellationToken.None);
+        using (var migrator = new PostgreSqlFlowOrchestratorMigrator(Db, NullLogger<PostgreSqlFlowOrchestratorMigrator>.Instance))
+        {
+            await migrator.StartAsync(CancellationToken.None);
+            await migrator.BackgroundIndexBuild;
+        }
+        // Back to the 1.x index set: `pg-migrate` measures the 2.0 run-search index build on the loaded table.
+        await conn.ExecuteAsync("DROP INDEX IF EXISTS ix_flow_runs_run_search_trgm;");
         Console.WriteLine($"indexes (incl. pg_trgm GIN) rebuilt by the migrator in {sw.Elapsed}");
         await File.AppendAllTextAsync(Path.Combine(Directory.CreateDirectory(Measure.OutDir).FullName, "ddl.tsv"), $"pg\tmigrator-indexes-after-load\t{sw.Elapsed.TotalSeconds:F1}\n");
         sw.Restart();
-        await conn.ExecuteAsync("VACUUM ANALYZE flow_runs; VACUUM ANALYZE flow_steps; VACUUM ANALYZE flow_events;");
+        // VACUUM refuses to run inside a transaction block, and a multi-statement batch is one: one per call.
+        foreach (var table in withEvents ? new[] { "flow_runs", "flow_steps", "flow_events" } : new[] { "flow_runs", "flow_steps" })
+            await conn.ExecuteAsync($"VACUUM ANALYZE {table};", commandTimeout: 7_200);
         Console.WriteLine($"vacuum analyze in {sw.Elapsed}");
     }
 
@@ -165,19 +177,21 @@ public static class PgBench
         foreach (var (name, query) in scenarios)
         {
             var cmd = Measure.ShippedCommand(typeof(PostgreSqlFlowRunStore), query);
-            var t = await Measure.RunAsync("pg-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal), budget: TimeSpan.FromSeconds(deep ? 180 : 60));
+            var t = await Measure.RunAsync(Environment.GetEnvironmentVariable("SB_SUITE") ?? "pg-base", name, () => RunBatchAsync(cmd.Sql, cmd.Parameters, cmd.CountsTotal), budget: TimeSpan.FromSeconds(deep ? 180 : 60));
             if (t.Min < 60_000) plans.Append(await ExplainAsync(name, cmd.Sql.Split(';')[0], cmd.Parameters));
         }
-        await Measure.WriteArtifactAsync($"pg-baseline-{(deep ? "deep" : "quick")}-explain.txt", plans.ToString());
+        await Measure.WriteArtifactAsync($"{Environment.GetEnvironmentVariable("SB_SUITE") ?? "pg-baseline"}-{(deep ? "deep" : "quick")}-explain.txt", plans.ToString());
     }
 
     private static async Task<int> RunBatchAsync(string sql, object parameters, bool countsTotal)
     {
         await using var conn = new NpgsqlConnection(Db);
         await using var grid = await conn.QueryMultipleAsync(new CommandDefinition(sql, parameters, commandTimeout: 1_800));
-        var rows = (await grid.ReadAsync()).Count();
-        if (countsTotal) await grid.ReadSingleAsync<int>();
-        return rows;
+        // Drain every result set: the shipped 2.0 batch may hold a run-id range statement too.
+        var rows = 0;
+        while (!grid.IsConsumed)
+            rows += (await grid.ReadAsync()).Count();
+        return countsTotal ? rows - 1 : rows;
     }
 
     private static async Task<int> RunAsync(string sql, object? parameters)
@@ -260,7 +274,9 @@ public static class PgBench
         }
         await w.CompleteAsync();
         await w.DisposeAsync();
-        await conn.ExecuteAsync("SET maintenance_work_mem = '1GB'; ALTER TABLE flow_run_search_tokens ADD PRIMARY KEY (token, started_at, run_id, source); VACUUM ANALYZE flow_run_search_tokens;", commandTimeout: 7_200);
+        await conn.ExecuteAsync("SET maintenance_work_mem = '1GB';");
+        await conn.ExecuteAsync("ALTER TABLE flow_run_search_tokens ADD PRIMARY KEY (token, started_at, run_id, source);", commandTimeout: 7_200);
+        await conn.ExecuteAsync("VACUUM ANALYZE flow_run_search_tokens;", commandTimeout: 7_200);
         Console.WriteLine($"tokens loaded: {total:N0} in {sw.Elapsed}");
         await File.AppendAllTextAsync(Path.Combine(Measure.OutDir, "ddl.tsv"), $"pg\ttokens-backfill(payload={includePayload})\t{sw.Elapsed.TotalSeconds:F1}\trows={total}\n");
     }
@@ -377,15 +393,12 @@ public static class PgBench
     /// <summary><c>word:*</c> per token of the 'simple' parser, AND-ed (hyphenated ids become a phrase of parts).</summary>
     public static string TsQuery(string text)
     {
+        // Each word goes to to_tsquery quoted, so PostgreSQL's own parser splits it exactly as to_tsvector
+        // did ('INV-001353358' -> 'inv' <-> '-001353358': the parser reads "-001353358" as a signed
+        // integer, which a client-side split on '-' gets wrong); ':*' makes every resulting lexeme a prefix.
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var terms = new List<string>();
-        foreach (var w in words)
-        {
-            var parts = w.Split(['-', '_', '.', '@', ':', '/', '\'', '"', '(', ')', ';', ','], StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0) continue;
-            terms.Add(string.Join(" <-> ", parts.Select(x => x.ToLowerInvariant() + ":*")));
-        }
-        return terms.Count == 0 ? "''" : string.Join(" & ", terms.Select(t => "(" + t + ")"));
+        var terms = words.Select(w => "'" + w.Replace("'", "''", StringComparison.Ordinal) + "':*").ToList();
+        return terms.Count == 0 ? "''" : string.Join(" & ", terms);
     }
 
     private static string Escape(string value) => value
@@ -408,11 +421,23 @@ public static class PgBench
         await Measure.RunAsync("pg-count", "reltuples estimate", () => RunAsync("SELECT reltuples::bigint FROM pg_class WHERE oid = 'flow_runs'::regclass", null));
     }
 
+    /// <summary>Executes one maintenance statement outside any transaction block (VACUUM, CREATE INDEX CONCURRENTLY…).</summary>
+    public static async Task ExecAsync(string sql)
+    {
+        var sw = Stopwatch.StartNew();
+        await using var conn = new NpgsqlConnection(Db);
+        await conn.OpenAsync();
+        await conn.ExecuteAsync("SET maintenance_work_mem = '1GB';");
+        var n = await conn.ExecuteAsync(sql, commandTimeout: 7_200);
+        Console.WriteLine($"exec ({n} rows) in {sw.Elapsed}: {sql}");
+        await File.AppendAllTextAsync(Path.Combine(Directory.CreateDirectory(Measure.OutDir).FullName, "ddl.tsv"), $"pg\texec:{sql}\t{sw.Elapsed.TotalSeconds:F1}\n");
+    }
+
     public static async Task SizesAsync()
     {
         await using var conn = new NpgsqlConnection(Db);
         var rows = await conn.QueryAsync<(string Name, string Table, long Bytes)>("""
-            SELECT c.relname, COALESCE(t.relname, c.relname), pg_total_relation_size(c.oid)
+            SELECT c.relname, COALESCE(t.relname, c.relname), CASE WHEN c.relkind = 'r' THEN pg_table_size(c.oid) ELSE pg_relation_size(c.oid) END
             FROM pg_class c LEFT JOIN pg_index i ON i.indexrelid = c.oid LEFT JOIN pg_class t ON t.oid = i.indrelid
             JOIN pg_namespace ns ON ns.oid = c.relnamespace AND ns.nspname = 'public'
             WHERE c.relkind IN ('r', 'i') AND COALESCE(t.relname, c.relname) IN ('flow_runs', 'flow_steps', 'flow_events', 'flow_run_search_tokens')
