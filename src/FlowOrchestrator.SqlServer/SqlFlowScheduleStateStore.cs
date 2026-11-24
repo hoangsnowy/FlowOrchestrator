@@ -46,9 +46,12 @@ public sealed class SqlFlowScheduleStateStore : IFlowScheduleStateStore
     public async Task SaveAsync(FlowScheduleState state)
     {
         await using var conn = new SqlConnection(_connectionString);
+        // HOLDLOCK, UPDLOCK: a bare MERGE is not atomic between its match probe and its INSERT, so two
+        // replicas saving a never-saved job at once both took the NOT MATCHED branch and the loser hit
+        // PK_FlowScheduleStates. Same pattern and reasoning as SqlFlowStore.SaveAsync.
         await conn.ExecuteAsync(
             """
-            MERGE FlowScheduleStates AS target
+            MERGE FlowScheduleStates WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @JobId AS JobId) AS source
             ON target.JobId = source.JobId
             WHEN MATCHED THEN

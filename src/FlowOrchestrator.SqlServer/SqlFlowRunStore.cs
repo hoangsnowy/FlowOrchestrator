@@ -121,7 +121,7 @@ public sealed class SqlFlowRunStore :
             INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, InputJson, JobId, StartedAt)
             VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET());
 
-            MERGE FlowSteps AS target
+            MERGE FlowSteps WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
             ON target.RunId = source.RunId AND target.StepKey = source.StepKey
             WHEN MATCHED THEN
@@ -879,7 +879,7 @@ public sealed class SqlFlowRunStore :
             INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, ErrorMessage, EvaluationTraceJson, StartedAt, CompletedAt)
             VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Skipped', @Reason, @EvaluationTraceJson, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
 
-            MERGE FlowSteps AS target
+            MERGE FlowSteps WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
             ON target.RunId = source.RunId AND target.StepKey = source.StepKey
             WHEN MATCHED THEN
@@ -911,9 +911,11 @@ public sealed class SqlFlowRunStore :
     public async Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
     {
         await using var conn = new SqlConnection(_connectionString);
+        // HOLDLOCK, UPDLOCK: see SqlFlowStore.SaveAsync — keeps a concurrent first configure of one run
+        // from racing past the match probe into a PK violation.
         await conn.ExecuteAsync(
             """
-            MERGE FlowRunControls AS target
+            MERGE FlowRunControls WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId) AS source
             ON target.RunId = source.RunId
             WHEN MATCHED THEN
