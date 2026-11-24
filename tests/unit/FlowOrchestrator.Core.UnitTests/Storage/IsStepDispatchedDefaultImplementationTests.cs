@@ -27,19 +27,6 @@ public sealed class IsStepDispatchedDefaultImplementationTests
         Assert.False(otherRun);
     }
 
-    [Fact]
-    public async Task Default_lease_of_unsent_dispatches_returns_nothing()
-    {
-        // Arrange — a provider that predates the unsent-dispatch lease keeps its pre-lease behaviour.
-        IFlowRunStore store = new LedgerOnlyRunStore(Guid.NewGuid(), ["a"]);
-
-        // Act
-        var leased = await store.LeaseUnsentDispatchesAsync(TimeSpan.Zero, 100);
-
-        // Assert
-        Assert.Empty(leased);
-    }
-
     /// <summary>A provider that implements the ledger read but not the point lookup.</summary>
     private sealed class LedgerOnlyRunStore(Guid ownerRunId, string[] keys) : IFlowRunStore
     {
@@ -60,6 +47,7 @@ public sealed class IsStepDispatchedDefaultImplementationTests
         public Task<DashboardStatistics> GetStatisticsAsync() => throw new NotSupportedException();
         public Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync() => throw new NotSupportedException();
         public Task<bool> RetryStepAsync(Guid runId, string stepKey) => throw new NotSupportedException();
+        public Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default) => throw new NotSupportedException();

@@ -405,8 +405,9 @@ where one provider behaved differently from the others.
     claimed, and the step has no status row or a `Pending` one. EventIds 5040–5044.
   - New `IFlowRunStore.LeaseUnsentDispatchesAsync` selects and re-stamps qualifying rows in one atomic
     statement, so replicas never lease the same row twice inside one window. Implemented by SQL Server
-    (`UPDATE TOP … OUTPUT` with `READPAST`), PostgreSQL (`FOR UPDATE SKIP LOCKED`) and InMemory. The default
-    interface implementation returns nothing, so custom stores compile unchanged and keep the old behaviour.
+    (`UPDATE TOP … OUTPUT` with `READPAST`), PostgreSQL (`FOR UPDATE SKIP LOCKED`) and InMemory. **Custom
+    stores must implement it** — it has no default implementation, because a store that returned nothing would
+    keep the stranded-run bug.
   - Schema: a filtered index `IX_FlowStepDispatches_Unsent` (SQL Server) / partial index
     `ix_flow_step_dispatches_unsent` (PostgreSQL) on the dispatch time of rows with no job id, created by the
     migrator. It holds only in-flight or stranded rows.

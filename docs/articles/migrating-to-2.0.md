@@ -563,7 +563,8 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
   send hung in the broker client) is re-delivered by the new `FlowUnsentDispatchRecoveryHostedService` once
   the row is older than `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s; `null` turns it off).
   The SQL Server / PostgreSQL migrator adds one filtered index on the dispatch ledger for it. A custom
-  `IFlowRunStore` opts in by implementing `LeaseUnsentDispatchesAsync`; the default does nothing.
+  `IFlowRunStore` must implement `LeaseUnsentDispatchesAsync` (no default implementation; returning an empty list
+  keeps steps whose hand-off never returned stranded).
 - `@triggerHeaders()['name']` is case-insensitive in every step on SQL Server / PostgreSQL storage
   (1.34.3); it used to be case-sensitive after the entry step. InMemory storage now does the same even
   when the trigger was raised with an ordinal dictionary.

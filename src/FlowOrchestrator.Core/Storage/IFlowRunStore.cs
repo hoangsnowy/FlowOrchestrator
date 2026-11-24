@@ -503,10 +503,9 @@ public interface IFlowRunStore
     /// (<see cref="IFlowRunRuntimeStore.TryClaimStepAsync"/>), whereas a lost one strands the run.
     /// </para>
     /// <para>
-    /// The default implementation returns nothing, so existing stores keep compiling and keep the pre-lease
-    /// behaviour.
+    /// No default implementation, deliberately: a store that silently returned nothing would keep the stranded-run
+    /// bug this member exists to close. Custom stores must implement it (see the migration guide).
     /// </para>
     /// </remarks>
-    Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
-        => Task.FromResult<IReadOnlyList<UnsentDispatch>>([]);
+    Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default);
 }
