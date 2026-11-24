@@ -206,6 +206,30 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   DI scope and store connections a running step still needed for its final status write, claim release
   or poll reschedule. The runner now signals the stopping token to running steps (as Hangfire does) and
   waits for them to return, bounded by `HostOptions.ShutdownTimeout` (EventIds 3130-3131).
+- **Service Bus cron: a cron change, a pause and a restart no longer leave a second schedule running.**
+  Three defects in the self-perpetuating cron chain:
+  - The consumer computed the next tick from the cron carried in the message, and `RegisterOrUpdate` for an
+    existing job seeded a new chain without retiring the old one — after a dashboard cron change the flow
+    fired on **both** schedules for ever, across restarts.
+  - A tick already in the broker when its job was paused (a tick from before a restart, or a pause made on
+    another replica) still started a run: the consumer called the engine whether or not the job was
+    registered.
+  - Every restart seeded the next tick under the same message id as the tick the previous process left,
+    and duplicate detection (10-minute window) only absorbs it when the surviving tick was sent less than
+    10 minutes earlier — any schedule with a longer period fired twice after each restart.
+
+  Each job now runs exactly one chain, stamped with an epoch (new `chainEpoch` field on the cron message;
+  ticks written before 2.0 rank below any chain seeded since). The consumer drops a tick of an older chain,
+  a second copy of a tick that already fired, a tick for a job that is not registered, and — reading the
+  shared state — a tick for a disabled flow, a trigger the manifest no longer declares, or a schedule paused
+  on any replica (`PersistOverrides`); a replica receiving a newer chain's tick follows it. Re-registering a
+  job with its current cron schedules nothing; a different cron cancels the known pending tick and seeds a
+  newer chain. At startup the hub peeks the cron queue once and adopts the surviving tick instead of seeding
+  a duplicate, and the consumer starts processing only after `ApplicationStarted` (the startup sync has
+  registered every job). An unparseable cron now throws `ArgumentException` with the job untouched. Logs
+  moved to `LoggerMessage` (EventIds 3140-3154). **Read before upgrading:** saving a schedule again with
+  the cron it already runs no longer schedules an extra tick; a chain that died (its tick dead-lettered
+  after `MaxDeliveryCount` failures) is re-seeded by the next restart.
 
 ### Security
 

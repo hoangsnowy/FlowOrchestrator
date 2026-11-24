@@ -30,6 +30,12 @@ Registers a recurring job with the active runtime adapter that fires the flow on
 - **Hangfire runtime** — maps to a Hangfire `RecurringJob` driven by `IRecurringJobManager`.
 - **InMemory runtime** — driven by an in-process `PeriodicTimer` (1 s tick) using [Cronos](https://github.com/HangfireIO/Cronos) for expression parsing. No external scheduler needed.
 - **ServiceBus runtime** (v1.22+) — schedules each cron firing as a Service Bus message with `ScheduledEnqueueTime` on the `flow-cron-triggers` queue. The cron consumer fires the trigger and self-perpetuates the next message. Single-delivery semantics across replicas — no leader election needed.
+  Each job runs exactly one such chain. A chain is stamped with an epoch (its first tick), and the consumer
+  drops a tick of an older chain, so a cron change, a restart or a resume replaces the chain instead of
+  adding one next to it; a replica that receives a tick of a newer chain than it knows follows it. At startup
+  the hub peeks the cron queue once and adopts the tick the previous process left instead of scheduling a
+  second one. Before firing, the consumer also checks the shared state: a tick for a disabled flow, a trigger
+  the manifest no longer declares, or (with `PersistOverrides`) a schedule paused on any replica is dropped.
 
 All three runtimes implement the same `IRecurringTriggerDispatcher` / `IRecurringTriggerSync` abstractions, so cron behaviour (overrides, pause/resume, dashboard controls) is identical across them.
 
