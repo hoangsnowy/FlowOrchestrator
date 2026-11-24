@@ -1197,6 +1197,6 @@ public sealed class InMemoryFlowRunStore :
 
     private static (Guid FlowId, string TriggerKey, string IdempotencyKey) NormalizeIdempotencyKey(Guid flowId, string triggerKey, string idempotencyKey)
     {
-        return (flowId, triggerKey.Trim().ToLowerInvariant(), idempotencyKey.Trim().ToLowerInvariant());
+        return (flowId, triggerKey.Trim().ToLowerInvariant(), IdempotencyKeyStorage.Normalize(idempotencyKey));
     }
 }

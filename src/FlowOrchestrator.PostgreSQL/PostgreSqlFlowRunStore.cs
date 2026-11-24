@@ -822,7 +822,7 @@ public sealed class PostgreSqlFlowRunStore :
                 RunId = runId,
                 FlowId = flowId,
                 TriggerKey = triggerKey,
-                IdempotencyKey = idempotencyKey,
+                IdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey),
                 TimeoutAtUtc = timeoutAtUtc
             });
     }
@@ -909,7 +909,7 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         return await conn.ExecuteScalarAsync<Guid?>(
             """
@@ -931,7 +931,7 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         var affected = await conn.ExecuteAsync(
             """

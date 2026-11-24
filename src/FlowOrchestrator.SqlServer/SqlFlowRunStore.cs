@@ -931,7 +931,7 @@ public sealed class SqlFlowRunStore :
                 RunId = runId,
                 FlowId = flowId,
                 TriggerKey = triggerKey,
-                IdempotencyKey = idempotencyKey,
+                IdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey),
                 TimeoutAtUtc = timeoutAtUtc
             });
     }
@@ -1018,7 +1018,7 @@ public sealed class SqlFlowRunStore :
     {
         await using var conn = new SqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         var runId = await conn.ExecuteScalarAsync<Guid?>(
             """
@@ -1042,7 +1042,7 @@ public sealed class SqlFlowRunStore :
     {
         await using var conn = new SqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         // Same race and the same fix as TryClaimStepAsync: HOLDLOCK + UPDLOCK serialise concurrent
         // registrations of one key, and a duplicate-key error still means "someone else won".
