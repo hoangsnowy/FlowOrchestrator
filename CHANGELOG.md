@@ -156,6 +156,11 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   life of the process — and, under the default `BackgroundServiceExceptionBehavior.StopHost`, stopped the
   host. Only the stopping token's own cancellation ends them now; everything else is logged and retried on
   the next tick (timeout sweep: new EventId 5010).
+- **InMemory runtime: a step scheduled with a delay that is already in the past is delivered at once.**
+  `ScheduleStepAsync` fed the delay straight to `Task.Delay` in a discarded task: `-1 ms` waited for ever,
+  any other negative value threw, and a delay above ~49.7 days threw — the step was never delivered while
+  its dispatch-ledger row said it was queued. A delay at or below zero now behaves like an immediate
+  enqueue (Hangfire / Service Bus parity), and very long delays are waited out in chunks.
 
 ### Security
 

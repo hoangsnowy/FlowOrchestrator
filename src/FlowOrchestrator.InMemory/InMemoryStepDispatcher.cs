@@ -15,7 +15,8 @@ namespace FlowOrchestrator.InMemory;
 /// <remarks>
 /// Immediate enqueues write directly to the channel; delayed enqueues fire a background
 /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> and then write, so <see cref="ScheduleStepAsync"/> returns
-/// almost immediately while the step remains invisible to the runner until the delay elapses.
+/// almost immediately while the step remains invisible to the runner until the delay elapses. A delay at or
+/// below zero is delivered at once, as Hangfire and Service Bus do for an instant already in the past.
 /// </remarks>
 internal sealed class InMemoryStepDispatcher : IStepDispatcher
 {
@@ -111,7 +112,7 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
     {
         try
         {
-            await Task.Delay(delay, CancellationToken.None).ConfigureAwait(false);
+            await WaitOutAsync(delay).ConfigureAwait(false);
             await _writer.WriteAsync(
                               new InMemoryStepEnvelope(context, flow, step, id) { ParentTraceContext = traceContext },
                               CancellationToken.None)
@@ -120,6 +121,36 @@ internal sealed class InMemoryStepDispatcher : IStepDispatcher
         catch (ChannelClosedException)
         {
             // Host is stopping; recovery hosted service will re-enqueue on next startup.
+        }
+    }
+
+    /// <summary>
+    /// The longest single wait <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts
+    /// (<see cref="uint.MaxValue"/> - 1 milliseconds, about 49.7 days).
+    /// </summary>
+    internal static readonly TimeSpan MaxSingleDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1d);
+
+    /// <summary>
+    /// Waits out <paramref name="delay"/> with the same contract as the Hangfire and Service Bus runtimes:
+    /// a delay at or below zero (an instant already in the past) completes at once, and a delay longer than
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts is waited out in chunks.
+    /// </summary>
+    /// <param name="delay">The requested delay; any value, including negative and <see cref="TimeSpan.MaxValue"/>.</param>
+    /// <returns>A task that completes once the delay has elapsed.</returns>
+    /// <remarks>
+    /// Handing a negative value to <see cref="Task.Delay(TimeSpan, CancellationToken)"/> either waits for
+    /// ever (<c>-1 ms</c> is <see cref="Timeout.InfiniteTimeSpan"/>) or throws into this discarded task, and
+    /// anything above <see cref="MaxSingleDelay"/> throws — in every case the step was silently never
+    /// delivered while its dispatch-ledger row said it was queued.
+    /// </remarks>
+    internal static async Task WaitOutAsync(TimeSpan delay)
+    {
+        var remaining = delay;
+        while (remaining > TimeSpan.Zero)
+        {
+            var chunk = remaining > MaxSingleDelay ? MaxSingleDelay : remaining;
+            await Task.Delay(chunk, CancellationToken.None).ConfigureAwait(false);
+            remaining -= chunk;
         }
     }
 

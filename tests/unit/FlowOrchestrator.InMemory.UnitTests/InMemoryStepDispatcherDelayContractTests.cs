@@ -48,4 +48,49 @@ public sealed class InMemoryStepDispatcherDelayContractTests
             $"ScheduleStepAsync(delay: {delayMs} ms) returned job id '{jobId}' but never delivered the step to the channel.");
         Assert.Equal(jobId, (await read).EnvelopeId);
     }
+
+    [Fact]
+    public async Task ScheduleStepAsync_ZeroDelay_DeliversTheStepImmediately()
+    {
+        // Arrange
+        var channel = Channel.CreateUnbounded<InMemoryStepEnvelope>();
+        var sut = new InMemoryStepDispatcher(channel.Writer);
+        var step = new StepInstance("poll", "Poll") { RunId = Guid.NewGuid() };
+
+        // Act
+        var jobId = await sut.ScheduleStepAsync(Substitute.For<IExecutionContext>(), Substitute.For<IFlowDefinition>(), step, TimeSpan.Zero);
+
+        // Assert
+        var delivered = await channel.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(jobId, delivered.EnvelopeId);
+    }
+
+    [Theory]
+    [InlineData(50)]       // just past Task.Delay's ~49.7-day ceiling
+    [InlineData(36500)]    // a century
+    public void WaitOutAsync_DelayBeyondTaskDelayCeiling_WaitsInsteadOfFaulting(int days)
+    {
+        // Arrange
+        var delay = TimeSpan.FromDays(days);
+
+        // Act — a single Task.Delay(delay) would throw ArgumentOutOfRangeException into the discarded task.
+        var wait = InMemoryStepDispatcher.WaitOutAsync(delay);
+
+        // Assert — still waiting, not faulted.
+        Assert.False(wait.IsFaulted, $"WaitOutAsync({days} days) faulted: {wait.Exception?.InnerException?.Message}");
+        Assert.False(wait.IsCompleted);
+    }
+
+    [Fact]
+    public void WaitOutAsync_MaxValueDelay_DoesNotOverflowOrFault()
+    {
+        // Arrange
+        var delay = TimeSpan.MaxValue;
+
+        // Act
+        var wait = InMemoryStepDispatcher.WaitOutAsync(delay);
+
+        // Assert
+        Assert.False(wait.IsFaulted, $"WaitOutAsync(TimeSpan.MaxValue) faulted: {wait.Exception?.InnerException?.Message}");
+    }
 }
