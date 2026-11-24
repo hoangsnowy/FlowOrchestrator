@@ -313,7 +313,9 @@ on a second replica.
 > Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under `Off` nothing below takes effect at all. `Enforce` is the default since 2.0.
 
 Token-bucket limiter built on `System.Threading.RateLimiting`, keyed
-per-flow or per `flowId|clientIp` when `webhookRateLimitPerIp = true`.
+per webhook trigger (`flowId|triggerKey`) or per `flowId|triggerKey|clientIp`
+when `webhookRateLimitPerIp = true`. Two webhook triggers of one flow have
+independent budgets, each sized by its own `webhookRateLimit*` inputs.
 
 ```csharp
 Inputs["webhookRateLimitPermitsPerSecond"] = 10;
@@ -518,7 +520,7 @@ these — pick a built-in scheme first.
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | `webhookRateLimitPermitsPerSecond`     | Steady-state token-bucket rate.                                        |
 | `webhookRateLimitBurstSize`            | Maximum token burst.                                                   |
-| `webhookRateLimitPerIp`                | When `true`, the bucket key is `flowId\|clientIp` instead of `flowId`. |
+| `webhookRateLimitPerIp`                | When `true`, the bucket key is `flowId\|triggerKey\|clientIp` instead of `flowId\|triggerKey`. |
 
 ### IP allow / deny fields
 

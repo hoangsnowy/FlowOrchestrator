@@ -177,15 +177,17 @@ public sealed class WebhookSecurityPipeline
         if (ipVerdict is { } reason)
             return await PersistRejectIpAsync(flowId, triggerKey, clientIp, reason, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
 
-        // ── Rate-limit gate (per flow [+ IP]) ──
+        // ── Rate-limit gate (per flow + trigger [+ IP]) ──
         if (_rateLimiter is not null)
         {
             var rateOpts = ResolveRateLimit(triggerInputs);
             if (rateOpts.IsEnabled)
             {
+                // Keyed per trigger, not per flow: two webhook triggers of one flow may declare different
+                // webhookRateLimit* inputs, and a shared bucket would hold both to whichever was hit first.
                 var key = rateOpts.PerIp && clientIp is not null
-                    ? $"{flowId}|{clientIp}"
-                    : flowId.ToString();
+                    ? $"{flowId}|{triggerKey}|{clientIp}"
+                    : $"{flowId}|{triggerKey}";
                 var rl = _rateLimiter.TryAcquire(key, rateOpts);
                 if (!rl.Allowed)
                     return await PersistRejectRateLimitAsync(flowId, triggerKey, key, rl.RetryAfter, clientIp, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);

@@ -91,4 +91,32 @@ public sealed class SurfaceAuditUnitTests
         // Assert
         Assert.True(result.IsValid, result.Reason.ToString());
     }
+
+    /// <summary>
+    /// Two webhook triggers on the same flow with different <c>webhookRateLimitPermitsPerSecond</c> must
+    /// not share one bucket sized by whichever trigger was hit first.
+    /// </summary>
+    [Fact]
+    public async Task Rate_limit_budget_is_isolated_per_trigger_of_the_same_flow()
+    {
+        // Arrange
+        var pipeline = new WebhookSecurityPipeline(
+            new HmacSignatureVerifier(),
+            new WebhookSecurityOptions { EnforcementMode = WebhookEnforcementMode.Enforce },
+            rateLimiter: new TokenBucketWebhookRateLimiter());
+        var flowId = Guid.NewGuid();
+        var slow = new Dictionary<string, object?> { ["webhookRateLimitPermitsPerSecond"] = 1d, ["webhookRateLimitBurstSize"] = 1 };
+        var fast = new Dictionary<string, object?> { ["webhookRateLimitPermitsPerSecond"] = 100d, ["webhookRateLimitBurstSize"] = 100 };
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var http = new DefaultHttpContext();
+
+        // Act
+        var slowFirst = await pipeline.EvaluateAsync(http, flowId, "partner-a", slow, ReadOnlyMemory<byte>.Empty, headers);
+        var fastFirst = await pipeline.EvaluateAsync(http, flowId, "partner-b", fast, ReadOnlyMemory<byte>.Empty, headers);
+
+        // Assert
+        Assert.Equal(WebhookSecurityPipeline.Decision.Accept, slowFirst.Decision);
+        Assert.Equal(WebhookSecurityPipeline.Decision.Accept, fastFirst.Decision);
+    }
 }
+

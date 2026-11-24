@@ -14,7 +14,7 @@ public sealed class WebhookRateLimitOptions
 
     /// <summary>
     /// When <see langword="true"/>, the limiter is keyed on
-    /// <c>{flowId}|{clientIp}</c> instead of <c>{flowId}</c>; protects against a
+    /// <c>{flowId}|{triggerKey}|{clientIp}</c> instead of <c>{flowId}|{triggerKey}</c>; protects against a
     /// single misbehaving publisher exhausting a flow's budget.
     /// </summary>
     public bool PerIp { get; set; }
