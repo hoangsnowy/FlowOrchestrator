@@ -72,7 +72,9 @@ internal sealed class WhenSkipGate
         WhenEvaluationTrace? trace;
         try
         {
-            trace = await _evaluator.EvaluateAsync(ctx, flow, metadata).ConfigureAwait(false);
+            // The step key gives the evaluator the loop scope, so @steps('sibling') inside a ForEach body resolves
+            // to this iteration's sibling, exactly as in the graph continuation.
+            trace = await _evaluator.EvaluateAsync(ctx, flow, metadata, stepKey).ConfigureAwait(false);
         }
         catch (FlowExpressionException ex)
         {
