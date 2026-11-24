@@ -122,9 +122,13 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Schema (SQL Server, additive):** two non-persisted computed columns on `FlowRuns` (`IdText`,
   `RunSearchText`, metadata-only) and two indexes (`IX_FlowRuns_IdText`,
   `IX_FlowRuns_StartedAt_Search`, ~56 MB per 200k runs). On Azure SQL Database, Managed Instance and
-  Enterprise/Developer the indexes build **online in the background** after startup; on other editions
-  they build at startup while `FlowRuns` has at most 2M rows, and above that a warning names the two
-  statements to run in a maintenance window. Search works (more slowly) until they exist. 1.34.x keeps
+  Enterprise/Developer the indexes build **online in the background** after startup (with
+  `WAIT_AT_LOW_PRIORITY` on Azure and SQL Server 2022+, so its brief table locks never make writers queue
+  behind it); on other editions they build at startup while `FlowRuns` has at most 2M rows, and above that
+  a warning names the two statements to run in a maintenance window. Hosts starting together build them
+  once, under an application lock: a racing second host used to fail its start with error 1913 on the
+  offline path and log a false build failure (7206) on the online one; it now waits (offline) or leaves the
+  build to the first host (online, event 7209). Search works (more slowly) until they exist. 1.34.x keeps
   working against the upgraded database. See
   [Migrating to 2.0 → Database](docs/articles/migrating-to-2.0.md#step-8--database).
 - **Indexed computed columns need the standard `SET` options** (`QUOTED_IDENTIFIER`, `ANSI_NULLS`,
@@ -134,10 +138,11 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Schema (PostgreSQL, additive):** `ix_flow_runs_run_search_trgm`, a trigram GIN index on the
   lower-cased run search expression (~47 MB per 200k runs), built `CREATE INDEX CONCURRENTLY` in the
   background after startup — no table rewrite, writers not blocked; an `INVALID` leftover is rebuilt on the
-  next start. Another replica (or a restarted host) can start while the build is still running: the
-  migrator's `flow_runs` DDL is skipped by a catalog check when there is nothing to change. A plain
-  `IF NOT EXISTS` still takes the table lock, so that replica would have queued behind the build, stalled
-  `flow_runs` writers, and then timed out or hit `40P01` deadlock at startup. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
+  next start. Another replica (or a restarted host) can start while the build is still running: its
+  migration requests no lock on `flow_runs` (see the start-up fix below), and its own background build sees
+  the other host's build in `pg_stat_progress_create_index` and leaves it alone (event 7215) instead of
+  taking the `INVALID` in-progress index for a leftover, dropping it once it finished and building it a
+  second time. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
   (Azure Database for PostgreSQL requires allow-listing it in `azure.extensions`) the migrator logs a
   warning and search runs the same SQL as a scan. PostgreSQL run-column matching is now
   `lower(...) LIKE lower(term)` instead of `ILIKE` per column: same results for ASCII and identifiers.
@@ -195,6 +200,19 @@ providers only:
 - A flow with such a key now **fails startup** instead of misbehaving. Rename the step and every
   `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
   [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
+
+### Fixed — starting a PostgreSQL host beside running ones takes no table locks
+
+- **The PostgreSQL migrator requested a table lock for every index and column on every start**, even when
+  the schema was already up to date: PostgreSQL takes the lock of `CREATE INDEX IF NOT EXISTS` (SHARE) and
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (ACCESS EXCLUSIVE) before it checks the name. A host starting
+  beside running ones (a rolling deployment, a restart) queued behind any in-flight write, autovacuum or
+  index build on `flow_runs`, `flow_steps`, `flow_step_attempts`, `flow_idempotency_keys`,
+  `flow_signal_waiters`, `webhook_replay_nonces` or `webhook_rejections`. Every later write to that table
+  queued behind the start, and a start that waited past the 30 s command timeout failed. Against the 2.0
+  run-search index build it also deadlocked (`40P01`), killing either the build or the start. Each
+  statement now runs behind a catalog check that takes no lock, so a start on an up-to-date schema
+  requests none; the resulting schema is identical.
 
 ### Fixed — a signal sent after a `WaitForSignal` timeout no longer resumes the step
 

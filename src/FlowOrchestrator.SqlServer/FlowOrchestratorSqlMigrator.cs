@@ -17,7 +17,8 @@ namespace FlowOrchestrator.SqlServer;
 /// 56 MB per 200k runs, 0.9 s to build measured) are built:</para>
 /// <list type="bullet">
 /// <item>in the background with <c>ONLINE = ON</c> on editions that support it (Azure SQL Database,
-/// Managed Instance, Enterprise / Developer) — startup is not delayed and writers are not blocked;</item>
+/// Managed Instance, Enterprise / Developer) — startup is not delayed; where <c>WAIT_AT_LOW_PRIORITY</c> is
+/// available (Azure, SQL Server 2022+) the build's short table locks never make writers queue behind it;</item>
 /// <item>synchronously (offline) on other editions while <c>FlowRuns</c> has at most
 /// <see cref="OfflineIndexBuildRowLimit"/> rows;</item>
 /// <item>not at all above that on editions without online builds: a warning names the two statements to
@@ -25,6 +26,9 @@ namespace FlowOrchestrator.SqlServer;
 /// </list>
 /// <para>Until an index exists, <see cref="SqlFlowRunStore"/> uses query shapes that do not need it, so
 /// search stays correct, only slower.</para>
+/// <para><b>Several hosts starting together.</b> The index build runs under an exclusive application lock: on
+/// the online path a host that finds another one building leaves it to that host (event 7209); on the
+/// offline path it waits for that build and then finds nothing to do.</para>
 /// <para>With <c>UseRunSearchIndex()</c> the token tables are created as well (empty; the back-fill runs
 /// in the background).</para>
 /// </remarks>
@@ -63,6 +67,12 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
 
     /// <summary>The background build of the run-search indexes, if one was started; completes when it ends.</summary>
     internal Task BackgroundIndexBuild => _backgroundIndexBuild;
+
+    /// <summary>
+    /// Test seam: overrides the edition check that picks the online (background) or offline (synchronous)
+    /// index build, so the offline path can run on a Developer-edition test server.
+    /// </summary>
+    internal bool? OnlineIndexBuildOverride { get; init; }
 
     /// <summary>Applies the schema; starts the background index build where supported.</summary>
     /// <param name="cancellationToken">Host start-up cancellation.</param>
@@ -116,7 +126,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     {
         await using var probe = conn.CreateCommand();
         probe.CommandText = RunSearchIndexProbeSql;
-        int edition, compatibility;
+        int edition, compatibility, majorVersion;
         long rows;
         bool missing;
         await using (var reader = await probe.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
@@ -126,6 +136,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
             rows = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
             missing = reader.GetInt32(2) > 0;
             compatibility = reader.GetInt32(3);
+            majorVersion = reader.GetInt32(4);
         }
 
         if (_runSearchIndexEnabled && compatibility < 130)
@@ -134,36 +145,33 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         if (!missing)
             return;
 
-        if (SupportsOnlineIndexBuild(edition))
+        if (OnlineIndexBuildOverride ?? SupportsOnlineIndexBuild(edition))
         {
             LogBuildingIndexesOnline(rows);
-            _backgroundIndexBuild = Task.Run(() => BuildIndexesInBackgroundAsync(_stopping.Token), CancellationToken.None);
+            var lowPriority = SupportsLowPriorityIndexBuild(edition, majorVersion);
+            _backgroundIndexBuild = Task.Run(() => BuildIndexesInBackgroundAsync(lowPriority, _stopping.Token), CancellationToken.None);
             return;
         }
 
         if (rows <= OfflineIndexBuildRowLimit)
         {
-            await using var build = conn.CreateCommand();
-            build.CommandText = BuildRunSearchIndexesSql(online: false);
-            build.CommandTimeout = 600;
-            await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            // Waits for another host's build instead of racing it; its IF NOT EXISTS guards then skip both.
+            await BuildRunSearchIndexesExclusiveAsync(online: false, lowPriority: false, OfflineIndexBuildTimeoutSeconds * 1000, OfflineIndexBuildTimeoutSeconds, cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
         LogIndexesSkipped(rows, BuildRunSearchIndexesSql(online: false));
     }
 
-    private async Task BuildIndexesInBackgroundAsync(CancellationToken cancellationToken)
+    private async Task BuildIndexesInBackgroundAsync(bool lowPriority, CancellationToken cancellationToken)
     {
         try
         {
-            await using var conn = new SqlConnection(_connectionString);
-            await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await using var build = conn.CreateCommand();
-            build.CommandText = BuildRunSearchIndexesSql(online: true);
-            build.CommandTimeout = 0;
-            await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            LogIndexesBuilt();
+            if (await BuildRunSearchIndexesExclusiveAsync(online: true, lowPriority, lockTimeoutMs: 0, commandTimeoutSeconds: 0, cancellationToken).ConfigureAwait(false))
+                LogIndexesBuilt();
+            else
+                LogIndexBuildInFlightElsewhere();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -177,16 +185,84 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         }
     }
 
+    /// <summary>
+    /// Runs <see cref="BuildRunSearchIndexesSql"/> while holding an exclusive application lock, so two hosts
+    /// starting together build the indexes once instead of racing: the loser of a race failed with error 1913
+    /// ("an index ... already exists") because both passed the <c>IF NOT EXISTS</c> guard before either
+    /// committed. That aborted the loser's start on the offline path and logged a false build failure (7206)
+    /// on the online one.
+    /// </summary>
+    /// <param name="online">Build with <c>ONLINE = ON</c>.</param>
+    /// <param name="lowPriority">Wait for the build's table locks at low priority; see <see cref="BuildRunSearchIndexesSql"/>.</param>
+    /// <param name="lockTimeoutMs">How long to wait for another host's build; 0 gives up at once.</param>
+    /// <param name="commandTimeoutSeconds">Timeout of the build itself; 0 for none.</param>
+    /// <param name="cancellationToken">Cancels the wait or the build (SQL Server rolls it back).</param>
+    /// <returns><see langword="false"/> when another host holds the lock and <paramref name="lockTimeoutMs"/> ran out.</returns>
+    /// <remarks>
+    /// The lock is session-owned and the connection is not pooled: closing it ends the session, which releases
+    /// the lock on every path, cancellation and errors included. A pooled connection would keep the session,
+    /// and with it the lock, alive in the pool.
+    /// </remarks>
+    internal async Task<bool> BuildRunSearchIndexesExclusiveAsync(bool online, bool lowPriority, int lockTimeoutMs, int commandTimeoutSeconds, CancellationToken cancellationToken)
+    {
+        var unpooled = new SqlConnectionStringBuilder(_connectionString) { Pooling = false }.ConnectionString;
+        await using var conn = new SqlConnection(unpooled);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        await using (var acquire = conn.CreateCommand())
+        {
+            acquire.CommandText = """
+                DECLARE @result INT;
+                EXEC @result = sp_getapplock @Resource = N'FlowOrchestrator.RunSearchIndexes', @LockMode = N'Exclusive',
+                    @LockOwner = N'Session', @LockTimeout = @lockTimeoutMs;
+                SELECT @result;
+                """;
+            acquire.Parameters.AddWithValue("@lockTimeoutMs", lockTimeoutMs);
+            acquire.CommandTimeout = lockTimeoutMs == 0 ? 30 : (lockTimeoutMs / 1000) + 30;
+            if (Convert.ToInt32(await acquire.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) < 0)
+                return false;
+        }
+
+        await using var build = conn.CreateCommand();
+        build.CommandText = BuildRunSearchIndexesSql(online, lowPriority);
+        build.CommandTimeout = commandTimeoutSeconds;
+        await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>How long a low-priority online build waits for each of its table locks before giving up.</summary>
+    internal const int LowPriorityMaxDurationMinutes = 5;
+
+    /// <summary>Budget of the synchronous offline build, and of waiting for another host's.</summary>
+    private const int OfflineIndexBuildTimeoutSeconds = 600;
+
     /// <inheritdoc/>
     public void Dispose() => _stopping.Dispose();
 
     /// <summary>Azure SQL Database (5), Managed Instance (8) and Enterprise / Developer / Evaluation (3) build indexes online.</summary>
     internal static bool SupportsOnlineIndexBuild(int engineEdition) => engineEdition is 3 or 5 or 8;
 
+    /// <summary>
+    /// <c>WAIT_AT_LOW_PRIORITY</c> on <c>CREATE INDEX</c>: Azure SQL Database (5), Managed Instance (8), and
+    /// SQL Server 2022 (major version 16) or later for Enterprise / Developer (3).
+    /// </summary>
+    internal static bool SupportsLowPriorityIndexBuild(int engineEdition, int productMajorVersion) =>
+        engineEdition is 5 or 8 || (engineEdition == 3 && productMajorVersion >= 16);
+
     /// <summary>The DDL for the run-search indexes, each guarded so a partial earlier build is completed.</summary>
-    internal static string BuildRunSearchIndexesSql(bool online)
+    /// <param name="online">Build with <c>ONLINE = ON</c>.</param>
+    /// <param name="lowPriority">
+    /// Add <c>WAIT_AT_LOW_PRIORITY</c>. An online build still needs a short S lock on <c>FlowRuns</c> at its
+    /// start and end; a plain request queues behind any open write transaction and every later writer queues
+    /// behind it, so one long transaction (a large retention sweep) stalls all run writes. At low priority the
+    /// build waits without blocking anyone and gives up after <see cref="LowPriorityMaxDurationMinutes"/>
+    /// minutes (warning 7206); the next start retries.
+    /// </param>
+    internal static string BuildRunSearchIndexesSql(bool online, bool lowPriority = false)
     {
-        var with = online ? " WITH (ONLINE = ON)" : string.Empty;
+        var with = !online ? string.Empty
+            : lowPriority ? $" WITH (ONLINE = ON (WAIT_AT_LOW_PRIORITY (MAX_DURATION = {LowPriorityMaxDurationMinutes} MINUTES, ABORT_AFTER_WAIT = SELF)))"
+            : " WITH (ONLINE = ON)";
         return $"""
             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowRuns_IdText' AND object_id = OBJECT_ID(N'[FlowRuns]'))
                 CREATE INDEX [IX_FlowRuns_IdText] ON [FlowRuns]([IdText]){with};
@@ -202,7 +278,8 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
             (SELECT CAST(SUM(p.rows) AS BIGINT) FROM sys.partitions AS p WHERE p.object_id = OBJECT_ID(N'[FlowRuns]') AND p.index_id IN (0, 1)),
             (SELECT COUNT(*) FROM (VALUES (N'IX_FlowRuns_IdText'), (N'IX_FlowRuns_StartedAt_Search')) AS wanted(name)
              WHERE NOT EXISTS (SELECT 1 FROM sys.indexes AS i WHERE i.name = wanted.name AND i.object_id = OBJECT_ID(N'[FlowRuns]'))),
-            (SELECT CAST(compatibility_level AS INT) FROM sys.databases WHERE database_id = DB_ID());
+            (SELECT CAST(compatibility_level AS INT) FROM sys.databases WHERE database_id = DB_ID()),
+            CAST(SERVERPROPERTY('ProductMajorVersion') AS INT);
         """;
 
     /// <summary>
@@ -264,6 +341,9 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
 
     [LoggerMessage(EventId = 7205, Level = LogLevel.Information, Message = "Run-search indexes built.")]
     private partial void LogIndexesBuilt();
+
+    [LoggerMessage(EventId = 7209, Level = LogLevel.Information, Message = "Another host is building the run-search indexes; this host leaves the build to it.")]
+    private partial void LogIndexBuildInFlightElsewhere();
 
     [LoggerMessage(EventId = 7206, Level = LogLevel.Warning, Message = "Run-search index build failed; search keeps its fallback query shapes and the next start retries.")]
     private partial void LogIndexBuildFailed(Exception exception);
