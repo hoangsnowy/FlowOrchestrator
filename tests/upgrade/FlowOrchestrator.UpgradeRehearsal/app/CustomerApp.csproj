@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    "OrderHub" — the customer app the 1.34 → 2.0 upgrade rehearsal runs. It is written the way a
+    FlowOrchestrator 1.34.x customer writes a host: package references from nuget.org, .NET 8,
+    Hangfire or Azure Service Bus as the runtime, SQL Server or PostgreSQL as the storage.
+
+    One source tree stands in for several customers. Pick the combination at build time:
+      -p:CustomerRuntime=hangfire|servicebus
+      -p:CustomerStorage=sqlserver|postgresql
+
+    This file is the 1.34.7 starting point. upgrade-to-2.0.patch (next to this folder) is the diff
+    a customer makes by following docs/articles/migrating-to-2.0.md; rehearse.ps1 applies it.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>OrderHub</RootNamespace>
+    <AssemblyName>OrderHub</AssemblyName>
+    <IsPackable>false</IsPackable>
+
+    <FlowOrchestratorVersion>1.34.7</FlowOrchestratorVersion>
+    <CustomerRuntime Condition="'$(CustomerRuntime)' == ''">hangfire</CustomerRuntime>
+    <CustomerStorage Condition="'$(CustomerStorage)' == ''">sqlserver</CustomerStorage>
+    <DefineConstants>$(DefineConstants);RUNTIME_$(CustomerRuntime.ToUpperInvariant());STORAGE_$(CustomerStorage.ToUpperInvariant())</DefineConstants>
+  </PropertyGroup>
+
+  <!-- 1.x: FlowOrchestrator.Hangfire carries AddFlowOrchestrator(), so every 1.x host references it,
+       Service Bus hosts included. -->
+  <ItemGroup>
+    <PackageReference Include="FlowOrchestrator.Hangfire" Version="$(FlowOrchestratorVersion)" />
+    <PackageReference Include="FlowOrchestrator.Dashboard" Version="$(FlowOrchestratorVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CustomerStorage)' == 'sqlserver'">
+    <PackageReference Include="FlowOrchestrator.SqlServer" Version="$(FlowOrchestratorVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CustomerStorage)' == 'postgresql'">
+    <PackageReference Include="FlowOrchestrator.PostgreSQL" Version="$(FlowOrchestratorVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CustomerRuntime)' == 'hangfire'">
+    <PackageReference Include="Hangfire.AspNetCore" Version="1.8.25" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CustomerRuntime)' == 'hangfire' And '$(CustomerStorage)' == 'sqlserver'">
+    <PackageReference Include="Hangfire.SqlServer" Version="1.8.25" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CustomerRuntime)' == 'hangfire' And '$(CustomerStorage)' == 'postgresql'">
+    <PackageReference Include="Hangfire.PostgreSql" Version="1.21.1" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CustomerRuntime)' == 'servicebus'">
+    <PackageReference Include="FlowOrchestrator.ServiceBus" Version="$(FlowOrchestratorVersion)" />
+  </ItemGroup>
+
+</Project>

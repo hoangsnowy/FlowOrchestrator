@@ -1,0 +1,6 @@
+<Project>
+  <!-- Isolation stopper: the customer app does not use the repository's Central Package Management. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
