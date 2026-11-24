@@ -118,5 +118,92 @@ public sealed class SurfaceAuditUnitTests
         Assert.Equal(WebhookSecurityPipeline.Decision.Accept, slowFirst.Decision);
         Assert.Equal(WebhookSecurityPipeline.Decision.Accept, fastFirst.Decision);
     }
-}
 
+    /// <summary>
+    /// WRONG RESULT (corrupt stream). <c>SseEndpointHandler</c> runs the heartbeat loop and the event
+    /// loop concurrently against the same <see cref="HttpResponse"/>. Without synchronisation, while an
+    /// event frame is being flushed (slow client / back-pressure), the heartbeat timer issued its own
+    /// write: two concurrent writers on one response body, which ASP.NET Core does not support (frames
+    /// interleave or the pipe throws).
+    /// </summary>
+    [Fact]
+    public async Task Sse_heartbeat_never_writes_concurrently_with_an_event_frame()
+    {
+        // Arrange
+        var body = new OverlapDetectingStream();
+        var http = new DefaultHttpContext();
+        http.Response.Body = body;
+        using var aborted = new CancellationTokenSource();
+        http.RequestAborted = aborted.Token;
+        var broadcaster = new SseFlowEventBroadcaster();
+
+        var handler = SseEndpointHandler.HandleAsync(http, broadcaster, runIdFilter: null, heartbeatInterval: TimeSpan.FromMilliseconds(5));
+        await body.FirstHeartbeat.Task.WaitAsync(TimeSpan.FromSeconds(30)); // connection registered + timer running
+
+        // Act
+        await broadcaster.PublishAsync(new RunStartedEvent { RunId = Guid.NewGuid(), FlowName = "F" });
+        var finished = await Task.WhenAny(body.Overlap.Task, body.EventWritten.Task).WaitAsync(TimeSpan.FromSeconds(30));
+        var overlapped = finished == body.Overlap.Task;
+        aborted.Cancel();
+        await handler.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Assert — writes are serialised: no heartbeat write enters while the event write is in flight.
+        Assert.False(overlapped, "heartbeat and event frames were written concurrently on one response body");
+    }
+
+    /// <summary>
+    /// Response body that holds the first event-frame write open (a slow client) and records whether
+    /// any other write enters while it is in flight.
+    /// </summary>
+    private sealed class OverlapDetectingStream : Stream
+    {
+        private int _inFlight;
+        private int _eventGated;
+
+        /// <summary>Set when a second write starts while another is still in progress.</summary>
+        public TaskCompletionSource<bool> Overlap { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Set when the gated event write completes without any overlap.</summary>
+        public TaskCompletionSource<bool> EventWritten { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Set on the first heartbeat frame.</summary>
+        public TaskCompletionSource<bool> FirstHeartbeat { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var text = Encoding.UTF8.GetString(buffer.Span);
+            if (Interlocked.Increment(ref _inFlight) > 1)
+                Overlap.TrySetResult(true);
+            try
+            {
+                if (text.Contains(": heartbeat", StringComparison.Ordinal))
+                    FirstHeartbeat.TrySetResult(true);
+
+                if (text.Contains("event: ", StringComparison.Ordinal) && Interlocked.Exchange(ref _eventGated, 1) == 0)
+                {
+                    // Slow client: keep this write in flight for several heartbeat periods (or until an
+                    // overlapping write proves the race) — a logical event, with a generous cap.
+                    await Task.WhenAny(Overlap.Task, Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None));
+                    EventWritten.TrySetResult(true);
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inFlight);
+            }
+        }
+    }
+}
