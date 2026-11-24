@@ -23,6 +23,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   final decision: a refused delivery is logged as rejected with status 401 and reason `secret_invalid`
   (also the `webhook_rejected_total` reason tag), and EventId 4006 is logged. The write does not depend on
   the request's abort token, so a sender that disconnects cannot keep a refusal out of the log.
+- **An over-long replay nonce no longer fails the webhook request.** With replay protection on and no
+  signature scheme, the nonce comes from the configured header (`webhookNonceHeader`) and was stored
+  verbatim; a value longer than the 256-character nonce column made SQL Server / PostgreSQL reject the
+  insert and the endpoint answered 500. A nonce over 256 characters is now registered as `sha256:` + its
+  hex SHA-256 (new public `WebhookReplayNonceStorage` helper in `FlowOrchestrator.Core.Storage`, used by
+  the replay gate and all three built-in stores), so a long nonce still gets replay protection. No schema
+  change; shorter nonces are stored as before.
 
 ## [1.34.5] - 2026-11-24
 

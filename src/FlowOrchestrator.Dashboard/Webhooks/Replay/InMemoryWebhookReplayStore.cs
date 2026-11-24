@@ -25,7 +25,8 @@ public sealed class InMemoryWebhookReplayStore : IWebhookReplayStore
         DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
-        var key = new NonceKey(flowId, triggerKey, nonce);
+        // Same bound as the SQL stores, so a long nonce maps to the same key on every backend.
+        var key = new NonceKey(flowId, triggerKey, WebhookReplayNonceStorage.ToStorageForm(nonce));
         var added = _entries.TryAdd(key, expiresAt);
         return ValueTask.FromResult(added);
     }
