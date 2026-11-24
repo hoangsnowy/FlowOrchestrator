@@ -107,6 +107,7 @@ found in access tokens (useful with `AddJwtBearer` for API clients).
 | `Authorization.OperatorRoles` | `["flow-operator"]` | Roles that may trigger, rerun, retry, cancel, deliver unrestricted signals, enable / disable and change schedules. |
 | `Authorization.ViewPolicy` / `OperatePolicy` | — | Authorization policy names that replace the role checks. |
 | `Authorization.AdditionalAuthenticationSchemes` | `[]` | Extra schemes tried after `AuthenticationScheme`, e.g. `["Bearer"]` from `AddJwtBearer` for machine clients. Same roles and policies apply. |
+| `Authorization.UnregisteredFlowSignals` | `Deny` | Signals for runs of flows this host does not register: `Deny` refuses them for everyone; `OperatorRule` lets operators deliver them (restrictions not enforced). |
 
 A misnamed scheme fails at startup (`MapFlowDashboard` throws), not on the first request.
 
@@ -162,6 +163,16 @@ step can name its approvers with `allowedRoles` and / or `authorizationPolicy`
 A caller who is not an operator gets `403` — not `404` — for a run that does not exist, so the signal
 endpoint does not reveal which run ids exist.
 
+Restrictions are read from the flows the dashboard host registers. **A signal for a run whose flow that host
+does not register is refused for every caller** (`403`, EventId `4108`), restricted or not, because the
+dashboard cannot tell. Register the same flows on the dashboard host as on the workers; a split deployment
+that cannot may opt back in to the operator rule for such runs, at the cost of not enforcing their
+restrictions over HTTP (startup logs EventId `4109`, Warning):
+
+```json
+"FlowDashboard": { "Authorization": { "UnregisteredFlowSignals": "OperatorRule" } }
+```
+
 ### What users see
 
 - The sidebar shows the signed-in user and a **Sign out** link (`/flows/signout` ends the Keycloak
@@ -171,7 +182,9 @@ endpoint does not reveal which run ids exist.
   signal the viewer is an approver for: its **Send signal** button stays; a restricted signal the user may not
   approve shows who may ("Requires role: finance-approver") instead of the button.
 - When the session expires, the next API call answers `401` and the page signs in again.
-- `GET /flows/api/me` returns `{ method, user, canOperate, canSignOut }` for your own tooling.
+- `GET /flows/api/me` returns `{ method, user, canOperate, canSignOut }` for your own tooling. `method` is
+  `none`, `basic`, `oidc` (cookie session) or `bearer` (an `AdditionalAuthenticationSchemes` scheme, which
+  has `canSignOut: false`).
 
 ## Basic Auth
 

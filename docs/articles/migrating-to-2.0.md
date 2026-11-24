@@ -470,6 +470,18 @@ New and opt-in: a `WaitForSignal` step can restrict who may deliver its signal (
 sign in with a bearer token — see [WaitForSignal → Security](wait-for-signal.md#security). Existing flows and
 configuration behave as before, except:
 
+- **a signal for a run whose flow the dashboard host does not register is refused with `403` for every
+  caller** (EventId `4108`), because the dashboard cannot read the step's restriction without the manifest.
+  Hosts that register every flow with `AddFlow` are unaffected. In a split deployment whose dashboard host
+  has no flows, register the same flows there, or restore the 1.x operator rule explicitly (startup then logs
+  EventId `4109`, Warning):
+
+  ```json
+  { "FlowDashboard": { "Authorization": { "UnregisteredFlowSignals": "OperatorRule" } } }
+  ```
+
+- `GET …/api/me` reports a caller signed in through an additional (bearer) scheme as `method: "bearer"`,
+  `canSignOut: false`;
 - a request with an `Authorization` header other than Basic that no scheme accepts answers **`401`** instead
   of redirecting to the identity provider, page requests included;
 - `POST …/signals/{name}` checks the run before the body: a missing run answers `404` to operators and `403`

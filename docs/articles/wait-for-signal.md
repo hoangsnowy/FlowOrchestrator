@@ -212,6 +212,7 @@ The signal endpoint is part of the dashboard and is protected the same way — s
 | Signed in (OIDC session or bearer token) with an operator role | `200` | `200` only if the caller satisfies the restriction |
 | Signed in, viewer role only | `403` | `200` only if the caller satisfies the restriction |
 | Signed in, no dashboard role | `403` | `200` only if the caller satisfies the restriction |
+| Anyone, for a run whose flow the dashboard host does not register (default `UnregisteredFlowSignals: Deny`) | `403` | `403` |
 
 Whatever the caller, a delivered signal cannot resurrect a cancelled or completed run: the run must be in
 `Running` status.
@@ -253,9 +254,12 @@ Rules worth knowing:
   signal addresses from the manifest, before it writes anything. A restriction declared in a `ForEach` or
   other scope applies to every iteration.
 - **The dashboard host must register the flow.** The restriction is read from the flows registered (with
-  `AddFlow`) in the process that serves the dashboard. A run of a flow that process does not know keeps the
-  plain operator rule, so in a split deployment register the same flows on the dashboard host as on the
-  workers.
+  `AddFlow`) in the process that serves the dashboard. A signal for a run of a flow that process does not
+  know is **refused for every caller** (`403`, EventId `4108`): without the manifest the dashboard cannot tell
+  whether it is restricted, so it fails closed. In a split deployment register the same flows on the
+  dashboard host as on the workers. If you cannot, `FlowDashboard:Authorization:UnregisteredFlowSignals:
+  OperatorRule` restores the operator rule for such runs — restrictions are then not enforced over HTTP, and
+  startup logs EventId `4109` (Warning).
 - When several `WaitForSignal` steps share a signal name, the caller must satisfy **every** restricted one:
   the store delivers to whichever waiter is oldest, so the check covers every step the delivery can reach.
 - **Validated at startup.** `MapFlowDashboard` throws when a restriction is malformed (`allowedRoles` not a
@@ -265,9 +269,12 @@ Rules worth knowing:
 - **Audit log.** Every restricted delivery logs EventId `4107` (Information) with the user, run, signal and
   step; every refused delivery logs `4108` (Warning). Startup logs `4106` (Warning) when flows declare
   restrictions but identity sign-in is not configured — such signals can then only be delivered in-process.
-- **The page follows suit.** Run detail carries a `signalAuthorization` entry for each parked restricted step
-  (`allowedRoles`, `policy`, `canSignal`); **Send signal** is shown only to callers who qualify — also in
-  view-only mode — and everyone else sees who may approve ("Requires role: finance-approver").
+- **The page follows suit.** Run detail carries a `signalAuthorization` entry for each parked step whose
+  signal is restricted (or whose flow the host does not register): `allowedRoles` / `policy` of the step,
+  `requirements` (every restricted step its signal name reaches), `flowUnregistered` and `canSignal`.
+  `canSignal` is computed by the same decision the endpoint makes, shared-name union included, so **Send
+  signal** is shown only to callers the endpoint would accept — also in view-only mode — and everyone else
+  sees who may approve ("Requires role: finance-approver").
 
 ### Machine-to-machine: approving with a bearer token
 
@@ -394,6 +401,7 @@ Waiters live in your configured storage (`FlowSignalWaiters` table for SQL Serve
 For deliberate simplicity, this primitive does **not** include:
 
 - HMAC-signed signal endpoints. Authenticate callers with identity sign-in or a bearer token instead ([Security](#security)).
+- Resource-based approval policies. `authorizationPolicy` is evaluated without a resource, so a policy cannot see the run, step or payload (for example to forbid the requester from approving their own request). Planned as a follow-up.
 - Broadcast multi-recipient signals. Each waiter is identified by `(RunId, StepKey)`; one signal targets one waiter.
 - Signal cancellation API. Cancel the run instead.
 - Long-poll API for callers waiting for delivery confirmation.

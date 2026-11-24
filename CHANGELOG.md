@@ -29,16 +29,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   step); `4108` (Warning) records every refused signal delivery; `4106` (Warning) at startup when flows
   declare restricted signals but identity sign-in is not configured. The stored payload is unchanged.
 - **Run detail** (`GET {base}/api/runs/{id}`) gains a `signalAuthorization` object — only while a restricted
-  `WaitForSignal` step is parked — with the step's `allowedRoles`, `policy` name, `misconfigured` and the
-  caller's `canSignal`. The page shows **Send signal** only to callers who qualify (also in view-only mode)
-  and otherwise a "Requires role: …" chip.
+  `WaitForSignal` step (or one of a flow this host does not register) is parked — with the step's `allowedRoles`,
+  `policy` name, `requirements` (every restricted step the signal name reaches), `misconfigured`,
+  `flowUnregistered` and the caller's `canSignal`, computed by the same decision the endpoint makes. The
+  page shows **Send signal** only to callers the endpoint accepts (also in view-only mode) and otherwise a
+  "Requires role: …" chip.
 - `WaitForSignalInput.AllowedRoles` / `.AuthorizationPolicy` document the inputs. `IFlowSignalDispatcher`
   is unchanged and stays unauthenticated by design: in-process delivery is trusted and the host owns
   authorization there.
 
 #### Read before upgrading
 
-- Nothing changes unless a step declares `allowedRoles` / `authorizationPolicy` or you set
+- **Signals of flows the dashboard host does not register are refused (`403`, for every caller).** The
+  dashboard reads a signal's restriction from the flow manifest; without the flow it cannot tell, so it
+  fails closed (`FlowDashboard:Authorization:UnregisteredFlowSignals = Deny`, the default; refusal logged as
+  EventId `4108`). Hosts that call `AddFlow` for every flow are unaffected. A **split deployment** whose
+  dashboard host does not register the flows either registers them there (recommended) or sets
+  `UnregisteredFlowSignals` to `OperatorRule` — the 1.x behaviour, any operator may deliver, restrictions
+  not enforced over HTTP — which logs EventId `4109` (Warning) at startup.
+- `GET {base}/api/me` reports a caller signed in through an additional scheme as `method: "bearer"` with
+  `canSignOut: false`.
+- Otherwise nothing changes unless a step declares `allowedRoles` / `authorizationPolicy` or you set
   `AdditionalAuthenticationSchemes`, with two small exceptions: a request that carries an `Authorization`
   header other than Basic and is not accepted now gets `401` instead of the identity-provider redirect
   (page requests included), and the signal endpoint looks the run up before it validates the body, so a
