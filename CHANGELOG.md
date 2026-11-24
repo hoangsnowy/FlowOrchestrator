@@ -6,6 +6,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+- **Read-only dashboard callers no longer see credentials whose names use separators.** Values are masked
+  for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
+  name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
+  `Ocp-Apim-Subscription-Key`, `pwd` and similar names were served unmasked in run detail, run lists,
+  flow manifests and the webhook delivery log. Names are now normalised first (case ignored; `-`, `_`, `.`
+  and spaces dropped), the list of name fragments is extended (API / subscription / function / access /
+  signing / account keys, private keys, SAS, session ids, JWTs, …), and the *Why skipped* trace of a
+  `When` condition that reads a secret-looking name no longer shows the resolved value. Masking is
+  deliberately broad (a name such as `tokenCount` is masked too); operators still see payloads as stored.
+
 ## [1.34.5] - 2026-11-24
 
 Patch release for the 1.34 line (.NET 8 / 9 / 10). A `WaitForSignal` step could stay parked until its

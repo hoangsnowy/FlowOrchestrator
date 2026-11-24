@@ -137,10 +137,14 @@ side. The demo realm is for local use only.
 - **Cross-site requests.** Every state-changing call (`POST` / `PUT`) is rejected with `403` when the
   browser marks it cross-site (`Sec-Fetch-Site` other than `same-origin`) or sends an `Origin` for another
   host. Keep the auth cookie `HttpOnly` and `SameSite=Lax` (or `Strict`); never `SameSite=None`.
-- **Secrets.** Viewers get flow manifests, run trigger bodies and step / attempt inputs and outputs with
-  every value under a secret-looking name masked (`*secret*`, `*password*`, `*token*`, `*apikey*`,
-  `*authorization*`, `*cookie*`, `*signature*`, HMAC keys …). Operators see them as stored, so treat the
-  operator role as privileged. Masking is by name — keep real secrets out of manifests where you can.
+- **Secrets.** Viewers get flow manifests, run trigger bodies and headers, step / attempt inputs and
+  outputs and the webhook delivery log with every value under a secret-looking name masked (`*secret*`,
+  `*password*`, `*pwd*`, `*token*`, `*apikey*`, `*privatekey*`, `*subscriptionkey*`, `*functionskey*`,
+  `*accesskey*`, `*authorization*`, `*cookie*`, `*signature*`, HMAC / signing keys, SAS …). Names are
+  compared case-insensitively with `-`, `_`, `.` and spaces ignored, so `X-Api-Key`, `api_key` and `apiKey`
+  are the same name. Matching is deliberately broad: a harmless name such as `tokenCount` is masked too.
+  Operators see everything as stored, so treat the operator role as privileged. Masking is by name — keep
+  real secrets out of manifests where you can.
 - **Reverse proxies.** Over plain HTTP browsers send no `Sec-Fetch-Site`, so the dashboard compares
   `Origin` with `Host`. If your proxy rewrites `Host` (and ForwardedHeaders middleware does not restore it),
   list the public origin in `FlowDashboard:TrustedOrigins` (e.g. `["http://flows.corp"]`) or the
