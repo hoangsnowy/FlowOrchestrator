@@ -150,6 +150,26 @@ builder.Services.AddFlowOrchestrator(options =>
 
 ---
 
+## Switching storage backend (SQL Server ↔ PostgreSQL)
+
+A database can move between SQL Server and PostgreSQL **with its run history** using the
+`flow-orchestrator storage copy` tool (package `FlowOrchestrator.Cli`; library `FlowOrchestrator.StorageMigration`):
+
+```bash
+dotnet tool install --global FlowOrchestrator.Cli
+flow-orchestrator storage copy --from sqlserver --from-connection env:FO_SQL                                --to postgresql --to-connection env:FO_PG --dry-run
+```
+
+It refuses to start while the source has runs in status `Running` or the target already holds
+FlowOrchestrator rows, creates the target schema with the target's own 2.0 migrator, bulk-copies every table
+(definitions, runs, steps, attempts, outputs, run controls, idempotency keys, schedule overrides, signal
+waiters, webhook logs) and verifies row counts and a content checksum per table. The source is never
+written, so switching back is a configuration change. Hangfire's storage is not copied — drain the queues
+first. The full runbook (drain, dry run, copy, verify, switch, start, rollback) and the per-table mapping are
+in [Switching Storage Backend](switching-storage-backend.md).
+
+---
+
 ## Custom Backend
 
 Implement the five core interfaces (the run store usually implements three of them):

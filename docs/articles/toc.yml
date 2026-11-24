@@ -37,6 +37,9 @@
 - name: Storage Backends
   href: storage.md
 
+- name: Switching Storage Backend
+  href: switching-storage-backend.md
+
 - name: Dashboard
   href: dashboard.md
 
