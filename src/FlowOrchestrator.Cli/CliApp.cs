@@ -132,7 +132,7 @@ internal static class CliApp
             $"{"Table",-22} {"Source rows",12} {"Copied",12} {"Target rows",12}  Verified")).ConfigureAwait(false);
         foreach (var t in result.Tables)
         {
-            var verified = t.Verified switch { true => "yes", false => "NO", null => "-" };
+            var verified = !t.Verified.HasValue ? "-" : t.Verified.Value ? "yes" : "NO";
             var copied = t.SkippedAsComplete ? "skipped" : t.CopiedRows.ToString(CultureInfo.InvariantCulture);
             var targetRows = t.TargetRows?.ToString(CultureInfo.InvariantCulture) ?? "-";
             await stdout.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,

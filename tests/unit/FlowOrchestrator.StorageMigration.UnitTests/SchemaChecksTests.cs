@@ -41,18 +41,12 @@ public sealed class SchemaChecksTests
     public void A_pre_2_0_schema_reports_the_missing_column_and_table()
     {
         // Arrange — a 1.x database: no SourceRunId yet, no webhook tables.
-        var rows = new List<(string, string)>();
-        foreach (var table in StorageCatalog.CoreTables)
-        {
-            if (table.SqlName is "WebhookReplayNonces" or "WebhookRejections")
-                continue;
-            foreach (var column in table.Columns)
-            {
-                if (table.SqlName == "FlowRuns" && column.SqlName == "SourceRunId")
-                    continue;
-                rows.Add((table.SqlName, column.SqlName));
-            }
-        }
+        var rows = StorageCatalog.CoreTables
+            .Where(table => table.SqlName is not ("WebhookReplayNonces" or "WebhookRejections"))
+            .SelectMany(table => table.Columns
+                .Where(column => !(table.SqlName == "FlowRuns" && column.SqlName == "SourceRunId"))
+                .Select(column => (Table: table.SqlName, Column: column.SqlName)))
+            .ToList();
 
         var schema = SchemaSnapshot.From(rows);
 

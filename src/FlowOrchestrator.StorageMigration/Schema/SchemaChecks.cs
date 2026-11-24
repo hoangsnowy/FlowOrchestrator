@@ -22,12 +22,10 @@ internal static class SchemaChecks
                 continue;
             }
 
-            foreach (var column in table.Columns)
-            {
-                var columnName = column.NameOn(provider);
-                if (!columns.Contains(columnName))
-                    missing.Add(name + "." + columnName);
-            }
+            missing.AddRange(table.Columns
+                .Select(column => column.NameOn(provider))
+                .Where(columnName => !columns.Contains(columnName))
+                .Select(columnName => name + "." + columnName));
         }
 
         return missing;
@@ -47,11 +45,9 @@ internal static class SchemaChecks
             if (columns is null)
                 continue;
 
-            foreach (var existing in columns)
-            {
-                if (!IsKnown(table, provider, existing))
-                    unknown.Add(name + "." + existing);
-            }
+            unknown.AddRange(columns
+                .Where(existing => !IsKnown(table, provider, existing))
+                .Select(existing => name + "." + existing));
         }
 
         unknown.Sort(StringComparer.Ordinal);

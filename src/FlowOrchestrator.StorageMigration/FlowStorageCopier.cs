@@ -370,10 +370,10 @@ public sealed partial class FlowStorageCopier
         StorageEndpoint target, SchemaSnapshot targetSchema, IReadOnlyList<StorageTable> tables, CancellationToken cancellationToken)
     {
         var nonEmpty = new List<string>();
-        foreach (var table in tables)
+        foreach (var name in tables.Select(table => table.NameOn(_options.TargetProvider)).Where(targetSchema.HasTable))
         {
-            var name = table.NameOn(_options.TargetProvider);
-            if (targetSchema.HasTable(name) && await target.HasRowsAsync(name, cancellationToken).ConfigureAwait(false))
+            var hasRows = await target.HasRowsAsync(name, cancellationToken).ConfigureAwait(false);
+            if (hasRows)
                 nonEmpty.Add(name);
         }
 
@@ -506,15 +506,11 @@ public sealed partial class FlowStorageCopier
 
     private static void ThrowIfMismatched(FlowStorageCopyResult result)
     {
-        var mismatched = new List<string>();
-        foreach (var table in result.Tables)
-        {
-            if (table.Verified == false)
-            {
-                mismatched.Add(string.Create(CultureInfo.InvariantCulture,
-                    $"{table.Table} (source {table.SourceRows} rows / {table.SourceChecksum}, target {table.TargetRows} rows / {table.TargetChecksum})"));
-            }
-        }
+        var mismatched = result.Tables
+            .Where(table => table.Verified == false)
+            .Select(table => string.Create(CultureInfo.InvariantCulture,
+                $"{table.Table} (source {table.SourceRows} rows / {table.SourceChecksum}, target {table.TargetRows} rows / {table.TargetChecksum})"))
+            .ToList();
 
         if (mismatched.Count > 0)
         {

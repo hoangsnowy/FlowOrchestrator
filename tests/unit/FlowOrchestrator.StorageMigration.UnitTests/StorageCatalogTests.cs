@@ -47,10 +47,8 @@ public sealed class StorageCatalogTests
         foreach (Match table in PgCreateTable.Matches(ddl))
         {
             var columns = tables[table.Groups[1].Value] = new SortedSet<string>(StringComparer.Ordinal);
-            foreach (Match column in PgColumn.Matches(table.Groups[2].Value))
+            foreach (var column in PgColumn.Matches(table.Groups[2].Value).Where(c => c.Groups[1].Value != "PRIMARY"))
             {
-                if (column.Groups[1].Value == "PRIMARY")
-                    continue;
                 columns.Add(Describe(column.Groups[1].Value, PgKind(column.Groups[2].Value), PgLength(column.Groups[2].Value, column.Groups[3].Value)));
             }
         }
@@ -165,11 +163,9 @@ public sealed class StorageCatalogTests
         {
             if (Snake(table.SqlName) != table.PgName)
                 mismatches.Add(table.SqlName);
-            foreach (var column in table.Columns)
-            {
-                if (Snake(column.SqlName) != column.PgName)
-                    mismatches.Add(table.SqlName + "." + column.SqlName);
-            }
+            mismatches.AddRange(table.Columns
+                .Where(column => Snake(column.SqlName) != column.PgName)
+                .Select(column => table.SqlName + "." + column.SqlName));
         }
 
         // Assert
