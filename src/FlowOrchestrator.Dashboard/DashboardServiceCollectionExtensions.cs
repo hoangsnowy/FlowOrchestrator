@@ -1400,6 +1400,16 @@ public static class DashboardServiceCollectionExtensions
             }
             var newCron = cronProp.GetString()!;
 
+            // Reject an unparseable expression BEFORE anything is persisted or scheduled: a persisted bad
+            // override is re-applied on every restart, and the in-memory runtime used to stop every cron job
+            // in the process on the first fire of one.
+            if (!Schedules.CronExpressionValidator.IsValid(newCron))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is not a valid 5-field or 6-field cron expression." });
+                return;
+            }
+
             var flow = await store.GetByIdAsync(flowId);
             if (flow?.ManifestJson is null)
             {
@@ -1410,6 +1420,23 @@ public static class DashboardServiceCollectionExtensions
 
             var existing = await scheduleStateStore.GetAsync(jobId);
             var paused = existing?.IsPaused ?? false;
+
+            // Schedule first, persist second: a runtime that still rejects the expression (each one validates
+            // in RegisterOrUpdate and leaves the job untouched) must not leave a persisted override behind.
+            if (!paused)
+            {
+                try
+                {
+                    triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
+                }
+                catch (Exception ex) when (ex is ArgumentException or FormatException)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonAsync(http.Response,new { error = "The runtime rejected cronExpression as an invalid cron expression." });
+                    return;
+                }
+            }
+
             await scheduleStateStore.SaveAsync(new FlowScheduleState
             {
                 JobId = jobId,
@@ -1419,11 +1446,6 @@ public static class DashboardServiceCollectionExtensions
                 IsPaused = paused,
                 CronOverride = newCron
             });
-
-            if (!paused)
-            {
-                triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
-            }
 
             await WriteJsonAsync(http.Response,new { success = true, message = $"Cron updated to '{newCron}'." });
         });

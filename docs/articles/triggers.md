@@ -57,6 +57,11 @@ Common patterns:
 
 > [!TIP]
 > Cron overrides written via the dashboard or `PUT /flows/api/schedules/{jobId}/cron` are persisted when `Scheduler.PersistOverrides = true` and survive process restarts.
+>
+> The endpoint answers `400` for an expression that is not a valid 5-field (minute) or 6-field (second)
+> cron expression, and nothing is persisted or rescheduled. An unparseable override already persisted by
+> an older version is ignored at startup: the job runs on the manifest cron and a warning (EventId 5011)
+> names it.
 
 ### Disabled flows
 

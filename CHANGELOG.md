@@ -161,6 +161,16 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   any other negative value threw, and a delay above ~49.7 days threw — the step was never delivered while
   its dispatch-ledger row said it was queued. A delay at or below zero now behaves like an immediate
   enqueue (Hangfire / Service Bus parity), and very long delays are waited out in chunks.
+- **InMemory runtime: a rejected cron override no longer stops every cron job in the process.**
+  `PeriodicTimerRecurringTriggerDispatcher.RegisterOrUpdate` assigned the new cron to the live job before
+  parsing it, so a bad override (accepted by the dashboard, which only checked for blank) replaced the
+  job's schedule anyway; the job's next fire then threw from a `finally` block, out of the shared timer
+  loop, and no cron job fired again until restart. The cron is now parsed first — an unparseable one
+  throws `ArgumentException` and leaves the job on its previous schedule (Hangfire's contract) — and the
+  timer loop isolates each job, so one failing job cannot end it (EventIds 3120-3126).
+- **Dashboard `PUT /api/schedules/{jobId}/cron` answers `400` for an unparseable cron expression** and
+  persists nothing. It validates with Cronos (5- or 6-field), then schedules before persisting, so an
+  expression the runtime itself rejects is not left behind as an override either.
 
 ### Security
 

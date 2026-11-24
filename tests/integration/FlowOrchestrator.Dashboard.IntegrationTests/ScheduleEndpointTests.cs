@@ -273,6 +273,67 @@ public sealed class ScheduleEndpointTests : IDisposable
             .SaveAsync(Arg.Is<FlowScheduleState>(s => s!.CronOverride == newCron));
     }
 
+    [Theory]
+    [InlineData("every day at noon")]
+    [InlineData("61 * * * *")]
+    [InlineData("* * * * * * * *")]
+    public async Task PUT_schedules_cron_returns_400_and_persists_nothing_when_cronExpression_is_unparseable(string badCron)
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var jobId = JobId(flowId, "cron");
+        _server.FlowStore.GetByIdAsync(flowId)
+            .Returns(new FlowDefinitionRecord
+            {
+                Id = flowId,
+                Name = "NightlyFlow",
+                IsEnabled = true,
+                ManifestJson = """{"triggers":{"cron":{"inputs":{"cronExpression":"0 * * * *"}}}}"""
+            });
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
+
+        // Act
+        var response = await _client.PutAsync(
+            $"/flows/api/schedules/{jobId}/cron",
+            JsonBody(new { cronExpression = badCron }));
+
+        // Assert — nothing reaches the runtime or the persisted overrides.
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        _server.TriggerDispatcher.DidNotReceive()
+            .RegisterOrUpdate(Arg.Any<string>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>());
+        await _server.ScheduleStateStore.DidNotReceive().SaveAsync(Arg.Any<FlowScheduleState>());
+    }
+
+    [Fact]
+    public async Task PUT_schedules_cron_returns_400_and_persists_nothing_when_the_runtime_rejects_the_expression()
+    {
+        // Arrange — the expression parses here, but the runtime's own validation refuses it.
+        var flowId = Guid.NewGuid();
+        var jobId = JobId(flowId, "cron");
+        const string newCron = "0 0 * * *";
+        _server.FlowStore.GetByIdAsync(flowId)
+            .Returns(new FlowDefinitionRecord
+            {
+                Id = flowId,
+                Name = "NightlyFlow",
+                IsEnabled = true,
+                ManifestJson = """{"triggers":{"cron":{"inputs":{"cronExpression":"0 * * * *"}}}}"""
+            });
+        _server.ScheduleStateStore.GetAsync(jobId).Returns(default(FlowScheduleState?));
+        _server.TriggerDispatcher
+            .When(d => d.RegisterOrUpdate(jobId, flowId, "cron", newCron))
+            .Do(_ => throw new ArgumentException("CRON expression is invalid."));
+
+        // Act
+        var response = await _client.PutAsync(
+            $"/flows/api/schedules/{jobId}/cron",
+            JsonBody(new { cronExpression = newCron }));
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await _server.ScheduleStateStore.DidNotReceive().SaveAsync(Arg.Any<FlowScheduleState>());
+    }
+
     [Fact]
     public async Task PUT_schedules_cron_returns_400_when_cronExpression_missing()
     {

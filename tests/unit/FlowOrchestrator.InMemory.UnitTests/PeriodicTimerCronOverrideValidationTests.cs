@@ -113,4 +113,41 @@ public sealed class PeriodicTimerCronOverrideValidationTests
         Assert.Null(failure);
         Assert.True(dispatcher.TryGetJob(jobId, out _));
     }
+
+    [Fact]
+    public void RegisterOrUpdate_UnparseableCronOnExistingJob_ThrowsArgumentExceptionAndKeepsThePreviousCron()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var jobId = RecurringTriggerJobId.Create(flowId, "nightly");
+        var sut = CreateDispatcher();
+        sut.RegisterOrUpdate(jobId, flowId, "nightly", ValidCron);
+        Assert.True(sut.TryGetJob(jobId, out var before));
+
+        // Act
+        var failure = Record.Exception(() => sut.RegisterOrUpdate(jobId, flowId, "nightly", InvalidCron));
+
+        // Assert — a clear ArgumentException for the caller, and the live job is untouched.
+        Assert.IsType<ArgumentException>(failure);
+        Assert.True(sut.TryGetJob(jobId, out var after));
+        Assert.Equal(ValidCron, after.EffectiveCron);
+        Assert.Equal(before.NextExecution, after.NextExecution);
+    }
+
+    [Fact]
+    public void RegisterOrUpdate_UnparseableCronOnNewJob_ThrowsArgumentExceptionAndRegistersNothing()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var jobId = RecurringTriggerJobId.Create(flowId, "nightly");
+        var sut = CreateDispatcher();
+
+        // Act
+        var failure = Record.Exception(() => sut.RegisterOrUpdate(jobId, flowId, "nightly", InvalidCron));
+
+        // Assert
+        Assert.IsType<ArgumentException>(failure);
+        Assert.False(sut.TryGetJob(jobId, out _));
+    }
+
 }
