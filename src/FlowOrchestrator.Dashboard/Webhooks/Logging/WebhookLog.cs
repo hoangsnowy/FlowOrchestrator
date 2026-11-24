@@ -47,4 +47,10 @@ internal static partial class WebhookLog
 
     [LoggerMessage(EventId = 4012, Level = LogLevel.Error, Message = "Webhook flow {FlowId} ('{TriggerKey}') sets webhookSignatureScheme to {Problem}. Its deliveries cannot be verified: rejected in Enforce, recorded and let through in Audit (reason signature_scheme_unknown).")]
     public static partial void SignatureSchemeUnknown(ILogger logger, Guid flowId, string triggerKey, string problem);
+
+    [LoggerMessage(EventId = 4013, Level = LogLevel.Warning, Message = "Webhook flow {FlowId} ('{TriggerKey}'): releasing the replay key of a delivery that failed before its run started failed; a retry inside the replay window is rejected as a replay until the key expires.")]
+    public static partial void ReplayKeyReleaseFailed(ILogger logger, Exception ex, Guid flowId, string triggerKey);
+
+    [LoggerMessage(EventId = 4014, Level = LogLevel.Information, Message = "Webhook flow {FlowId} ('{TriggerKey}'): delivery failed before its run started; its replay key was released so the publisher's retry is processed.")]
+    public static partial void ReplayKeyReleased(ILogger logger, Guid flowId, string triggerKey);
 }

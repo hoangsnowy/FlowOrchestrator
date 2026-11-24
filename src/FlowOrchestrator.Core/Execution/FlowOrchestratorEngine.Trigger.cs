@@ -128,12 +128,14 @@ public sealed partial class FlowOrchestratorEngine
                     if (skipped)
                     {
                         anyEntrySkipped = true;
+                        triggerContext.EntryStepsStarted = true;
                         continue;
                     }
 
                     if (await TryScheduleStepAsync(triggerContext, triggerContext.Flow, entry, null).ConfigureAwait(false))
                     {
                         anyEntryScheduled = true;
+                        triggerContext.EntryStepsStarted = true;
                     }
                 }
             }

@@ -34,7 +34,7 @@ namespace FlowOrchestrator.Dashboard.Tests;
 /// <see cref="WebhookHardeningPipelineE2ETests"/> remarks on NSubstitute thread-local leakage).
 /// </para>
 /// </remarks>
-public sealed class ProviderWebhookEndpointTests
+public sealed partial class ProviderWebhookEndpointTests
 {
     // ── Independent signers (do not use production code) ────────────────────────────────────────
 

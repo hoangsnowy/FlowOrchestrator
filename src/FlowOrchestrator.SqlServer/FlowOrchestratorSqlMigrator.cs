@@ -503,6 +503,11 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
             CREATE INDEX IX_WebhookReplayNonces_ExpiresAt ON [WebhookReplayNonces]([ExpiresAt]);
         END
 
+        -- Owner token of a replay entry: only the request that recorded it can release it again
+        -- (TryForgetAsync). NULL on rows written before the column existed, which never match a release.
+        IF COL_LENGTH(N'WebhookReplayNonces', N'RegistrationId') IS NULL
+            ALTER TABLE [WebhookReplayNonces] ADD [RegistrationId] UNIQUEIDENTIFIER NULL;
+
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'WebhookRejections')
         BEGIN
             CREATE TABLE [WebhookRejections] (

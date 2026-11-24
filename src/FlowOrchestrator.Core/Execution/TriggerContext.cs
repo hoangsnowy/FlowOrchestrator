@@ -1,4 +1,5 @@
 using System.Runtime.Serialization;
+using System.Text.Json.Serialization;
 using FlowOrchestrator.Core.Abstractions;
 
 namespace FlowOrchestrator.Core.Execution;
@@ -41,4 +42,10 @@ public sealed class TriggerContext : ITriggerContext
 
     /// <inheritdoc/>
     public string? JobId { get; set; }
+
+    /// <inheritdoc/>
+    /// <remarks>Engine-written outcome, not trigger input: excluded from job and JSON serialisation.</remarks>
+    [IgnoreDataMember]
+    [JsonIgnore]
+    public bool EntryStepsStarted { get; set; }
 }

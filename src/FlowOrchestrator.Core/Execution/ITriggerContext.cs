@@ -24,4 +24,16 @@ public interface ITriggerContext : IExecutionContext
     /// so the dashboard can render a link back to the original. Used by "Re-run all".
     /// </summary>
     Guid? SourceRunId { get => null; set { } }
+
+    /// <summary>
+    /// Set by the engine once <see cref="IFlowOrchestrator.TriggerAsync"/> has dispatched or skipped at least one
+    /// entry step — from then on the run is alive (recovery re-dispatches it) even if the trigger call later throws.
+    /// </summary>
+    /// <remarks>
+    /// A caller that sees <c>TriggerAsync</c> throw while this is still <see langword="false"/> knows no work was
+    /// started for the delivery, so letting the sender retry it cannot duplicate a run. The webhook endpoint uses
+    /// it to decide whether to release the delivery's replay-protection key. The default implementation does not
+    /// store the value (it always reads <see langword="false"/>); <see cref="TriggerContext"/> does.
+    /// </remarks>
+    bool EntryStepsStarted { get => false; set { } }
 }

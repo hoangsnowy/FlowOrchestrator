@@ -244,6 +244,23 @@ where one provider behaved differently from the others.
 
 ### Fixed — webhooks, dashboard REST, FlowTestHost and telemetry
 
+- **A webhook delivery that fails before its run starts no longer turns the publisher's retries into
+  `409`s.** The replay gate records the delivery's replay key (signed `webhook-id`, Mailgun token, the
+  timestamp + body hash, the body hash for body-only schemes, or `webhookNonceHeader`) before the run is
+  started. When the request then failed — the trigger threw (`5xx`), the client disconnected before the
+  run was written, or the legacy `X-Webhook-Key` check refused it — the key stayed, so every retry inside the
+  window was rejected as a replay and the delivery was lost (and a caller without the shared secret could
+  burn any `webhookNonceHeader` value). The endpoint now releases the key on those failures, with
+  `CancellationToken.None`, best effort (EventId 4013 on failure, 4014 on success). The release is
+  owner-bound — each registration carries a random token that never leaves the process and the store deletes
+  only a matching entry — runs only on failure, and is skipped once the engine has dispatched or skipped an
+  entry step (new `ITriggerContext.EntryStepsStarted`, default interface member), because that run is alive.
+  **Custom stores:** new `IWebhookReplayStore.TryRegisterAsync(…, Guid registrationId, …)` and
+  `IWebhookReplayStore.TryForgetAsync` (no default implementation — a silent no-op would keep the lost-retry
+  bug); the old five-argument `TryRegisterAsync` is now a default member that delegates with an unrevealed
+  token. SQL Server and PostgreSQL add a nullable `RegistrationId` / `registration_id` column to the replay
+  table on startup; pre-upgrade rows have no owner and expire as before.
+
 - **Microsoft Teams outgoing webhooks verify.** The verifier never saw the `Authorization` header Teams
   signs in (the endpoint strips it from the captured headers), and it keyed the HMAC with the token's UTF-8
   bytes instead of the base64-**decoded** security token Microsoft documents. The signature header is now

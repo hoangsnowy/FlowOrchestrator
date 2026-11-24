@@ -370,6 +370,9 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (flow_id, trigger_key, nonce)
         );
         CREATE INDEX IF NOT EXISTS ix_webhook_replay_nonces_expires_at ON webhook_replay_nonces (expires_at);
+        -- Owner token of a replay entry: only the request that recorded it can release it again
+        -- (TryForgetAsync). NULL on rows written before the column existed, which never match a release.
+        ALTER TABLE webhook_replay_nonces ADD COLUMN IF NOT EXISTS registration_id UUID NULL;
 
         CREATE TABLE IF NOT EXISTS webhook_rejections (
             id              BIGSERIAL    PRIMARY KEY,

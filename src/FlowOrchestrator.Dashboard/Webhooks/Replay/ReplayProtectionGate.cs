@@ -44,7 +44,28 @@ public sealed class ReplayProtectionGate
     }
 
     /// <summary>Verdict + the wall-clock skew measured for diagnostics.</summary>
-    public readonly record struct ReplayResult(Decision Decision, TimeSpan Skew, string? Reason);
+    public readonly record struct ReplayResult(Decision Decision, TimeSpan Skew, string? Reason)
+    {
+        /// <summary>
+        /// The replay entry this evaluation recorded (set only for <see cref="Decision.Fresh"/>), so a caller
+        /// whose request fails before the run starts can release it again with <see cref="ReleaseAsync"/>.
+        /// </summary>
+        public WebhookReplayRegistration? Registration { get; init; }
+    }
+
+    /// <summary>
+    /// Releases a replay entry this gate recorded, so a publisher's retry of a delivery that failed before its
+    /// run was started is not rejected as a replay.
+    /// </summary>
+    /// <param name="registration">The registration returned on the <see cref="Decision.Fresh"/> verdict.</param>
+    /// <param name="ct">Cancellation token; compensation callers pass <see cref="CancellationToken.None"/>.</param>
+    /// <returns><see langword="true"/> when the entry was still owned by <paramref name="registration"/> and is now gone.</returns>
+    /// <remarks>
+    /// The store removes the entry only when its owner token matches, so a release can never drop an entry a
+    /// different request recorded — a replayer's registration fails, and it never holds the token.
+    /// </remarks>
+    public ValueTask<bool> ReleaseAsync(WebhookReplayRegistration registration, CancellationToken ct = default)
+        => _store.TryForgetAsync(registration.FlowId, registration.TriggerKey, registration.Nonce, registration.RegistrationId, ct);
 
     /// <summary>
     /// Evaluates the request. Returns <see cref="Decision.Disabled"/> when
@@ -124,9 +145,10 @@ public sealed class ReplayProtectionGate
             // replay key, held for 2 × tolerance from the server clock.
             var bodyNonce = authenticatedNonce ?? DefaultNonce(body, string.Empty);
             var bodyKeyExpiry = _clock.GetUtcNow().AddSeconds(2d * toleranceSeconds);
-            var fresh = await _store.TryRegisterAsync(flowId, triggerKey, bodyNonce, bodyKeyExpiry, ct).ConfigureAwait(false);
+            var bodyRegistration = new WebhookReplayRegistration(flowId, triggerKey, bodyNonce, Guid.NewGuid());
+            var fresh = await _store.TryRegisterAsync(flowId, triggerKey, bodyNonce, bodyKeyExpiry, bodyRegistration.RegistrationId, ct).ConfigureAwait(false);
             return fresh
-                ? new ReplayResult(Decision.Fresh, TimeSpan.Zero, null)
+                ? new ReplayResult(Decision.Fresh, TimeSpan.Zero, null) { Registration = bodyRegistration }
                 : new ReplayResult(Decision.ReplayRejected, TimeSpan.Zero, "nonce_seen");
         }
 
@@ -171,11 +193,12 @@ public sealed class ReplayProtectionGate
         // An unsigned nonce header is caller-controlled and uncapped; the SQL / PostgreSQL columns are 256
         // characters. Over-long nonces are registered as a fixed-length digest, so they still dedupe.
         nonce = WebhookReplayNonceStorage.ToStorageForm(nonce);
-        var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, ct).ConfigureAwait(false);
+        var registration = new WebhookReplayRegistration(flowId, triggerKey, nonce, Guid.NewGuid());
+        var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, registration.RegistrationId, ct).ConfigureAwait(false);
         if (!registered)
             return new ReplayResult(Decision.ReplayRejected, skew, "nonce_seen");
 
-        return new ReplayResult(Decision.Fresh, skew, null);
+        return new ReplayResult(Decision.Fresh, skew, null) { Registration = registration };
     }
 
     // DateTimeOffset.FromUnixTimeSeconds throws outside this range; reject instead of surfacing a 500.

@@ -285,12 +285,11 @@ Both come from [replay protection](#replay-protection): turn it on with
 `UseReplayProtection(toleranceSeconds: 300)` (or
 `webhookReplayToleranceSeconds = 300` on the trigger). The skew window then
 applies to the signed `webhook-timestamp`, and the signed `webhook-id` is the
-replay key — a resend of the same message id within the window is `409`, even
-though the publisher re-timestamps and re-signs every retry. The key is held for
-`2 × tolerance` from the first delivery's timestamp, so a retry of a message whose
-first attempt passed the gate but then failed (a `5xx` while starting the run) is
-accepted again once that window has passed; publishers retry on a back-off
-schedule well beyond it.
+replay key — once a message has been processed, a resend of the same message id
+within the window is `409`, even though the publisher re-timestamps and re-signs
+every retry. A first attempt that failed before its run started (a `5xx` from the
+trigger, for example) does not count: its key is released, so the publisher's
+retry is processed — see [Failed deliveries release their key](#failed-deliveries-release-their-key).
 
 There is no `Svix` alias: use `StandardWebhooks` for every provider that signs
 this way. (`Svix` stays an unknown scheme name and is rejected like any other.)
@@ -388,6 +387,36 @@ every minute. For multi-replica deployments use the SQL Server or
 PostgreSQL backend (see [Storage](storage.md#webhook-hardening-backends-v125))
 — the in-memory store is single-process and would let a replay through
 on a second replica.
+
+### Failed deliveries release their key
+
+The replay key is recorded when the request passes the gate, before the run is
+started. If the request then fails without starting a run — the legacy
+`X-Webhook-Key` check refuses it (`401`), the trigger throws (`5xx`), or the client
+disconnects before the run is written — the endpoint releases the key again
+(EventId 4014), so the publisher's retry is processed instead of being answered
+`409`. Without this, a store outage during one delivery turned every retry inside
+the window into a lost delivery, and a caller without the shared secret could
+burn any `webhookNonceHeader` value it chose.
+
+The release cannot open a replay window:
+
+- Each registration carries a random owner token (`registrationId`) that never
+  leaves the process; the store removes the entry only when the token matches. A
+  replayer's own registration fails (the entry already exists), so it never holds
+  the token of the entry that blocks it.
+- It runs only on failure. A delivery whose trigger returned — run started,
+  `Idempotency-Key` duplicate, or disabled flow (`202`) — keeps its key.
+- It does not run once the engine has dispatched or skipped an entry step
+  (`ITriggerContext.EntryStepsStarted`): that run is alive and recovery finishes
+  it, so a retry would start a second one.
+- It runs with `CancellationToken.None` and is best effort: if the store cannot
+  be reached the original failure is still returned, EventId 4013 is logged, and
+  the key expires as it always did.
+
+Entries are owner-tagged in a nullable `RegistrationId` / `registration_id`
+column that the SQL Server and PostgreSQL migrators add on startup; rows written
+before the upgrade have no owner and simply expire.
 
 ## Rate limiting
 > Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under `Off` nothing below takes effect at all. `Enforce` is the default since 2.0.

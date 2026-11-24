@@ -108,6 +108,44 @@ public sealed class WebhookSecurityPipeline
         /// <c>webhookSecret</c> used as the HMAC key is never sent back as a header by the publisher.
         /// </summary>
         public bool SignatureVerified { get; init; }
+
+        /// <summary>
+        /// The replay-protection entry this request recorded, or <see langword="null"/> when replay protection
+        /// did not register one. A caller whose request then fails before the run is started passes the result
+        /// to <see cref="ReleaseReplayRegistrationAsync"/>, so the publisher's retry is not answered as a replay.
+        /// </summary>
+        public WebhookReplayRegistration? ReplayRegistration { get; init; }
+    }
+
+    /// <summary>
+    /// Compensates a delivery that passed the gate chain and then failed before its run was started (a refused
+    /// legacy key, a trigger that threw, a client disconnect before the trigger write): releases the replay entry
+    /// the request recorded, so the publisher's retry is processed instead of rejected with <c>409</c>.
+    /// </summary>
+    /// <param name="flowId">Flow the delivery targeted (logging).</param>
+    /// <param name="triggerKey">Trigger the delivery targeted (logging).</param>
+    /// <param name="registration">The <see cref="PipelineResult.ReplayRegistration"/> of the failed request.</param>
+    /// <remarks>
+    /// Runs with <see cref="CancellationToken.None"/>: it executes on a failure path that may have been caused by
+    /// the caller disconnecting, and the release must still happen. Best effort — a store failure is logged
+    /// (EventId 4013) and never masks the original failure; the entry then simply expires as before.
+    /// Only the owner token in <paramref name="registration"/> can release the entry, so this cannot open a
+    /// replay window for anybody else.
+    /// </remarks>
+    internal async ValueTask ReleaseReplayRegistrationAsync(Guid flowId, string triggerKey, WebhookReplayRegistration registration)
+    {
+        if (_replayGate is null)
+            return;
+        try
+        {
+            var released = await _replayGate.ReleaseAsync(registration, CancellationToken.None).ConfigureAwait(false);
+            if (released && _logger is not null)
+                WebhookLog.ReplayKeyReleased(_logger, flowId, triggerKey);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (_logger is not null) WebhookLog.ReplayKeyReleaseFailed(_logger, ex, flowId, triggerKey);
+        }
     }
 
     /// <summary>
@@ -311,6 +349,7 @@ public sealed class WebhookSecurityPipeline
         }
 
         // ── Replay-protection gate ──
+        WebhookReplayRegistration? replayRegistration = null;
         if (_replayGate is not null)
         {
             var tolerance = TryGetInt(triggerInputs, "webhookReplayToleranceSeconds")
@@ -336,12 +375,17 @@ public sealed class WebhookSecurityPipeline
                     case ReplayProtectionGate.Decision.TimestampMissing:
                         return await PersistRejectReplayAsync(flowId, triggerKey, verdict.Reason ?? verdict.Decision.ToString(), clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
                 }
+                replayRegistration = verdict.Registration;
             }
         }
 
         Activity.Current?.SetTag("flow.webhook.result", "accepted");
         Accept(deferredAcceptance, flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch, spec?.HeaderName);
-        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation) { SignatureVerified = signatureVerified };
+        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation)
+        {
+            SignatureVerified = signatureVerified,
+            ReplayRegistration = replayRegistration,
+        };
     }
 
     /// <summary>

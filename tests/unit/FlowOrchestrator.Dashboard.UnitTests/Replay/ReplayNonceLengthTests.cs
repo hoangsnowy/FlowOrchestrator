@@ -93,6 +93,12 @@ public sealed class ReplayNonceLengthTests
             return ValueTask.FromResult(true);
         }
 
+        public ValueTask<bool> TryRegisterAsync(Guid flowId, string triggerKey, string nonce, DateTimeOffset expiresAt, Guid registrationId, CancellationToken ct = default)
+            => TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, ct);
+
+        public ValueTask<bool> TryForgetAsync(Guid flowId, string triggerKey, string nonce, Guid registrationId, CancellationToken ct = default)
+            => ValueTask.FromResult(false);
+
         public ValueTask<int> PurgeExpiredAsync(DateTimeOffset now, CancellationToken ct = default) => ValueTask.FromResult(0);
     }
 }

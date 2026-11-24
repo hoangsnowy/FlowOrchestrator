@@ -545,6 +545,7 @@ public static class DashboardServiceCollectionExtensions
             // in later phases).
             var pipeline = http.RequestServices.GetService<WebhookSecurityPipeline>();
             var signatureVerified = false;
+            Webhooks.Replay.WebhookReplayRegistration? replayRegistration = null;
             // The pipeline's "accepted" log row is held until the legacy key check below has run, so a delivery
             // refused there is logged as the rejection it is, never as accepted.
             var acceptance = new WebhookSecurityPipeline.DeferredAcceptance();
@@ -559,61 +560,85 @@ public static class DashboardServiceCollectionExtensions
                     return;
                 }
                 signatureVerified = verdict.SignatureVerified;
+                replayRegistration = verdict.ReplayRegistration;
             }
 
-            // Backwards-compat shared-secret check (kept after the pipeline so flows
-            // that haven't migrated to webhookSignatureScheme still authenticate).
-            // Skipped when a signature scheme verified the request: webhookSecret is then the
-            // legacy alias of the HMAC key, and the publisher (GitHub, Stripe, …) never sends it
-            // back as X-Webhook-Key, so demanding it would reject every correctly signed delivery.
-            if (!string.IsNullOrEmpty(expectedSecret) && !signatureVerified)
+            // From here until the trigger returns the delivery can still fail with no run started: a refused
+            // legacy key, a trigger that throws (5xx), a client disconnect before the trigger write. The replay
+            // gate has already recorded this delivery's key, so without compensation the publisher's retry is
+            // answered 409 and the delivery is lost. The finally block releases the key — only the key this
+            // request recorded (owner token), only on failure, and not once the engine has dispatched an entry
+            // step (EntryStepsStarted), because that run is alive and a retry would duplicate it.
+            var triggerReturned = false;
+            TriggerContext? ctx = null;
+            try
             {
-                var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
-                    ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
-                if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
+                // Backwards-compat shared-secret check (kept after the pipeline so flows
+                // that haven't migrated to webhookSignatureScheme still authenticate).
+                // Skipped when a signature scheme verified the request: webhookSecret is then the
+                // legacy alias of the HMAC key, and the publisher (GitHub, Stripe, …) never sends it
+                // back as X-Webhook-Key, so demanding it would reject every correctly signed delivery.
+                if (!string.IsNullOrEmpty(expectedSecret) && !signatureVerified)
                 {
-                    var keyLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
-                    if (keyLogger is not null)
-                        WebhookLog.SecretInvalid(keyLogger, flow.Id, triggerKey);
-                    if (pipeline is not null)
+                    var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
+                        ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
+                    if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
                     {
-                        // "secret_invalid" is the reason the webhook_rejected_total metric documents for this check.
-                        await pipeline.RecordRejectionAfterPipelineAsync(
-                            http, flow.Id, triggerKey, "secret_invalid",
-                            StatusCodes.Status401Unauthorized, buffered.Bytes, headers, acceptance);
+                        var keyLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+                        if (keyLogger is not null)
+                            WebhookLog.SecretInvalid(keyLogger, flow.Id, triggerKey);
+                        if (pipeline is not null)
+                        {
+                            // "secret_invalid" is the reason the webhook_rejected_total metric documents for this check.
+                            await pipeline.RecordRejectionAfterPipelineAsync(
+                                http, flow.Id, triggerKey, "secret_invalid",
+                                StatusCodes.Status401Unauthorized, buffered.Bytes, headers, acceptance);
+                        }
+                        http.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
+                        return;
                     }
-                    http.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
+                }
+
+                pipeline?.CommitAcceptance(acceptance);
+
+                ctx = new TriggerContext
+                {
+                    RunId = Guid.NewGuid(),
+                    Flow = flow,
+                    Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), buffered.Parsed, headers)
+                };
+                var webhookResult = await engine.TriggerAsync(ctx) as FlowTriggerResult;
+                // The trigger returned: the delivery is handled (run started, duplicate, or disabled flow), so
+                // its replay key stays — from here on a repeat really is a replay.
+                triggerReturned = true;
+                var webhookLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+
+                // A disabled flow must not be logged as an accepted delivery, and must not answer with a
+                // run id that no run backs. 202 rather than 409: a webhook sender cannot act on the
+                // distinction and retrying would not help, so the delivery is acknowledged as received
+                // and explicitly reported as not started.
+                if (webhookResult is { Disabled: true })
+                {
+                    http.Response.StatusCode = StatusCodes.Status202Accepted;
+                    await WriteJsonAsync(http.Response, new { runId = webhookResult.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
                     return;
                 }
+
+                var startedRunId = webhookResult?.RunId ?? ctx.RunId;
+                if (webhookLogger is not null)
+                    WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
+                await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
             }
-
-            pipeline?.CommitAcceptance(acceptance);
-
-            var ctx = new TriggerContext
+            finally
             {
-                RunId = Guid.NewGuid(),
-                Flow = flow,
-                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), buffered.Parsed, headers)
-            };
-            var webhookResult = await engine.TriggerAsync(ctx) as FlowTriggerResult;
-            var webhookLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
-
-            // A disabled flow must not be logged as an accepted delivery, and must not answer with a
-            // run id that no run backs. 202 rather than 409: a webhook sender cannot act on the
-            // distinction and retrying would not help, so the delivery is acknowledged as received
-            // and explicitly reported as not started.
-            if (webhookResult is { Disabled: true })
-            {
-                http.Response.StatusCode = StatusCodes.Status202Accepted;
-                await WriteJsonAsync(http.Response, new { runId = webhookResult.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
-                return;
+                if (!triggerReturned && replayRegistration is { } registration && pipeline is not null
+                    && ctx?.EntryStepsStarted != true)
+                {
+                    // CancellationToken.None inside: this may be running because the caller went away.
+                    await pipeline.ReleaseReplayRegistrationAsync(flow.Id, triggerKey, registration);
+                }
             }
-
-            var startedRunId = webhookResult?.RunId ?? ctx.RunId;
-            if (webhookLogger is not null)
-                WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
-            await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
         }).AddEndpointFilter(ClientDisconnectFilter);
 
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
