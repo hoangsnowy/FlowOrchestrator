@@ -51,6 +51,21 @@ public sealed partial class FlowOrchestratorEngine
 
         try
         {
+            // Mixed-version window (rolling deploy): a step dispatched by a replica running a newer
+            // manifest can be delivered to a replica that has not restarted yet. Its manifest does not
+            // contain the step, and before 2.0 the executor recorded it Skipped ("Step metadata not
+            // found.") — a terminal row no later version could undo, which then cascade-skipped every
+            // dependent and could close the run Skipped. Decide BEFORE the claim, so a hand-back leaves
+            // nothing behind. Cost per step execution, independent of the run's size: one allocation-free
+            // FindStep — a dictionary hit for a top-level key, O(key length) for a loop child — the same
+            // lookup the executor repeats. The flow-store read happens only on the miss.
+            if (flow.Manifest.Steps.FindStep(step.Key) is null
+                && await TryHandBackStepUnknownToManifestAsync(ctx, flow, step).ConfigureAwait(false))
+            {
+                activity?.SetTag("flow.step.handed_back", true);
+                return null;
+            }
+
             // Execute-time claim guard (v1.22+). Atomic INSERT into FlowStepClaims; only the first
             // worker to call this for (runId, stepKey) wins, the rest exit silently. Critical for
             // at-least-once delivery models where one enqueued message can reach multiple
@@ -857,6 +872,72 @@ public sealed partial class FlowOrchestratorEngine
                 EngineLog.StepSkipTrackingFailed(_logger, ex, loopKey);
             }
         }
+    }
+
+    /// <summary>
+    /// Delay before a step handed back by a worker whose manifest does not contain it is redelivered.
+    /// </summary>
+    /// <remarks>
+    /// Long enough that a rolling deploy is not flooded by redeliveries bouncing between stale replicas,
+    /// short enough that the step is not noticeably late once a current replica picks it up.
+    /// </remarks>
+    internal static readonly TimeSpan UnknownStepRedeliveryDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Handles a step whose key the executing worker's manifest does not contain: hands it back to the
+    /// runtime when another manifest version is registered for the flow, so a worker that knows the step
+    /// runs it; otherwise lets the caller record it as removed.
+    /// </summary>
+    /// <param name="ctx">Execution context of the run.</param>
+    /// <param name="flow">The flow definition this worker holds.</param>
+    /// <param name="step">The step this worker was handed.</param>
+    /// <returns>
+    /// <see langword="true"/> when the step was redelivered and the caller must exit without claiming it;
+    /// <see langword="false"/> when this worker holds the registered manifest (the step was removed from the
+    /// flow) or no manifest is registered, and the step is recorded <see cref="StepStatus.Skipped"/> by the
+    /// ordinary path.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The worker cannot tell from its own manifest whether the step was added in a version it has not
+    /// loaded yet, or removed in the version it has. The flow store can: every host syncs its manifest there
+    /// at startup (<c>FlowSyncHostedService</c>), so a stored manifest that differs from this worker's means
+    /// another version is live. Only a worker that holds the registered manifest takes the terminal decision.
+    /// When the deploy converges — every replica restarted, or rolled back — the stored manifest matches
+    /// every worker again and the step is decided on its next delivery, so a hand-back cannot loop for ever.
+    /// </para>
+    /// <para>
+    /// The dispatch-ledger row this delivery was queued under is kept, so the run never reads as finished
+    /// while the step is in transit; the redelivery reuses it. A store read that fails hands the step back
+    /// too: a Skipped row cannot be undone, a redelivery can be repeated.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> TryHandBackStepUnknownToManifestAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    {
+        bool anotherVersionRegistered;
+        try
+        {
+            var record = await _flowStore.GetByIdAsync(flow.Id).ConfigureAwait(false);
+            anotherVersionRegistered = record?.ManifestJson is { } stored && !RegisteredManifest.Matches(stored, flow);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.UnknownStepManifestCheckFailed(_logger, ex, step.Key);
+            anotherVersionRegistered = true;
+        }
+
+        if (!anotherVersionRegistered)
+        {
+            EngineLog.UnknownStepRemovedFromManifest(_logger, step.Key, flow.Id);
+            return false;
+        }
+
+        EngineLog.UnknownStepHandedBack(_logger, step.Key, flow.Id, UnknownStepRedeliveryDelay.TotalSeconds);
+
+        // The ledger row is held; DispatchReservedStepAsync releases it if the runtime rejects the message,
+        // and the throw makes the runtime retry this delivery.
+        await DispatchReservedStepAsync(ctx, flow, step, UnknownStepRedeliveryDelay).ConfigureAwait(false);
+        return true;
     }
 
     private async Task RecordSkippedCurrentStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, string terminalStatus)

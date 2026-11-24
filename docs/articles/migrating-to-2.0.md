@@ -432,6 +432,11 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       - `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` — deletes claims with no step row older than
         the given age (on the clock that stamped them) together with their ledger rows.
 - [ ] `RecordSkippedStepAsync` writes the step row and its attempt row in one transaction.
+- [ ] `IFlowStore.GetByIdAsync` returns the `ManifestJson` that `SaveAsync` stored (byte-identical, or JSON
+      that is structurally equal). During a rolling deploy the engine compares it with its own manifest to
+      decide whether a step it does not know belongs to a newer version (hand it back) or was removed
+      (record it `Skipped`). A store that drops the column (`null`) gets the removed-step answer every time,
+      which is the 1.x behaviour.
 - [ ] Optional members with default implementations (`IsStepClaimedAsync`, `IsStepDispatchedAsync`,
       `GetStepAsync`, `SearchRunsAsync`, …) are worth overriding with point queries: the defaults fetch
       whole sets.
@@ -558,6 +563,16 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
   duplicate signal delivery that races the first one now gets `409` (already delivered) instead of `404`.
 - An idempotency key longer than 256 characters is accepted on SQL Server / PostgreSQL (it returned `500`)
   and stored as a `sha256:` digest; shorter keys are stored exactly as before.
+- **In-flight runs and manifest changes.** A run is not pinned to the manifest it started under: every
+  decision uses the manifest of the worker taking it, on every runtime — so a step added to a deployed flow
+  runs in in-flight runs whose prerequisites it finds satisfied, including a new entry step. What changed in
+  2.0 is the rolling-deploy window: a replica that has not restarted yet and is handed a step of the new
+  version no longer records it `Skipped` (which cascade-skipped its dependents and could end the run
+  `Skipped`); it hands the step back for a replica that knows it (EventId 3020). A step queued before a
+  deploy that removed it is recorded `Skipped` (EventId 3021), and the in-memory runtime's startup recovery
+  now redelivers such a step instead of leaving the run open for ever. See
+  [Versioning Flows](versioning.md#the-rule--in-flight-runs-follow-the-latest-manifest), rewritten for 2.0 —
+  the 1.x page claimed in-flight runs kept the graph they started with, which was never the case.
 - A run the user cancelled stays `Cancelled` even when its deadline passes while the cancel is being
   recorded; it used to be relabelled `TimedOut`, and a later retry could then clear the cancel.
 - The Hangfire package no longer brings the OpenTelemetry SDK or `Microsoft.Extensions.Logging`
