@@ -34,4 +34,7 @@ internal static partial class DashboardAuthLog
 
     [LoggerMessage(EventId = 4108, Level = LogLevel.Warning, Message = "Signal '{SignalName}' for run {RunId} refused for '{User}' ({Method}): {Reason}.")]
     public static partial void SignalDeliveryDenied(ILogger logger, string signalName, Guid runId, string? user, string method, string reason);
+
+    [LoggerMessage(EventId = 4109, Level = LogLevel.Warning, Message = "FlowDashboard:Authorization:UnregisteredFlowSignals is OperatorRule: a signal for a run whose flow this host does not register is delivered under the operator rule, so allowedRoles / authorizationPolicy on its WaitForSignal step are not enforced over HTTP. Register the same flows on the dashboard host and use Deny (the default) where you can.")]
+    public static partial void UnregisteredFlowSignalsUseOperatorRule(ILogger logger);
 }

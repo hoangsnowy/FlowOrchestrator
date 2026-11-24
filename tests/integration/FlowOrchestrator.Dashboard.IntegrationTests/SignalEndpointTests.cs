@@ -11,10 +11,32 @@ namespace FlowOrchestrator.Dashboard.Tests;
 /// </summary>
 public sealed class SignalEndpointTests : IDisposable
 {
+    private static readonly Guid ApprovalFlowId = new("5a5a5a5a-0000-0000-0000-0000000000a1");
     private readonly DashboardTestServer _server = new();
     private readonly HttpClient _client;
 
-    public SignalEndpointTests() => _client = _server.CreateClient();
+    /// <summary>
+    /// Registers the runs' flow with one unrestricted <c>WaitForSignal</c> step: the endpoint refuses signals
+    /// for flows this host does not register (<c>UnregisteredFlowSignals = Deny</c>).
+    /// </summary>
+    public SignalEndpointTests()
+    {
+        _client = _server.CreateClient();
+        var flow = Substitute.For<FlowOrchestrator.Core.Abstractions.IFlowDefinition>();
+        flow.Id.Returns(ApprovalFlowId);
+        flow.Manifest.Returns(new FlowOrchestrator.Core.Abstractions.FlowManifest
+        {
+            Steps = new FlowOrchestrator.Core.Abstractions.StepCollection
+            {
+                ["wait_for_approval"] = new FlowOrchestrator.Core.Abstractions.StepMetadata
+                {
+                    Type = "WaitForSignal",
+                    Inputs = new Dictionary<string, object?> { ["signalName"] = "approval" },
+                },
+            },
+        });
+        _server.Flows = new FlowOrchestrator.Core.Abstractions.FlowRegistry([flow]);
+    }
 
     public void Dispose() => _server.Dispose();
 
@@ -40,7 +62,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Succeeded" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Succeeded" });
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
@@ -58,7 +80,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         using var content = new StringContent("{not-json", Encoding.UTF8, "application/json");
 
         // Act
@@ -76,7 +98,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         _server.SignalDispatcher
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
@@ -98,7 +120,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         _server.SignalDispatcher
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
@@ -120,7 +142,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         var deliveredAt = DateTimeOffset.UtcNow;
         _server.SignalDispatcher
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())

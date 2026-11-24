@@ -48,6 +48,18 @@ public sealed class FlowDashboardAuthorizationOptions
     public string[]? AdditionalAuthenticationSchemes { get; set; }
 
     /// <summary>
+    /// What the signal endpoint does with a run whose flow is not registered in this host, so its
+    /// <c>WaitForSignal</c> restrictions cannot be read. Defaults to <see cref="UnregisteredFlowSignalMode.Deny"/>.
+    /// </summary>
+    /// <remarks>
+    /// Applies whatever authentication is configured, anonymous Development access included. A deployment that
+    /// serves the dashboard from a host without the flows (workers elsewhere) either registers the same flows on
+    /// the dashboard host or opts in to <see cref="UnregisteredFlowSignalMode.OperatorRule"/>, which is logged at
+    /// startup because it lets any operator deliver a signal a restriction would have refused.
+    /// </remarks>
+    public UnregisteredFlowSignalMode UnregisteredFlowSignals { get; set; } = UnregisteredFlowSignalMode.Deny;
+
+    /// <summary>
     /// Roles allowed to read the dashboard: pages, run lists, run detail, the event stream. A user with any
     /// of them, or any <see cref="OperatorRoles"/> role, can view. <see langword="null"/> means
     /// <c>flow-viewer</c>; an empty array means any signed-in user can view.
@@ -112,4 +124,23 @@ public sealed class FlowDashboardAuthorizationOptions
 
     /// <summary>Operator roles with the default applied.</summary>
     internal IReadOnlyList<string> EffectiveOperatorRoles => OperatorRoles ?? ["flow-operator"];
+}
+
+/// <summary>
+/// How the dashboard signal endpoint treats a run whose flow the dashboard host does not register.
+/// </summary>
+public enum UnregisteredFlowSignalMode
+{
+    /// <summary>
+    /// Refuse the delivery with <c>403</c> for every caller: without the manifest the dashboard cannot tell
+    /// whether the signal is restricted, so it fails closed. The default.
+    /// </summary>
+    Deny = 0,
+
+    /// <summary>
+    /// Treat the signal as unrestricted: an operator may deliver it. Only for split deployments whose
+    /// dashboard host deliberately does not register the flows; a restriction declared on the step is then not
+    /// enforced over HTTP.
+    /// </summary>
+    OperatorRule = 1,
 }

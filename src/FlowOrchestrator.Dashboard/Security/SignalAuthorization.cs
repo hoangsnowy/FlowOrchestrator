@@ -22,6 +22,20 @@ namespace FlowOrchestrator.Dashboard.Security;
 /// </param>
 internal sealed record SignalRequirement(string StepKey, IReadOnlyList<string> AllowedRoles, string? Policy, string? Error = null);
 
+/// <summary>Whether a caller may deliver one signal of one run, and why not.</summary>
+/// <param name="Allowed"><see langword="true"/> when the signal endpoint would deliver it.</param>
+/// <param name="Requirements">Restrictions of every step the signal can reach; empty for an unrestricted signal.</param>
+/// <param name="FlowUnregistered">
+/// <see langword="true"/> when the run's flow is not registered in this host and
+/// <see cref="UnregisteredFlowSignalMode.Deny"/> refused the delivery.
+/// </param>
+/// <param name="DenialReason">Log-facing reason when <paramref name="Allowed"/> is <see langword="false"/>.</param>
+internal sealed record SignalAccessDecision(bool Allowed, IReadOnlyList<SignalRequirement> Requirements, bool FlowUnregistered, string? DenialReason)
+{
+    /// <summary><see langword="true"/> when at least one reachable step restricts the signal.</summary>
+    public bool IsRestricted => Requirements.Count > 0;
+}
+
 /// <summary>Result of checking a caller against the requirements of one signal.</summary>
 internal enum SignalAuthorizationOutcome
 {
@@ -187,6 +201,129 @@ internal static class SignalAuthorization
 
         return SignalAuthorizationOutcome.Allowed;
     }
+
+    /// <summary>
+    /// Decides whether <paramref name="access"/> may deliver <paramref name="signalName"/> to a run of
+    /// <paramref name="flow"/>. The single rule shared by the signal endpoint and run detail's
+    /// <c>canSignal</c>, so the page never offers a delivery the endpoint refuses.
+    /// </summary>
+    /// <param name="http">The request; supplies the signed-in principal and the authorization services.</param>
+    /// <param name="access">Who the caller is, as resolved by the access filter.</param>
+    /// <param name="flow">The run's flow, or <see langword="null"/> when this host does not register it.</param>
+    /// <param name="signalName">The addressed signal name.</param>
+    /// <param name="unregistered">What to do when <paramref name="flow"/> is <see langword="null"/>.</param>
+    /// <returns>The decision, with the reachable restrictions and a log-facing reason when refused.</returns>
+    /// <remarks>
+    /// Restricted (any reachable step declares a restriction): the caller must be an identity signed in through
+    /// <c>FlowDashboard:Authorization</c> and satisfy every one — the operator role is irrelevant. Unrestricted:
+    /// the caller needs the operator role. Unregistered flow: refused under
+    /// <see cref="UnregisteredFlowSignalMode.Deny"/>, the operator rule under
+    /// <see cref="UnregisteredFlowSignalMode.OperatorRule"/>. One manifest walk, O(steps).
+    /// </remarks>
+    public static async ValueTask<SignalAccessDecision> DecideAsync(
+        HttpContext http,
+        DashboardAccess access,
+        IFlowDefinition? flow,
+        string signalName,
+        UnregisteredFlowSignalMode unregistered)
+    {
+        if (flow is null)
+        {
+            if (unregistered == UnregisteredFlowSignalMode.Deny)
+                return new(false, [], FlowUnregistered: true, "the run's flow is not registered in this host, so its signal restrictions cannot be checked (UnregisteredFlowSignals = Deny)");
+            return access.CanOperate
+                ? new(true, [], false, null)
+                : new(false, [], false, "unregistered flow under the operator rule, and the caller is not an operator");
+        }
+
+        var requirements = ForSignal(flow.Manifest.Steps, signalName);
+        if (requirements.Count == 0)
+        {
+            return access.CanOperate
+                ? new(true, requirements, false, null)
+                : new(false, requirements, false, "unrestricted signal needs the operator role");
+        }
+
+        var outcome = await AuthorizeAsync(http, access.IsIdentity ? http.User : null, requirements).ConfigureAwait(false);
+        return outcome == SignalAuthorizationOutcome.Allowed
+            ? new(true, requirements, false, null)
+            : new(false, requirements, false, DescribeDenial(outcome));
+    }
+
+    /// <summary>
+    /// Returns the signal name a parked step waits on: the resolved <c>signalName</c> in its step record's
+    /// input JSON (what the handler registered), else the manifest's static value, else <c>"default"</c>.
+    /// </summary>
+    /// <param name="inputJson">The step record's resolved inputs, as persisted.</param>
+    /// <param name="template">The step's manifest metadata, when known.</param>
+    /// <returns>The trimmed signal name.</returns>
+    public static string SignalNameOf(string? inputJson, StepMetadata? template)
+    {
+        if (!string.IsNullOrWhiteSpace(inputJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(inputJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var property in doc.RootElement.EnumerateObject())
+                    {
+                        if (string.Equals(property.Name, SignalNameInput, StringComparison.OrdinalIgnoreCase)
+                            && property.Value.ValueKind == JsonValueKind.String
+                            && property.Value.GetString() is { Length: > 0 } resolved
+                            && !string.IsNullOrWhiteSpace(resolved))
+                            return resolved.Trim();
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Unreadable record: fall back to the manifest.
+            }
+        }
+
+        return template is not null && TryGetStaticSignalName(template, out var name) ? name : DefaultSignalName;
+    }
+
+    /// <summary>Human-readable summary of what a restricted signal needs, e.g. <c>Requires role: finance-approver.</c></summary>
+    /// <param name="restriction">The signal's restrictions.</param>
+    /// <returns>One sentence per restricted step, naming roles and policies only.</returns>
+    public static string Describe(IReadOnlyList<SignalRequirement> restriction)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (var requirement in restriction)
+        {
+            if (text.Length > 0)
+                text.Append(' ');
+            if (requirement.Error is not null)
+            {
+                text.Append("Its restriction is misconfigured; nobody can deliver it until the flow is fixed.");
+                continue;
+            }
+            text.Append("Requires ");
+            if (requirement.AllowedRoles.Count > 0)
+            {
+                text.Append(requirement.AllowedRoles.Count == 1 ? "role: " : "one of the roles: ")
+                    .AppendJoin(", ", requirement.AllowedRoles);
+                if (requirement.Policy is not null)
+                    text.Append(" and ");
+            }
+            if (requirement.Policy is not null)
+                text.Append("policy: ").Append(requirement.Policy);
+            text.Append(", signed in through the identity provider.");
+        }
+        return text.ToString();
+    }
+
+    /// <summary>Log-facing reason for a <see cref="SignalAuthorizationOutcome"/>.</summary>
+    private static string DescribeDenial(SignalAuthorizationOutcome outcome) => outcome switch
+    {
+        SignalAuthorizationOutcome.NotSignedIn => "restricted signal needs an identity signed in through FlowDashboard:Authorization",
+        SignalAuthorizationOutcome.MissingRole => "caller has none of the allowed roles",
+        SignalAuthorizationOutcome.PolicyFailed => "caller does not satisfy the authorization policy",
+        SignalAuthorizationOutcome.Misconfigured => "the signal's restriction is malformed or names an unregistered policy",
+        _ => outcome.ToString(),
+    };
 
     /// <summary>
     /// Validates every restricted <c>WaitForSignal</c> step of every registered flow, at startup.

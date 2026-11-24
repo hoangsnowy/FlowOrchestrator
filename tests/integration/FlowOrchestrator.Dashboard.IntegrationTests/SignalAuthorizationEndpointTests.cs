@@ -9,6 +9,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -40,7 +41,8 @@ public sealed class SignalAuthorizationEndpointTests
         bool identity = true,
         bool bearer = false,
         Action<IServiceCollection>? services = null,
-        string? environment = null)
+        string? environment = null,
+        Action<FlowDashboardOptions>? configure = null)
     {
         var server = DashboardTestServer.WithServices(s =>
         {
@@ -59,6 +61,7 @@ public sealed class SignalAuthorizationEndpointTests
                     o.Authorization.AuthenticationScheme = CookieScheme;
                 if (bearer)
                     o.Authorization.AdditionalAuthenticationSchemes = [BearerScheme];
+                configure?.Invoke(o);
             });
         }, environment);
         if (flow is not null)
@@ -473,6 +476,138 @@ public sealed class SignalAuthorizationEndpointTests
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.False(doc.RootElement.TryGetProperty("signalAuthorization", out _));
+    }
+
+    [Fact]
+    public async Task Run_detail_applies_the_endpoints_union_rule_to_steps_sharing_a_signal_name()
+    {
+        // Arrange — wait_a alone would admit a finance approver; the shared name means the endpoint also
+        // demands legal-approver, and so must the page. wait_open declares nothing but shares the name too.
+        using var server = Server(Flow(
+            ("wait_a", WaitFor("approval", roles: ["finance-approver"])),
+            ("wait_b", WaitFor("approval", roles: ["legal-approver"])),
+            ("wait_open", WaitFor("approval"))));
+        var steps = new[]
+        {
+            new FlowStepRecord { StepKey = "wait_a", StepType = "WaitForSignal", Status = "Pending", InputJson = """{"signalName":"approval"}""" },
+            new FlowStepRecord { StepKey = "wait_open", StepType = "WaitForSignal", Status = "Pending", InputJson = """{"signalName":"approval"}""" },
+        };
+        var runId = ArrangeRunningRun(server, "approval", "wait_a", steps);
+
+        // Act
+        using var financeDetail = await server.Client.SendAsync(Get($"/flows/api/runs/{runId}", user: "fiona", roles: "flow-viewer,finance-approver"));
+        using var financeSignal = await server.Client.SendAsync(Signal(runId, "approval", user: "fiona", roles: "flow-viewer,finance-approver"));
+        using var bothDetail = await server.Client.SendAsync(Get($"/flows/api/runs/{runId}", user: "bo", roles: "flow-viewer,finance-approver,legal-approver"));
+        using var finance = JsonDocument.Parse(await financeDetail.Content.ReadAsStringAsync());
+        using var both = JsonDocument.Parse(await bothDetail.Content.ReadAsStringAsync());
+
+        // Assert — the page and the endpoint agree.
+        Assert.Equal(HttpStatusCode.Forbidden, financeSignal.StatusCode);
+        var financeHint = finance.RootElement.GetProperty("signalAuthorization");
+        Assert.False(financeHint.GetProperty("wait_a").GetProperty("canSignal").GetBoolean());
+        Assert.False(financeHint.GetProperty("wait_open").GetProperty("canSignal").GetBoolean());
+        Assert.Equal(2, financeHint.GetProperty("wait_a").GetProperty("requirements").GetArrayLength());
+        var bothHint = both.RootElement.GetProperty("signalAuthorization");
+        Assert.True(bothHint.GetProperty("wait_a").GetProperty("canSignal").GetBoolean());
+        Assert.True(bothHint.GetProperty("wait_open").GetProperty("canSignal").GetBoolean());
+    }
+
+    // ── Runs of flows this host does not register ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task Signal_for_an_unregistered_flow_is_refused_for_everyone_by_default()
+    {
+        // Arrange — no flow registered for the run; UnregisteredFlowSignals defaults to Deny.
+        var sink = new CapturingLoggerProvider();
+        using var server = Server(basic: true, services: s => s.AddSingleton<ILoggerProvider>(sink));
+        var steps = new[] { new FlowStepRecord { StepKey = "wait_finance", StepType = "WaitForSignal", Status = "Pending" } };
+        var runId = ArrangeRunningRun(server, steps: steps);
+        using var anonymousDev = new DashboardTestServer();
+        var anonymousRunId = ArrangeRunningRun(anonymousDev);
+
+        // Act
+        using var asOperator = await server.Client.SendAsync(Signal(runId, user: "otto", roles: "flow-operator"));
+        using var asBasic = await server.Client.SendAsync(Signal(runId, basic: true));
+        using var asAnonymous = await anonymousDev.Client.SendAsync(Signal(anonymousRunId));
+        using var detail = await server.Client.SendAsync(Get($"/flows/api/runs/{runId}", user: "otto", roles: "flow-operator"));
+        using var doc = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Forbidden, asOperator.StatusCode);
+        Assert.Contains("not registered", await asOperator.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, asBasic.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, asAnonymous.StatusCode);
+        await ReceivedNoDelivery(server);
+        await ReceivedNoDelivery(anonymousDev);
+        Assert.Contains(sink.Entries, e => e.EventId == 4108 && e.Message.Contains("not registered in this host", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.Entries, e => e.EventId == 4109);
+        var hint = doc.RootElement.GetProperty("signalAuthorization").GetProperty("wait_finance");
+        Assert.True(hint.GetProperty("flowUnregistered").GetBoolean());
+        Assert.False(hint.GetProperty("canSignal").GetBoolean());
+    }
+
+    [Fact]
+    public async Task OperatorRule_opt_in_delivers_signals_of_unregistered_flows_to_operators_only_and_is_logged()
+    {
+        // Arrange
+        var sink = new CapturingLoggerProvider();
+        using var server = Server(
+            services: s => s.AddSingleton<ILoggerProvider>(sink),
+            configure: o => o.Authorization.UnregisteredFlowSignals = UnregisteredFlowSignalMode.OperatorRule);
+        var steps = new[] { new FlowStepRecord { StepKey = "wait_finance", StepType = "WaitForSignal", Status = "Pending" } };
+        var runId = ArrangeRunningRun(server, steps: steps);
+
+        // Act
+        using var asOperator = await server.Client.SendAsync(Signal(runId, user: "otto", roles: "flow-operator"));
+        using var asViewer = await server.Client.SendAsync(Signal(runId, user: "vera", roles: "flow-viewer"));
+        using var detail = await server.Client.SendAsync(Get($"/flows/api/runs/{runId}", user: "otto", roles: "flow-operator"));
+        using var doc = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+
+        // Assert — the page falls back to its view-only rule, so no per-step hint is sent.
+        Assert.Equal(HttpStatusCode.OK, asOperator.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, asViewer.StatusCode);
+        Assert.Single(sink.Entries, e => e.EventId == 4109);
+        Assert.False(doc.RootElement.TryGetProperty("signalAuthorization", out _));
+    }
+
+    [Fact]
+    public void UnregisteredFlowSignals_binds_from_configuration_and_defaults_to_deny()
+    {
+        // Arrange
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["FlowDashboard:Authorization:UnregisteredFlowSignals"] = "OperatorRule" })
+            .Build();
+        var services = new ServiceCollection().AddFlowDashboard(configuration).BuildServiceProvider();
+
+        // Act
+        var bound = services.GetRequiredService<IOptions<FlowDashboardOptions>>().Value.Authorization.UnregisteredFlowSignals;
+        var fallback = new FlowDashboardAuthorizationOptions().UnregisteredFlowSignals;
+
+        // Assert
+        Assert.Equal(UnregisteredFlowSignalMode.OperatorRule, bound);
+        Assert.Equal(UnregisteredFlowSignalMode.Deny, fallback);
+    }
+
+    // ── /api/me for token callers ───────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Bearer_caller_is_reported_as_bearer_without_sign_out()
+    {
+        // Arrange
+        using var server = Server(bearer: true);
+
+        // Act
+        using var bearer = await server.Client.SendAsync(Get("/flows/api/me", bearer: ValidToken));
+        using var cookie = await server.Client.SendAsync(Get("/flows/api/me", user: "vera", roles: "flow-viewer"));
+        using var bearerDoc = JsonDocument.Parse(await bearer.Content.ReadAsStringAsync());
+        using var cookieDoc = JsonDocument.Parse(await cookie.Content.ReadAsStringAsync());
+
+        // Assert
+        Assert.Equal("bearer", bearerDoc.RootElement.GetProperty("method").GetString());
+        Assert.False(bearerDoc.RootElement.GetProperty("canSignOut").GetBoolean());
+        Assert.Equal("service-account-erp", bearerDoc.RootElement.GetProperty("user").GetString());
+        Assert.Equal("oidc", cookieDoc.RootElement.GetProperty("method").GetString());
+        Assert.True(cookieDoc.RootElement.GetProperty("canSignOut").GetBoolean());
     }
 
     // ── Audit ───────────────────────────────────────────────────────────────────────────────────

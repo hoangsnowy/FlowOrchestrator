@@ -11,8 +11,10 @@ namespace FlowOrchestrator.Dashboard.Security;
 
 /// <summary>Who is using the dashboard and what they may do, resolved once per request.</summary>
 /// <param name="Method">
-/// <c>"none"</c> (no protection configured), <c>"basic"</c>, or <c>"oidc"</c> for any identity signed in through
-/// <see cref="FlowDashboardAuthorizationOptions"/> (the cookie scheme or an additional scheme such as a bearer token).
+/// <c>"none"</c> (no protection configured), <c>"basic"</c>, <c>"oidc"</c> for an identity signed in through
+/// <see cref="FlowDashboardAuthorizationOptions.AuthenticationScheme"/> (the cookie session), or <c>"bearer"</c> for one
+/// signed in through an <see cref="FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes"/> scheme (an
+/// access token; nothing to sign out of).
 /// </param>
 /// <param name="UserName">Display name of the signed-in user; <see langword="null"/> when there is none.</param>
 /// <param name="CanOperate"><see langword="true"/> when the caller may use state-changing endpoints.</param>
@@ -24,7 +26,7 @@ namespace FlowOrchestrator.Dashboard.Security;
 internal sealed record DashboardAccess(string Method, string? UserName, bool CanOperate, bool CanView = true)
 {
     /// <summary><see langword="true"/> when the caller is an identity signed in through <see cref="FlowDashboardAuthorizationOptions"/>.</summary>
-    public bool IsIdentity => Method == "oidc";
+    public bool IsIdentity => Method is "oidc" or "bearer";
 
     /// <summary><see cref="HttpContext.Items"/> key the filter stores the resolved access under.</summary>
     public const string ItemKey = "FlowOrchestrator.Dashboard.Access";
@@ -149,13 +151,13 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
         var basic = options.BasicAuth;
         var identity = options.Authorization;
 
-        var principal = await AuthenticateAsync(http, identity.AuthenticationScheme!);
+        var (principal, viaAdditionalScheme) = await AuthenticateAsync(http, identity.AuthenticationScheme!);
         if (principal is not null)
         {
             http.User = principal;
             var canOperate = await HasAccessAsync(http, principal, identity.OperatePolicy, identity.EffectiveOperatorRoles);
             var canView = canOperate || await HasAccessAsync(http, principal, identity.ViewPolicy, identity.EffectiveViewerRoles);
-            http.Items[DashboardAccess.ItemKey] = new DashboardAccess("oidc", DisplayName(principal), canOperate, canView);
+            http.Items[DashboardAccess.ItemKey] = new DashboardAccess(viaAdditionalScheme ? "bearer" : "oidc", DisplayName(principal), canOperate, canView);
 
             var needsOperate = IsMutating(http.Request.Method);
             // /api/me and /signout stay reachable for any signed-in user, so one without a dashboard role
@@ -197,26 +199,26 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
 
     /// <summary>
     /// Authenticates with <paramref name="primaryScheme"/>, then each additional scheme in order, and returns the
-    /// first principal any of them produces, or <see langword="null"/>.
+    /// first principal any of them produces (and whether an additional scheme produced it), or <see langword="null"/>.
     /// </summary>
     /// <remarks>
     /// The common case — a browser with a cookie — succeeds on the first scheme and never touches the others;
     /// additional schemes cost one handler call each only for requests the cookie scheme did not accept.
     /// </remarks>
-    private async ValueTask<ClaimsPrincipal?> AuthenticateAsync(HttpContext http, string primaryScheme)
+    private async ValueTask<(ClaimsPrincipal? Principal, bool ViaAdditionalScheme)> AuthenticateAsync(HttpContext http, string primaryScheme)
     {
         var result = await http.AuthenticateAsync(primaryScheme);
         if (result.Succeeded && result.Principal is { } principal)
-            return principal;
+            return (principal, false);
 
         foreach (var scheme in _additionalSchemes)
         {
             result = await http.AuthenticateAsync(scheme);
             if (result.Succeeded && result.Principal is { } additional)
-                return additional;
+                return (additional, true);
         }
 
-        return null;
+        return (null, false);
     }
 
     /// <summary>

@@ -4,6 +4,7 @@ using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Dashboard.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 
 namespace FlowOrchestrator.Dashboard.UnitTests.Security;
 
@@ -252,6 +253,76 @@ public sealed class SignalAuthorizationTests
         Assert.Equal(SignalAuthorizationOutcome.Misconfigured, withBroken);
     }
 
+    // ── The shared decision ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Unregistered_flow_is_refused_under_Deny_and_follows_the_operator_rule_when_opted_in()
+    {
+        // Arrange
+        var operatorAccess = new DashboardAccess("basic", "admin", CanOperate: true);
+        var viewerAccess = new DashboardAccess("oidc", "vera", CanOperate: false);
+
+        // Act
+        var denied = await SignalAuthorization.DecideAsync(Http(), operatorAccess, null, "approval", UnregisteredFlowSignalMode.Deny);
+        var operatorRule = await SignalAuthorization.DecideAsync(Http(), operatorAccess, null, "approval", UnregisteredFlowSignalMode.OperatorRule);
+        var viewerRule = await SignalAuthorization.DecideAsync(Http(), viewerAccess, null, "approval", UnregisteredFlowSignalMode.OperatorRule);
+
+        // Assert
+        Assert.False(denied.Allowed);
+        Assert.True(denied.FlowUnregistered);
+        Assert.Contains("not registered", denied.DenialReason);
+        Assert.True(operatorRule.Allowed);
+        Assert.False(viewerRule.Allowed);
+        Assert.False(viewerRule.FlowUnregistered);
+    }
+
+    [Fact]
+    public async Task Restricted_signal_ignores_the_operator_role_and_unrestricted_one_requires_it()
+    {
+        // Arrange
+        var flow = Substitute.For<IFlowDefinition>();
+        flow.Manifest.Returns(new FlowManifest
+        {
+            Steps = new StepCollection
+            {
+                ["wait_finance"] = Wait(("signalName", "finance"), ("allowedRoles", new[] { "finance-approver" })),
+                ["wait_manager"] = Wait(("signalName", "manager")),
+            },
+        });
+        var http = Http();
+        http.User = SignedIn(new Claim("roles", "flow-operator"));
+        var operatorAccess = new DashboardAccess("oidc", "otto", CanOperate: true);
+
+        // Act
+        var restricted = await SignalAuthorization.DecideAsync(http, operatorAccess, flow, "finance", UnregisteredFlowSignalMode.Deny);
+        var unrestricted = await SignalAuthorization.DecideAsync(http, operatorAccess, flow, "manager", UnregisteredFlowSignalMode.Deny);
+
+        // Assert
+        Assert.False(restricted.Allowed);
+        Assert.True(restricted.IsRestricted);
+        Assert.True(unrestricted.Allowed);
+        Assert.False(unrestricted.IsRestricted);
+    }
+
+    [Theory]
+    [InlineData("""{"signalName":"resolved-name"}""", "resolved-name")]
+    [InlineData("""{"SIGNALNAME":" spaced "}""", "spaced")]
+    [InlineData("""{"other":1}""", "from-manifest")]
+    [InlineData("not json", "from-manifest")]
+    [InlineData(null, "from-manifest")]
+    public void Signal_name_of_a_parked_step_prefers_the_resolved_input(string? inputJson, string expected)
+    {
+        // Arrange
+        var template = Wait(("signalName", "from-manifest"));
+
+        // Act
+        var name = SignalAuthorization.SignalNameOf(inputJson, template);
+
+        // Assert
+        Assert.Equal(expected, name);
+        Assert.Equal("default", SignalAuthorization.SignalNameOf(null, null));
+    }
+
     // ── Wording and options ─────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -261,7 +332,7 @@ public sealed class SignalAuthorizationTests
         var requirement = new SignalRequirement("wait", ["finance-approver"], "FinanceLead");
 
         // Act
-        var text = DashboardServiceCollectionExtensions.DescribeSignalRestriction([requirement]);
+        var text = SignalAuthorization.Describe([requirement]);
 
         // Assert
         Assert.Equal("Requires role: finance-approver and policy: FinanceLead, signed in through the identity provider.", text);

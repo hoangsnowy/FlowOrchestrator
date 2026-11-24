@@ -111,7 +111,7 @@ async function loadDashboardAccess() {
   // explicit opt-in), and "Anonymous · View only" where it is read-only.
   const anonymous = dashboardAccess.method === 'none';
   if (!el || (anonymous && dashboardAccess.canOperate)) return;
-  el.innerHTML = '<span class="sidebar-user-name" title="' + (anonymous ? 'No dashboard sign-in is configured' : 'Signed in via ' + (dashboardAccess.method === 'oidc' ? 'single sign-on' : 'Basic Auth')) + '">'
+  el.innerHTML = '<span class="sidebar-user-name" title="' + (anonymous ? 'No dashboard sign-in is configured' : 'Signed in via ' + (dashboardAccess.method === 'oidc' ? 'single sign-on' : dashboardAccess.method === 'bearer' ? 'access token' : 'Basic Auth')) + '">'
     + esc(anonymous ? 'Anonymous' : (dashboardAccess.user || 'Signed in')) + '</span>'
     + (dashboardAccess.canOperate ? '' : '<span class="chip chip--readonly">View only</span>')
     + (dashboardAccess.canSignOut ? '<a class="sidebar-signout" href="' + BASE.replace(/\/api$/, '') + '/signout">Sign out</a>' : '');
@@ -2446,11 +2446,19 @@ function renderSignalAction(runId, stepKey, restriction) {
     +' onclick="sendSignal(\''+escJsAttr(runId)+'\',\''+escJsAttr(stepKey)+'\', event)">'+ICON_SEND+'Send signal</button>';
   if (!restriction) return button(false);
   if (restriction.canSignal) return button(true);
-  const roles = restriction.allowedRoles || [];
+  // Every restricted step the signal name reaches must be satisfied (the server's union rule).
+  const reqs = restriction.requirements && restriction.requirements.length
+    ? restriction.requirements
+    : [{ allowedRoles: restriction.allowedRoles, policy: restriction.policy }];
   const parts = [];
-  if (roles.length) parts.push((roles.length === 1 ? 'role: ' : 'one of: ') + roles.join(', '));
-  if (restriction.policy) parts.push('policy: ' + restriction.policy);
-  const label = restriction.misconfigured ? 'Signal restriction misconfigured' : 'Requires ' + parts.join(' + ');
+  for (const r of reqs) {
+    const roles = r.allowedRoles || [];
+    if (roles.length) parts.push((roles.length === 1 ? 'role: ' : 'one of: ') + roles.join(', '));
+    if (r.policy) parts.push('policy: ' + r.policy);
+  }
+  const label = restriction.flowUnregistered ? 'Flow not registered on this host'
+    : restriction.misconfigured ? 'Signal restriction misconfigured'
+    : 'Requires ' + parts.join(' + ');
   return '<span class="chip chip--readonly" title="'+esc(restriction.requirement || label)+'">'+esc(label)+'</span>';
 }
 

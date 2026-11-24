@@ -863,7 +863,7 @@ public static class DashboardServiceCollectionExtensions
             // Parked WaitForSignal steps with a per-signal restriction: tell the page who may approve and whether
             // this caller may, so it can show "Send signal" or "Requires role: …". Added only when such a step is
             // parked, so the common poll keeps the plain FlowRunRecord shape and its allocation-free write.
-            var signalAuthorization = await DescribeParkedSignalRestrictionsAsync(http, run);
+            var signalAuthorization = await DescribeParkedSignalRestrictionsAsync(http, run, options.Authorization.UnregisteredFlowSignals);
             if (signalAuthorization is null)
             {
                 await WriteJsonAsync(http.Response, visible);
@@ -1100,7 +1100,7 @@ public static class DashboardServiceCollectionExtensions
                 // signals were authorized per step. Anyone else gets the 403 a refused delivery gets.
                 if (!access.CanOperate)
                 {
-                    await DenySignalAsync(http, authLogger, access, runId, signalName, "run not found", restriction: null);
+                    await DenySignalAsync(http, authLogger, access, runId, signalName, new Security.SignalAccessDecision(false, [], false, "run not found"));
                     return;
                 }
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -1109,27 +1109,18 @@ public static class DashboardServiceCollectionExtensions
             }
 
             // Registry resolved with a fallback, per the dashboard DI rule. Restrictions are read from the flows
-            // registered in THIS host: a run whose flow it does not register (removed, or a dashboard-only host
-            // without AddFlow) has no manifest to read one from and keeps the operator rule, as before. Hosts
-            // that serve the dashboard must register the same flows as their workers — documented in
-            // wait-for-signal.md.
+            // registered in THIS host; a run whose flow it does not register is refused unless the host opted in
+            // to the operator rule (UnregisteredFlowSignals). Same decision as run detail's canSignal.
             var registry = http.RequestServices.GetService<FlowRegistry>() ?? FlowRegistry.Empty;
-            IReadOnlyList<Security.SignalRequirement> requirements = registry.TryGetFlow(run.FlowId, out var flow)
-                ? Security.SignalAuthorization.ForSignal(flow.Manifest.Steps, signalName)
-                : [];
-            if (requirements.Count > 0)
+            var decision = await Security.SignalAuthorization.DecideAsync(
+                http,
+                access,
+                registry.TryGetFlow(run.FlowId, out var flow) ? flow : null,
+                signalName,
+                options.Authorization.UnregisteredFlowSignals);
+            if (!decision.Allowed)
             {
-                var principal = access.IsIdentity ? http.User : null;
-                var outcome = await Security.SignalAuthorization.AuthorizeAsync(http, principal, requirements);
-                if (outcome != Security.SignalAuthorizationOutcome.Allowed)
-                {
-                    await DenySignalAsync(http, authLogger, access, runId, signalName, DescribeSignalDenial(outcome), requirements);
-                    return;
-                }
-            }
-            else if (!access.CanOperate)
-            {
-                await DenySignalAsync(http, authLogger, access, runId, signalName, "unrestricted signal needs the operator role", restriction: null);
+                await DenySignalAsync(http, authLogger, access, runId, signalName, decision);
                 return;
             }
 
@@ -1167,7 +1158,7 @@ public static class DashboardServiceCollectionExtensions
             switch (result.Status)
             {
                 case SignalDeliveryStatus.Delivered:
-                    if (requirements.Count > 0 && authLogger is not null)
+                    if (decision.IsRestricted && authLogger is not null)
                         Security.DashboardAuthLog.RestrictedSignalDelivered(authLogger, ForLog(signalName), ForLog(result.StepKey), runId, ForLog(access.UserName));
                     await WriteJsonAsync(http.Response, new
                     {
@@ -1785,6 +1776,8 @@ public static class DashboardServiceCollectionExtensions
             : 0;
         if (restrictedSignals > 0 && !authorization.IsEnabled && logger is not null)
             Security.DashboardAuthLog.RestrictedSignalsWithoutIdentitySignIn(logger, restrictedSignals);
+        if (authorization.UnregisteredFlowSignals == UnregisteredFlowSignalMode.OperatorRule && logger is not null)
+            Security.DashboardAuthLog.UnregisteredFlowSignalsUseOperatorRule(logger);
 
         if (authorization.IsEnabled)
         {
@@ -1869,8 +1862,7 @@ public static class DashboardServiceCollectionExtensions
     /// <param name="access">Who the caller is.</param>
     /// <param name="runId">The addressed run.</param>
     /// <param name="signalName">The addressed signal.</param>
-    /// <param name="reason">Why the delivery was refused, for the log only.</param>
-    /// <param name="restriction">The signal's restrictions; named in the body only for callers that may read runs.</param>
+    /// <param name="decision">The refusal; its reason goes to the log, its restrictions to readers' messages.</param>
     /// <remarks>
     /// The body is the same for a missing run and for any refusal when the caller may not read runs, so the
     /// endpoint does not tell such a caller which run ids exist. A viewer or operator could read the
@@ -1882,42 +1874,61 @@ public static class DashboardServiceCollectionExtensions
         Security.DashboardAccess access,
         Guid runId,
         string signalName,
-        string reason,
-        IReadOnlyList<Security.SignalRequirement>? restriction)
+        Security.SignalAccessDecision decision)
     {
         if (logger is not null)
-            Security.DashboardAuthLog.SignalDeliveryDenied(logger, ForLog(signalName), runId, ForLog(access.UserName) ?? "anonymous", access.Method, reason);
+            Security.DashboardAuthLog.SignalDeliveryDenied(logger, ForLog(signalName), runId, ForLog(access.UserName) ?? "anonymous", access.Method, decision.DenialReason ?? "refused");
 
         var message = "You are not allowed to deliver this signal.";
-        if (access.CanView && restriction is { Count: > 0 })
-            message += " " + DescribeSignalRestriction(restriction);
-        else if (access.CanView && restriction is null && !access.CanOperate)
-            message += " This signal needs an operator role.";
+        if (access.CanView)
+        {
+            if (decision.FlowUnregistered)
+                message += " " + UnregisteredFlowMessage;
+            else if (decision.IsRestricted)
+                message += " " + Security.SignalAuthorization.Describe(decision.Requirements);
+            else if (!access.CanOperate)
+                message += " This signal needs an operator role.";
+        }
 
         http.Response.StatusCode = StatusCodes.Status403Forbidden;
         return WriteJsonAsync(http.Response, new { error = message });
     }
 
+    private const string UnregisteredFlowMessage =
+        "This run's flow is not registered on the dashboard host, so its signal restrictions cannot be checked and signals cannot be delivered here.";
+
     /// <summary>
-    /// Describes the restriction of every parked (<c>Pending</c>) <c>WaitForSignal</c> step in
-    /// <paramref name="run"/> that declares one, keyed by runtime step key; <see langword="null"/> when none does.
+    /// Describes, for every parked (<c>Pending</c>) <c>WaitForSignal</c> step in <paramref name="run"/> whose
+    /// signal is restricted (or whose flow this host does not register, under
+    /// <see cref="UnregisteredFlowSignalMode.Deny"/>), who may deliver it and whether this caller may — keyed by
+    /// runtime step key; <see langword="null"/> when no such step is parked.
     /// </summary>
     /// <param name="http">The request; supplies the caller and the authorization services.</param>
     /// <param name="run">The run, with its step records.</param>
+    /// <param name="unregistered">The host's <see cref="FlowDashboardAuthorizationOptions.UnregisteredFlowSignals"/>.</param>
     /// <returns>
-    /// Per step: <c>allowedRoles</c>, <c>policy</c> (names only), <c>misconfigured</c>, and <c>canSignal</c> —
-    /// whether this caller passes the same check the signal endpoint applies to that step.
+    /// Per step: <c>allowedRoles</c> / <c>policy</c> of the step's own restriction (names only),
+    /// <c>requirements</c> (every restricted step the signal name reaches), <c>misconfigured</c>,
+    /// <c>flowUnregistered</c>, <c>requirement</c> (sentence) and <c>canSignal</c>.
     /// </returns>
     /// <remarks>
-    /// Run detail is polled while open, so the walk stays cheap: one pass over the step records, a manifest
-    /// lookup only for parked <c>WaitForSignal</c> rows, and the policy check only for restricted ones.
+    /// <c>canSignal</c> comes from <see cref="Security.SignalAuthorization.DecideAsync"/>, the decision the signal
+    /// endpoint makes, for the signal name the step waits on — so steps sharing a name get the endpoint's union
+    /// rule and the page never offers a delivery the endpoint refuses. Run detail is polled while open: one pass
+    /// over the step records, and one decision per distinct signal name among the parked steps.
     /// </remarks>
-    private static async ValueTask<Dictionary<string, object>?> DescribeParkedSignalRestrictionsAsync(HttpContext http, FlowRunRecord run)
+    private static async ValueTask<Dictionary<string, object>?> DescribeParkedSignalRestrictionsAsync(
+        HttpContext http,
+        FlowRunRecord run,
+        UnregisteredFlowSignalMode unregistered)
     {
         if (run.Steps is not { Count: > 0 } steps)
             return null;
 
+        var resolvedFlow = false;
         IFlowDefinition? flow = null;
+        Security.DashboardAccess? access = null;
+        Dictionary<string, Security.SignalAccessDecision>? decisions = null;
         Dictionary<string, object>? described = null;
         foreach (var step in steps)
         {
@@ -1925,71 +1936,50 @@ public static class DashboardServiceCollectionExtensions
                 || !string.Equals(step.StepType, WaitForSignalHandler.StepTypeName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (flow is null)
+            if (!resolvedFlow)
             {
+                resolvedFlow = true;
                 var registry = http.RequestServices.GetService<FlowRegistry>() ?? FlowRegistry.Empty;
-                if (!registry.TryGetFlow(run.FlowId, out flow))
-                    return described;
+                flow = registry.TryGetFlow(run.FlowId, out var found) ? found : null;
+                access = http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess ?? Security.DashboardAccess.Unprotected;
             }
 
-            if (flow.Manifest.Steps.FindStep(step.StepKey) is not { } metadata
-                || Security.SignalAuthorization.Read(step.StepKey, metadata) is not { } requirement)
-                continue;
+            var template = flow?.Manifest.Steps.FindStep(step.StepKey);
+            var signalName = Security.SignalAuthorization.SignalNameOf(step.InputJson, template);
+            decisions ??= new(StringComparer.OrdinalIgnoreCase);
+            if (!decisions.TryGetValue(signalName, out var decision))
+            {
+                decision = await Security.SignalAuthorization.DecideAsync(http, access!, flow, signalName, unregistered);
+                decisions[signalName] = decision;
+            }
 
-            var access = http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess ?? Security.DashboardAccess.Unprotected;
-            var outcome = await Security.SignalAuthorization.AuthorizeAsync(http, access.IsIdentity ? http.User : null, [requirement]);
+            if (!decision.IsRestricted && !decision.FlowUnregistered)
+                continue;   // operator rule: the page's view-only mode already matches it
+
+            var own = template is null ? null : Security.SignalAuthorization.Read(step.StepKey, template);
+            var shown = own ?? (decision.IsRestricted ? decision.Requirements[0] : null);
+            var requirements = new List<object>(decision.Requirements.Count);
+            var misconfigured = false;
+            foreach (var requirement in decision.Requirements)
+            {
+                misconfigured |= requirement.Error is not null;
+                requirements.Add(new { stepKey = requirement.StepKey, allowedRoles = requirement.AllowedRoles, policy = requirement.Policy });
+            }
+
             (described ??= new(StringComparer.Ordinal))[step.StepKey] = new
             {
-                allowedRoles = requirement.AllowedRoles,
-                policy = requirement.Policy,
-                misconfigured = requirement.Error is not null,
-                canSignal = outcome == Security.SignalAuthorizationOutcome.Allowed,
-                requirement = DescribeSignalRestriction([requirement]),
+                allowedRoles = shown?.AllowedRoles ?? [],
+                policy = shown?.Policy,
+                requirements,
+                misconfigured,
+                flowUnregistered = decision.FlowUnregistered,
+                canSignal = decision.Allowed,
+                requirement = decision.FlowUnregistered ? UnregisteredFlowMessage : Security.SignalAuthorization.Describe(decision.Requirements),
             };
         }
 
         return described;
     }
-
-    /// <summary>Human-readable summary of what a restricted signal needs, e.g. <c>Requires role: finance-approver.</c></summary>
-    /// <param name="restriction">The signal's restrictions.</param>
-    /// <returns>One sentence per restricted step, naming roles and policies only.</returns>
-    internal static string DescribeSignalRestriction(IReadOnlyList<Security.SignalRequirement> restriction)
-    {
-        var text = new StringBuilder();
-        foreach (var requirement in restriction)
-        {
-            if (text.Length > 0)
-                text.Append(' ');
-            if (requirement.Error is not null)
-            {
-                text.Append("Its restriction is misconfigured; nobody can deliver it until the flow is fixed.");
-                continue;
-            }
-            text.Append("Requires ");
-            if (requirement.AllowedRoles.Count > 0)
-            {
-                text.Append(requirement.AllowedRoles.Count == 1 ? "role: " : "one of the roles: ")
-                    .AppendJoin(", ", requirement.AllowedRoles);
-                if (requirement.Policy is not null)
-                    text.Append(" and ");
-            }
-            if (requirement.Policy is not null)
-                text.Append("policy: ").Append(requirement.Policy);
-            text.Append(", signed in through the identity provider.");
-        }
-        return text.ToString();
-    }
-
-    /// <summary>Log-facing reason for a <see cref="Security.SignalAuthorizationOutcome"/>.</summary>
-    private static string DescribeSignalDenial(Security.SignalAuthorizationOutcome outcome) => outcome switch
-    {
-        Security.SignalAuthorizationOutcome.NotSignedIn => "restricted signal needs an identity signed in through FlowDashboard:Authorization",
-        Security.SignalAuthorizationOutcome.MissingRole => "caller has none of the allowed roles",
-        Security.SignalAuthorizationOutcome.PolicyFailed => "caller does not satisfy the authorization policy",
-        Security.SignalAuthorizationOutcome.Misconfigured => "the signal's restriction is malformed or names an unregistered policy",
-        _ => outcome.ToString(),
-    };
 
     /// <summary>Strips line breaks from a caller-supplied value before it is logged, so it cannot forge log lines.</summary>
     [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(value))]
