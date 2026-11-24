@@ -21,6 +21,31 @@ public sealed class WaitForSignalInput
     /// When the deadline passes, the step transitions to <see cref="StepStatus.Failed"/>.
     /// </summary>
     public int? TimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// Roles allowed to deliver this signal over the dashboard signal endpoint; the caller needs any one
+    /// of them. Setting this (or <see cref="AuthorizationPolicy"/>) makes the signal <i>restricted</i>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Enforced by the dashboard's <c>POST /api/runs/{runId}/signals/{signalName}</c> endpoint, never by
+    /// this handler and never by <see cref="IFlowSignalDispatcher"/>: an in-process caller is trusted, and the
+    /// host owns authorization on that path. A restricted signal can only be delivered over HTTP by an identity
+    /// authenticated through <c>FlowDashboard:Authorization</c>; Basic Auth and anonymous callers are refused,
+    /// and the <c>flow-operator</c> role does not bypass the check.</para>
+    /// <para>Must be a static list in the manifest (no expressions), and the step's <see cref="SignalName"/>
+    /// must then be static too, so the endpoint can tell which step a signal addresses before it writes
+    /// anything. The dashboard validates both when it maps its endpoints.</para>
+    /// </remarks>
+    public string[]? AllowedRoles { get; set; }
+
+    /// <summary>
+    /// Name of an ASP.NET Core authorization policy (registered with <c>AddAuthorization</c>) the caller must
+    /// satisfy to deliver this signal over the dashboard signal endpoint. When <see cref="AllowedRoles"/> is
+    /// set as well, the caller must satisfy both.
+    /// </summary>
+    /// <remarks>Same enforcement point and static-value rule as <see cref="AllowedRoles"/>; an unregistered
+    /// policy name fails when the dashboard maps its endpoints.</remarks>
+    public string? AuthorizationPolicy { get; set; }
 }
 
 /// <summary>

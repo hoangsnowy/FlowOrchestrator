@@ -30,6 +30,24 @@ public sealed class FlowDashboardAuthorizationOptions
     public string? ChallengeScheme { get; set; }
 
     /// <summary>
+    /// Extra schemes that authenticate dashboard requests alongside <see cref="AuthenticationScheme"/>, tried
+    /// in order when it does not, for example <c>"Bearer"</c> from <c>AddJwtBearer</c> so machine clients
+    /// (a Keycloak service account using client credentials) can call the REST API with an access token.
+    /// <see langword="null"/> or empty means none.
+    /// </summary>
+    /// <remarks>
+    /// <para>The same viewer / operator roles, policies and per-signal restrictions apply whichever scheme
+    /// signed the caller in. A request that carries an <c>Authorization</c> header other than Basic and that no
+    /// scheme accepts gets <c>401</c> — each of these schemes is challenged, so a JWT bearer handler adds its
+    /// <c>WWW-Authenticate</c> header — and is never redirected to the identity provider.</para>
+    /// <para>These schemes take no part in <c>/signout</c>: a bearer token has no server-side session to end.
+    /// Every name must be registered with <c>AddAuthentication()</c>, and <see cref="AuthenticationScheme"/>
+    /// must be set; otherwise the dashboard fails when it maps its endpoints.</para>
+    /// <para>Nullable for the same reason as <see cref="ViewerRoles"/>.</para>
+    /// </remarks>
+    public string[]? AdditionalAuthenticationSchemes { get; set; }
+
+    /// <summary>
     /// Roles allowed to read the dashboard: pages, run lists, run detail, the event stream. A user with any
     /// of them, or any <see cref="OperatorRoles"/> role, can view. <see langword="null"/> means
     /// <c>flow-viewer</c>; an empty array means any signed-in user can view.
@@ -39,10 +57,13 @@ public sealed class FlowDashboardAuthorizationOptions
     public string[]? ViewerRoles { get; set; }
 
     /// <summary>
-    /// Roles allowed to change state: trigger, enable / disable, rerun, retry, cancel, send signals, pause /
+    /// Roles allowed to change state: trigger, enable / disable, rerun, retry, cancel, send unrestricted signals, pause /
     /// resume schedules and override cron. <see langword="null"/> means <c>flow-operator</c>; an empty array
     /// means any signed-in user can operate.
     /// </summary>
+    /// <remarks>A <i>restricted</i> signal — its <c>WaitForSignal</c> step declares <c>allowedRoles</c> or
+    /// <c>authorizationPolicy</c> — is authorized by that restriction alone: these roles neither grant nor are
+    /// needed for it.</remarks>
     public string[]? OperatorRoles { get; set; }
 
     /// <summary>
@@ -65,6 +86,29 @@ public sealed class FlowDashboardAuthorizationOptions
 
     /// <summary>Viewer roles with the default applied.</summary>
     internal IReadOnlyList<string> EffectiveViewerRoles => ViewerRoles ?? ["flow-viewer"];
+
+    /// <summary>
+    /// <see cref="AdditionalAuthenticationSchemes"/> trimmed, without blanks, duplicates or a repeat of
+    /// <see cref="AuthenticationScheme"/>; empty when none are set. Allocates — read it once, not per request.
+    /// </summary>
+    internal IReadOnlyList<string> EffectiveAdditionalSchemes
+    {
+        get
+        {
+            if (AdditionalAuthenticationSchemes is not { Length: > 0 } configured)
+                return [];
+            var schemes = new List<string>(configured.Length);
+            foreach (var raw in configured)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                    continue;
+                var scheme = raw.Trim();
+                if (!string.Equals(scheme, AuthenticationScheme, StringComparison.Ordinal) && !schemes.Contains(scheme, StringComparer.Ordinal))
+                    schemes.Add(scheme);
+            }
+            return schemes;
+        }
+    }
 
     /// <summary>Operator roles with the default applied.</summary>
     internal IReadOnlyList<string> EffectiveOperatorRoles => OperatorRoles ?? ["flow-operator"];
