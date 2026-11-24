@@ -1063,7 +1063,8 @@ public sealed class SqlFlowRunStore :
             {
                 FlowId = flowId,
                 TriggerKey = triggerKey.Trim().ToLowerInvariant(),
-                IdempotencyKey = idempotencyKey.Trim().ToLowerInvariant(),
+                // Same storage form as registration: keys over 256 characters are stored as a digest.
+                IdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey),
                 RunId = runId
             });
 

@@ -136,6 +136,25 @@ public sealed partial class PostgreSqlFlowRunStoreTests
     }
 
     [Fact]
+    public async Task ReleaseIdempotencyKeyAsync_releases_a_key_longer_than_the_column()
+    {
+        // Arrange — registration stores a key over 256 characters as its digest; release must address the
+        // same row, or a trigger that failed before dispatch keeps answering "duplicate" for a dead run.
+        var flowId = Guid.NewGuid();
+        var owner = Guid.NewGuid();
+        var longKey = new string('k', 300);
+        Assert.True(await _store.TryRegisterIdempotencyKeyAsync(flowId, "webhook", longKey, owner));
+
+        // Act
+        var released = await _store.ReleaseIdempotencyKeyAsync(flowId, "webhook", longKey, owner);
+        var afterRelease = await _store.FindRunIdByIdempotencyKeyAsync(flowId, "webhook", longKey);
+
+        // Assert
+        Assert.True(released);
+        Assert.Null(afterRelease);
+    }
+
+    [Fact]
     public async Task TryRegisterIdempotencyKeyAsync_under_contention_has_exactly_one_winner_and_never_throws()
     {
         // Arrange
