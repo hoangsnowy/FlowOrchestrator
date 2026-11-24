@@ -6,6 +6,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.5] - 2026-11-24
+
+Patch release for the 1.34 line (.NET 8 / 9 / 10). A `WaitForSignal` step could stay parked until its
+timeout when the client that delivered its signal disconnected mid-request — on SQL Server even without
+telemetry. Hosts that deliver signals over the dashboard endpoint should upgrade.
+
 ### Fixed
 
 - **A signal delivered by a client that disconnects no longer strands the waiting step.** The dashboard
