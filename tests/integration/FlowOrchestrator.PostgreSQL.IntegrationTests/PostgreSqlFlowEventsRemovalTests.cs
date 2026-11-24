@@ -12,7 +12,10 @@ namespace FlowOrchestrator.PostgreSQL.Tests;
 /// </summary>
 /// <remarks>
 /// Each test migrates its own database inside the shared container, so the "fresh" and "upgraded"
-/// schemas never see each other.
+/// schemas never see each other. <c>MigrateAsync</c> deliberately does not wait for the migrator's
+/// background run-search index build: the upgrade test's second start overlaps the first start's build,
+/// as a second replica or a restarted host does. That overlap used to fail intermittently with
+/// <c>40P01</c>; <see cref="PostgreSqlMigratorConcurrentIndexBuildTests"/> pins it.
 /// </remarks>
 public sealed class PostgreSqlFlowEventsRemovalTests : IClassFixture<PostgreSqlFixture>
 {
