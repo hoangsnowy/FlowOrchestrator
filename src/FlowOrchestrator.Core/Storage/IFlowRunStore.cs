@@ -141,59 +141,154 @@ public interface IFlowRunStore
     /// id is a primary-key seek, a text term reads only the run's own columns inside the start-time
     /// window, and step payloads are read only when <see cref="RunSearchQuery.IncludeStepPayloads"/> is
     /// set. The default implementation keeps third-party providers correct by delegating to
-    /// <see cref="GetRunsPageAsync(Guid?, string?, int, int, string?, bool, DateTimeOffset?, DateTimeOffset?)"/>
-    /// with <c>Take + 1</c> rows; it does not get the seeks. It honours <see cref="RunSearchQuery.After"/>
-    /// by bounding <c>startedTo</c> at the cursor's start time and dropping the tied rows at or before the
-    /// cursor (a handful of extra rows are read for that), and applies
-    /// <see cref="RunSearchQuery.TotalCountCap"/> to the exact count the legacy overload returns.
+    /// <see cref="GetRunsPageAsync(Guid?, string?, int, int, string?, bool, DateTimeOffset?, DateTimeOffset?)"/>;
+    /// it does not get the seeks. That overload orders runs newest first but leaves runs that share a start
+    /// time in no defined order, so the default implementation re-sorts every page into the cursor order
+    /// (<c>StartedAt</c> descending, then <c>Id</c> ascending) and pages exactly — no run duplicated or
+    /// dropped — whatever the number of ties:
+    /// <list type="bullet">
+    /// <item>with <see cref="RunSearchQuery.After"/>, it reads the runs that started at the cursor's exact
+    /// start time as one group (a <c>startedFrom = startedTo</c> window), keeps those after the cursor, and
+    /// reads the rest strictly older than the cursor;</item>
+    /// <item>when the page's last row shares its start time with rows the read did not reach, it reads
+    /// that whole tie group too, so <see cref="RunSearchPage.NextCursor"/> never skips a tied run.</item>
+    /// </list>
+    /// A tie group is read with growing page sizes until the overload returns fewer rows than asked, so
+    /// the extra reads are proportional to the number of tied runs and happen only on a tie. Exactness
+    /// relies on the overload honouring <c>startedFrom</c> / <c>startedTo</c>; with a
+    /// <see cref="RunSearchQuery.Skip"/>, offset semantics apply to the rows older than the cursor, as they
+    /// do on the built-in providers. <see cref="RunSearchQuery.TotalCountCap"/> is applied to the exact
+    /// count the legacy overload returns.
     /// </remarks>
     async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Rows read beyond Take + 1 so that runs sharing the cursor's start time, which the legacy
-        // overload returns in no defined order, can be dropped without shortening the page.
-        const int CursorTieSlack = 8;
-
         // A run id falls back to a substring match on the legacy overload, then is narrowed to the
         // exact id here. Text, when also present, wins the store-side match.
         var search = query.HasText ? query.Text : query.RunId?.ToString("D");
-        var take = Math.Clamp(query.Take, 0, int.MaxValue - 1 - CursorTieSlack);
-        var after = query.After;
-        var startedTo = after is { } cursor && (query.StartedTo is null || cursor.StartedAt < query.StartedTo)
-            ? cursor.StartedAt
-            : query.StartedTo;
-        var (runs, total) = await GetRunsPageAsync(
-            query.FlowId, query.Status, Math.Max(0, query.Skip), take + 1 + (after is null ? 0 : CursorTieSlack), search,
-            query.IncludeStepPayloads, query.StartedFrom, startedTo).ConfigureAwait(false);
+        var take = Math.Clamp(query.Take, 0, int.MaxValue - 1);
+        var skip = Math.Max(0, query.Skip);
+        var rows = new List<FlowRunRecord>(Math.Min(take + 1, 256));
+        var upper = query.StartedTo;
+        int? total = null;
 
-        var rows = new List<FlowRunRecord>(Math.Min(runs.Count, take + 1));
-        // foreach, not .Where(): two captured filters (runId, cursor position) would allocate a closure on
-        // every search call through this default implementation; CLAUDE.md prefers the loop.
-        foreach (var run in runs)
+        if (query.After is { } after)
         {
-            if (query.RunId is { } runId && run.Id != runId)
-                continue;
-            if (after is { } position && !position.Precedes(run))
-                continue;
-            rows.Add(run);
+            var cursorInWindow = (query.StartedTo is null || after.StartedAt <= query.StartedTo)
+                && (query.StartedFrom is null || after.StartedAt >= query.StartedFrom);
+            if (cursorInWindow)
+            {
+                var group = await ReadTieGroupAsync(query, search, after.StartedAt).ConfigureAwait(false);
+                foreach (var run in group)
+                {
+                    if (!after.Precedes(run) || (query.RunId is { } id && run.Id != id))
+                        continue;
+                    if (skip > 0)
+                    {
+                        skip--;
+                        continue;
+                    }
+
+                    rows.Add(run);
+                }
+            }
+
+            // Strictly older than the cursor: the legacy window is inclusive, and the cursor's own start
+            // time was read above as a whole group.
+            var older = after.StartedAt.AddTicks(-1);
+            upper = upper is { } to && to < older ? to : older;
         }
 
-        if (after is not null)
+        var groupRows = rows.Count;
+        var need = take + 1 - groupRows;
+        if (need > 0 && (query.StartedFrom is null || upper is null || upper >= query.StartedFrom))
         {
-            rows.Sort(static (a, b) => b.StartedAt != a.StartedAt ? b.StartedAt.CompareTo(a.StartedAt) : a.Id.CompareTo(b.Id));
+            var (batch, batchTotal) = await GetRunsPageAsync(
+                query.FlowId, query.Status, skip, need, search,
+                query.IncludeStepPayloads, query.StartedFrom, upper).ConfigureAwait(false);
+            total = batchTotal;
 
-            // The count above covered only the rows up to the cursor; the total is over the plain
-            // filters, so take it with an empty page.
-            if (query.CountsTotal)
+            DateTimeOffset? boundary = null;
+            // foreach, not .Where(): the captured filters would allocate a closure on every search call
+            // through this default implementation; CLAUDE.md prefers the loop.
+            foreach (var run in batch)
             {
-                (_, total) = await GetRunsPageAsync(
-                    query.FlowId, query.Status, 0, 0, null, false, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
+                if (boundary is null || run.StartedAt < boundary)
+                    boundary = run.StartedAt;
+                if (query.RunId is { } id && run.Id != id)
+                    continue;
+                rows.Add(run);
+            }
+
+            rows.Sort(groupRows, rows.Count - groupRows, RunSearchCursor.ListOrder);
+
+            // The read stopped at `need` rows, so more runs may share the start time of its oldest row. If
+            // that tie group reaches onto the page, NextCursor would point into the middle of a group whose
+            // other members were never read: replace the partial group with the whole one. With an offset
+            // (skip > 0) the group's members before the offset cannot be told apart, so offset paging keeps
+            // its usual semantics.
+            var lastOnPage = take - 1;
+            if (batch.Count >= need && boundary is { } tie && skip == 0 && query.RunId is null
+                && lastOnPage >= groupRows && lastOnPage < rows.Count && rows[lastOnPage].StartedAt == tie)
+            {
+                var kept = groupRows;
+                for (var i = groupRows; i < rows.Count; i++)
+                {
+                    if (rows[i].StartedAt != tie)
+                        rows[kept++] = rows[i];
+                }
+
+                rows.RemoveRange(kept, rows.Count - kept);
+                rows.AddRange(await ReadTieGroupAsync(query, search, tie).ConfigureAwait(false));
             }
         }
 
-        return RunSearchPage.FromRows(rows, take, query.CountsTotal ? total : null, query.EffectiveTotalCountCap);
+        if (query.CountsTotal && (query.After is not null || total is null))
+        {
+            // With a cursor the reads above covered only the rows after it; the total is over the plain
+            // filters, so take it with an empty page.
+            (_, var counted) = await GetRunsPageAsync(
+                query.FlowId, query.Status, 0, 0, null, false, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
+            total = counted;
+        }
+
+        return RunSearchPage.FromRows(rows, take, query.CountsTotal ? total ?? 0 : null, query.EffectiveTotalCountCap);
+    }
+
+    /// <summary>
+    /// Reads every run matching <paramref name="query"/>'s filters that started exactly at
+    /// <paramref name="startedAt"/>, in cursor order. Used by the default <see cref="SearchRunsAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Page sizes grow 64, 256, 1024, … until the overload returns fewer rows than asked, so the cost is
+    /// proportional to the tie group and needs no count. Rows outside the instant are dropped in case the
+    /// provider does not honour the window.
+    /// </remarks>
+    private async Task<List<FlowRunRecord>> ReadTieGroupAsync(RunSearchQuery query, string? search, DateTimeOffset startedAt)
+    {
+        var size = 64;
+        while (true)
+        {
+            var (batch, _) = await GetRunsPageAsync(
+                query.FlowId, query.Status, 0, size, search,
+                query.IncludeStepPayloads, startedAt, startedAt).ConfigureAwait(false);
+            if (batch.Count < size || size > int.MaxValue / 4)
+            {
+                var group = new List<FlowRunRecord>(batch.Count);
+                foreach (var run in batch)
+                {
+                    if (run.StartedAt == startedAt && (query.RunId is not { } id || run.Id == id))
+                        group.Add(run);
+                }
+
+                group.Sort(RunSearchCursor.ListOrder);
+                return group;
+            }
+
+            size *= 4;
+        }
     }
 
     /// <summary>

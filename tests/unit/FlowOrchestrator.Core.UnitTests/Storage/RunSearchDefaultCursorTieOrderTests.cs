@@ -41,15 +41,89 @@ public sealed class RunSearchDefaultCursorTieOrderTests
         Assert.Equal(ids.OrderBy(id => id), seen.OrderBy(id => id));
     }
 
-    /// <summary>Legacy-only provider: newest first, ties returned in descending id order.</summary>
-    private sealed class TieOrderStore(List<FlowRunRecord> runs) : IFlowRunStore
+    [Theory]
+    [InlineData(20, 1, 3)]     // one tie group far larger than the old 8-row slack
+    [InlineData(150, 1, 7)]    // a tie group larger than the first 64-row group read
+    [InlineData(60, 4, 5)]     // several tie groups, page boundaries inside groups
+    [InlineData(37, 37, 4)]    // no ties at all
+    [InlineData(25, 2, 1)]     // one row per page
+    public async Task Paging_visits_every_run_once_in_cursor_order_whatever_the_number_of_ties(int count, int distinctTimes, int take)
+    {
+        // Arrange
+        var runs = Enumerable.Range(1, count)
+            .Select(i => new FlowRunRecord { Id = IdOf(i), StartedAt = Start.AddSeconds(-(i % distinctTimes)) })
+            .ToList();
+        IFlowRunStore store = new TieOrderStore(runs);
+
+        // Act
+        var seen = await ReadAllPagesAsync(store, take);
+
+        // Assert
+        var expected = runs.OrderByDescending(r => r.StartedAt).ThenBy(r => r.Id).Select(r => r.Id).ToList();
+        Assert.Equal(expected, seen);
+    }
+
+    [Fact]
+    public async Task Paging_is_exact_when_the_provider_returns_ties_in_a_different_order_on_every_call()
+    {
+        // Arrange — "undefined order" taken literally: each call shuffles runs that share a start time.
+        var runs = Enumerable.Range(1, 40)
+            .Select(i => new FlowRunRecord { Id = IdOf(i), StartedAt = Start.AddSeconds(-(i % 3)) })
+            .ToList();
+        IFlowRunStore store = new TieOrderStore(runs, new Random(1234));
+
+        // Act
+        var seen = await ReadAllPagesAsync(store, 6);
+
+        // Assert
+        var expected = runs.OrderByDescending(r => r.StartedAt).ThenBy(r => r.Id).Select(r => r.Id).ToList();
+        Assert.Equal(expected, seen);
+    }
+
+    [Fact]
+    public async Task First_page_is_sorted_into_cursor_order()
+    {
+        // Arrange
+        var runs = Enumerable.Range(1, 5).Select(i => new FlowRunRecord { Id = IdOf(i), StartedAt = Start }).ToList();
+        IFlowRunStore store = new TieOrderStore(runs);
+
+        // Act
+        var page = await store.SearchRunsAsync(new RunSearchQuery { Take = 10 });
+
+        // Assert
+        Assert.Equal(runs.Select(r => r.Id), page.Runs.Select(r => r.Id));
+        Assert.False(page.HasMore);
+    }
+
+    private static Guid IdOf(int i) => Guid.Parse($"00000000-0000-0000-0000-{i:D12}");
+
+    private static async Task<List<Guid>> ReadAllPagesAsync(IFlowRunStore store, int take)
+    {
+        var seen = new List<Guid>();
+        RunSearchCursor? after = null;
+        for (var guard = 0; guard < 1000; guard++)
+        {
+            var page = await store.SearchRunsAsync(new RunSearchQuery { Take = take, After = after });
+            Assert.True(page.Runs.Count <= take);
+            seen.AddRange(page.Runs.Select(r => r.Id));
+            if (!page.HasMore) break;
+            after = page.NextCursor;
+        }
+
+        return seen;
+    }
+
+    /// <summary>Legacy-only provider: newest first, ties in descending id order or shuffled per call.</summary>
+    private sealed class TieOrderStore(List<FlowRunRecord> runs, Random? shuffleTies = null) : IFlowRunStore
     {
         public Task<(IReadOnlyList<FlowRunRecord> Runs, int TotalCount)> GetRunsPageAsync(Guid? flowId, string? status, int skip, int take, string? search, bool deepSearch, DateTimeOffset? startedFrom = null, DateTimeOffset? startedTo = null)
         {
-            var filtered = runs
+            var window = runs
                 .Where(r => (startedFrom is null || r.StartedAt >= startedFrom) && (startedTo is null || r.StartedAt <= startedTo))
-                .OrderByDescending(r => r.StartedAt)
-                .ThenByDescending(r => r.Id)
+                .OrderByDescending(r => r.StartedAt);
+            var filtered = (shuffleTies is null
+                    ? window.ThenByDescending(r => r.Id)
+                    : window.ThenBy(_ => shuffleTies.Next()))
                 .ToList();
             IReadOnlyList<FlowRunRecord> page = filtered.Skip(skip).Take(take).ToList();
             return Task.FromResult((page, filtered.Count));

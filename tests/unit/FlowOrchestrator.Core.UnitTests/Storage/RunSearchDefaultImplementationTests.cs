@@ -78,8 +78,14 @@ public sealed class RunSearchDefaultImplementationTests
         Assert.True(store.LastDeep);
     }
 
+    // Distinct start times, newest first: these tests are about what is forwarded and read, not about
+    // runs sharing a start time (RunSearchDefaultCursorTieOrderTests covers ties).
     private static FlowRunRecord[] Runs(int count)
-        => Enumerable.Range(0, count).Select(_ => new FlowRunRecord { Id = Guid.NewGuid(), Status = "Failed" }).ToArray();
+        => Enumerable.Range(0, count)
+            .Select(i => new FlowRunRecord { Id = Guid.NewGuid(), Status = "Failed", StartedAt = Epoch.AddSeconds(-i) })
+            .ToArray();
+
+    private static readonly DateTimeOffset Epoch = new(2026, 11, 24, 0, 0, 0, TimeSpan.Zero);
 
     /// <summary>A provider written before <see cref="IFlowRunStore.SearchRunsAsync"/> existed.</summary>
     private sealed class LegacyRunStore(IReadOnlyList<FlowRunRecord> runs, int total = 0) : IFlowRunStore
