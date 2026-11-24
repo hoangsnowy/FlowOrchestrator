@@ -138,7 +138,7 @@ public sealed class ExpressionAuditEdgeCaseTests
     public void TriggerBody_NullConditionalOverNullMember_ResolvesNull()
     {
         // Arrange
-        var body = JsonSerializer.SerializeToElement(new { order = (object?)null });
+        var body = JsonSerializer.SerializeToElement(new { order = default(object) });
 
         // Act
         var matched = TriggerExpressionResolver.TryResolveTriggerBodyExpression("@triggerBody()?.order?.id", body, out var resolved);

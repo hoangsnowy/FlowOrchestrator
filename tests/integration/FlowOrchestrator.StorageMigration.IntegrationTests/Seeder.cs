@@ -50,7 +50,7 @@ public static class Seeder
         (seed.SmallOrderRunId, _) = await host.RunAsync<OrderFlow>(new { label = "small", amount = 10, items = Array.Empty<string>() });
 
         // Failed, then retried (a second attempt that fails again).
-        (seed.FailedRunId, var failedStatus) = await host.RunAsync<FailingFlow>(new { reason = (string?)null });
+        (seed.FailedRunId, var failedStatus) = await host.RunAsync<FailingFlow>(new { reason = default(string) });
         Assert.Equal("Failed", failedStatus);
         var retried = host.Events.Next(seed.FailedRunId);
         using (var scope = services.CreateScope())

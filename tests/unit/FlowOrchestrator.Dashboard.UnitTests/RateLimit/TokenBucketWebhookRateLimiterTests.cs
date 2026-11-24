@@ -98,7 +98,8 @@ public sealed class TokenBucketWebhookRateLimiterTests
     /// </summary>
     private static async Task<bool> DisposeUnderLoadAsync()
     {
-        var limiter = new TokenBucketWebhookRateLimiter();
+        // `using` covers an early throw; the explicit Dispose below is the race under test (Dispose is idempotent).
+        using var limiter = new TokenBucketWebhookRateLimiter();
         var opts = new WebhookRateLimitOptions { PermitsPerSecond = 1000, BurstSize = 1000 };
         using var stop = new CancellationTokenSource();
         const int workerCount = 8;

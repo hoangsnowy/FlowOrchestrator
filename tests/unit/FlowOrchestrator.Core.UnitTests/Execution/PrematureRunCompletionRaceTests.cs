@@ -61,8 +61,8 @@ public sealed class PrematureRunCompletionRaceTests
     public async Task ParallelBranches_CompletingConcurrently_RunIsNotCompletedBeforeJoinIsDispatched()
     {
         // Arrange
-        var bHandlerEntered = new ManualResetEventSlim(false);
-        var bHandlerRelease = new ManualResetEventSlim(false);
+        using var bHandlerEntered = new ManualResetEventSlim(false);
+        using var bHandlerRelease = new ManualResetEventSlim(false);
         var bInContinuation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var aDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 

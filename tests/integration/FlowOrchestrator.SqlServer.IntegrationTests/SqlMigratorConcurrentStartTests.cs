@@ -59,14 +59,8 @@ public sealed class SqlMigratorConcurrentStartTests : IClassFixture<SqlServerFix
             gate.SetResult();
             foreach (var start in starts)
             {
-                try
-                {
-                    await start.WaitAsync(Budget);
-                }
-                catch (Exception ex)
-                {
-                    failures.Add($"round {round}: {ex.GetType().Name}: {ex.Message}");
-                }
+                if (await OutcomeWithinBudgetAsync(start) is { } failure)
+                    failures.Add($"round {round}: {failure}");
             }
 
             falseBuildFailures += logs.Sum(log => log.Entries.Count(e => e.EventId == 7206));
@@ -205,15 +199,13 @@ public sealed class SqlMigratorConcurrentStartTests : IClassFixture<SqlServerFix
     /// <summary>Returns <see langword="null"/> when <paramref name="task"/> succeeds within <see cref="Budget"/>, otherwise why not.</summary>
     private static async Task<string?> OutcomeWithinBudgetAsync(Task task)
     {
-        try
-        {
-            await task.WaitAsync(Budget);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            return $"{ex.GetType().Name}: {ex.Message}";
-        }
+        // Read the outcome from the task instead of a catch-all: whatever ended it (WaitAsync's
+        // TimeoutException, or the migrator's own failure) is reported by type and message.
+        var waited = task.WaitAsync(Budget);
+        await waited.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (waited.IsCanceled)
+            return "TaskCanceledException: A task was canceled.";
+        return waited.Exception?.InnerException is { } ex ? $"{ex.GetType().Name}: {ex.Message}" : null;
     }
 
     private sealed class CapturingLogger : ILogger<FlowOrchestratorSqlMigrator>

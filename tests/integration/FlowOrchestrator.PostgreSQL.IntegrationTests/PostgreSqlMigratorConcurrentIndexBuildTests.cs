@@ -341,16 +341,13 @@ public sealed class PostgreSqlMigratorConcurrentIndexBuildTests : IClassFixture<
     /// <summary>Returns <see langword="null"/> when <paramref name="task"/> succeeds within <see cref="Budget"/>, otherwise why not.</summary>
     private static async Task<string?> OutcomeWithinBudgetAsync(Task task)
     {
-        try
-        {
-            await task.WaitAsync(Budget);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            // Timed out here, or failed on its own (Npgsql's 30 s command timeout, 40P01 deadlock).
-            return $"{ex.GetType().Name}: {ex.Message}";
-        }
+        // Read the outcome from the task instead of a catch-all: whatever ended it (WaitAsync's
+        // TimeoutException, or the migrator's own failure: Npgsql's 30 s command timeout, a 40P01 deadlock) is reported by type and message.
+        var waited = task.WaitAsync(Budget);
+        await waited.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (waited.IsCanceled)
+            return "TaskCanceledException: A task was canceled.";
+        return waited.Exception?.InnerException is { } ex ? $"{ex.GetType().Name}: {ex.Message}" : null;
     }
 
     private sealed class CapturingLogger : ILogger<PostgreSqlFlowOrchestratorMigrator>
