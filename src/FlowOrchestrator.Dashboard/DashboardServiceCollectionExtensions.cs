@@ -1090,6 +1090,19 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // One normalized name for the authorization decision AND the delivery below (see
+            // SignalAuthorization.TryNormalizeRequested): otherwise a compatibility spelling could be judged
+            // unrestricted here and still be folded onto a restricted waiter by the store.
+            if (!Security.SignalAuthorization.TryNormalizeRequested(signalName, out var normalizedSignalName)
+                || normalizedSignalName.Length == 0)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Signal name is not valid." });
+                return;
+            }
+
+            signalName = normalizedSignalName;
+
             var access = http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess ?? Security.DashboardAccess.Unprotected;
             var authLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Dashboard.Auth");
 

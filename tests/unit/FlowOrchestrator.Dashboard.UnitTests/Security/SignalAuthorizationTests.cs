@@ -163,6 +163,49 @@ public sealed class SignalAuthorizationTests
     }
 
     [Fact]
+    public void Restricted_signal_with_a_non_ascii_name_is_a_configuration_error()
+    {
+        // Arrange — stores fold non-ASCII case differently, so a restriction on such a name can't be enforced.
+        var step = Wait(("signalName", "pr\u00FCfung"), ("allowedRoles", new[] { "auditor" }));
+
+        // Act
+        var requirement = SignalAuthorization.Read("wait", step);
+
+        // Assert
+        Assert.NotNull(requirement);
+        Assert.Contains("ASCII", requirement!.Error);
+    }
+
+    [Theory]
+    [InlineData("\u212Ayc-approval", "Kyc-approval")]
+    [InlineData("  finance-approval\t", "finance-approval")]
+    [InlineData("\uFF46inance", "finance")]
+    public void Requested_names_are_normalized_with_nfkc_and_trimmed(string requested, string expected)
+    {
+        // Arrange — requested comes straight from the route.
+
+        // Act
+        var ok = SignalAuthorization.TryNormalizeRequested(requested, out var normalized);
+
+        // Assert
+        Assert.True(ok);
+        Assert.Equal(expected, normalized);
+    }
+
+    [Fact]
+    public void A_lone_surrogate_is_rejected()
+    {
+        // Arrange
+        var requested = "approval\uD800";
+
+        // Act
+        var ok = SignalAuthorization.TryNormalizeRequested(requested, out _);
+
+        // Assert
+        Assert.False(ok);
+    }
+
+    [Fact]
     public void Default_signal_name_applies_when_the_step_declares_none()
     {
         // Arrange

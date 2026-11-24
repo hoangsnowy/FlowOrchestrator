@@ -19,7 +19,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   restriction. **The `flow-operator` role does not bypass it**, Basic Auth and anonymous callers (also in
   `Development` and with `AllowAnonymousOperators`) get `403`, and an approver needs no viewer or operator
   role for that one endpoint. The check runs before the payload is written; the step is resolved from the
-  manifest, `ForEach` / scope children included. Unrestricted signals keep the operator rule. See
+  manifest, `ForEach` / scope children included. Unrestricted signals keep the operator rule. A restricted
+  `signalName` must be ASCII, and the endpoint normalizes the requested name (Unicode NFKC, trimmed) once for
+  both the check and the delivery, so a compatibility spelling such as U+212A KELVIN SIGN cannot be judged
+  unrestricted and still reach a restricted waiter through a store's case folding. See
   [WaitForSignal → Security](docs/articles/wait-for-signal.md#security).
 - **Machine-to-machine access.** `FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes`
   (default none) lists extra schemes — e.g. `"Bearer"` from `AddJwtBearer` — tried after

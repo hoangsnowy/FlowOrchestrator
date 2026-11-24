@@ -263,7 +263,7 @@ Rules worth knowing:
 - When several `WaitForSignal` steps share a signal name, the caller must satisfy **every** restricted one:
   the store delivers to whichever waiter is oldest, so the check covers every step the delivery can reach.
 - **Validated at startup.** `MapFlowDashboard` throws when a restriction is malformed (`allowedRoles` not a
-  non-empty string array, an expression in either input, a non-static `signalName`) or names a policy that is
+  non-empty string array, an expression in either input, a non-static or non-ASCII `signalName`) or names a policy that is
   not registered. A restriction that slips past (flows registered per scope) is refused with `403` at request
   time, never delivered.
 - **Audit log.** Every restricted delivery logs EventId `4107` (Information) with the user, run, signal and

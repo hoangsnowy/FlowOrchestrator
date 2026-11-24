@@ -146,8 +146,15 @@ internal static class SignalAuthorization
         if (roles.Count == 0 && policy is null)
             return null;   // both explicitly null: unrestricted
 
-        if (!TryGetStaticSignalName(step, out _))
+        if (!TryGetStaticSignalName(step, out var restrictedName))
             return Invalid(stepKey, $"a restricted signal needs a static '{SignalNameInput}' so the dashboard can tell which step a delivery addresses before it writes anything.");
+
+        // ASCII only: the stores match signal names case-insensitively with their OWN folding (PostgreSQL
+        // lower(), SQL Server collation, .NET OrdinalIgnoreCase in memory), and those disagree on a few
+        // non-ASCII characters (KELVIN SIGN, capital sharp s, ...). For an ASCII name, TryNormalizeRequested
+        // (NFKC) leaves no request spelling that a store folds onto it while this check does not.
+        if (!System.Text.Ascii.IsValid(restrictedName))
+            return Invalid(stepKey, $"a restricted '{SignalNameInput}' must be ASCII; '{restrictedName}' is not.");
 
         return new SignalRequirement(stepKey, roles, policy);
     }
@@ -399,6 +406,33 @@ internal static class SignalAuthorization
     }
 
     private static SignalRequirement Invalid(string stepKey, string error) => new(stepKey, [], null, error);
+
+    /// <summary>
+    /// Normalizes a signal name taken from a request: Unicode compatibility composition (NFKC), then trim.
+    /// The endpoint uses the result for BOTH the authorization decision and the delivery, so the two can
+    /// never address different waiters.
+    /// </summary>
+    /// <param name="requested">The raw name from the request route.</param>
+    /// <param name="normalized">The normalized name.</param>
+    /// <returns><see langword="false"/> when the name is not valid Unicode (e.g. a lone surrogate).</returns>
+    /// <remarks>
+    /// Without NFKC a compatibility character such as U+212A KELVIN SIGN would slip past the case-insensitive
+    /// match against a restricted <c>kyc-approval</c> here, yet PostgreSQL's <c>lower()</c> folds it to
+    /// <c>k</c> and delivers to the restricted step: an approval bypass for any operator.
+    /// </remarks>
+    public static bool TryNormalizeRequested(string requested, out string normalized)
+    {
+        try
+        {
+            normalized = requested.Normalize(System.Text.NormalizationForm.FormKC).Trim();
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            normalized = string.Empty;
+            return false;
+        }
+    }
 
     /// <summary>Reads a static, trimmed <c>signalName</c>, defaulting to <c>"default"</c> like the handler.</summary>
     private static bool TryGetStaticSignalName(StepMetadata step, out string name)

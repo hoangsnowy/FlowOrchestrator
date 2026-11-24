@@ -163,6 +163,27 @@ public sealed class SignalAuthorizationEndpointTests
     }
 
     [Fact]
+    public async Task Compatibility_spelling_of_a_restricted_name_cannot_bypass_the_restriction()
+    {
+        // Arrange — U+212A KELVIN SIGN: .NET OrdinalIgnoreCase does not equate it with 'k', but PostgreSQL's
+        // lower() does, so without normalization an operator's "\u212Ayc-approval" was judged unrestricted
+        // here and then delivered by the store to the restricted kyc-approval step.
+        using var server = Server(Flow(("wait_kyc", WaitFor("kyc-approval", roles: ["compliance-officer"]))));
+        var runId = ArrangeRunningRun(server, signalName: "Kyc-approval", stepKey: "wait_kyc");
+
+        // Act
+        using var operatorResponse = await server.Client.SendAsync(
+            Signal(runId, signalName: Uri.EscapeDataString("\u212Ayc-approval"), user: "otto", roles: "flow-operator"));
+        using var approverResponse = await server.Client.SendAsync(
+            Signal(runId, signalName: Uri.EscapeDataString("\u212Ayc-approval"), user: "carol", roles: "compliance-officer"));
+
+        // Assert — the operator is refused; the approver's delivery carries the normalized name.
+        Assert.Equal(HttpStatusCode.Forbidden, operatorResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, approverResponse.StatusCode);
+        await server.SignalDispatcher.Received(1).DispatchAsync(runId, "Kyc-approval", Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Basic_auth_caller_gets_403_for_a_restricted_signal()
     {
         // Arrange
