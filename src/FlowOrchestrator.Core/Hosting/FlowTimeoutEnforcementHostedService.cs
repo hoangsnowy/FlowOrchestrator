@@ -1,5 +1,6 @@
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -58,13 +59,13 @@ public sealed class FlowTimeoutEnforcementHostedService : BackgroundService
             var enforcer = scope.ServiceProvider.GetRequiredService<IRunTimeoutEnforcer>();
             await enforcer.EnforceDueTimeoutsAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        // Only the stopping token's own cancellation ends the loop. Any other exception — including an
+        // OperationCanceledException raised by a store for its own reasons (an HTTP client timeout, a
+        // linked CTS) — is a failed sweep: logged, retried on the next tick. Letting a stray OCE escape
+        // would fault ExecuteAsync and, under BackgroundServiceExceptionBehavior.StopHost, stop the host.
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            throw;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Periodic timeout-enforcement sweep failed; will retry on the next tick.");
+            HostingLog.TimeoutSweepFailed(_logger, ex);
         }
     }
 }

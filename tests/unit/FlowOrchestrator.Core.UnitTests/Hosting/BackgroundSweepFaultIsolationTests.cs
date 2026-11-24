@@ -92,4 +92,30 @@ public sealed class BackgroundSweepFaultIsolationTests
         Assert.True(secondSweep.Task.IsCompleted,
             $"Retention sweep loop ended after a stray OperationCanceledException (ExecuteTask status: {loopStatus}); no further sweep ran.");
     }
+
+    [Fact]
+    public async Task RetentionSweep_CancelledByTheStoppingToken_EndsWithoutFaulting()
+    {
+        // Arrange — the store honours the token it is given: it blocks until shutdown cancels it.
+        var sweepStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<IFlowRetentionStore>();
+        store.CleanupAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            sweepStarted.TrySetResult();
+            await Task.Delay(Timeout.Infinite, call.Arg<CancellationToken>());
+        });
+
+        var sut = new FlowRetentionHostedService(
+            [store],
+            new FlowRetentionOptions { Enabled = true, SweepInterval = TimeSpan.FromHours(1) },
+            NullLogger<FlowRetentionHostedService>.Instance);
+        await sut.StartAsync(CancellationToken.None);
+        await sweepStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Act
+        await sut.StopAsync(CancellationToken.None);
+
+        // Assert — a real shutdown is still a clean exit, not a fault.
+        Assert.False(sut.ExecuteTask!.IsFaulted, $"ExecuteTask faulted on shutdown: {sut.ExecuteTask.Exception}");
+    }
 }

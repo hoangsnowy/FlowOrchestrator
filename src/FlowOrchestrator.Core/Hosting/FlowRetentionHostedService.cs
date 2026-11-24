@@ -54,11 +54,10 @@ internal sealed class FlowRetentionHostedService : BackgroundService
             {
                 await store.CleanupAsync(cutoff, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            // Only the stopping token's own cancellation ends the sweep; a store-raised
+            // OperationCanceledException (client timeout, linked CTS) is a failed cleanup for that store,
+            // logged and retried on the next tick instead of faulting ExecuteAsync and stopping the host.
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
                 HostingLog.RetentionCleanupFailed(_logger, ex, store.GetType().Name);
             }

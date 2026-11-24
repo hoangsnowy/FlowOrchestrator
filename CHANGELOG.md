@@ -150,6 +150,12 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   `StepRetryOutcome.NotFailed`), a retry that loses the race gets `409` (`Conflict`), and
   `IFlowOrchestrator.RetryStepAsync` returns a `StepRetryResult` instead of the step's result. The accepted
   response body is unchanged. See [Migrating to 2.0](docs/articles/migrating-to-2.0.md#manual-retry-is-dispatched-and-accepts-only-a-failed-step).
+- **The timeout and retention sweeps survive an `OperationCanceledException` that is not a shutdown.**
+  Both loops let every `OperationCanceledException` escape their per-tick catch, not just shutdown, so a
+  store that cancels for its own reasons (an HTTP client timeout, a linked token) ended the sweep for the
+  life of the process — and, under the default `BackgroundServiceExceptionBehavior.StopHost`, stopped the
+  host. Only the stopping token's own cancellation ends them now; everything else is logged and retried on
+  the next tick (timeout sweep: new EventId 5010).
 
 ### Security
 

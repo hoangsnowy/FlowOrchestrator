@@ -26,4 +26,7 @@ internal static partial class HostingLog
 
     [LoggerMessage(EventId = 5005, Level = LogLevel.Warning, Message = "Flow retention cleanup failed for store {StoreType}.")]
     public static partial void RetentionCleanupFailed(ILogger logger, Exception ex, string storeType);
+
+    [LoggerMessage(EventId = 5010, Level = LogLevel.Warning, Message = "Periodic timeout-enforcement sweep failed; will retry on the next tick.")]
+    public static partial void TimeoutSweepFailed(ILogger logger, Exception ex);
 }
