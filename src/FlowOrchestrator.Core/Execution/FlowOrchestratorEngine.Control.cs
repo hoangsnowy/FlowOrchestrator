@@ -285,11 +285,30 @@ public sealed partial class FlowOrchestratorEngine
 
         if (control.TimeoutAtUtc is not null && DateTimeOffset.UtcNow >= control.TimeoutAtUtc.Value)
         {
-            await _runControlStore.MarkTimedOutAsync(runId, "Run timed out before scheduling next step.").ConfigureAwait(false);
+            if (!await _runControlStore.MarkTimedOutAsync(runId, "Run timed out before scheduling next step.").ConfigureAwait(false))
+            {
+                // The store refuses to latch a timeout once a user cancel is recorded: a cancel that landed
+                // between the read above and this write must win, or the run is reported TimedOut while the
+                // control record says Cancelled. One extra point read, only on this losing path.
+                return await ReadVerdictAfterRefusedTimeoutAsync(runId).ConfigureAwait(false);
+            }
+
             return "TimedOut";
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Re-reads the control record after <see cref="IFlowRunControlStore.MarkTimedOutAsync"/> refused to latch
+    /// a timeout, and returns the verdict the store actually holds.
+    /// </summary>
+    /// <param name="runId">The run whose timeout latch was refused.</param>
+    /// <returns><c>"Cancelled"</c> when a user cancel is recorded without a timeout; otherwise <c>"TimedOut"</c>.</returns>
+    private async Task<string> ReadVerdictAfterRefusedTimeoutAsync(Guid runId)
+    {
+        var current = await _runControlStore.GetRunControlAsync(runId).ConfigureAwait(false);
+        return current is { CancelRequested: true, TimedOutAtUtc: null } ? "Cancelled" : "TimedOut";
     }
 
     /// <inheritdoc/>
@@ -372,9 +391,12 @@ public sealed partial class FlowOrchestratorEngine
                 // A stuck run the user already cancelled must be finalised as Cancelled, not mislabelled
                 // TimedOut, and must NOT latch the timeout — otherwise a later retry's ExtendDeadlineAsync
                 // would clear the cancel.
-                if (mustLatchTimeout)
+                if (mustLatchTimeout
+                    && !await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false))
                 {
-                    await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false);
+                    // A user cancel landed after this sweep read the control record; the store kept it, so
+                    // the run closes as Cancelled rather than TimedOut.
+                    terminalStatus = await ReadVerdictAfterRefusedTimeoutAsync(run.Id).ConfigureAwait(false);
                 }
 
                 await TryCompleteRunAsync(run.Id, terminalStatus).ConfigureAwait(false);

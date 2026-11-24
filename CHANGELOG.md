@@ -197,7 +197,9 @@ where one provider behaved differently from the others.
   `RunStatusNames.Canonicalize`, so the status indexes stay usable.
 - **A user cancel is no longer relabelled a timeout.** `MarkTimedOutAsync` no longer applies when a cancel
   was already requested (all three stores). A cancel that landed between the engine's deadline check and
-  the timeout write used to turn the run `TimedOut`, and a later retry then cleared the user's cancel.
+  the timeout write used to turn the run `TimedOut`, and a later retry then cleared the user's cancel. When the
+  store refuses the latch, the engine (graph continuation and timeout sweep) re-reads the control record and
+  closes the run `Cancelled` as well.
 - **InMemory matches the SQL stores** in four places: trigger headers are stored as a case-insensitive
   snapshot (a caller's ordinal dictionary made `@triggerHeaders()['x-request-id']` miss, and a reused
   dictionary rewrote a started run's headers); `ConfigureRunAsync` updates an existing control record
