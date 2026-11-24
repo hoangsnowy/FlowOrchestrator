@@ -320,6 +320,30 @@ public sealed class FlowSignalResumeDispatchTests
             Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
     }
 
+    [Fact]
+    public async Task Expired_delivery_is_returned_as_is_and_sends_no_resume_nudge()
+    {
+        // Arrange — the store refused the signal because the waiter's deadline passed; nothing was written,
+        // so there is nothing to resume and a nudge would only re-run a step that is timing out.
+        _signalStore.DeliverSignalAsync(_runId, SignalName, "{}", Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<SignalDeliveryResult>(
+                new SignalDeliveryResult(SignalDeliveryStatus.Expired, StepKey, null)));
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        var dispatcher = CreateDispatcher(runtimeStore);
+
+        // Act
+        var result = await dispatcher.DispatchAsync(_runId, SignalName, "{}");
+
+        // Assert
+        Assert.Equal(SignalDeliveryStatus.Expired, result.Status);
+        Assert.Equal(StepKey, result.StepKey);
+        await _stepDispatcher.DidNotReceive().EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
+        await _stepDispatcher.DidNotReceive().ScheduleStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        await runtimeStore.DidNotReceive().IsStepClaimedAsync(Arg.Any<Guid>(), Arg.Any<string>());
+    }
+
     /// <summary>Builds the subject under test with the shared substitutes and the supplied runtime store.</summary>
     private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore runtimeStore) => new(
         _signalStore,

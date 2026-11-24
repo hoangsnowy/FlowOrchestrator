@@ -101,3 +101,39 @@ public sealed class WaitForSignalTimeoutFlow : IFlowDefinition
         }
     };
 }
+
+/// <summary>
+/// <c>wait_for_approval</c> (WaitForSignal, 60 s timeout) → <c>finalize</c> (Echo, runs only on success).
+/// Used with a frozen clock to deliver a signal after the deadline but before the step's timeout poll.
+/// </summary>
+public sealed class WaitForSignalWithDeadlineFlow : IFlowDefinition
+{
+    public Guid Id { get; } = new("aaaa4444-aaaa-4444-aaaa-444444444444");
+    public string Version => "1.0";
+
+    public FlowManifest Manifest { get; set; } = new()
+    {
+        Triggers = new FlowTriggerCollection
+        {
+            ["manual"] = new TriggerMetadata { Type = TriggerType.Manual }
+        },
+        Steps = new StepCollection
+        {
+            ["wait_for_approval"] = new StepMetadata
+            {
+                Type = "WaitForSignal",
+                Inputs = new Dictionary<string, object?>
+                {
+                    ["signalName"] = "approval",
+                    ["timeoutSeconds"] = 60
+                }
+            },
+            ["finalize"] = new StepMetadata
+            {
+                Type = "Echo",
+                RunAfter = new RunAfterCollection { ["wait_for_approval"] = [StepStatus.Succeeded] },
+                Inputs = new Dictionary<string, object?> { ["label"] = "finished" }
+            }
+        }
+    };
+}

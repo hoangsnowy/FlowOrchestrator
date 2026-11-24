@@ -1190,6 +1190,13 @@ public static class DashboardServiceCollectionExtensions
                     http.Response.StatusCode = StatusCodes.Status409Conflict;
                     await WriteJsonAsync(http.Response, new { error = "Signal already delivered.", stepKey = result.StepKey });
                     return;
+                case SignalDeliveryStatus.Expired:
+                    // 410 Gone, not 404: the waiter existed but its timeoutSeconds deadline passed, so the step
+                    // has timed out (or is about to be failed by its safety-net invocation) and no retry of this
+                    // signal can resume it. Nothing was written.
+                    http.Response.StatusCode = StatusCodes.Status410Gone;
+                    await WriteJsonAsync(http.Response, new { error = $"The wait for signal '{signalName}' timed out; the signal was not delivered.", stepKey = result.StepKey });
+                    return;
                 default:
                     http.Response.StatusCode = StatusCodes.Status404NotFound;
                     await WriteJsonAsync(http.Response, new { error = $"No waiter registered for signal '{signalName}' on this run." });

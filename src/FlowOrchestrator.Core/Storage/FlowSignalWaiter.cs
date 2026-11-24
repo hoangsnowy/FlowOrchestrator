@@ -18,10 +18,17 @@ public sealed class FlowSignalWaiter
     /// <summary>Time the waiter was first registered.</summary>
     public DateTimeOffset CreatedAt { get; set; }
 
-    /// <summary>Optional absolute deadline; once <see cref="DateTimeOffset.UtcNow"/> passes this, the step fails.</summary>
+    /// <summary>
+    /// Optional absolute deadline. From this instant on (inclusive) the waiter is expired: the step fails
+    /// with its timeout reason and <see cref="IFlowSignalStore.DeliverSignalAsync"/> refuses the waiter with
+    /// <see cref="SignalDeliveryStatus.Expired"/>.
+    /// </summary>
     public DateTimeOffset? ExpiresAt { get; set; }
 
-    /// <summary>Set when <see cref="IFlowSignalStore.DeliverSignalAsync"/> succeeds.</summary>
+    /// <summary>
+    /// Set when <see cref="IFlowSignalStore.DeliverSignalAsync"/> succeeds, by the store's clock. Always earlier
+    /// than <see cref="ExpiresAt"/> for a delivery a built-in store accepted.
+    /// </summary>
     public DateTimeOffset? DeliveredAt { get; set; }
 
     /// <summary>JSON payload supplied by the caller when the signal was delivered.</summary>
@@ -38,12 +45,27 @@ public enum SignalDeliveryStatus
     NotFound,
 
     /// <summary>A waiter exists but already received a signal — second delivery rejected.</summary>
-    AlreadyDelivered
+    AlreadyDelivered,
+
+    /// <summary>
+    /// The only undelivered waiters for the (run, signal name) pair passed their
+    /// <see cref="FlowSignalWaiter.ExpiresAt"/> deadline — the delivery is rejected and nothing is written.
+    /// </summary>
+    /// <remarks>
+    /// The step has timed out (or is about to be failed by its safety-net invocation), so the payload can
+    /// never resume it. The dashboard signal endpoint answers <c>410 Gone</c>.
+    /// </remarks>
+    Expired
 }
 
 /// <summary>Result of <see cref="IFlowSignalStore.DeliverSignalAsync"/>.</summary>
 /// <param name="Status">Disposition of the delivery attempt.</param>
-/// <param name="StepKey">When <see cref="SignalDeliveryStatus.Delivered"/>, the step key whose waiter received the payload.</param>
+/// <param name="StepKey">
+/// When <see cref="SignalDeliveryStatus.Delivered"/>, the step key whose waiter received the payload; when
+/// <see cref="SignalDeliveryStatus.Expired"/>, the step key of the oldest expired waiter; when
+/// <see cref="SignalDeliveryStatus.AlreadyDelivered"/>, the step key of a waiter that already holds a payload
+/// (when the store can tell).
+/// </param>
 /// <param name="DeliveredAt">When <see cref="SignalDeliveryStatus.Delivered"/>, the timestamp recorded on the waiter row.</param>
 public readonly record struct SignalDeliveryResult(
     SignalDeliveryStatus Status,

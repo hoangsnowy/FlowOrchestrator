@@ -16,18 +16,57 @@ namespace FlowOrchestrator.InMemory;
 public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionStore
 {
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowSignalWaiter> _waiters = new();
+
+    // Registration order, the tie-breaker for waiters with equal CreatedAt — the norm under a frozen
+    // TimeProvider (FlowTestHostBuilder.WithSystemClock), where every waiter is stamped with the same instant.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), long> _order = new();
+    private long _sequence;
+
     private readonly InMemoryFlowRunStore? _runStore;
+    private readonly TimeProvider _clock;
 
     /// <summary>Creates a standalone store; the retention sweep is a no-op without a paired run store.</summary>
     public InMemoryFlowSignalStore()
+        : this(null, TimeProvider.System)
     {
     }
 
     /// <summary>Creates a store whose retention sweep follows <paramref name="runStore"/>'s run lifetime.</summary>
     /// <param name="runStore">The run store whose purged runs lose their waiters on the next sweep.</param>
     public InMemoryFlowSignalStore(InMemoryFlowRunStore runStore)
+        : this(runStore, TimeProvider.System)
     {
+    }
+
+    /// <summary>Creates a standalone store that stamps and judges waiters by <paramref name="clock"/>.</summary>
+    /// <param name="clock">
+    /// The clock that stamps <see cref="FlowSignalWaiter.CreatedAt"/> / <see cref="FlowSignalWaiter.DeliveredAt"/>
+    /// and decides whether a waiter's <see cref="FlowSignalWaiter.ExpiresAt"/> has passed.
+    /// </param>
+    public InMemoryFlowSignalStore(TimeProvider clock)
+        : this(null, clock)
+    {
+    }
+
+    /// <summary>
+    /// Creates a store whose retention sweep follows <paramref name="runStore"/>'s run lifetime and whose
+    /// waiters are stamped and judged by <paramref name="clock"/>.
+    /// </summary>
+    /// <param name="runStore">
+    /// The run store whose purged runs lose their waiters on the next sweep; <see langword="null"/> makes the
+    /// sweep a no-op.
+    /// </param>
+    /// <param name="clock">
+    /// The clock that decides expiry. Pass the <see cref="TimeProvider"/> the <c>WaitForSignal</c> handler
+    /// resolves — the DI container does this when one is registered — so both sides agree on when a waiter
+    /// expired; a frozen test clock otherwise sets <see cref="FlowSignalWaiter.ExpiresAt"/> on one timeline
+    /// while the store judges it on another.
+    /// </param>
+    public InMemoryFlowSignalStore(InMemoryFlowRunStore? runStore, TimeProvider clock)
+    {
+        ArgumentNullException.ThrowIfNull(clock);
         _runStore = runStore;
+        _clock = clock;
     }
 
     /// <inheritdoc/>
@@ -50,6 +89,7 @@ public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionSt
             if (!_runStore.ContainsRun(key.RunId))
             {
                 _waiters.TryRemove(key, out _);
+                _order.TryRemove(key, out _);
             }
         }
 
@@ -65,7 +105,8 @@ public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionSt
         CancellationToken ct = default)
     {
         var key = (runId, stepKey);
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();
+        _order.TryAdd(key, Interlocked.Increment(ref _sequence));
         _waiters.AddOrUpdate(
             key,
             _ => new FlowSignalWaiter
@@ -87,11 +128,14 @@ public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionSt
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Delivers to the oldest UNDELIVERED waiter for the run + signal name, mirroring the
-    /// <c>AND delivered_at IS NULL</c> CTE filter in the SQL backends. When several waiters
-    /// share the same run + signal name (different step keys), a sequence of deliveries fans
-    /// out to each undelivered waiter in <see cref="FlowSignalWaiter.CreatedAt"/> order rather
-    /// than repeatedly re-selecting the first — already-delivered — waiter.
+    /// Delivers to the oldest UNDELIVERED, LIVE waiter for the run + signal name, mirroring the
+    /// <c>DeliveredAt IS NULL AND (ExpiresAt IS NULL OR ExpiresAt &gt; now)</c> filter in the SQL backends.
+    /// When several waiters share the same run + signal name (different step keys), a sequence of
+    /// deliveries fans out to each live undelivered waiter in <see cref="FlowSignalWaiter.CreatedAt"/>
+    /// (then registration) order rather than repeatedly re-selecting the first — already-delivered —
+    /// waiter, and an expired waiter is skipped instead of blocking a live one behind it. Expiry is judged
+    /// by this store's clock under the waiter's lock, so <see cref="FlowSignalWaiter.DeliveredAt"/> is
+    /// always earlier than <see cref="FlowSignalWaiter.ExpiresAt"/>.
     /// </remarks>
     public ValueTask<SignalDeliveryResult> DeliverSignalAsync(
         Guid runId,
@@ -99,20 +143,30 @@ public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionSt
         string payloadJson,
         CancellationToken ct = default)
     {
-        var candidates = _waiters.Values
-            .Where(w => w.RunId == runId &&
-                        string.Equals(w.SignalName, signalName, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(w => w.CreatedAt)
-            .ToList();
+        // One pass over the store, no closure; the sort only covers this run's matches.
+        List<FlowSignalWaiter>? candidates = null;
+        foreach (var waiter in _waiters.Values)
+        {
+            if (waiter.RunId == runId && string.Equals(waiter.SignalName, signalName, StringComparison.OrdinalIgnoreCase))
+            {
+                (candidates ??= []).Add(waiter);
+            }
+        }
 
-        if (candidates.Count == 0)
+        if (candidates is null)
         {
             return ValueTask.FromResult(new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null));
         }
 
-        // Claim the oldest waiter whose delivery slot is still open. Lock at the waiter level so
+        if (candidates.Count > 1)
+        {
+            candidates.Sort(CompareRegistrationOrder);
+        }
+
+        // Claim the oldest live waiter whose delivery slot is still open. Lock at the waiter level so
         // concurrent DeliverSignal calls racing for the SAME waiter are serialised; the post-lock
         // re-check skips any waiter another thread delivered between selection and lock acquisition.
+        FlowSignalWaiter? firstExpired = null;
         foreach (var candidate in candidates)
         {
             if (candidate.DeliveredAt is not null)
@@ -127,12 +181,27 @@ public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionSt
                     continue;
                 }
 
-                var deliveredAt = DateTimeOffset.UtcNow;
-                candidate.DeliveredAt = deliveredAt;
+                // Read the clock under the lock so the expiry decision and the DeliveredAt stamp are the same
+                // instant. Inclusive boundary, like WaitForSignalHandler: now >= ExpiresAt is expired.
+                var now = _clock.GetUtcNow();
+                if (candidate.ExpiresAt is { } expiresAt && now >= expiresAt)
+                {
+                    firstExpired ??= candidate;
+                    continue;
+                }
+
+                candidate.DeliveredAt = now;
                 candidate.PayloadJson = payloadJson;
                 return ValueTask.FromResult(
-                    new SignalDeliveryResult(SignalDeliveryStatus.Delivered, candidate.StepKey, deliveredAt));
+                    new SignalDeliveryResult(SignalDeliveryStatus.Delivered, candidate.StepKey, now));
             }
+        }
+
+        // No live waiter. An expired undelivered waiter is the one this signal was meant for — report that
+        // rather than a duplicate delivery, matching the SQL backends' follow-up read.
+        if (firstExpired is not null)
+        {
+            return ValueTask.FromResult(new SignalDeliveryResult(SignalDeliveryStatus.Expired, firstExpired.StepKey, null));
         }
 
         // Every matching waiter has already been delivered — report the oldest's prior delivery,
@@ -153,6 +222,20 @@ public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionSt
     public ValueTask RemoveWaiterAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         _waiters.TryRemove((runId, stepKey), out _);
+        _order.TryRemove((runId, stepKey), out _);
         return ValueTask.CompletedTask;
+    }
+
+    private int CompareRegistrationOrder(FlowSignalWaiter x, FlowSignalWaiter y)
+    {
+        var byCreated = x.CreatedAt.CompareTo(y.CreatedAt);
+        if (byCreated != 0)
+        {
+            return byCreated;
+        }
+
+        _order.TryGetValue((x.RunId, x.StepKey), out var xs);
+        _order.TryGetValue((y.RunId, y.StepKey), out var ys);
+        return xs.CompareTo(ys);
     }
 }

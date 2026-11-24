@@ -115,13 +115,14 @@ public sealed class ApprovalService(IFlowSignalDispatcher signals)
             runId,
             "approval",
             $$"""{"approver":"{{approver}}","approved":true}""");
-        // result.Status is Delivered / NotFound / AlreadyDelivered;
+        // result.Status is Delivered / NotFound / AlreadyDelivered / Expired;
         // result.StepKey and result.DeliveredAt are populated on success.
     }
 }
 ```
 
-The returned `SignalDeliveryResult` carries the same outcomes the HTTP endpoint maps to 200 / 404 / 409.
+The returned `SignalDeliveryResult` carries the same outcomes the HTTP endpoint maps to 200 / 404 / 409 / 410.
+An `Expired` result writes nothing and sends no resume nudge.
 
 `IFlowSignalDispatcher` performs **no authorization** — not the operator rule, not a step's
 `allowedRoles` / `authorizationPolicy`. That is by design: code running in your process is trusted, and
@@ -139,9 +140,17 @@ Checked in this order: authentication, authorization, run state, body.
 | `403` | The caller may not deliver this signal — see [Security](#security). Also the answer to a caller who is not an operator when the run does not exist, so the endpoint cannot be used to probe run ids. |
 | `404` | Run does not exist (operators only), or no waiter is registered for that signal name on the run. |
 | `409` | A signal has already been delivered for this waiter — second delivery rejected. |
+| `410` | The waiter's `timeoutSeconds` deadline has passed — the signal is refused and nothing is written. The step fails with its timeout reason (if it has not already). |
 | `400` | Run is no longer in `Running` status, or the body is not valid JSON. |
 
 ## Timeout Patterns
+
+The deadline is absolute. From that instant on the store refuses the signal (`SignalDeliveryStatus.Expired`,
+HTTP `410`) — judged by the store's clock: `SYSDATETIMEOFFSET()` on SQL Server, `now()` on PostgreSQL, the
+registered `TimeProvider` in memory — even though the step itself is only failed by its safety-net
+invocation about a second later. A late signal therefore never resumes a timed-out step. When several
+steps wait on the same signal name, an expired waiter is skipped and the oldest live one receives the
+signal.
 
 Set `timeoutSeconds` to fail the step (and therefore the run, unless you wire a recovery branch with a downstream step that runs on `[StepStatus.Failed]`) after a deadline:
 

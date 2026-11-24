@@ -6,9 +6,11 @@ namespace FlowOrchestrator.Core.Storage;
 /// </summary>
 /// <remarks>
 /// Backends must guarantee atomic delivery semantics: a single signal is either persisted exactly once
-/// on the matching waiter row, or rejected as <see cref="SignalDeliveryStatus.AlreadyDelivered"/>. The
+/// on the matching live waiter row, or rejected as <see cref="SignalDeliveryStatus.AlreadyDelivered"/>,
+/// <see cref="SignalDeliveryStatus.Expired"/> or <see cref="SignalDeliveryStatus.NotFound"/>. The
 /// in-memory backend uses <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey, TValue}.TryUpdate"/>;
-/// SQL backends use a conditional <c>UPDATE … WHERE DeliveredAt IS NULL</c> with row-count detection.
+/// SQL backends use a conditional <c>UPDATE … WHERE DeliveredAt IS NULL AND (ExpiresAt IS NULL OR ExpiresAt &gt; now)</c>
+/// with row-count detection.
 /// </remarks>
 public interface IFlowSignalStore
 {
@@ -38,8 +40,23 @@ public interface IFlowSignalStore
     /// <returns>
     /// <see cref="SignalDeliveryStatus.Delivered"/> with the resolved <c>StepKey</c> on success;
     /// <see cref="SignalDeliveryStatus.NotFound"/> when no waiter matches;
-    /// <see cref="SignalDeliveryStatus.AlreadyDelivered"/> when a payload is already recorded.
+    /// <see cref="SignalDeliveryStatus.Expired"/> when every undelivered matching waiter is past its
+    /// <see cref="FlowSignalWaiter.ExpiresAt"/>;
+    /// <see cref="SignalDeliveryStatus.AlreadyDelivered"/> when every matching waiter already holds a payload.
     /// </returns>
+    /// <remarks>
+    /// <para>The payload goes to the oldest (<see cref="FlowSignalWaiter.CreatedAt"/>) waiter that is both
+    /// undelivered and <b>live</b> — <see cref="FlowSignalWaiter.ExpiresAt"/> is <see langword="null"/> or later
+    /// than the store's current time. An expired waiter never receives a payload and never blocks a live waiter
+    /// that shares its signal name. Expiry is judged by the <b>store's</b> clock in the same atomic write that
+    /// records the delivery (<c>SYSDATETIMEOFFSET()</c> on SQL Server, <c>now()</c> on PostgreSQL, the injected
+    /// <see cref="TimeProvider"/> in memory), with the same inclusive boundary the <c>WaitForSignal</c> handler
+    /// uses (<c>now &gt;= ExpiresAt</c> is expired), so a recorded <see cref="FlowSignalWaiter.DeliveredAt"/> is
+    /// always earlier than the deadline.</para>
+    /// <para>Before 2.0 the stores ignored <see cref="FlowSignalWaiter.ExpiresAt"/>: a signal landing between the
+    /// deadline and the step's safety-net invocation (deadline + 1 s, later under load) was recorded and resumed
+    /// the step past its timeout. Custom stores must apply the same rule.</para>
+    /// </remarks>
     ValueTask<SignalDeliveryResult> DeliverSignalAsync(
         Guid runId,
         string signalName,

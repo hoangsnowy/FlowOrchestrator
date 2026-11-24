@@ -5,9 +5,11 @@ namespace FlowOrchestrator.PostgreSQL.Tests;
 public sealed class PostgreSqlFlowSignalStoreTests : IClassFixture<PostgreSqlFixture>
 {
     private readonly PostgreSqlFlowSignalStore _store;
+    private readonly string _connectionString;
 
     public PostgreSqlFlowSignalStoreTests(PostgreSqlFixture fixture)
     {
+        _connectionString = fixture.ConnectionString;
         _store = new PostgreSqlFlowSignalStore(fixture.ConnectionString);
     }
 
@@ -142,5 +144,84 @@ public sealed class PostgreSqlFlowSignalStoreTests : IClassFixture<PostgreSqlFix
 
         // Assert
         Assert.Null(waiter);
+    }
+
+    // ── Expiry is judged by the DATABASE clock in the delivery statement itself ────────────────────────
+
+    [Fact]
+    public async Task DeliverSignal_at_or_after_expiry_returns_Expired_and_writes_nothing()
+    {
+        // Arrange — ExpiresAt = the database's "now" read before the delivery; by the time the delivery
+        // statement runs the database clock is at or past it, and the boundary is inclusive.
+        var runId = Guid.NewGuid();
+        var deadline = await DatabaseNowAsync();
+        await _store.RegisterWaiterAsync(runId, "wait", "approve", deadline);
+
+        // Act
+        var result = await _store.DeliverSignalAsync(runId, "approve", """{"late":true}""");
+        var waiter = await _store.GetWaiterAsync(runId, "wait");
+
+        // Assert
+        Assert.Equal(SignalDeliveryStatus.Expired, result.Status);
+        Assert.Equal("wait", result.StepKey);
+        Assert.Null(result.DeliveredAt);
+        Assert.Null(waiter!.DeliveredAt);
+        Assert.Null(waiter.PayloadJson);
+    }
+
+    [Fact]
+    public async Task DeliverSignal_just_before_expiry_returns_Delivered()
+    {
+        // Arrange — a deadline a few seconds ahead of the database clock.
+        var runId = Guid.NewGuid();
+        var deadline = (await DatabaseNowAsync()).AddSeconds(5);
+        await _store.RegisterWaiterAsync(runId, "wait", "approve", deadline);
+
+        // Act
+        var result = await _store.DeliverSignalAsync(runId, "approve", """{"ok":true}""");
+        var waiter = await _store.GetWaiterAsync(runId, "wait");
+
+        // Assert — the recorded DeliveredAt is earlier than the deadline by construction.
+        Assert.Equal(SignalDeliveryStatus.Delivered, result.Status);
+        Assert.Equal("wait", result.StepKey);
+        Assert.Equal("""{"ok":true}""", waiter!.PayloadJson);
+        Assert.True(waiter.DeliveredAt < waiter.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task DeliverSignal_expired_and_live_waiters_same_signal_live_one_receives_it()
+    {
+        // Arrange — the OLDER waiter has expired; it must neither take the payload nor block the live one.
+        var runId = Guid.NewGuid();
+        var now = await DatabaseNowAsync();
+        await _store.RegisterWaiterAsync(runId, "expired", "approve", now.AddMinutes(-1));
+        await Task.Delay(20); // distinct CreatedAt ordering, as in the two-waiter test above
+        await _store.RegisterWaiterAsync(runId, "live", "approve", now.AddHours(1));
+
+        // Act
+        var first = await _store.DeliverSignalAsync(runId, "approve", """{"n":1}""");
+        var second = await _store.DeliverSignalAsync(runId, "approve", """{"n":2}""");
+        var expired = await _store.GetWaiterAsync(runId, "expired");
+        var live = await _store.GetWaiterAsync(runId, "live");
+
+        // Assert — the live waiter gets the first delivery; with it delivered, the expired one is what is left.
+        Assert.Equal(SignalDeliveryStatus.Delivered, first.Status);
+        Assert.Equal("live", first.StepKey);
+        Assert.Equal(SignalDeliveryStatus.Expired, second.Status);
+        Assert.Equal("expired", second.StepKey);
+        Assert.Null(expired!.DeliveredAt);
+        Assert.Null(expired.PayloadJson);
+        Assert.Equal("""{"n":1}""", live!.PayloadJson);
+    }
+
+    /// <summary>Reads the database clock the store judges expiry by.</summary>
+    private async Task<DateTimeOffset> DatabaseNowAsync()
+    {
+        await using var conn = new Npgsql.NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new Npgsql.NpgsqlCommand("SELECT now();", conn);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        await reader.ReadAsync();
+        return reader.GetFieldValue<DateTimeOffset>(0);
     }
 }
