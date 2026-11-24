@@ -158,6 +158,73 @@ public sealed class DashboardSurfaceAuditTests
     }
 
     /// <summary>
+    /// Docs (webhook-hardening.md, Twilio): "Twilio sends application/x-www-form-urlencoded, not JSON". The
+    /// endpoint must accept the form body and hand its fields to the verifier, which signs
+    /// <c>{url}{sorted key+value pairs}</c>.
+    /// </summary>
+    [Fact]
+    public async Task Twilio_form_encoded_delivery_with_valid_signature_is_accepted()
+    {
+        // Arrange
+        using var server = new DashboardTestServer(o => o.UseWebhookSecurity(s => s.AllowLegacySha1()));
+        var id = Guid.NewGuid();
+        const string authToken = "twilio-auth-token";
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?>
+        {
+            ["webhookSlug"] = "twilio-sms",
+            ["webhookHmacKey"] = authToken,
+            ["webhookSignatureScheme"] = "Twilio",
+        }));
+        var form = new SortedDictionary<string, string>(StringComparer.Ordinal) { ["Body"] = "hello", ["From"] = "+15550001111" };
+        var url = "http://localhost/flows/api/webhook/twilio-sms";
+        var signed = new StringBuilder(url);
+        foreach (var (k, v) in form) signed.Append(k).Append(v);
+        var signature = Convert.ToBase64String(HMACSHA1.HashData(Encoding.UTF8.GetBytes(authToken), Encoding.UTF8.GetBytes(signed.ToString())));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/twilio-sms")
+        {
+            Content = new FormUrlEncodedContent(form),
+        };
+        request.Headers.Add("X-Twilio-Signature", signature);
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>
+    /// A form-encoded body reaches the run as a JSON object: one string per field, an array for a field
+    /// that repeats, with <c>+</c> and percent-escapes decoded.
+    /// </summary>
+    [Fact]
+    public async Task Form_encoded_delivery_becomes_a_json_object_trigger_body()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var id = Guid.NewGuid();
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?> { ["webhookSlug"] = "form" }));
+        ITriggerContext? captured = null;
+        server.FlowOrchestrator.TriggerAsync(Arg.Do<ITriggerContext>(c => captured = c), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>((object?)null));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/flows/api/webhook/form")
+        {
+            Content = new StringContent("Body=hello+world&To=%2B1555&Media=a&Media=b", Encoding.UTF8, "application/x-www-form-urlencoded"),
+        };
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = Assert.IsType<System.Text.Json.JsonElement>(captured!.Trigger.Data);
+        Assert.Equal("hello world", body.GetProperty("Body").GetString());
+        Assert.Equal("+1555", body.GetProperty("To").GetString());
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, body.GetProperty("Media").ValueKind);
+        Assert.Equal(["a", "b"], body.GetProperty("Media").EnumerateArray().Select(e => e.GetString()).ToArray());
+    }
+
+    /// <summary>
     /// When the signature did NOT verify (Audit mode lets the delivery through the pipeline), the legacy
     /// shared-secret check still applies — skipping it is reserved for a verified signature.
     /// </summary>

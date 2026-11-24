@@ -124,6 +124,9 @@ X-Webhook-Key: my-secret-key
 { "orderId": "ORD-456", "total": 129.99 }
 ```
 
+- The body may be JSON or `application/x-www-form-urlencoded`. A form body reaches the run as a JSON
+  object (`Body=hi&From=%2B1555` becomes `{ "Body": "hi", "From": "+1555" }`; a repeated field becomes an
+  array), so `@triggerBody()?.From` reads the same either way.
 - `webhookSlug` — URL path segment. Must be unique across all registered webhooks.
 - `webhookSecret` — When set, every incoming request must include `X-Webhook-Key: {secret}`. Requests without or with the wrong secret receive `401 Unauthorized`.
 - If `webhookSecret` is omitted, the endpoint is unauthenticated.

@@ -120,6 +120,33 @@ public sealed class WebhookSecurityPipeline
     /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
     /// <param name="headers">Inbound request headers (case-insensitive).</param>
     /// <param name="ct">Cancellation token.</param>
+    public ValueTask<PipelineResult> EvaluateAsync(
+        HttpContext http,
+        Guid flowId,
+        string triggerKey,
+        IReadOnlyDictionary<string, object?> triggerInputs,
+        ReadOnlyMemory<byte> bodyBytes,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken ct = default)
+        => EvaluateAsync(http, flowId, triggerKey, triggerInputs, bodyBytes, headers, formFields: null, ct);
+
+    /// <summary>
+    /// Runs the active gate chain for a request whose body may be form-encoded. Caller passes the
+    /// resolved flow / trigger info, the buffered body bytes and — for an
+    /// <c>application/x-www-form-urlencoded</c> body — its decoded fields.
+    /// </summary>
+    /// <param name="http">HTTP context (used for client IP, absolute URL, activity tags).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key (manifest key).</param>
+    /// <param name="triggerInputs">Manifest inputs for the matching webhook trigger.</param>
+    /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
+    /// <param name="headers">Inbound request headers (case-insensitive).</param>
+    /// <param name="formFields">
+    /// Decoded form fields (<see cref="WebhookRequestBuffer.BufferedBody.FormFields"/>), handed to the
+    /// verifier for schemes that sign them (Twilio's <see cref="SignedPayloadStrategy.UrlPlusSortedForm"/>);
+    /// <see langword="null"/> for a JSON body.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
     public async ValueTask<PipelineResult> EvaluateAsync(
         HttpContext http,
         Guid flowId,
@@ -127,6 +154,7 @@ public sealed class WebhookSecurityPipeline
         IReadOnlyDictionary<string, object?> triggerInputs,
         ReadOnlyMemory<byte> bodyBytes,
         IReadOnlyDictionary<string, string> headers,
+        IReadOnlyDictionary<string, string>? formFields,
         CancellationToken ct = default)
     {
         var stopwatch = ValueStopwatch.StartNew();
@@ -206,7 +234,7 @@ public sealed class WebhookSecurityPipeline
                 Body = bodyBytes,
                 Headers = WithSignatureHeader(http, headers, spec),
                 AbsoluteUrl = BuildAbsoluteUrl(http),
-                FormFields = null,
+                FormFields = formFields,
                 Spec = spec,
                 HmacKey = key ?? string.Empty,
                 HmacKeyPrevious = previous,

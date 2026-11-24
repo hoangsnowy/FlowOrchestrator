@@ -169,6 +169,18 @@ SHA-1 base64 over `{absoluteUrl}{sortedFormParams}`. Twilio sends
 proxy preserves the form body verbatim. Twilio and `GitHubLegacy` are the two
 built-in schemes that require `AllowLegacySha1 = true` (both sign with HMAC-SHA1).
 
+The webhook endpoint accepts form-encoded bodies for every webhook trigger. The
+decoded fields are handed to the verifier, and the run's trigger body is a JSON
+object with one string per field (a field that repeats becomes an array of its
+values), so `@triggerBody()?.Body` and `@triggerBody()?.From` work as they would
+for a JSON delivery. A form over the ASP.NET Core form limits (1,024 fields)
+is answered `400 Invalid form payload.`; the `MaxBodyBytes` cap applies as for JSON.
+Twilio signs a repeated parameter value by value — the verifier sees a repeated
+field joined with `,`, so a Twilio request that repeats a parameter does not verify.
+The absolute URL the verifier signs is the one the request arrived on; behind a
+proxy that rewrites scheme or host, configure forwarded headers so it matches the
+URL configured in Twilio.
+
 ```csharp
 Inputs = new Dictionary<string, object?>
 {

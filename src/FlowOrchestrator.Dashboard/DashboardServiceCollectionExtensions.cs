@@ -560,6 +560,12 @@ public static class DashboardServiceCollectionExtensions
                 await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
                 return;
             }
+            if (buffered.Status == WebhookRequestBuffer.BufferStatus.InvalidForm)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Invalid form payload." });
+                return;
+            }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
                 .Where(h => !_sensitiveHeaders.Contains(h.Key))
@@ -573,7 +579,7 @@ public static class DashboardServiceCollectionExtensions
             if (pipeline is not null && triggerInputs is not null)
             {
                 var inputsRo = (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>(triggerInputs, StringComparer.OrdinalIgnoreCase);
-                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, http.RequestAborted);
+                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, buffered.FormFields, http.RequestAborted);
                 if (verdict.Decision == WebhookSecurityPipeline.Decision.Reject)
                 {
                     http.Response.StatusCode = verdict.StatusCode;
