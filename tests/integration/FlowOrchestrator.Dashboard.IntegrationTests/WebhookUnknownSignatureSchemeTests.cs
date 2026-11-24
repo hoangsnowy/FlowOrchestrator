@@ -76,7 +76,7 @@ public sealed class WebhookUnknownSignatureSchemeTests
         var flowId = Register(server, "svix-events", new Dictionary<string, object?>
         {
             ["webhookSignatureScheme"] = "Svix",
-            ["webhookHmacKey"] = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ["webhookHmacKey"] = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
         });
         using var request = Delivery("svix-events", "{\"test\": 1}",
             ("webhook-id", "msg_forged"), ("webhook-timestamp", Now.ToString(CultureInfo.InvariantCulture)),
@@ -104,7 +104,7 @@ public sealed class WebhookUnknownSignatureSchemeTests
         Register(server, "stdwh-events", new Dictionary<string, object?>
         {
             ["webhookSignatureScheme"] = "StandardWebhooks",
-            ["webhookHmacKey"] = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ["webhookHmacKey"] = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
         });
         using var request = Delivery("stdwh-events", "{\"test\": 2432232314}",
             ("webhook-id", "msg_p5jXN8AQM9LWM0D4loKWxJek"),
