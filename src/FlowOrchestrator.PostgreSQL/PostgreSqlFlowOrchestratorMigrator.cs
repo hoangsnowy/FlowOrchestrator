@@ -267,7 +267,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
 
     // Every CREATE INDEX / ADD COLUMN below goes through EnsureIndex / EnsureColumn: see EnsureIndex for why a
     // plain IF NOT EXISTS is not enough. CREATE TABLE IF NOT EXISTS takes no lock on an existing table.
-    private static readonly string MigrationSql = $"""
+    internal static readonly string MigrationSql = $"""
         CREATE TABLE IF NOT EXISTS flow_definitions (
             id            UUID         NOT NULL PRIMARY KEY,
             name          VARCHAR(256) NOT NULL,
@@ -367,8 +367,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
 
         -- Rows whose runtime hand-off never returned (no job id), for the unsent-dispatch sweep. Partial, so it
         -- holds only in-flight or stranded dispatches and stays tiny however large the ledger grows.
-        CREATE INDEX IF NOT EXISTS ix_flow_step_dispatches_unsent
-            ON flow_step_dispatches (dispatched_at) WHERE dispatch_job_id IS NULL;
+        {EnsureIndex("flow_step_dispatches", "ix_flow_step_dispatches_unsent", "(dispatched_at) WHERE dispatch_job_id IS NULL")}
 
         CREATE TABLE IF NOT EXISTS flow_signal_waiters (
             run_id        UUID         NOT NULL,
@@ -450,7 +449,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     // Trigram (pg_trgm) GIN indexes for substring run-search acceleration. Run separately
     // from MigrationSql via TryCreateTrigramIndexesAsync because CREATE EXTENSION may be denied
     // on locked-down roles; a failure must not abort the mandatory schema migration.
-    private static readonly string TrigramSql = $"""
+    internal static readonly string TrigramSql = $"""
         CREATE EXTENSION IF NOT EXISTS pg_trgm;
         {EnsureIndex("flow_runs", "ix_flow_runs_flow_name_trgm", "USING gin (flow_name gin_trgm_ops)")}
         {EnsureIndex("flow_runs", "ix_flow_runs_trigger_key_trgm", "USING gin (trigger_key gin_trgm_ops)")}

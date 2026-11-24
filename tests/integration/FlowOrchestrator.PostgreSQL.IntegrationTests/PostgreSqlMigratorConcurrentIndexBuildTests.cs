@@ -157,7 +157,8 @@ public sealed class PostgreSqlMigratorConcurrentIndexBuildTests : IClassFixture<
         // running cluster holds: ROW EXCLUSIVE (an in-flight write) and SHARE UPDATE EXCLUSIVE (autovacuum,
         // ANALYZE, an index build). Any DDL lock the re-run requests on any table conflicts with one of them.
         var cs = await CreateDatabaseAsync();
-        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger()))
+        var initialLog = new CapturingLogger();
+        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, initialLog))
         {
             await initial.StartAsync(CancellationToken.None);
             await initial.BackgroundIndexBuild;
@@ -174,18 +175,23 @@ public sealed class PostgreSqlMigratorConcurrentIndexBuildTests : IClassFixture<
             $"BEGIN; LOCK TABLE {tables} IN ROW EXCLUSIVE MODE; LOCK TABLE {tables} IN SHARE UPDATE EXCLUSIVE MODE;");
         var rerunLog = new CapturingLogger();
         using var restarted = new PostgreSqlFlowOrchestratorMigrator(cs, rerunLog);
-        string? rerunFailure, writeFailure;
+        string? rerunFailure, writeFailure, lockSnapshot = null;
 
         // Act — the restarted host's migration and a running host's writes, both beside the holder.
         try
         {
-            var rerun = OutcomeWithinBudgetAsync(restarted.StartAsync(CancellationToken.None));
+            var rerunStart = restarted.StartAsync(CancellationToken.None);
+            var rerun = OutcomeWithinBudgetAsync(rerunStart);
             var write = OutcomeWithinBudgetAsync(Task.Run(async () =>
             {
                 await store.StartRunAsync(Guid.NewGuid(), "RerunLockFlow", Guid.NewGuid(), "manual", null, null);
                 await store.RecordStepStartAsync(runId, "a", "Work", null, null);
                 await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
             }));
+            // Diagnostics only: the healthy re-run takes milliseconds. If it is still running after a few
+            // seconds, record who waits on what while the state is live, so a CI failure names the lock.
+            if (await Task.WhenAny(rerunStart, Task.Delay(TimeSpan.FromSeconds(5))) != rerunStart)
+                lockSnapshot = await DescribeLockWaitsAsync(cs);
             rerunFailure = await rerun;
             writeFailure = await write;
         }
@@ -197,10 +203,39 @@ public sealed class PostgreSqlMigratorConcurrentIndexBuildTests : IClassFixture<
         await restarted.BackgroundIndexBuild.WaitAsync(Budget);
 
         // Assert — the trigram step swallows its own failures as warnings, so a warning is a failure too.
-        Assert.True(rerunFailure is null, $"The re-run migration waited on a lock a running host holds: {rerunFailure}");
+        Assert.True(
+            rerunFailure is null,
+            $"The re-run migration waited on a lock a running host holds: {rerunFailure}\n"
+            + $"Lock waits: {lockSnapshot}\nInitial migration warnings: {Warnings(initialLog)}\nRe-run log: {Warnings(rerunLog)}");
         Assert.True(writeFailure is null, $"A write did not complete during the re-run migration: {writeFailure}");
-        Assert.DoesNotContain(rerunLog.Entries, e => e.Level >= LogLevel.Warning);
+        Assert.True(!rerunLog.Entries.Any(e => e.Level >= LogLevel.Warning), $"Re-run warnings: {Warnings(rerunLog)}");
         Assert.NotEmpty(tables);
+    }
+
+    private static string Warnings(CapturingLogger log) =>
+        string.Join(" | ", log.Entries.Where(e => e.Level >= LogLevel.Warning).Select(e => $"{e.EventId} {e.Message}"));
+
+    /// <summary>
+    /// Every backend of the database with its wait and the pids blocking it, and every lock request not yet
+    /// granted, as one line each: what a failing run needs to name the statement and the lock it waited on.
+    /// </summary>
+    private static async Task<string> DescribeLockWaitsAsync(string cs)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        var activity = await conn.QueryAsync<string>("""
+            SELECT format('pid %s [%s] %s wait=%s/%s blocked_by=%s :: %s',
+                          a.pid, a.backend_type, a.state, a.wait_event_type, a.wait_event,
+                          pg_blocking_pids(a.pid), left(regexp_replace(a.query, '\s+', ' ', 'g'), 160))
+            FROM pg_stat_activity AS a
+            WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
+            """);
+        var waiting = await conn.QueryAsync<string>("""
+            SELECT format('pid %s waits %s on %s %s', l.pid, l.mode, l.locktype,
+                          coalesce(l.relation::regclass::text, l.virtualxid, l.transactionid::text, ''))
+            FROM pg_locks AS l
+            WHERE NOT l.granted
+            """);
+        return string.Join(" || ", activity.Concat(waiting));
     }
 
     /// <summary>A migrated database whose run-search index is missing, so the next start builds it.</summary>

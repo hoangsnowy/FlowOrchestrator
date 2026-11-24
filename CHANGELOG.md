@@ -240,12 +240,13 @@ providers only:
   the schema was already up to date: PostgreSQL takes the lock of `CREATE INDEX IF NOT EXISTS` (SHARE) and
   `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (ACCESS EXCLUSIVE) before it checks the name. A host starting
   beside running ones (a rolling deployment, a restart) queued behind any in-flight write, autovacuum or
-  index build on `flow_runs`, `flow_steps`, `flow_step_attempts`, `flow_idempotency_keys`,
-  `flow_signal_waiters`, `webhook_replay_nonces` or `webhook_rejections`. Every later write to that table
-  queued behind the start, and a start that waited past the 30 s command timeout failed. Against the 2.0
-  run-search index build it also deadlocked (`40P01`), killing either the build or the start. Each
-  statement now runs behind a catalog check that takes no lock, so a start on an up-to-date schema
-  requests none; the resulting schema is identical.
+  index build on `flow_runs`, `flow_steps`, `flow_step_attempts`, `flow_step_dispatches`,
+  `flow_idempotency_keys`, `flow_signal_waiters`, `webhook_replay_nonces` or `webhook_rejections`. Every
+  later write to that table queued behind the start, and a start that waited past the 30 s command
+  timeout failed. Against the 2.0 run-search index build it also deadlocked (`40P01`), killing either the
+  build or the start. Each statement now runs behind a catalog check that takes no lock, so a start on an
+  up-to-date schema requests none; the resulting schema is identical. A unit test rejects any unguarded
+  `CREATE INDEX` / `ALTER TABLE` in the start-up SQL.
 
 ### Fixed — a signal sent after a `WaitForSignal` timeout no longer resumes the step
 
