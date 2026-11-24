@@ -6,6 +6,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **A signal delivered by a client that disconnects no longer strands the waiting step.** With
+  OpenTelemetry on, `FlowSignalDispatcher` read the waiter for the wait-time metric with the request
+  token *after* the signal was durably delivered. SQL Server and PostgreSQL honour that token, so an
+  aborted request threw there, before the resume dispatch, and the `WaitForSignal` step stayed parked
+  until its timeout (up to 24 h). The read now uses `CancellationToken.None`, like the dispatch itself.
+  Same failure class as 1.26.1 and #188. Found by the 2.0 stress harness; fixed on main in #270.
+
 ## [1.34.4] - 2026-11-23
 
 Security release for the 1.34 line (.NET 8 / 9 / 10). Webhook replay protection trusted an unsigned
