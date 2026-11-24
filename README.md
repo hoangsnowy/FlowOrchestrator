@@ -16,15 +16,13 @@
 
 ---
 
-![FlowOrchestrator Dashboard](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-demo.gif)
+![FlowOrchestrator dashboard: Overview with the "Needs attention" list, runs-per-hour chart and recent runs](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-overview.jpg)
 
 ---
 
-> **What's new in v1.29** — Stuck runs now recover. Dashboard **Retry** used to be a permanent no-op once a run's timeout deadline had lapsed; `RetryStepAsync` now refreshes the run's execution window via the new `IFlowRunControlStore.ExtendDeadlineAsync` (un-latching a timeout while preserving a genuine user cancel). A new `FlowTimeoutEnforcementHostedService` (`FlowRunControlOptions.TimeoutEnforcementInterval`, default 30 s) proactively finalizes runs that are past their deadline with no in-flight work, so a step that threw and left nothing scheduled no longer leaves the run `Running` forever. Run completion is now idempotent through `IFlowRunStore.CompleteRunIfActiveAsync`, an atomic guarded `Running → terminal` transition, so lifecycle events fire exactly once even when the graph continuation and the timeout sweep race. Both new store members ship as default interface methods — custom store implementations compile unchanged.
+> **What's new in 2.0** — **Hangfire becomes an opt-in runtime**: `AddFlowOrchestrator()` ships in `FlowOrchestrator.Core`, so InMemory and Azure Service Bus hosts no longer pull Hangfire in (Hangfire stays a fully supported runtime). **Targets .NET 10 and .NET 11** (hosts on .NET 8/9 stay on 1.34.x). **Redesigned dashboard**: a dense operator view that leads with what needs attention. **Index-backed run search**: SQL Server quick search 88-178 ms → 5-7 ms, PostgreSQL 16-150 ms → 1-3.5 ms, with run-id prefix matching and keyset paging. **Webhook security defaults to `Enforce`.** **Correctness fixes** for failed dispatches, signals sent by disconnecting clients, concurrent `ForEach` completion, workers that die after claiming a step, and racing dashboard retries. Persisted run events and the dead 1.x shims are removed.
 >
-> **v1.28** — `AddFlowDashboard(IConfiguration, Action<FlowDashboardOptions>)` overload (config-bound *then* delegate, closing a footgun that silently dropped Basic Auth); large correctness pass across Service Bus cron, signal delivery, `ForEach` run termination, and concurrent SQL/PostgreSQL writes; webhook `X-Forwarded-For` spoofing fix. **v1.27** — Faster dashboard RUN search: PostgreSQL deep search now actually hits the `pg_trgm` trigram GIN indexes (~462 ms → ~151 ms on 100k runs / 500k steps) and in-memory deep search is no longer quadratic. Full [deep-search investigation](https://hoangsnowy.github.io/FlowOrchestrator/benchmarks/sql-deep-search-investigation-2026-05-24.html).
->
-> **v1.25** — Enterprise webhook hardening pipeline: opt-in HMAC signature verifier covering 17 partner dialects, replay protection, token-bucket rate limiting, IP allow/deny lists, body-size cap, DLQ + recent-deliveries log, and a "Webhooks" dashboard tab. Full [hardening cookbook](https://hoangsnowy.github.io/FlowOrchestrator/articles/webhook-hardening.html). **v1.24** — Realtime SSE push for the dashboard (replaces 5-second polling with `EventSource`). **v1.22** — Third runtime adapter [`FlowOrchestrator.ServiceBus`](https://www.nuget.org/packages/FlowOrchestrator.ServiceBus); engine rejects triggers for disabled flows across all runtimes. v1.21 shipped server-side timeseries; v1.19 added health checks; v1.18 shipped [`WaitForSignal`](https://hoangsnowy.github.io/FlowOrchestrator/articles/wait-for-signal.html); v1.17 shipped [`When` conditions](https://hoangsnowy.github.io/FlowOrchestrator/articles/conditional-execution.html). Full [CHANGELOG](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/CHANGELOG.md).
+> Upgrading from 1.x: read **[Migrating to 2.0](https://hoangsnowy.github.io/FlowOrchestrator/articles/migrating-to-2.0.html)** first — it has a package matrix per runtime, the breaking changes with replacements, and a rollback plan. Full history in the [CHANGELOG](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/CHANGELOG.md).
 
 ---
 
@@ -53,7 +51,7 @@
 
 | | Hangfire | **FlowOrchestrator** | Elsa v3 | Temporal .NET | Dapr Workflows |
 |---|---|---|---|---|---|
-| Background job execution | ✓ | ✓ (via Hangfire) | ✓ | ✓ | ✓ |
+| Background job execution | ✓ | ✓ (Hangfire, in-process, or Service Bus) | ✓ | ✓ | ✓ |
 | Multi-step DAG with `runAfter` | Manual | ✓ | ✓ | Implicit (code) | Implicit (code) |
 | Polling pattern (no thread block) | Manual | ✓ built-in | ✓ | ✓ durable timers | ✓ durable timers |
 | Code-first C# definitions | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -144,7 +142,8 @@ public sealed class OrderFlow : IFlowDefinition
         }
     };
 }
-// Requires: SQL Server or PostgreSQL you already have, plus Hangfire.
+// Requires: SQL Server or PostgreSQL you already have, plus Hangfire or Azure Service Bus as the
+// runtime — or nothing extra at all with the in-process runtime.
 ```
 
 ---
@@ -153,8 +152,23 @@ public sealed class OrderFlow : IFlowDefinition
 
 - **Zero new infrastructure (or your choice)** — runs inside your existing Hangfire app on SQL Server / PostgreSQL, in-process with a `Channel<T>` and zero deps, or on Azure Service Bus for cloud-native scale-out.
 - **Code-first, always** — flows are plain C# classes; no YAML, no JSON files, no designer to learn.
-- **Built-in dashboard with realtime updates** — Timeline, DAG, and Gantt views with retry, cancel, and re-run controls; state changes stream over Server-Sent Events the moment they happen, polling only kicks in if the stream stalls.
+- **Built-in dashboard with realtime updates** — an operator view that puts failed and long-running runs first, with step, graph and timing views and retry, cancel, and re-run controls; state changes stream over Server-Sent Events the moment they happen, polling only kicks in if the stream stalls.
 - **Runtime-agnostic core** — three runtimes ship today (Hangfire, in-process, Azure Service Bus); add your own without touching flow definitions.
+
+---
+
+## The dashboard
+
+`app.MapFlowDashboard("/flows")` serves a built-in operator UI and REST API: no separate server, no build step, light and dark themes.
+
+| | |
+|---|---|
+| ![Run detail: the failing step's error sits under the header, with collapsible error, input and output panels and per-step Retry](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-run-detail.jpg) | ![Runs: searchable list with run-id prefix search, flow and status filters, and paging](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-runs.jpg) |
+| **Run detail** — the failing step's error is the first thing you see; retry the step or re-run the whole flow. | **Runs** — search by run-id prefix, flow, trigger or status; opt in to searching step output and errors. |
+| ![Graph view of a fan-in flow: three parallel API checks feeding one report step](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-run-graph.jpg) | ![Overview in the dark theme](https://raw.githubusercontent.com/hoangsnowy/FlowOrchestrator/main/docs/assets/dashboard-overview-dark.jpg) |
+| **Graph** — the run's DAG with per-step status and duration; click a step for its input, output and error. | **Dark theme** — same layout, warm palette. |
+
+Protect it with Basic Auth (`FlowDashboard:BasicAuth`) or role-based access through `FlowDashboardOptions.Authorization`; with neither configured it is read-only outside `Development`. See [Securing the dashboard](https://hoangsnowy.github.io/FlowOrchestrator/articles/dashboard-security.html) and [Dashboard & REST API](https://hoangsnowy.github.io/FlowOrchestrator/articles/dashboard.html).
 
 ---
 
