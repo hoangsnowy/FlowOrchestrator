@@ -266,12 +266,16 @@ internal sealed class RunRecoverer
             return false;
         }
 
+        // The ledger row is durable from here (RFC 2.0 P-1(d), review C10): the host's StartAsync token must
+        // not reach the dispatch. A shutdown that cancelled it here would abort the hand-off after the row
+        // was recorded. Cancellation is honoured above, before the row is written, and by the host loop
+        // between runs.
         string? jobId;
         try
         {
             jobId = delay.HasValue
-                ? await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, ct).ConfigureAwait(false)
-                : await _dispatcher.EnqueueStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
+                ? await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, CancellationToken.None).ConfigureAwait(false)
+                : await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -298,7 +302,7 @@ internal sealed class RunRecoverer
         {
             try
             {
-                await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId, ct).ConfigureAwait(false);
+                await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

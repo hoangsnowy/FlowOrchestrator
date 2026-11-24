@@ -113,6 +113,46 @@ public class FlowRunRecoveryHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShutdownAfterTheLedgerRowWasRecorded_StillDispatchesWithAnUncancellableToken()
+    {
+        // Arrange - host shutdown cancels the StartAsync token right after recovery recorded the ledger row
+        // (RFC 2.0 P-1(d)). Handing that token to the dispatcher aborted the hand-off with the row in place.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = FlowWith(flowId, "step1");
+        using var shutdown = new CancellationTokenSource();
+
+        _runStore.GetActiveRunsAsync()
+            .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
+        _runtimeStore.GetStepStatusesAsync(runId)
+            .Returns(Task.FromResult(EmptyStatuses()));
+        _runStore.GetDispatchedStepKeysAsync(runId)
+            .Returns(Task.FromResult(EmptyDispatched()));
+        _runStore.TryRecordDispatchAsync(runId, "step1", Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                shutdown.Cancel();
+                return Task.FromResult(true);
+            });
+        _dispatcher.EnqueueStepAsync(default!, default!, default!, default)
+            .ReturnsForAnyArgs(new ValueTask<string?>("job-1"));
+
+        // Act
+        await CreateSut().StartAsync(shutdown.Token);
+
+        // Assert
+        await _dispatcher.Received(1).EnqueueStepAsync(
+            Arg.Is<IExecutionContext>(c => c!.RunId == runId),
+            flow,
+            Arg.Is<IStepInstance>(s => s!.Key == "step1"),
+            Arg.Is<CancellationToken>(t => !t.CanBeCanceled));
+        await _runStore.Received(1).AnnotateDispatchAsync(
+            runId, "step1", "job-1", Arg.Is<CancellationToken>(t => !t.CanBeCanceled));
+        await _runStore.DidNotReceiveWithAnyArgs().ReleaseDispatchAsync(default, default!, default);
+    }
+
+    [Fact]
     public async Task StartAsync_ReadyStepAlreadyDispatched_DoesNotReEnqueue()
     {
         // Arrange

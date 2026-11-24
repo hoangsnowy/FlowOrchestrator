@@ -115,6 +115,9 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Startup recovery releases the ledger row when its own dispatch fails**, like the engine does: a
   recovery dispatch that threw after recording the row left it behind, so the next recovery skipped the
   step and it never ran.
+- **Startup recovery no longer hands the host's shutdown token to the dispatcher** (RFC 2.0 P-1(d)). Once
+  the ledger row is recorded, the dispatch and its annotation run with `CancellationToken.None`; a shutdown
+  landing in between used to abort the hand-off with the row already written.
 - Dashboard-persisted cron overrides are stripped of line breaks before they are logged by the cron sync.
 - **A `ForEach` loop step that two workers finish at the same moment completes once.** When the last two
   iterations completed concurrently, both continuations saw "all iterations terminal", both wrote the loop
