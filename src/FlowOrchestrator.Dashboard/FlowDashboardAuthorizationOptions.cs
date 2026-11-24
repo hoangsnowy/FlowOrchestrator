@@ -110,9 +110,8 @@ public sealed class FlowDashboardAuthorizationOptions
             if (AdditionalAuthenticationSchemes is not { Length: > 0 } configured)
                 return [];
             var schemes = new List<string>(configured.Length);
-            foreach (var raw in configured.Where(r => !string.IsNullOrWhiteSpace(r)))
+            foreach (var scheme in configured.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => r.Trim()))
             {
-                var scheme = raw.Trim();
                 if (!string.Equals(scheme, AuthenticationScheme, StringComparison.Ordinal) && !schemes.Contains(scheme, StringComparer.Ordinal))
                     schemes.Add(scheme);
             }
