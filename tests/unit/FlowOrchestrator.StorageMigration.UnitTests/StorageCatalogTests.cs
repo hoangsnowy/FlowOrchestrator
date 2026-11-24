@@ -14,8 +14,10 @@ namespace FlowOrchestrator.StorageMigration.UnitTests;
 /// </summary>
 public sealed class StorageCatalogTests
 {
+    // GetValue, not GetRawConstantValue: the SQL is a const on SQL Server but a static readonly (built with the
+    // EnsureIndex / EnsureColumn guards) on PostgreSQL; GetValue reads either.
     private static string MigrationSqlOf<T>() =>
-        (string)typeof(T).GetField("MigrationSql", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
+        (string)typeof(T).GetField("MigrationSql", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
 
     private static readonly Regex SqlCreateTable = new(@"CREATE TABLE \[(\w+)\] \((.*?)\n\s*\);", RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(5));
     private static readonly Regex SqlColumn = new(@"^\s*\[(\w+)\]\s+(UNIQUEIDENTIFIER|NVARCHAR|BIT|INT|BIGINT|FLOAT|DATETIMEOFFSET)(?:\((\d+|MAX)\))?", RegexOptions.Multiline | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(5));
