@@ -610,22 +610,25 @@ public sealed class WebhookSecurityPipeline
 
     /// <summary>
     /// Resolves the effective client IP used for the allowlist/denylist gate and the rate-limit key,
-    /// honouring <see cref="WebhookSecurityOptions.ForwardedHeaderDepth"/> trusted-proxy hops.
+    /// honouring <see cref="WebhookSecurityOptions.ForwardedHeaderDepth"/> trusted proxies.
     /// </summary>
     /// <param name="http">The current request context.</param>
-    /// <param name="forwardedDepth">Number of trusted reverse-proxies in front of the host; <c>0</c> ignores <c>X-Forwarded-For</c>.</param>
+    /// <param name="forwardedDepth">Number of trusted reverse proxies in front of the host; <c>0</c> ignores <c>X-Forwarded-For</c>.</param>
     /// <returns>
-    /// The trusted client address: the <c>X-Forwarded-For</c> hop just before the trusted proxies when the
-    /// header genuinely contains more hops than <paramref name="forwardedDepth"/>; otherwise the transport-level
-    /// <see cref="ConnectionInfo.RemoteIpAddress"/> (which may be <see langword="null"/>).
+    /// The <c>X-Forwarded-For</c> entry <paramref name="forwardedDepth"/> positions from the right when the header
+    /// has at least that many entries; otherwise the transport-level <see cref="ConnectionInfo.RemoteIpAddress"/>
+    /// (which may be <see langword="null"/>).
     /// </returns>
     /// <remarks>
-    /// Security invariant: an <c>X-Forwarded-For</c> entry is trusted ONLY when <c>hops.Length &gt; forwardedDepth</c>.
-    /// If the header carries fewer hops than the configured depth (a misconfiguration, or an attacker padding the
-    /// header), the previous <c>Math.Max(0, …)</c> clamp would select index 0 — the leftmost, fully
-    /// client-controlled value — letting a caller spoof the allowlist match and evade per-IP rate limiting. In that
-    /// case the method discards the untrusted chain and falls back to <see cref="ConnectionInfo.RemoteIpAddress"/>;
-    /// the allowlist fails safe on a <see langword="null"/>/unknown address.
+    /// <para>Every proxy APPENDS the address of the peer it received the request from — never its own. Behind
+    /// N trusted proxies the socket peer is the innermost proxy and the last N entries were written by trusted
+    /// proxies, the leftmost of them (<c>hops[^N]</c>) by the outermost proxy: that is the client. Everything
+    /// further left arrived in the caller's own <c>X-Forwarded-For</c> and is attacker-controlled. This matches
+    /// ASP.NET Core's <c>ForwardedHeadersMiddleware</c> with <c>ForwardLimit = N</c>.</para>
+    /// <para>With fewer than N entries the chain did not pass through all trusted proxies (a misconfiguration, or
+    /// a request that bypassed one), so no entry is trusted and the socket address is used; the allowlist fails
+    /// safe on a <see langword="null"/> / unknown address. An unparseable entry falls back the same way.</para>
+    /// <para>Per webhook request; parsed over spans, allocation-free apart from the header string itself.</para>
     /// </remarks>
     internal static IPAddress? ResolveClientIp(HttpContext http, int forwardedDepth)
     {
@@ -633,21 +636,18 @@ public sealed class WebhookSecurityPipeline
             && http.Request.Headers.TryGetValue("X-Forwarded-For", out var xff)
             && !string.IsNullOrWhiteSpace(xff))
         {
-            // X-Forwarded-For: client, proxy1, proxy2 (left-to-right). Trust the
-            // last `forwardedDepth` entries as proxies; the entry just before is
-            // the client we want.
-            var hops = xff.ToString().Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-            // Security: only trust an XFF entry when the header actually contains MORE hops than the
-            // configured proxy depth. If hops.Length <= forwardedDepth (misconfiguration, or an
-            // attacker padding the header with fewer entries than expected), the computed index would
-            // clamp to 0 — the leftmost, fully client-controlled value — and we'd trust a spoofed IP for
-            // the allowlist and rate-limit key. In that case treat the XFF chain as untrusted and fall
-            // back to the transport-level RemoteIpAddress (the allowlist fails safe on a null/unknown IP).
-            if (hops.Length > forwardedDepth)
+            // Several X-Forwarded-For header lines are one comma-joined list, in arrival order.
+            var rest = xff.ToString().AsSpan();
+            var remaining = forwardedDepth;
+            while (true)
             {
-                var index = hops.Length - forwardedDepth - 1;
-                if (IPAddress.TryParse(hops[index], out var addr)) return addr;
+                var comma = rest.LastIndexOf(',');
+                var entry = (comma < 0 ? rest : rest[(comma + 1)..]).Trim();
+                if (!entry.IsEmpty && --remaining == 0)
+                    return IPAddress.TryParse(entry, out var client) ? client : http.Connection.RemoteIpAddress;
+                if (comma < 0)
+                    break;
+                rest = rest[..comma];
             }
         }
         return http.Connection.RemoteIpAddress;

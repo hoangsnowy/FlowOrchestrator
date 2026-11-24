@@ -255,7 +255,7 @@ builder.Services.AddFlowOrchestrator(options =>
 | `RateLimit.PermitsPerSecond` | `double` | `0` | Sustained throughput. `0` disables rate limiting. |
 | `RateLimit.BurstSize` | `int?` | — | Optional burst capacity; defaults to `PermitsPerSecond`. |
 | `RateLimit.PerIp` | `bool` | `false` | Key the limiter on `flowId\|clientIp` instead of `flowId`. |
-| `ForwardedHeaderDepth` | `int` | `0` | Trusted reverse-proxy depth for `X-Forwarded-For`. `0` uses `RemoteIpAddress` directly. |
+| `ForwardedHeaderDepth` | `int` | `0` | Number of trusted reverse proxies in front of the app; the client is the `X-Forwarded-For` entry that many positions from the right. `0` uses `RemoteIpAddress` directly. |
 
 **Manifest-level overrides** are documented in [Triggers — Enterprise hardening (v1.25)](triggers.md#enterprise-hardening-v125).
 

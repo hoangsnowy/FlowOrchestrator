@@ -16,6 +16,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
   EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
   `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
+- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote.** Proxies append the
+  address they received the request from, so behind N trusted proxies the caller is the
+  `X-Forwarded-For` entry N positions from the right. The pipeline read the entry one further left,
+  which the caller supplies itself: with `UseForwardedHeaders(1)` behind a single proxy, any caller could
+  pick the address used for `webhookIpAllowList` / deny lists and per-IP rate limiting, and a caller
+  that sent no header got the proxy's address. The client is now `hops[^N]` (the same rule as ASP.NET
+  Core's `ForwardedHeadersMiddleware` with `ForwardLimit = N`); with fewer than N entries the socket
+  address is used. **Check your setting:** it must equal the number of proxies in front of the app. A
+  value raised by one to compensate for the old behaviour now trusts a caller-supplied entry.
 
 ## [1.34.6] - 2026-11-24
 
