@@ -126,4 +126,61 @@ public sealed class DashboardSurfaceAuditTests
         Assert.NotNull(captured);
         Assert.False(captured!.Trigger.Headers!.ContainsKey("Authorization"));
     }
+
+    /// <summary>
+    /// Docs: "Existing v1.24 manifests using only <c>webhookSecret</c> continue to work unchanged" and
+    /// <c>webhookSecret</c> is the legacy alias of <c>webhookHmacKey</c>. Once the pipeline verified the
+    /// GitHub HMAC with it, the endpoint must not also demand <c>X-Webhook-Key</c> = the HMAC key — GitHub
+    /// never sends that header.
+    /// </summary>
+    [Fact]
+    public async Task Legacy_webhookSecret_as_hmac_key_accepts_valid_GitHub_signature_without_X_Webhook_Key()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var id = Guid.NewGuid();
+        const string key = "v124-github-secret";
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?>
+        {
+            ["webhookSlug"] = "gh-legacy",
+            ["webhookSecret"] = key,
+            ["webhookSignatureScheme"] = "GitHub",
+        }));
+        var body = Encoding.UTF8.GetBytes("{\"action\":\"opened\"}");
+        using var request = JsonPost("/flows/api/webhook/gh-legacy", body);
+        request.Headers.Add("X-Hub-Signature-256", GitHubSignature(key, body));
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>
+    /// When the signature did NOT verify (Audit mode lets the delivery through the pipeline), the legacy
+    /// shared-secret check still applies — skipping it is reserved for a verified signature.
+    /// </summary>
+    [Fact]
+    public async Task Legacy_webhookSecret_check_still_applies_when_the_signature_failed_in_audit_mode()
+    {
+        // Arrange
+        using var server = new DashboardTestServer(o => o.UseWebhookSecurity(s => s.UseEnforcementMode(WebhookEnforcementMode.Audit)));
+        var id = Guid.NewGuid();
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?>
+        {
+            ["webhookSlug"] = "gh-audit",
+            ["webhookSecret"] = "v124-github-secret",
+            ["webhookSignatureScheme"] = "GitHub",
+        }));
+        var body = Encoding.UTF8.GetBytes("{\"action\":\"opened\"}");
+        using var request = JsonPost("/flows/api/webhook/gh-audit", body);
+        request.Headers.Add("X-Hub-Signature-256", GitHubSignature("some-other-key", body));
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

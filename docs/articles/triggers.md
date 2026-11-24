@@ -156,7 +156,10 @@ invalid requests are accepted, you are in `Off`.
 
 Note the asymmetry with the legacy `webhookSecret` / `X-Webhook-Key` check, which runs *outside* the
 pipeline and therefore rejects with `401` whatever the enforcement mode is. `webhookSecret` secures an
-endpoint on its own; `webhookHmacKey` does not.
+endpoint on its own; `webhookHmacKey` does not. The one exception: when the trigger also sets
+`webhookSignatureScheme` and the signature **verified**, `webhookSecret` is acting as the HMAC key and the
+`X-Webhook-Key` check is skipped — publishers such as GitHub never send that header. A signature that did
+not verify (for example under `Audit`) still has to pass the `X-Webhook-Key` check.
 
 Configure per flow via manifest inputs. The full set of v1.25 fields:
 

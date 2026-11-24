@@ -92,7 +92,9 @@ keep working as aliases.
 | `webhookSecretPrevious` | `webhookHmacKeyPrevious`  | Same precedence rule as above.                                                                                                                 |
 
 Existing v1.24 manifests using only `webhookSecret` continue to work
-unchanged. Removal of the legacy names is planned for v2.0; no
+unchanged. When such a trigger also sets `webhookSignatureScheme`, a delivery
+whose signature verifies with the `webhookSecret` key is accepted without an
+`X-Webhook-Key` header; without a scheme, `X-Webhook-Key` is still required. Removal of the legacy names is planned for v2.0; no
 `[Obsolete]` attribute is applied yet.
 
 ## Per-publisher cookbook

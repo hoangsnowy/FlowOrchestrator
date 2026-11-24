@@ -569,6 +569,7 @@ public static class DashboardServiceCollectionExtensions
             // replay / rate-limit / IP allowlist plug into the same gate chain
             // in later phases).
             var pipeline = http.RequestServices.GetService<WebhookSecurityPipeline>();
+            var signatureVerified = false;
             if (pipeline is not null && triggerInputs is not null)
             {
                 var inputsRo = (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>(triggerInputs, StringComparer.OrdinalIgnoreCase);
@@ -579,11 +580,15 @@ public static class DashboardServiceCollectionExtensions
                     await WriteJsonAsync(http.Response, new { error = "Webhook rejected by security pipeline.", reason = verdict.Reason });
                     return;
                 }
+                signatureVerified = verdict.SignatureVerified;
             }
 
             // Backwards-compat shared-secret check (kept after the pipeline so flows
             // that haven't migrated to webhookSignatureScheme still authenticate).
-            if (!string.IsNullOrEmpty(expectedSecret))
+            // Skipped when a signature scheme verified the request: webhookSecret is then the
+            // legacy alias of the HMAC key, and the publisher (GitHub, Stripe, …) never sends it
+            // back as X-Webhook-Key, so demanding it would reject every correctly signed delivery.
+            if (!string.IsNullOrEmpty(expectedSecret) && !signatureVerified)
             {
                 var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
                     ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();

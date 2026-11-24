@@ -98,7 +98,16 @@ public sealed class WebhookSecurityPipeline
     }
 
     /// <summary>Verdict including the HTTP status code and a precise reason chip.</summary>
-    public readonly record struct PipelineResult(Decision Decision, int StatusCode, string Reason, bool UsedRotationKey);
+    public readonly record struct PipelineResult(Decision Decision, int StatusCode, string Reason, bool UsedRotationKey)
+    {
+        /// <summary>
+        /// <see langword="true"/> when a signature scheme configured on the trigger verified this request
+        /// (built-in or DI-registered custom verifier). The endpoint skips the legacy <c>X-Webhook-Key</c>
+        /// shared-secret check in that case: the signature already authenticated the sender, and a
+        /// <c>webhookSecret</c> used as the HMAC key is never sent back as a header by the publisher.
+        /// </summary>
+        public bool SignatureVerified { get; init; }
+    }
 
     /// <summary>
     /// Runs the active gate chain (signature → replay). Caller passes the
@@ -258,7 +267,7 @@ public sealed class WebhookSecurityPipeline
 
         Activity.Current?.SetTag("flow.webhook.result", "accepted");
         EmitAccept(flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, spec?.HeaderName);
-        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation);
+        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation) { SignatureVerified = signatureVerified };
     }
 
     private async ValueTask<PipelineResult> PersistRejectSignatureAsync(
