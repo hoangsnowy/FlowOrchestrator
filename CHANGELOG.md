@@ -6,6 +6,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+- **A webhook signature scheme nothing can verify no longer turns signature checking off.** When a
+  trigger's `webhookSignatureScheme` named a scheme that is not built in, not registered with
+  `RegisterScheme` / `AddWebhookSignatureVerifier`, or was `Custom` with an unregistered
+  signed-payload strategy, the pipeline found no spec and skipped the signature gate, so unsigned
+  deliveries were accepted. Such a delivery is now rejected with `401` and reason
+  `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
+  EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
+  `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
+
 ## [1.34.6] - 2026-11-24
 
 Security release for the 1.34 line (.NET 8 / 9 / 10), fixing

@@ -102,6 +102,15 @@ HMAC verifier is generic — set `webhookSignatureScheme` and the wire
 format is resolved through `PartnerSchemeRegistry`. Use `Custom` for any
 publisher not on the built-in list.
 
+A `webhookSignatureScheme` value that nothing can verify — not a built-in
+name, not registered with `RegisterScheme` or `AddWebhookSignatureVerifier`,
+or `Custom` with a signed-payload strategy that was never registered with
+`AddCustomSignatureStrategy` — is a configuration error, not "unsigned":
+`MapFlowDashboard` throws for a registered flow that names one (in `Enforce`
+and `Audit`), and a delivery to such a trigger is rejected with `401` /
+`signature_scheme_unknown` (`Audit` records it and lets it through; EventId
+4012). Leave the input out, or set it to `None`, for an unsigned trigger.
+
 ### GitHub (`X-Hub-Signature-256`)
 
 ```csharp
@@ -414,8 +423,8 @@ Counters and histograms (see [Observability](observability.md#what-is-emitted)):
 - `webhook_body_bytes`
 - `webhook_processing_ms{flow,result}`
 
-EventIds 4000–4099 reserved; 4000–4011 allocated today (4000, 4004, 4006 and
-4009 are reserved but not currently emitted). Full list in
+EventIds 4000–4099 reserved; 4000–4012 allocated today (4000, 4004 and 4009
+are reserved but not currently emitted). Full list in
 [Observability — EventIds](observability.md#logger-scopes-and-eventids).
 
 The existing `flow.webhook.receive` activity gains tags

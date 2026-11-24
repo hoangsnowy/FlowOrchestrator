@@ -204,6 +204,16 @@ public sealed class WebhookSecurityPipeline
             spec = WebhookSignatureSpecResolver.Resolve(triggerInputs, customSchemesRo);
         }
 
+        // A scheme the trigger names but nothing can verify (a typo, an unsupported provider, Custom with an
+        // unregistered strategy) must not silently skip the signature gate: that would accept unsigned
+        // deliveries on an endpoint the operator believes is signed. Rejected in Enforce; recorded (and let
+        // through) in Audit like every other violation.
+        if (!customDispatch && DescribeUnverifiableScheme(schemeName, spec, _options, _verifier is HmacSignatureVerifier) is { } schemeProblem)
+        {
+            if (_logger is not null) WebhookLog.SignatureSchemeUnknown(_logger, flowId, triggerKey, schemeProblem);
+            return await PersistRejectAsync(flowId, triggerKey, UnknownSchemeReason, StatusCodes.Status401Unauthorized, clientIp, bodyBytes, headers, spec: null, stopwatch, ct).ConfigureAwait(false);
+        }
+
         // ── Signature gate ──
         var usedRotation = false;
         var signatureVerified = false;
@@ -522,6 +532,40 @@ public sealed class WebhookSecurityPipeline
             ProcessingMs = processingMs,
             IsAccepted = isAccepted,
         };
+    }
+
+    /// <summary>Reason recorded for a delivery whose trigger names a signature scheme nothing can verify.</summary>
+    internal const string UnknownSchemeReason = "signature_scheme_unknown";
+
+    /// <summary>
+    /// Describes why a trigger's <c>webhookSignatureScheme</c> cannot be verified, or returns
+    /// <see langword="null"/> when it can — or when the trigger names no scheme.
+    /// </summary>
+    /// <param name="schemeName">The trigger's <c>webhookSignatureScheme</c> value.</param>
+    /// <param name="spec">What <see cref="WebhookSignatureSpecResolver.Resolve"/> made of it.</param>
+    /// <param name="options">Host webhook options (registered custom payload strategies).</param>
+    /// <param name="checkStrategies">
+    /// <see langword="true"/> when the built-in <see cref="HmacSignatureVerifier"/> is in use, whose custom
+    /// payload strategies come from <paramref name="options"/>; a replacement verifier resolves its own.
+    /// </param>
+    /// <returns>A sentence fragment naming the problem, or <see langword="null"/>.</returns>
+    /// <remarks>
+    /// Callers check DI-registered custom verifiers (<see cref="WebhookCustomVerifierRegistry"/>) first: a name
+    /// one of them handles is verifiable. <c>None</c> is the documented way to say "no signature" and stays valid.
+    /// </remarks>
+    internal static string? DescribeUnverifiableScheme(
+        string? schemeName, WebhookSignatureSpec? spec, WebhookSecurityOptions options, bool checkStrategies)
+    {
+        if (string.IsNullOrWhiteSpace(schemeName)
+            || string.Equals(schemeName.Trim(), nameof(WebhookSignatureScheme.None), StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (spec is null)
+            return $"'{schemeName}', which is neither a built-in scheme, a scheme registered with RegisterScheme, nor a verifier registered with AddWebhookSignatureVerifier";
+        if (checkStrategies
+            && spec.SignedPayloadStrategy == SignedPayloadStrategy.Custom
+            && (string.IsNullOrEmpty(spec.CustomStrategyName) || !options.CustomSignatureStrategies.ContainsKey(spec.CustomStrategyName)))
+            return $"'{schemeName}' with signed-payload strategy Custom, but the strategy '{spec.CustomStrategyName}' is not registered with AddCustomSignatureStrategy";
+        return null;
     }
 
     private static string? TryGetString(IReadOnlyDictionary<string, object?> map, string key) =>
