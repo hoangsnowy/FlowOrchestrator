@@ -283,4 +283,178 @@ public sealed class DashboardSurfaceAuditTests
         // Assert
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    // ── Client disconnect on the webhook endpoint ────────────────────────────────────────────
+
+    /// <summary>
+    /// TELEMETRY NOISE. The webhook endpoint is mapped on the root builder, not on the dashboard group,
+    /// so the group's "request aborted → 499, swallow" filter did not wrap it. A client that disconnects
+    /// while the body is being buffered makes <c>WebhookRequestBuffer.ReadAsync</c> throw
+    /// <see cref="OperationCanceledException"/>, which escapes the endpoint as an unhandled exception
+    /// (counted by <c>aspnetcore.diagnostics.exceptions</c>) — the stress-harness observation.
+    /// </summary>
+    [Fact]
+    public async Task Webhook_client_disconnect_during_body_read_does_not_escape_as_unhandled_exception()
+    {
+        // Arrange
+        var probe = new EscapeProbe(onlyPathContaining: "/api/webhook/", failure: AbortingBodyStream.Failure.ClientAbort);
+        // Production: no DeveloperExceptionPage between the probe and the endpoint, so whatever
+        // escapes the endpoint reaches the probe exactly as it reaches Kestrel in a real deployment.
+        using var server = DashboardTestServer.WithServices(s =>
+        {
+            s.AddFlowDashboard(o => o.AllowAnonymousOperators = true);
+            s.AddSingleton<IStartupFilter>(probe);
+        }, Environments.Production);
+        var id = Guid.NewGuid();
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?> { ["webhookSlug"] = "drop" }));
+        using var request = JsonPost("/flows/api/webhook/drop", "{\"a\":1}"u8.ToArray());
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+        var escaped = await probe.Completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Assert — handled like every dashboard endpoint: no exception, status 499.
+        Assert.Null(escaped);
+        Assert.Equal(499, (int)response.StatusCode);
+    }
+
+    /// <summary>
+    /// TELEMETRY NOISE. Kestrel throws <see cref="BadHttpRequestException"/> ("Unexpected end of request
+    /// content") from the body stream when a client disconnects mid-upload. Neither the webhook endpoint
+    /// nor the dashboard control-plane endpoints caught it (the group filter only swallowed
+    /// <see cref="OperationCanceledException"/>), so it surfaced as an unhandled application exception.
+    /// </summary>
+    [Theory]
+    [InlineData("/flows/api/webhook/drop")]
+    [InlineData("/flows/api/flows/{id}/trigger")]
+    public async Task Truncated_request_body_does_not_escape_as_unhandled_exception(string pathTemplate)
+    {
+        // Arrange
+        var probe = new EscapeProbe(onlyPathContaining: "/api/", failure: AbortingBodyStream.Failure.TruncatedBody);
+        // Production: no DeveloperExceptionPage between the probe and the endpoint, so whatever
+        // escapes the endpoint reaches the probe exactly as it reaches Kestrel in a real deployment.
+        using var server = DashboardTestServer.WithServices(s =>
+        {
+            s.AddFlowDashboard(o => o.AllowAnonymousOperators = true);
+            s.AddSingleton<IStartupFilter>(probe);
+        }, Environments.Production);
+        var id = Guid.NewGuid();
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?> { ["webhookSlug"] = "drop" }));
+        using var request = JsonPost(pathTemplate.Replace("{id}", id.ToString()), "{\"a\":1}"u8.ToArray());
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+        var escaped = await probe.Completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Assert — a handled 400 (the caller is still connected).
+        Assert.Null(escaped);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    // ── Cancel ───────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 500 ON MALFORMED INPUT. <c>POST /api/runs/{id}/cancel</c> deserialises the optional reason body
+    /// without catching <c>JsonException</c>; a malformed body is a 500 instead of a 400.
+    /// </summary>
+    [Fact]
+    public async Task Cancel_with_malformed_reason_body_returns_400()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var runId = Guid.NewGuid();
+        server.FlowRunStore.GetRunDetailAsync(runId).Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+        using var content = new StringContent("{reason: oops", Encoding.UTF8, "application/json");
+
+        // Act
+        HttpStatusCode status;
+        try
+        {
+            using var response = await server.Client.PostAsync($"/flows/api/runs/{runId}/cancel", content);
+            status = response.StatusCode;
+        }
+        catch (Exception)
+        {
+            status = HttpStatusCode.InternalServerError;
+        }
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+    }
+
+    // ── Test doubles ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Startup filter that wraps the whole pipeline: for matching paths it swaps the request body for a
+    /// stream that fails the way Kestrel does on a client disconnect, then records whether an exception
+    /// escaped the endpoint pipeline.
+    /// </summary>
+    private sealed class EscapeProbe(string onlyPathContaining, AbortingBodyStream.Failure failure) : IStartupFilter
+    {
+        /// <summary>Completed with the escaped exception, or <see langword="null"/> when none escaped.</summary>
+        public TaskCompletionSource<Exception?> Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <inheritdoc/>
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (ctx, nextMiddleware) =>
+            {
+                if (!(ctx.Request.Path.Value ?? string.Empty).Contains(onlyPathContaining, StringComparison.Ordinal))
+                {
+                    await nextMiddleware(ctx);
+                    return;
+                }
+
+                var aborted = new CancellationTokenSource();
+                ctx.RequestAborted = aborted.Token;
+                ctx.Request.Body = new AbortingBodyStream(aborted, failure);
+                try
+                {
+                    await nextMiddleware(ctx);
+                    Completed.TrySetResult(null);
+                }
+                catch (Exception ex)
+                {
+                    Completed.TrySetResult(ex);
+                    if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 599;
+                }
+            });
+            next(app);
+        };
+    }
+
+    /// <summary>Request body stream that fails its first read like a disconnected client.</summary>
+    private sealed class AbortingBodyStream(CancellationTokenSource aborted, AbortingBodyStream.Failure failure) : Stream
+    {
+        /// <summary>The disconnect flavour to simulate.</summary>
+        public enum Failure
+        {
+            /// <summary>RequestAborted fires and the read throws <see cref="OperationCanceledException"/>.</summary>
+            ClientAbort,
+
+            /// <summary>Kestrel's "Unexpected end of request content" <see cref="BadHttpRequestException"/>.</summary>
+            TruncatedBody,
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw Fail();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => ValueTask.FromException<int>(Fail());
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => Task.FromException<int>(Fail());
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        private Exception Fail()
+        {
+            if (failure == Failure.TruncatedBody)
+                return new BadHttpRequestException("Unexpected end of request content.", StatusCodes.Status400BadRequest);
+            aborted.Cancel();
+            return new OperationCanceledException(aborted.Token);
+        }
+    }
 }

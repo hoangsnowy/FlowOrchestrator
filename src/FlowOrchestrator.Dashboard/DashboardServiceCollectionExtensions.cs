@@ -245,35 +245,11 @@ public static class DashboardServiceCollectionExtensions
 
         // A caller that goes away mid-request — a load balancer timing out, a closed browser tab, a
         // fire-and-forget webhook — cancels HttpContext.RequestAborted, and every store call that
-        // honours it then throws. Without this filter that exception reaches the diagnostics
-        // middleware and is counted as an unhandled fault, so `aspnetcore.diagnostics.exceptions`
-        // climbs and the app reads as broken when nothing is. Swallow it only when the request was
-        // genuinely aborted: there is no response to write at that point, and a cancellation from
-        // any other source must still surface. Registered before the auth filter so it also covers
-        // a disconnect during authentication.
-        group.AddEndpointFilter(async (ctx, next) =>
-        {
-            try
-            {
-                return await next(ctx);
-            }
-            catch (OperationCanceledException) when (ctx.HttpContext.RequestAborted.IsCancellationRequested)
-            {
-                // No body can reach the caller — the socket is already gone — but the status code is
-                // still what access logs and http.server.request.duration record for this request.
-                // Leaving it at the default 200 would file an abandoned request as a success and
-                // hide disconnect rates entirely. 499 is nginx's "client closed request": not an
-                // IANA code, but the conventional one, and unambiguous in a latency histogram.
-                // Guarded because the status is immutable once the response has started, which is
-                // the normal case for the SSE stream.
-                if (!ctx.HttpContext.Response.HasStarted)
-                {
-                    ctx.HttpContext.Response.StatusCode = 499;
-                }
-
-                return Results.Empty;
-            }
-        });
+        // honours it then throws; a body read cut short throws BadHttpRequestException. Without this
+        // filter either reaches the diagnostics middleware as an unhandled fault. Registered before the
+        // auth filter so it also covers a disconnect during authentication, and on the webhook endpoint,
+        // which is mapped outside this group.
+        group.AddEndpointFilter(ClientDisconnectFilter);
 
         // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side. With
         // neither configured, anonymous callers are operators only in Development (or when the host
@@ -630,7 +606,7 @@ public static class DashboardServiceCollectionExtensions
             if (webhookLogger is not null)
                 WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
             await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
-        });
+        }).AddEndpointFilter(ClientDisconnectFilter);
 
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
         {
@@ -979,7 +955,18 @@ public static class DashboardServiceCollectionExtensions
                     return;
                 }
 
-                var payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                JsonElement payload;
+                try
+                {
+                    payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                }
+                catch (JsonException)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
+                    return;
+                }
+
                 if (payload.ValueKind == JsonValueKind.Object
                     && payload.TryGetProperty("reason", out var reasonProp)
                     && reasonProp.ValueKind == JsonValueKind.String)
@@ -1510,6 +1497,65 @@ public static class DashboardServiceCollectionExtensions
         });
 
         return endpoints;
+    }
+
+    /// <summary>
+    /// Endpoint filter that turns a client disconnect into a quiet, correctly-logged response instead of
+    /// an unhandled exception, on every dashboard endpoint and the webhook receiver.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="OperationCanceledException"/> is swallowed only when <see cref="HttpContext.RequestAborted"/>
+    /// fired — a cancellation from any other source must still surface. No body can reach the caller, but
+    /// the status code is still what access logs and <c>http.server.request.duration</c> record: leaving it
+    /// at the default 200 would file an abandoned request as a success. 499 is nginx's "client closed
+    /// request": not an IANA code, but the conventional one.
+    /// </para>
+    /// <para>
+    /// <see cref="BadHttpRequestException"/> is what Kestrel throws from the request body when the client
+    /// stops sending mid-upload ("Unexpected end of request content") or exceeds the server's body limit.
+    /// It becomes its own status (400 / 413) with a short JSON error when the caller is still connected,
+    /// and 499 with no body when it is not.
+    /// </para>
+    /// <para>
+    /// Status writes are guarded because the status is immutable once the response has started, which is
+    /// the normal case for the SSE stream.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<object?> ClientDisconnectFilter(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var http = ctx.HttpContext;
+        try
+        {
+            return await next(ctx);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            if (!http.Response.HasStarted)
+                http.Response.StatusCode = 499;
+            return Results.Empty;
+        }
+        catch (BadHttpRequestException ex)
+        {
+            if (http.Response.HasStarted)
+                return Results.Empty;
+            if (http.RequestAborted.IsCancellationRequested)
+            {
+                http.Response.StatusCode = 499;
+                return Results.Empty;
+            }
+
+            http.Response.StatusCode = ex.StatusCode;
+            try
+            {
+                await WriteJsonAsync(http.Response, new { error = "The request body could not be read." });
+            }
+            catch (Exception writeFailure) when (writeFailure is IOException or OperationCanceledException)
+            {
+                // The client went away while we answered; nothing more to do.
+            }
+            return Results.Empty;
+        }
     }
 
     // We deliberately avoid HttpResponse.WriteAsJsonAsync — that helper writes
