@@ -467,7 +467,7 @@ public sealed partial class FlowOrchestratorEngine
         WhenEvaluationTrace? trace;
         try
         {
-            trace = await _whenEvaluator.EvaluateAsync(ctx, flow, metadata).ConfigureAwait(false);
+            trace = await _whenEvaluator.EvaluateAsync(ctx, flow, metadata, stepKey).ConfigureAwait(false);
         }
         catch (FlowExpressionException ex)
         {
