@@ -98,7 +98,13 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
             return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
         }
 
-        var result = await _signalStore.DeliverSignalAsync(runId, signalName.Trim(), payloadJson, ct).ConfigureAwait(false);
+        // CancellationToken.None, not `ct`: this IS the durable write, and `ct` is the dashboard request's
+        // RequestAborted. SqlClient reports a cancel that arrives while the UPDATE is in flight by throwing
+        // even when the statement has already committed, so the waiter ended up delivered while this method
+        // threw before the resume nudge below — the step stayed parked until its timeout and every retry of
+        // the signal was answered "already delivered". The stress harness measured 51 of 630 runs stranded
+        // that way on SQL Server (0 on PostgreSQL). Cancellation is honoured nowhere after this point.
+        var result = await _signalStore.DeliverSignalAsync(runId, signalName.Trim(), payloadJson, CancellationToken.None).ConfigureAwait(false);
         if (result.Status != SignalDeliveryStatus.Delivered || result.StepKey is null)
         {
             return result;
@@ -118,7 +124,11 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
         // by DeliverSignalAsync above. Skip silently if telemetry was not registered.
         if (_telemetry is not null && result.DeliveredAt is { } deliveredAt)
         {
-            var waiter = await _signalStore.GetWaiterAsync(runId, result.StepKey, ct).ConfigureAwait(false);
+            // CancellationToken.None: the signal is already durably delivered, and `ct` is the HTTP
+            // request's RequestAborted. A SQL Server / PostgreSQL store honours it, so a client that
+            // disconnects here would throw before the resume dispatch below and strand the parked step
+            // until its timeout (the v1.26.1 / #188 failure class, reached through the telemetry read).
+            var waiter = await _signalStore.GetWaiterAsync(runId, result.StepKey, CancellationToken.None).ConfigureAwait(false);
             if (waiter is not null)
             {
                 var waitMs = Math.Max(0, (deliveredAt - waiter.CreatedAt).TotalMilliseconds);

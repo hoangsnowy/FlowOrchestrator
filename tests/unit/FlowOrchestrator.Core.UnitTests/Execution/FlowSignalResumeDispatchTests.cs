@@ -1,5 +1,6 @@
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -249,6 +250,72 @@ public sealed class FlowSignalResumeDispatchTests
         // Upper bound with NO slack: the immediate path must stamp UtcNow, not UtcNow + ResumeDelay.
         // A generous window here would pass for the post-dated value this test exists to reject.
         Assert.InRange(dispatched!.ScheduledTime, before, DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Resume_still_dispatches_when_the_request_aborts_after_delivery_with_telemetry_on()
+    {
+        // Arrange — the signal is durably delivered, then the caller disconnects (RequestAborted
+        // fires). A SQL/PostgreSQL store honours the token on the telemetry GetWaiterAsync read; if
+        // that read used the request token it would throw before the resume dispatch and strand the
+        // parked step until its timeout (v1.26.1 / #188 class).
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        runtimeStore.IsStepClaimedAsync(_runId, StepKey).Returns(Task.FromResult(false));
+        _signalStore.GetWaiterAsync(_runId, StepKey, Arg.Any<CancellationToken>())
+            .Returns(call => call.Arg<CancellationToken>().IsCancellationRequested
+                ? ValueTask.FromException<FlowSignalWaiter?>(new OperationCanceledException(call.Arg<CancellationToken>()))
+                : new ValueTask<FlowSignalWaiter?>(new FlowSignalWaiter
+                {
+                    RunId = _runId,
+                    StepKey = StepKey,
+                    SignalName = SignalName,
+                    CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+                }));
+        using var telemetry = new FlowOrchestratorTelemetry();
+        var dispatcher = new FlowSignalDispatcher(
+            _signalStore, _runStore, _flowRepository, _stepDispatcher, _outputsRepository,
+            runtimeStores: new[] { runtimeStore }, telemetry: telemetry, logger: null);
+        using var aborted = new CancellationTokenSource();
+        await aborted.CancelAsync();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => dispatcher.DispatchAsync(_runId, SignalName, "{}", aborted.Token).AsTask());
+
+        // Assert
+        Assert.Null(ex);
+        await _stepDispatcher.Received(1).EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Resume_still_dispatches_when_the_request_aborts_while_the_delivery_write_is_in_flight()
+    {
+        // Arrange — models SqlClient: the delivery UPDATE commits, but a cancel that lands while the
+        // statement is in flight still surfaces as an exception. If the store received the request token,
+        // the waiter would be delivered while DispatchAsync threw before the resume nudge, stranding the
+        // parked step (every retry of the signal is then answered "already delivered").
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        runtimeStore.IsStepClaimedAsync(_runId, StepKey).Returns(Task.FromResult(false));
+        using var aborted = new CancellationTokenSource();
+        _signalStore.DeliverSignalAsync(_runId, SignalName, "{}", Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                aborted.Cancel(); // the client disconnects while the write is in flight; the row is committed
+                var token = call.Arg<CancellationToken>();
+                return token.IsCancellationRequested
+                    ? ValueTask.FromException<SignalDeliveryResult>(new OperationCanceledException(token))
+                    : new ValueTask<SignalDeliveryResult>(
+                        new SignalDeliveryResult(SignalDeliveryStatus.Delivered, StepKey, DateTimeOffset.UtcNow));
+            });
+        var dispatcher = CreateDispatcher(runtimeStore);
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => dispatcher.DispatchAsync(_runId, SignalName, "{}", aborted.Token).AsTask());
+
+        // Assert
+        Assert.Null(ex);
+        await _stepDispatcher.Received(1).EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
     }
 
     /// <summary>Builds the subject under test with the shared substitutes and the supplied runtime store.</summary>
