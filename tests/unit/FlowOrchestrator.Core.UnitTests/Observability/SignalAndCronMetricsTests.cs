@@ -20,6 +20,7 @@ public sealed class SignalAndCronMetricsTests
     {
         // Arrange
         var telemetry = new FlowOrchestratorTelemetry();
+        var flowId = Guid.NewGuid();
         var captured = new List<double>();
         using var meterListener = new MeterListener
         {
@@ -31,7 +32,18 @@ public sealed class SignalAndCronMetricsTests
                 }
             },
         };
-        meterListener.SetMeasurementEventCallback<double>((_, value, _, _) => captured.Add(value));
+        // Count only this test's measurements: the listener sees every meter named FlowOrchestrator in the
+        // process, so a test running in parallel that records flow_signal_wait_ms would otherwise land here.
+        meterListener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+        {
+            if (HasFlowId(tags, flowId))
+            {
+                lock (captured)
+                {
+                    captured.Add(value);
+                }
+            }
+        });
         meterListener.Start();
 
         var runId = Guid.NewGuid();
@@ -57,7 +69,7 @@ public sealed class SignalAndCronMetricsTests
         runStore.GetRunAsync(runId).Returns(Task.FromResult<FlowRunRecord?>(new FlowRunRecord
         {
             Id = runId,
-            FlowId = Guid.NewGuid(),
+            FlowId = flowId,
             FlowName = "Approval",
             Status = "Running",
             TriggerKey = "manual",
@@ -88,6 +100,7 @@ public sealed class SignalAndCronMetricsTests
     public async Task FlowSignalDispatcher_DoesNotRecord_WhenTelemetryNotInjected()
     {
         // Arrange — same setup as above but telemetry == null
+        var flowId = Guid.NewGuid();
         var captured = new List<double>();
         using var meterListener = new MeterListener
         {
@@ -99,7 +112,18 @@ public sealed class SignalAndCronMetricsTests
                 }
             },
         };
-        meterListener.SetMeasurementEventCallback<double>((_, value, _, _) => captured.Add(value));
+        // Count only this test's measurements: the listener sees every meter named FlowOrchestrator in the
+        // process, so a test running in parallel that records flow_signal_wait_ms would otherwise land here.
+        meterListener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+        {
+            if (HasFlowId(tags, flowId))
+            {
+                lock (captured)
+                {
+                    captured.Add(value);
+                }
+            }
+        });
         meterListener.Start();
 
         var runId = Guid.NewGuid();
@@ -111,7 +135,7 @@ public sealed class SignalAndCronMetricsTests
         runStore.GetRunAsync(runId).Returns(Task.FromResult<FlowRunRecord?>(new FlowRunRecord
         {
             Id = runId,
-            FlowId = Guid.NewGuid(),
+            FlowId = flowId,
             FlowName = "X",
             Status = "Running",
             TriggerKey = "manual",
@@ -136,5 +160,20 @@ public sealed class SignalAndCronMetricsTests
         Assert.Empty(captured);
         // GetWaiterAsync should not be called when telemetry is null — saves a DB roundtrip.
         await signalStore.DidNotReceive().GetWaiterAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Returns <see langword="true"/> when the measurement carries this test's <c>flow_id</c> tag.</summary>
+    private static bool HasFlowId(ReadOnlySpan<KeyValuePair<string, object?>> tags, Guid flowId)
+    {
+        var expected = flowId.ToString();
+        foreach (var tag in tags)
+        {
+            if (tag.Key == "flow_id" && tag.Value is string value && value == expected)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
