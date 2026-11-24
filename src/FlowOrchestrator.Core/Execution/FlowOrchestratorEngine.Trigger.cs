@@ -226,7 +226,7 @@ public sealed partial class FlowOrchestratorEngine
                 .ReleaseIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey, runId)
                 .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not null)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Best-effort compensation on a path that is already failing: logged, never masks the original.
             EngineLog.IdempotencyKeyReleaseFailed(_logger, ex, runId);
