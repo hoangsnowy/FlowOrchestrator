@@ -1,0 +1,3 @@
+# The rehearsal applies upgrade-to-2.0.patch to the app with git apply: both must keep LF on every
+# checkout (core.autocrlf would turn the app files into CRLF and the patch would no longer apply).
+* text eol=lf
