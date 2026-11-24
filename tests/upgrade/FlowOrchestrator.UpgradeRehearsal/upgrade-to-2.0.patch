@@ -1,0 +1,79 @@
+diff --git a/CustomerApp.csproj b/CustomerApp.csproj
+index 3b38d9e..26d1fbb 100644
+--- a/CustomerApp.csproj
++++ b/CustomerApp.csproj
+@@ -9,28 +9,27 @@
+       -p:CustomerRuntime=hangfire|servicebus
+       -p:CustomerStorage=sqlserver|postgresql
+ 
+-    This file is the 1.34.7 starting point. upgrade-to-2.0.patch (next to this folder) is the diff
+-    a customer makes by following docs/articles/migrating-to-2.0.md; rehearse.ps1 applies it.
++    Upgraded to 2.0 by following docs/articles/migrating-to-2.0.md, Steps 1 and 2.
+   -->
+ 
+   <PropertyGroup>
+-    <TargetFramework>net8.0</TargetFramework>
++    <TargetFramework>net10.0</TargetFramework>
+     <Nullable>enable</Nullable>
+     <ImplicitUsings>enable</ImplicitUsings>
+     <RootNamespace>OrderHub</RootNamespace>
+     <AssemblyName>OrderHub</AssemblyName>
+     <IsPackable>false</IsPackable>
+ 
+-    <FlowOrchestratorVersion>1.34.7</FlowOrchestratorVersion>
++    <FlowOrchestratorVersion>2.0.0-rehearsal.1</FlowOrchestratorVersion>
+     <CustomerRuntime Condition="'$(CustomerRuntime)' == ''">hangfire</CustomerRuntime>
+     <CustomerStorage Condition="'$(CustomerStorage)' == ''">sqlserver</CustomerStorage>
+     <DefineConstants>$(DefineConstants);RUNTIME_$(CustomerRuntime.ToUpperInvariant());STORAGE_$(CustomerStorage.ToUpperInvariant())</DefineConstants>
+   </PropertyGroup>
+ 
+-  <!-- 1.x: FlowOrchestrator.Hangfire carries AddFlowOrchestrator(), so every 1.x host references it,
+-       Service Bus hosts included. -->
++  <!-- 2.0: AddFlowOrchestrator() lives in FlowOrchestrator.Core; only Hangfire hosts reference
++       FlowOrchestrator.Hangfire (migrating-to-2.0.md, Step 2). -->
+   <ItemGroup>
+-    <PackageReference Include="FlowOrchestrator.Hangfire" Version="$(FlowOrchestratorVersion)" />
++    <PackageReference Include="FlowOrchestrator.Core" Version="$(FlowOrchestratorVersion)" />
+     <PackageReference Include="FlowOrchestrator.Dashboard" Version="$(FlowOrchestratorVersion)" />
+   </ItemGroup>
+ 
+@@ -42,6 +41,7 @@
+   </ItemGroup>
+ 
+   <ItemGroup Condition="'$(CustomerRuntime)' == 'hangfire'">
++    <PackageReference Include="FlowOrchestrator.Hangfire" Version="$(FlowOrchestratorVersion)" />
+     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.25" />
+   </ItemGroup>
+   <ItemGroup Condition="'$(CustomerRuntime)' == 'hangfire' And '$(CustomerStorage)' == 'sqlserver'">
+diff --git a/Program.cs b/Program.cs
+index 6dc9a81..2dbcc86 100644
+--- a/Program.cs
++++ b/Program.cs
+@@ -1,17 +1,17 @@
+-// OrderHub — the upgrade rehearsal's customer host, as written against FlowOrchestrator 1.34.7.
++// OrderHub — the upgrade rehearsal's customer host, upgraded to FlowOrchestrator 2.0.
+ // See ../README.md. Everything below "Rehearsal knobs" exists only so the rehearsal script can
+ // leave work queued across the upgrade; the rest is ordinary customer wiring.
+ using FlowOrchestrator.Core.Configuration;
+ using FlowOrchestrator.Core.HealthChecks;
+ using FlowOrchestrator.Dashboard;
+ using FlowOrchestrator.Dashboard.Webhooks;
+-using FlowOrchestrator.Hangfire;
+ #if STORAGE_SQLSERVER
+ using FlowOrchestrator.SqlServer;
+ #else
+ using FlowOrchestrator.PostgreSQL;
+ #endif
+ #if RUNTIME_HANGFIRE
++using FlowOrchestrator.Hangfire;   // Step 3: Hangfire hosts keep it (UseHangfire() lives here); Service Bus hosts drop it
+ using Hangfire;
+ #if STORAGE_POSTGRESQL
+ using Hangfire.PostgreSql;
+@@ -75,7 +75,6 @@ builder.Services.AddFlowOrchestrator(options =>
+     options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
+     options.Retention.Enabled = true;
+     options.Retention.DataTtl = TimeSpan.FromDays(30);
+-    options.Observability.EnableEventPersistence = true;
+ 
+     options.AddFlow<OrderWebhookFlow>();
+     options.AddFlow<NightlyReportFlow>();

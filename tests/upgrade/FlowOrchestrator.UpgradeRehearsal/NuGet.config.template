@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <!-- Written into the work directory by rehearse.ps1. nuget.org serves 1.34.x; the local feed
+       serves the 2.0 packages packed from this checkout under a version nuget.org never has. -->
+  <packageSources>
+    <clear />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+    <add key="local-2.0" value="__LOCAL_FEED__" />
+  </packageSources>
+</configuration>

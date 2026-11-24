@@ -32,43 +32,55 @@ review**.
 ## Recommended upgrade path
 
 ```text
-any 1.x  ──►  1.34.3  ──(run it in production for a while)──►  2.0
+any 1.x  ──►  latest 1.34.x  ──(run it in production for a while)──►  2.0
 ```
 
-1. **Upgrade to 1.34.3 first**, on your current .NET 8 / 9 / 10 runtime. 1.34.3 is the last 1.x release
-   and carries every fix that 2.0 has, including three security fixes
-   ([GHSA-g5jp-pqw5-wrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-g5jp-pqw5-wrmj),
-   [GHSA-358q-p9gq-3m6p](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-358q-p9gq-3m6p),
-   [GHSA-8248-pg9c-cp7c](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-8248-pg9c-cp7c))
-   and the SQL Server execute-once / concurrency fixes. Its two behaviour changes — the read-only
+1. **Upgrade to the latest 1.34.x first** (1.34.7 when this was written), on your current .NET 8 / 9 / 10
+   runtime. The 1.34 line carries the security fixes 2.0 also has — from 1.34.2 on, every 1.34.x patch
+   is a security or correctness release; see the
+   [security advisories](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories) — and the
+   SQL Server execute-once / concurrency fixes. Its two behaviour changes (1.34.2) — the read-only
    unauthenticated dashboard and single-pass input resolution — then surface **separately** from the
    2.0 changes, which makes any problem much easier to attribute.
-2. **Then move to 2.0** with this guide. Coming from 1.34.3, the remaining work is the .NET retarget,
+2. **Then move to 2.0** with this guide. Coming from 1.34.x, the remaining work is the .NET retarget,
    package references, the Hangfire queue rollout and the new startup checks.
 
 Upgrading straight from an old 1.x to 2.0 works too; do every step below, plus the 1.34.2 items in
 [Step 7](#step-7--review-the-behaviour-changes).
 
+This upgrade — 1.34.7 → 2.0 with live state (parked, polling, queued and scheduled work, cron overrides,
+webhook nonces, idempotency keys) on Hangfire + SQL Server, Hangfire + PostgreSQL and Service Bus + SQL
+Server, plus the rollback — is rehearsed by `tests/upgrade/FlowOrchestrator.UpgradeRehearsal/rehearse.ps1`
+before every 2.0 release; its README lists what it checks. Where this guide quotes a command, an error
+message or a schema change, it is the one the rehearsal ran or observed.
+
 ---
 
 ## Step 0 — Before you start
 
-- [ ] **Read the release notes** for 1.34.2, 1.34.3 and 2.0 (`CHANGELOG.md`).
-- [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). So far 2.0 changes
-      nothing in an existing database (see [Step 8](#step-8--database)), but take the backup anyway; you
-      will want it for [rollback](#rollback).
-- [ ] **Inventory your extension points.** Search your solution for these; each one has a section below:
+- [ ] **Read the release notes** of every 1.34.x after the one you run, and of 2.0. 1.34.5 – 1.34.7 were
+      released from the `release/1.34` branch and are not in `main`'s `CHANGELOG.md`; their notes are on the
+      [GitHub releases](https://github.com/hoangsnowy/FlowOrchestrator/releases) page.
+- [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). 2.0 only *adds* to
+      an existing database (columns and indexes, listed in [Step 8](#step-8--database)) and never
+      rewrites or deletes data, but take the backup anyway; you will want it for [rollback](#rollback).
+- [ ] **Inventory your extension points.** Run this from the solution root; each hit has a section below:
 
-  ```text
-  IFlowRepository  FlowRepositoryExtensions  IFlowExecutor  FlowExecutor  new FlowOrchestratorEngine(
-  IFlowRunStore  IFlowRunRuntimeStore  IFlowRunControlStore  IOutputsRepository  IStepInstance
-  IRecurringTriggerSync  SyncTriggers(  FlowOrchestratorOptions  AddFlowOrchestratorSqlServer
-  AddFlowOrchestratorPostgreSql  ScopeMoveNext  EndScopeAsync  AllKnownStepKeys  FindParentStep
-  FindNextStep  ShouldExecute  HangfireEnabled  FlowSignalDispatcher(  EnableEventPersistence
-  IFlowEventReader  RecordEventAsync  GetRunEventsAsync  FlowEvent  FlowEvents  flow_events
+  ```bash
+  grep -rnE --include='*.cs' 'IFlowRepository|FlowRepositoryExtensions|IFlowExecutor|FlowExecutor\b|new FlowOrchestratorEngine\(|IFlowRunStore|IFlowRunRuntimeStore|IFlowRunControlStore|IOutputsRepository|IStepInstance([^<]|$)|IRecurringTriggerSync|SyncTriggers\(|FlowOrchestratorOptions|AddFlowOrchestratorSqlServer|AddFlowOrchestratorPostgreSql|ScopeMoveNext|EndScopeAsync|AllKnownStepKeys|FindParentStep|FindNextStep|ShouldExecute|HangfireEnabled|FlowSignalDispatcher\(|EnableEventPersistence|IFlowEventReader|RecordEventAsync|GetRunEventsAsync|FlowEvent\b|FlowEvents|flow_events' .
+  ```
+
+  ```powershell
+  # PowerShell: the same pattern
+  Get-ChildItem -Recurse -Filter *.cs | Select-String -Pattern '<the pattern above>'
   ```
 
   No hits means you use only the built-ins and can skip [Step 6](#step-6--update-custom-extensions).
+  The pattern skips `IStepInstance<TInput>`: every typed handler's `ExecuteAsync` signature has one, and
+  typed handlers need no change. A bare `IStepInstance` hit is either an **untyped handler** (check
+  [4.3](#43-inputs-of-untyped-handlers) if it runs on Hangfire) or a class implementing `IStepInstance`
+  ([Step 6](#removed-and-changed-api)). `EnableEventPersistence = true` — set by most 1.x hosts, it was in
+  the 1.x samples — is a hit too: delete the line (it no longer compiles).
 - [ ] **Check your flow manifests** for top-level step keys that contain `.` or are empty
       ([Step 5](#step-5--fix-what-the-new-startup-checks-report)).
 - [ ] **Know which runtime you run**: Hangfire, InMemory or Azure Service Bus. The package and rollout
@@ -125,8 +137,8 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 
 ```xml
 <!-- 1.x -->
-<PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.3" />
-<PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.3" />
+<PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.7" />
 
 <!-- 2.0: keep Hangfire; referencing Core explicitly is optional (Hangfire still depends on it) but
      makes the AddFlowOrchestrator() origin visible -->
@@ -139,9 +151,9 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 
 ```xml
 <!-- 1.x: FlowOrchestrator.Hangfire was required just for AddFlowOrchestrator() -->
-<PackageReference Include="FlowOrchestrator.Hangfire"   Version="1.34.3" />
-<PackageReference Include="FlowOrchestrator.ServiceBus" Version="1.34.3" />
-<PackageReference Include="FlowOrchestrator.SqlServer"  Version="1.34.3" />
+<PackageReference Include="FlowOrchestrator.Hangfire"   Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.ServiceBus" Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.SqlServer"  Version="1.34.7" />
 
 <!-- 2.0: drop FlowOrchestrator.Hangfire entirely -->
 <PackageReference Include="FlowOrchestrator.Core"       Version="2.0.0" />
@@ -238,15 +250,29 @@ Two facts drive this step:
    | Job enqueued by | Runs on a 2.0 worker? | Runs on a 1.x worker? |
    |---|---|---|
    | FlowOrchestrator **≤ 1.16** | **No** — the target method is removed | Yes |
-   | FlowOrchestrator **1.17 – 1.34.x** | **Yes** — the overload is kept, `[Obsolete]`, for one major | Yes |
-   | FlowOrchestrator **2.0** | Yes | **No** — a 1.x worker cannot run a 2.0 job |
+   | FlowOrchestrator **1.17 – 1.34.x** | **Yes** — the overload is kept, `[Obsolete]`, for one major. Enqueued and Scheduled jobs both run, see below | Yes |
+   | FlowOrchestrator **2.0** | Yes | **No** — a 1.x worker cannot run a 2.0 job: Hangfire fails it with `TypeLoadException: Could not load type 'FlowOrchestrator.Hangfire.HangfireStepEnvelope'` and retries it, and the run stays `Running` |
 
    So: drain anything enqueued by ≤ 1.16, and never let 1.x and 2.0 workers process the same Hangfire
    storage at the same time.
 
+   **Pending re-checks queued by 1.x** — a polling step's next attempt, a `WaitForSignal` deadline check
+   — carry the step's resolved inputs, which Hangfire's Newtonsoft.Json store could not keep (it saved
+   `System.Text.Json.JsonElement` values as their `ValueKind` only). A 2.0 worker rebuilds them from the
+   manifest before running the step, so they run, with one visible difference: **a poll queued by 1.x
+   starts a fresh attempt count and `pollTimeoutSeconds` window** on its first 2.0 attempt (its 1.x poll
+   bookkeeping did not survive the store). A `WaitForSignal` deadline is unaffected: it is read from the
+   database. Alpha builds before this fix left such jobs failing with `Operation is not valid due to the
+   current state of the object` (EventId 2006) and the run `Running` for ever.
+
+   > The same loss hits 1.34.x itself on Hangfire: from a poll's **second** attempt on, the handler gets
+   > the destroyed inputs (observed on 1.34.7: an input bound from `@triggerBody()` arrives `null`, a
+   > `ForEach` child poll fails with the exception above). 2.0 jobs carry inputs as System.Text.Json
+   > and are not affected, so polling flows that misbehaved on 1.34 + Hangfire are fixed by the upgrade.
+
 ### 4.1 Check for ≤ 1.16 jobs
 
-If you upgraded to 1.34.3 first and it has run for a while, every job created since is 1.17+ already.
+If you upgraded to 1.34.x first and it has run for a while, every job created since is 1.17+ already.
 Still, check the queue before the cut-over. With the default `HangFire` schema on SQL Server:
 
 ```sql
@@ -257,9 +283,19 @@ WHERE j.StateName IN ('Enqueued', 'Scheduled', 'Processing', 'Awaiting')
   AND j.InvocationData LIKE '%IFlowDefinition%';
 ```
 
-On PostgreSQL storage for Hangfire (`Hangfire.PostgreSql`), run the same filter against its job table —
-by default `hangfire.job` with columns `invocationdata` and `statename`; check your configured schema
-name. **Zero rows** means nothing blocks the upgrade. Any rows: let them
+On PostgreSQL storage for Hangfire (`Hangfire.PostgreSql`, default schema `hangfire`; use yours if you
+configured `SchemaName`). `invocationdata` is `jsonb` there, so cast it — the SQL Server text as-is fails
+with `operator does not exist: jsonb ~~ unknown`:
+
+```sql
+SELECT j.id, j.statename, j.createdat
+FROM hangfire.job AS j
+WHERE j.statename IN ('Enqueued', 'Scheduled', 'Processing', 'Awaiting')
+  AND j.invocationdata::text LIKE '%IFlowDefinition%';
+```
+
+**Zero rows** means nothing blocks the upgrade (1.17 – 1.34.x jobs name `System.Guid` where ≤ 1.16 jobs
+named `IFlowDefinition`, so they do not match). Any rows: let them
 finish on a 1.x worker first (they are usually long-scheduled polling steps or `WaitForSignal`
 re-checks), or re-trigger those runs after the upgrade.
 
@@ -267,14 +303,23 @@ re-checks), or re-trigger those runs after the upgrade.
 
 **A — Short maintenance window (simplest, recommended):**
 
-1. Stop accepting new triggers: pause cron triggers from the dashboard, and hold webhook traffic at your
-   gateway (or accept that callers retry).
-2. Wait until the Hangfire dashboard shows **0 Enqueued and 0 Processing** for the FlowOrchestrator
-   queues. Scheduled jobs (polling re-checks, delays) may remain: they are 1.17+ jobs and a 2.0 worker
-   runs them (verify with the query in 4.1 that none is ≤ 1.16).
-3. **Stop every 1.x instance.**
+1. Run the query in [4.1](#41-check-for--116-jobs); it must return zero rows.
+2. Hold webhook traffic at your gateway, or accept that callers retry. A retry of a delivery 1.x already
+   accepted is answered `409` (`nonce_seen`) by 2.0 when the trigger uses replay protection: the nonces
+   are in the shared database.
+3. **Stop every 1.x instance** (a normal shutdown, so Hangfire servers deregister). You do not have to
+   wait for the queue to drain: jobs left **Enqueued** or **Scheduled** by 1.17+ stay in Hangfire
+   storage and the 2.0 workers run them — entry steps, continuations, poll re-checks and `WaitForSignal`
+   deadline checks alike (rehearsed). A job that was **Processing** when its server stopped is requeued by
+   Hangfire and also runs on 2.0.
 4. Deploy 2.0 to every instance and start them.
-5. Resume cron triggers and webhook traffic.
+5. Release webhook traffic. Cron schedules need no action: a stopped deployment fires nothing, and 2.0
+   re-registers every schedule — with its dashboard override, and paused ones stay paused — at startup.
+
+> **Pausing schedules first?** Not needed, and it has a side effect: pausing from the dashboard stores the
+> schedule's current cron expression as its *override* (1.x and 2.0 alike), and resuming keeps it. A
+> schedule you never overrode is then pinned to that expression: a later manifest change of its cron
+> does not apply, because the stored override wins (with `Scheduler.PersistOverrides`, across restarts).
 
 **B — Blue/green with separate Hangfire storage:** stand 2.0 up against a *new* Hangfire storage (a new
 schema, `HangFire2`, or a separate database for Hangfire only — the FlowOrchestrator tables stay shared),
@@ -600,9 +645,46 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
 
 ## Step 8 — Database
 
-The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database both
-only **add** the run-search indexes (and, on SQL Server, two computed columns) described below; 1.34.3 keeps working against the upgraded database, which is what makes the
-[rollback](#rollback) below possible.
+The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database they
+only **add** objects — nothing is altered, rewritten or deleted, and no row changes. This is the complete
+list, from a schema diff of a 1.34.7 database before and after the first 2.0 start (the upgrade
+rehearsal checks it on every run):
+
+| Backend | Added on a 1.34.x database | Why |
+|---|---|---|
+| SQL Server / Azure SQL | columns `FlowRuns.IdText`, `FlowRuns.RunSearchText` (computed, not persisted); indexes `IX_FlowRuns_IdText`, `IX_FlowRuns_StartedAt_Search` | run search — [below](#run-search-columns-and-indexes-sql-server--azure-sql) |
+| | filtered index `IX_FlowStepDispatches_Unsent` on `FlowStepDispatches([DispatchedAt]) WHERE [DispatchJobId] IS NULL` | unsent-dispatch recovery ([Step 7](#smaller-changes)); holds only in-flight rows |
+| | nullable column `WebhookReplayNonces.RegistrationId` (`UNIQUEIDENTIFIER`) | lets a rejected delivery release only its own replay nonce; `NULL` on rows written by 1.x, which simply never match a release |
+| PostgreSQL | index `ix_flow_runs_run_search_trgm` (built `CONCURRENTLY` in the background) | run search — [below](#run-search-index-postgresql) |
+| | partial index `ix_flow_step_dispatches_unsent` on `flow_step_dispatches(dispatched_at) WHERE dispatch_job_id IS NULL` | unsent-dispatch recovery |
+| | nullable column `webhook_replay_nonces.registration_id` (`uuid`) | as for SQL Server |
+
+1.34.x keeps working against the upgraded database (it ignores every object above), which is what makes
+the [rollback](#rollback) below possible. The run events table is left in place — see
+[below](#the-run-events-table-is-no-longer-used).
+
+To run all of it ahead of the deployment instead of at the first start, apply the statements in this
+section with `sqlcmd -I` (SQL Server) or `psql` (PostgreSQL); the migrators skip whatever exists:
+
+```sql
+-- SQL Server / Azure SQL — the two indexes on FlowRuns are in the next section
+IF COL_LENGTH(N'FlowRuns', N'IdText') IS NULL
+    ALTER TABLE [FlowRuns] ADD [IdText] AS CONVERT(CHAR(36), [Id]);
+IF COL_LENGTH(N'FlowRuns', N'RunSearchText') IS NULL
+    ALTER TABLE [FlowRuns] ADD [RunSearchText] AS
+        CAST(LOWER(CONCAT(CONVERT(CHAR(36), [Id]), N'|', [FlowName], N'|', [TriggerKey], N'|', [Status], N'|', [BackgroundJobId])) AS NVARCHAR(800))
+        COLLATE Latin1_General_100_BIN2;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowStepDispatches_Unsent' AND object_id = OBJECT_ID(N'[FlowStepDispatches]'))
+    CREATE INDEX IX_FlowStepDispatches_Unsent ON [FlowStepDispatches]([DispatchedAt]) WHERE [DispatchJobId] IS NULL;
+IF COL_LENGTH(N'WebhookReplayNonces', N'RegistrationId') IS NULL
+    ALTER TABLE [WebhookReplayNonces] ADD [RegistrationId] UNIQUEIDENTIFIER NULL;
+```
+
+```sql
+-- PostgreSQL — the trigram index is in "Run-search index (PostgreSQL)" below
+CREATE INDEX IF NOT EXISTS ix_flow_step_dispatches_unsent ON flow_step_dispatches (dispatched_at) WHERE dispatch_job_id IS NULL;
+ALTER TABLE webhook_replay_nonces ADD COLUMN IF NOT EXISTS registration_id uuid NULL;
+```
 
 ### Run-search columns and indexes (SQL Server / Azure SQL)
 
@@ -663,7 +745,7 @@ ALTER TABLE [FlowRuns] DROP COLUMN [RunSearchText], [IdText];`
 |---|---|---|
 | `ix_flow_runs_run_search_trgm` | trigram GIN index on `lower(id::text \|\| '\|' \|\| flow_name \|\| … \|\| background_job_id)` — every quick search and the run-id prefix | ~47 MB per 200k runs |
 
-No column is added and `flow_runs` is not rewritten: the index is an expression index, built with
+No column is added to `flow_runs` and it is not rewritten: the index is an expression index, built with
 `CREATE INDEX CONCURRENTLY` in the background after startup (log events 7211 / 7212; 7213 on failure,
 retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt; one
 that another host is still building is left to it (7215). Hosts started during the build, as in a rolling
@@ -764,30 +846,56 @@ large tables, and how to run it ahead of the deployment.
 - [ ] A webhook flow accepts a signed delivery; a replay is rejected if you enforce replay protection.
 - [ ] A `WaitForSignal` flow resumes when signalled.
 - [ ] A polling step re-polls and completes.
-- [ ] Hangfire hosts: the Hangfire dashboard shows no failed jobs with `method not found` /
-      `JobLoadException`; no 1.x instance is still consuming the queue.
+- [ ] Runs that were in flight at the cut-over — parked in `WaitForSignal`, polling, or queued — move on:
+      `GET {base}/api/runs/active` shrinks as they finish, and a parked run resumes when signalled.
+- [ ] Hangfire hosts: the Hangfire dashboard shows no job on the **Failed** *or* **Retries** page with
+      `JobLoadException`, `method not found`, `TypeLoadException` or `Operation is not valid due to the
+      current state of the object`. A failing step job is retried (it shows as *Scheduled*) for a long
+      time before it reaches *Failed*, so look at both. With SQL Server storage:
+
+      ```sql
+      SELECT s.JobId, j.StateName, s.CreatedAt, LEFT(CAST(s.Data AS nvarchar(max)), 300) AS Error
+      FROM HangFire.State AS s JOIN HangFire.Job AS j ON j.Id = s.JobId
+      WHERE s.Name = 'Failed' AND s.CreatedAt > DATEADD(hour, -1, GETUTCDATE());
+      ```
+
+      (PostgreSQL: the same over `hangfire.state` / `hangfire.job`, `s.data::text`, `now() - interval '1 hour'`.)
+      Also check that no 1.x instance is still consuming the queue.
 - [ ] Non-Hangfire hosts: `dotnet list package --include-transitive` shows no Hangfire.
-- [ ] Logs: no new error-level events (in particular 4103 / 4104 if you rely on the dashboard).
+- [ ] Logs: no new error-level events (in particular 4103 / 4104 if you rely on the dashboard), and no
+      EventId **2006** ("Failed to track step start") warnings. Warning 4100 (Basic Auth in a non-Development
+      environment) is logged by 1.34 as well and is not new.
 
 ---
 
 ## Rollback
 
-Because 2.0 only adds to an existing database (the run-search columns and indexes, which 1.34.3
-ignores), rolling back to **1.34.3** is a redeploy:
+Because 2.0 only adds to an existing database ([Step 8](#step-8--database); 1.34.x ignores every added
+object), rolling back to the **1.34.x** you ran before (1.34.7 in the rehearsal) is a redeploy. The
+retarget and package changes are reverted with your code; keep the database as it is.
 
-1. Pause cron triggers and hold webhook traffic.
-2. **Hangfire hosts:** wait until no 2.0 step job is Enqueued or Processing — a 1.x worker cannot run
-   them. Scheduled 2.0 jobs left in the queue would fail on 1.x; either let them run first or re-trigger
-   the affected runs after the rollback.
-3. Stop the 2.0 instances, deploy 1.34.3, start, resume traffic.
+1. Hold webhook traffic. You do not need to pause cron schedules (and pausing pins their cron as an
+   override — see the note in [4.2](#42-cut-over-pick-one)): a stopped deployment fires nothing.
+2. **Hangfire hosts:** a 1.x worker cannot run a 2.0 step job — Hangfire fails it with
+   `TypeLoadException: Could not load type 'FlowOrchestrator.Hangfire.HangfireStepEnvelope'`, keeps
+   retrying it, and the run stays `Running`. So before you stop 2.0, let **Enqueued** step jobs drain
+   (the Hangfire dashboard's Enqueued count for the FlowOrchestrator queue reaches 0). **Scheduled** 2.0
+   jobs — poll re-checks and `WaitForSignal` deadline checks of runs that are still in progress — cannot
+   drain quickly; after the rollback those runs stop polling and their `WaitForSignal` timeout does not
+   fire. Re-run them from the dashboard after the rollback, or cancel them.
+   **Service Bus hosts:** nothing to drain. The step message did not change between 1.34 and 2.0, so a
+   1.34 worker runs step messages 2.0 sent (rehearsed).
+3. Stop the 2.0 instances, deploy 1.34.x, start, release traffic.
 
-Runs started on 2.0 that are still in progress continue on 1.34.3 (same tables), except for the Hangfire
-jobs covered in step 2.
+What carries over (all rehearsed on 1.34.7):
 
-1.34.3 reads run events from `FlowEvents` again, which 2.0 did not write: runs executed under 2.0 show an
-empty Events drawer on 1.34.3 (their steps, attempts and outputs are all there). If you already dropped
-the table, 1.34.3's migrator recreates it empty at startup.
+- Runs started on 2.0 and still in progress continue on 1.34.x (same tables): a run parked in
+  `WaitForSignal` on 2.0 resumes when signalled, except for the Hangfire jobs covered in step 2.
+- The 1.34 dashboard lists and opens runs 2.0 wrote; idempotency keys 2.0 stored still deduplicate; cron
+  overrides and paused schedules are kept.
+- 1.34.x reads run events from `FlowEvents` again, which 2.0 did not write: runs executed under 2.0 show an
+  **empty Events drawer** on 1.34.x (their steps, attempts and outputs are all there). If you already
+  dropped the table, the 1.34.x migrator recreates it empty at startup.
 
 ---
 
@@ -817,7 +925,10 @@ No. Hangfire is a permanent, first-class runtime. 2.0 only stops forcing it on h
 Against the same FlowOrchestrator database, yes, as long as they do not share a **Hangfire storage**
 and only one side fires cron schedules
 ([Step 4](#step-4--move-the-hangfire-queue-across-hangfire-hosts-only)). With InMemory there is nothing
-to share; with Service Bus, drain the step topic subscriptions before switching versions to be safe.
+to share. With Service Bus the step message format is the same in 1.34 and 2.0, and the rehearsal runs
+messages queued by 1.34 on 2.0 and messages sent by 2.0 on 1.34; still, let only one version consume a
+subscription at a time, because a 1.x consumer does not know the 2.0 rolling-deploy hand-back
+(a step of a manifest it does not know is recorded `Skipped`).
 
 **We are on .NET 8 and cannot move yet.**
 Stay on 1.34.x. The proposed support policy (roadmap #262, to be confirmed with 2.0 GA) is security and

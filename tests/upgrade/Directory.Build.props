@@ -1,0 +1,5 @@
+<Project>
+  <!-- Stops MSBuild from importing the repository's Directory.Build.props: the upgrade rehearsal's
+       customer app is built exactly as a customer would build it — against packages from a NuGet
+       feed, without the repository's warning policy, analyzers or Central Package Management. -->
+</Project>
