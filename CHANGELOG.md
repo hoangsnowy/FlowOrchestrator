@@ -122,9 +122,13 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Schema (SQL Server, additive):** two non-persisted computed columns on `FlowRuns` (`IdText`,
   `RunSearchText`, metadata-only) and two indexes (`IX_FlowRuns_IdText`,
   `IX_FlowRuns_StartedAt_Search`, ~56 MB per 200k runs). On Azure SQL Database, Managed Instance and
-  Enterprise/Developer the indexes build **online in the background** after startup; on other editions
-  they build at startup while `FlowRuns` has at most 2M rows, and above that a warning names the two
-  statements to run in a maintenance window. Search works (more slowly) until they exist. 1.34.x keeps
+  Enterprise/Developer the indexes build **online in the background** after startup (with
+  `WAIT_AT_LOW_PRIORITY` on Azure and SQL Server 2022+, so its brief table locks never make writers queue
+  behind it); on other editions they build at startup while `FlowRuns` has at most 2M rows, and above that
+  a warning names the two statements to run in a maintenance window. Hosts starting together build them
+  once, under an application lock: a racing second host used to fail its start with error 1913 on the
+  offline path and log a false build failure (7206) on the online one; it now waits (offline) or leaves the
+  build to the first host (online, event 7209). Search works (more slowly) until they exist. 1.34.x keeps
   working against the upgraded database. See
   [Migrating to 2.0 → Database](docs/articles/migrating-to-2.0.md#step-8--database).
 - **Indexed computed columns need the standard `SET` options** (`QUOTED_IDENTIFIER`, `ANSI_NULLS`,

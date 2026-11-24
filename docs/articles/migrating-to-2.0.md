@@ -611,9 +611,14 @@ The two columns are added synchronously at startup. The two indexes (measured 0.
 runs) are built:
 
 - **Azure SQL Database, Managed Instance, Enterprise / Developer:** online (`ONLINE = ON`) in the
-  background after startup — no startup delay, writers are not blocked. Log events 7204 / 7205 mark
-  start and end; 7206 a failure (retried on the next start).
-- **Standard / Express / Web:** offline at startup while `FlowRuns` has at most 2,000,000 rows (seconds).
+  background after startup — no startup delay. On Azure and SQL Server 2022+ the build waits for its two
+  brief table locks with `WAIT_AT_LOW_PRIORITY`, so writers never queue behind it (it gives up after 5
+  minutes and retries on the next start). On Enterprise / Developer 2016-2019 `CREATE INDEX` has no
+  low-priority wait: a write transaction left open on `FlowRuns` while the build starts or finishes makes
+  later writers queue behind the build until that transaction ends. Log events 7204 / 7205 mark start and end; 7206
+  a failure (retried on the next start); 7209 on a host that found another one building.
+- **Standard / Express / Web:** offline at startup while `FlowRuns` has at most 2,000,000 rows (seconds);
+  a host starting at the same time as another waits for that host's build instead of racing it.
   Above that the migrator skips them and logs warning 7207 with the statements; run them in a maintenance
   window:
 
