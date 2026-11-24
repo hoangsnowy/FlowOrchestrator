@@ -171,6 +171,13 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Dashboard `PUT /api/schedules/{jobId}/cron` answers `400` for an unparseable cron expression** and
   persists nothing. It validates with Cronos (5- or 6-field), then schedules before persisting, so an
   expression the runtime itself rejects is not left behind as an override either.
+- **An unparseable persisted cron override no longer aborts host startup.** `RecurringTriggerSync` passed
+  the persisted override straight to the runtime; its rejection propagated out of `FlowSyncHostedService`,
+  so every restart failed until the schedule-state row was edited by hand. A rejected override is now
+  logged (EventId 5011) and the job is registered on the manifest cron instead — the same for Hangfire,
+  the in-memory runtime and Service Bus, which all sync through it. Only a cron rejection
+  (`ArgumentException` / `FormatException`) is absorbed; an invalid manifest cron or any other runtime
+  failure still propagates.
 
 ### Security
 

@@ -150,4 +150,34 @@ public sealed class PeriodicTimerCronOverrideValidationTests
         Assert.False(sut.TryGetJob(jobId, out _));
     }
 
+
+    [Fact]
+    public async Task SyncTriggersAsync_PersistedOverrideIsUnparseable_FallsBackToTheManifestCron()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var jobId = RecurringTriggerJobId.Create(flowId, "nightly");
+        var stateStore = new InMemoryFlowScheduleStateStore();
+        await stateStore.SaveAsync(new FlowScheduleState
+        {
+            JobId = jobId,
+            FlowId = flowId,
+            FlowName = "CronFlow",
+            TriggerKey = "nightly",
+            CronOverride = InvalidCron,
+        });
+        var dispatcher = CreateDispatcher();
+        var sync = new RecurringTriggerSync(
+            new FlowRegistry([new CronFlow(flowId, "nightly", ValidCron)]),
+            dispatcher,
+            stateStore,
+            new FlowSchedulerOptions { PersistOverrides = true });
+
+        // Act
+        await sync.SyncTriggersAsync(flowId, isEnabled: true);
+
+        // Assert
+        Assert.True(dispatcher.TryGetJob(jobId, out var job));
+        Assert.Equal(ValidCron, job.EffectiveCron);
+    }
 }

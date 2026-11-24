@@ -29,4 +29,7 @@ internal static partial class HostingLog
 
     [LoggerMessage(EventId = 5010, Level = LogLevel.Warning, Message = "Periodic timeout-enforcement sweep failed; will retry on the next tick.")]
     public static partial void TimeoutSweepFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(EventId = 5011, Level = LogLevel.Warning, Message = "Recurring job {JobId}: the persisted cron override '{CronOverride}' was rejected by the runtime; scheduling on the manifest cron '{ManifestCron}' instead. Fix or clear the override from the dashboard.")]
+    public static partial void RecurringJobOverrideRejected(ILogger logger, Exception ex, string jobId, string cronOverride, string manifestCron);
 }

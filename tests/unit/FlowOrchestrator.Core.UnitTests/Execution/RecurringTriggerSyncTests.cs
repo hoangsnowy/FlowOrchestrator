@@ -150,4 +150,57 @@ public sealed class RecurringTriggerSyncTests
         // Assert
         Assert.Empty(_dispatcher.ReceivedCalls());
     }
+
+    [Fact]
+    public async Task EnabledFlow_RuntimeRejectsPersistedOverride_FallsBackToManifestCron()
+    {
+        // Arrange — the dispatcher rejects the override the way Hangfire's AddOrUpdate does.
+        const string badOverride = "every day at noon";
+        var sut = CreateSut(CronManifest());
+        await _stateStore.SaveAsync(new FlowScheduleState { JobId = JobId(), CronOverride = badOverride });
+        _dispatcher
+            .When(d => d.RegisterOrUpdate(JobId(), _flowId, "schedule", badOverride))
+            .Do(_ => throw new ArgumentException("CRON expression is invalid.", "cronExpression"));
+
+        // Act
+        var failure = await Record.ExceptionAsync(() => sut.SyncTriggersAsync(_flowId, isEnabled: true));
+
+        // Assert — startup is not aborted, and the job still runs on the manifest schedule.
+        Assert.Null(failure);
+        _dispatcher.Received(1).RegisterOrUpdate(JobId(), _flowId, "schedule", ManifestCron);
+    }
+
+    [Fact]
+    public async Task EnabledFlow_RuntimeRejectsManifestCron_StillPropagates()
+    {
+        // Arrange — an unparseable cron in code is an authoring error, not a stale persisted value.
+        var sut = CreateSut(CronManifest("not a cron"));
+        _dispatcher
+            .When(d => d.RegisterOrUpdate(JobId(), _flowId, "schedule", "not a cron"))
+            .Do(_ => throw new ArgumentException("CRON expression is invalid.", "cronExpression"));
+
+        // Act
+        var failure = await Record.ExceptionAsync(() => sut.SyncTriggersAsync(_flowId, isEnabled: true));
+
+        // Assert
+        Assert.IsType<ArgumentException>(failure);
+    }
+
+    [Fact]
+    public async Task EnabledFlow_RuntimeFailsForAnotherReason_DoesNotMaskTheFailure()
+    {
+        // Arrange — only a cron rejection is absorbed; a storage outage in the runtime is not.
+        var sut = CreateSut(CronManifest());
+        await _stateStore.SaveAsync(new FlowScheduleState { JobId = JobId(), CronOverride = "*/5 * * * *" });
+        _dispatcher
+            .When(d => d.RegisterOrUpdate(JobId(), _flowId, "schedule", "*/5 * * * *"))
+            .Do(_ => throw new InvalidOperationException("job storage unavailable"));
+
+        // Act
+        var failure = await Record.ExceptionAsync(() => sut.SyncTriggersAsync(_flowId, isEnabled: true));
+
+        // Assert
+        Assert.IsType<InvalidOperationException>(failure);
+        _dispatcher.DidNotReceive().RegisterOrUpdate(JobId(), _flowId, "schedule", ManifestCron);
+    }
 }

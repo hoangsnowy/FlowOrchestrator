@@ -21,7 +21,9 @@ namespace FlowOrchestrator.Core.Execution;
 ///   <item>flow disabled, or the trigger has no cron expression → <see cref="IRecurringTriggerDispatcher.Remove"/>;</item>
 ///   <item>persisted state is paused (only consulted when <see cref="FlowSchedulerOptions.PersistOverrides"/>) → remove;</item>
 ///   <item>otherwise → <see cref="IRecurringTriggerDispatcher.RegisterOrUpdate"/> with the persisted
-///         <see cref="FlowScheduleState.CronOverride"/> when set, else the manifest cron.</item>
+///         <see cref="FlowScheduleState.CronOverride"/> when set, else the manifest cron. An override the
+///         runtime rejects as unparseable is logged (EventId 5011) and the manifest cron is registered
+///         instead, so a bad persisted value can never abort host startup.</item>
 /// </list>
 /// </remarks>
 public sealed class RecurringTriggerSync : IRecurringTriggerSync
@@ -89,14 +91,49 @@ public sealed class RecurringTriggerSync : IRecurringTriggerSync
                 continue;
             }
 
-            var effectiveCron = string.IsNullOrWhiteSpace(persisted?.CronOverride)
-                ? manifestCron
-                : persisted.CronOverride;
+            var effectiveCron = RegisterWithFallback(jobId, flow.Id, triggerKey, manifestCron, persisted?.CronOverride);
 
-            _dispatcher.RegisterOrUpdate(jobId, flow.Id, triggerKey, effectiveCron);
             // A dashboard-persisted override is user input: strip line breaks before it reaches the log.
             // Cold path (startup and schedule edits only), so the chained Replace is fine here.
-            HostingLog.RecurringJobSynced(_logger, jobId, effectiveCron.Replace('\r', '_').Replace('\n', '_'));
+            HostingLog.RecurringJobSynced(_logger, jobId, Sanitize(effectiveCron));
         }
     }
+
+    /// <summary>
+    /// Registers the job on the persisted override when there is one, falling back to the manifest cron when
+    /// the runtime rejects the override.
+    /// </summary>
+    /// <returns>The cron expression the job was actually registered with.</returns>
+    /// <remarks>
+    /// A persisted override is user input that an older version (or a direct write to the schedule-state
+    /// table) can have stored unvalidated. Rethrowing the runtime's rejection here used to abort
+    /// <c>FlowSyncHostedService</c> and therefore host startup, on every restart, until someone edited the
+    /// table by hand. Only a cron rejection is absorbed — every built-in dispatcher reports one as
+    /// <see cref="ArgumentException"/> (Cronos' own <see cref="FormatException"/> is accepted for custom
+    /// runtimes) and leaves the job untouched. An unparseable MANIFEST cron is an authoring error and still
+    /// propagates, like any other invalid flow definition.
+    /// </remarks>
+    private string RegisterWithFallback(string jobId, Guid flowId, string triggerKey, string manifestCron, string? cronOverride)
+    {
+        if (string.IsNullOrWhiteSpace(cronOverride))
+        {
+            _dispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, manifestCron);
+            return manifestCron;
+        }
+
+        try
+        {
+            _dispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, cronOverride);
+            return cronOverride;
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException)
+        {
+            HostingLog.RecurringJobOverrideRejected(_logger, ex, jobId, Sanitize(cronOverride), Sanitize(manifestCron));
+        }
+
+        _dispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, manifestCron);
+        return manifestCron;
+    }
+
+    private static string Sanitize(string value) => value.Replace('\r', '_').Replace('\n', '_');
 }
