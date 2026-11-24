@@ -1881,9 +1881,14 @@ public static class DashboardServiceCollectionExtensions
         // Restricted WaitForSignal steps: a malformed restriction or an unknown policy fails here, like an
         // unknown ViewPolicy / OperatePolicy, rather than as a 403 on the first approval. Flows are read from
         // the root provider; a host that registers its FlowRegistry per scope is checked per request instead.
-        var restrictedSignals = services.GetService<FlowRegistry>() is { } registry
+        var startupRegistry = services.GetService<FlowRegistry>();
+        var restrictedSignals = startupRegistry is { } registry
             ? Security.SignalAuthorization.ValidateFlows(registry, services)
             : 0;
+        // Webhook inputs read as int (webhookReplayToleranceSeconds): an out-of-range value fails here
+        // rather than being misread on every delivery.
+        if (startupRegistry is not null)
+            WebhookSecurityPipeline.ValidateTriggerInputs(startupRegistry);
         if (restrictedSignals > 0 && !authorization.IsEnabled && logger is not null)
             Security.DashboardAuthLog.RestrictedSignalsWithoutIdentitySignIn(logger, restrictedSignals);
         if (authorization.UnregisteredFlowSignals == UnregisteredFlowSignalMode.OperatorRule && logger is not null)

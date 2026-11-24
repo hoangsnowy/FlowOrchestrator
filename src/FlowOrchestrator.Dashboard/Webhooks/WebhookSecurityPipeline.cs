@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Dashboard.Webhooks.Logging;
@@ -481,10 +482,54 @@ public sealed class WebhookSecurityPipeline
         return value switch
         {
             int i => i,
-            long l => (int)l,
+            // Clamp, never truncate: (int)4294967296L is 0, which silently disabled replay protection.
+            // ValidateTriggerInputs rejects such a value at startup; this guards flows it never saw.
+            long l => (int)Math.Clamp(l, int.MinValue, int.MaxValue),
             string s when int.TryParse(s, out var p) => p,
             _ => null,
         };
+    }
+
+    /// <summary>Integer-valued webhook trigger inputs that the pipeline reads as <see cref="int"/>.</summary>
+    private static readonly string[] IntegerInputs = ["webhookReplayToleranceSeconds"];
+
+    /// <summary>
+    /// Fails fast when a registered webhook trigger declares an integer input outside the
+    /// <see cref="int"/> range, instead of letting it be misread on every request.
+    /// </summary>
+    /// <param name="registry">The flows registered on the dashboard host.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a webhook trigger's <c>webhookReplayToleranceSeconds</c> is an integer (or integer string)
+    /// outside <c>0 … 2147483647</c>.
+    /// </exception>
+    /// <remarks>Startup-only: one pass over the registered triggers.</remarks>
+    internal static void ValidateTriggerInputs(FlowRegistry registry)
+    {
+        foreach (var flow in registry.Flows)
+        {
+            foreach (var (triggerKey, trigger) in flow.Manifest.Triggers)
+            {
+                if (trigger.Type != TriggerType.Webhook)
+                    continue;
+                foreach (var input in IntegerInputs)
+                {
+                    if (!trigger.Inputs.TryGetValue(input, out var raw) || raw is null)
+                        continue;
+                    long? value = raw switch
+                    {
+                        int i => i,
+                        long l => l,
+                        string s when long.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+                        _ => null,
+                    };
+                    if (value is { } v && (v < 0 || v > int.MaxValue))
+                    {
+                        throw new InvalidOperationException(
+                            $"Flow '{flow.Id}' webhook trigger '{triggerKey}' sets {input} = {v}, outside 0 … {int.MaxValue}. Use 0 to disable replay protection or a positive number of seconds.");
+                    }
+                }
+            }
+        }
     }
 
     private static string BuildAbsoluteUrl(HttpContext http)

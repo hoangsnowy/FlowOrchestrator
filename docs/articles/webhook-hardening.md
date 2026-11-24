@@ -511,7 +511,7 @@ these — pick a built-in scheme first.
 
 | Field                              | Meaning                                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `webhookReplayToleranceSeconds`    | Maximum allowed clock skew. `0` (default) disables replay protection.                                         |
+| `webhookReplayToleranceSeconds`    | Maximum allowed clock skew. `0` (default) disables replay protection. Must be `0 … 2147483647`; a value outside that range fails `MapFlowDashboard` at startup. |
 | `webhookNonceHeader`               | Header used for the nonce ledger (e.g. `X-GitHub-Delivery`); falls back to SHA-256 of `timestamp \|\| body`. |
 
 ### Rate-limit fields

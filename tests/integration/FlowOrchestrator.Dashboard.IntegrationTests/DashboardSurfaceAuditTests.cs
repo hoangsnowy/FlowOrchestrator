@@ -285,6 +285,37 @@ public sealed class DashboardSurfaceAuditTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    /// <summary>
+    /// <c>MapFlowDashboard</c> refuses to start when a registered webhook trigger declares a
+    /// <c>webhookReplayToleranceSeconds</c> outside the <see cref="int"/> range (it used to truncate to 0,
+    /// silently disabling replay protection).
+    /// </summary>
+    [Fact]
+    public void Dashboard_startup_rejects_an_out_of_range_replay_tolerance()
+    {
+        // Arrange
+        var flow = WebhookFlow(Guid.NewGuid(), new Dictionary<string, object?>
+        {
+            ["webhookSlug"] = "too-tolerant",
+            ["webhookReplayToleranceSeconds"] = 4_294_967_296L,
+        });
+        var registry = new FlowRegistry(new[] { flow });
+
+        // Act
+        var ex = Record.Exception(() =>
+        {
+            using var server = DashboardTestServer.WithServices(s =>
+            {
+                s.AddFlowDashboard();
+                s.AddSingleton(registry);
+            });
+        });
+
+        // Assert
+        var invalid = Assert.IsType<InvalidOperationException>(ex);
+        Assert.Contains("webhookReplayToleranceSeconds", invalid.Message);
+    }
+
     // ── Client disconnect on the webhook endpoint ────────────────────────────────────────────
 
     /// <summary>
