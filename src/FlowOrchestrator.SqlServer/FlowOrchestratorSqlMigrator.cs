@@ -61,8 +61,16 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         _runSearchIndexEnabled = runSearchIndexEnabled;
     }
 
-    /// <summary>The background build of the run-search indexes, if one was started; completes when it ends.</summary>
-    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
+    /// <summary>
+    /// The background build of the run-search indexes started by <see cref="StartAsync"/>, or a completed task
+    /// when none was started. Completes when the build ends; it never faults (a failed build is logged and
+    /// retried on the next start).
+    /// </summary>
+    /// <remarks>
+    /// For code that runs the migrator outside a host (tests, the storage copy tool) and must not write to
+    /// <c>FlowRuns</c> while the online build is still running.
+    /// </remarks>
+    public Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>Applies the schema; starts the background index build where supported.</summary>
     /// <param name="cancellationToken">Host start-up cancellation.</param>
