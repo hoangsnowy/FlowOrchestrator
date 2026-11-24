@@ -657,7 +657,7 @@ public static class DashboardServiceCollectionExtensions
             {
                 var options = http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
                 var clock = http.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System;
-                receivedFrom = clock.GetUtcNow() - options.EffectiveRunSearchWindow;
+                receivedFrom = RunListRequest.WindowStart(clock.GetUtcNow(), options.EffectiveRunSearchWindow);
                 windowDefaulted = true;
             }
 

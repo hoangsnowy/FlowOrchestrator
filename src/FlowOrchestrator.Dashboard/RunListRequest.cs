@@ -65,7 +65,7 @@ internal sealed record RunListRequest(
         var windowDefaulted = false;
         if (term.Kind == RunSearchTermKind.Text && startedFrom is null)
         {
-            startedFrom = (startedTo ?? now) - options.EffectiveRunSearchWindow;
+            startedFrom = WindowStart(startedTo ?? now, options.EffectiveRunSearchWindow);
             windowDefaulted = true;
         }
 
@@ -93,6 +93,21 @@ internal sealed record RunListRequest(
             && after is null;
 
         return new RunListRequest(storeQuery, term, windowDefaulted, includeTotal, isPlainListing);
+    }
+
+    /// <summary>
+    /// Returns <paramref name="anchor"/> minus <paramref name="window"/>, clamped to
+    /// <see cref="DateTimeOffset.MinValue"/> instead of throwing when the subtraction would underflow
+    /// (a caller-supplied <c>to</c> near year 1, or a very large configured window).
+    /// </summary>
+    /// <param name="anchor">The window's upper bound.</param>
+    /// <param name="window">The window length; non-negative.</param>
+    internal static DateTimeOffset WindowStart(DateTimeOffset anchor, TimeSpan window)
+    {
+        var utc = anchor.ToUniversalTime();
+        return utc.UtcTicks - DateTimeOffset.MinValue.UtcTicks <= window.Ticks
+            ? DateTimeOffset.MinValue
+            : utc - window;
     }
 
     /// <summary>

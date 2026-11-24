@@ -453,6 +453,35 @@ public sealed class DashboardSurfaceAuditTests
         Assert.Equal(HttpStatusCode.BadRequest, status);
     }
 
+    // ── Query parsing / compression ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 500 ON A VIEWER GET. A free-text run search with only <c>to</c> computes the default window as
+    /// <c>to - RunSearchWindow</c>; for <c>to</c> near <see cref="DateTimeOffset.MinValue"/> the subtraction
+    /// threw <see cref="ArgumentOutOfRangeException"/> out of <c>RunListRequest.Parse</c>.
+    /// </summary>
+    [Fact]
+    public async Task Run_search_with_minimal_to_bound_does_not_500()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+
+        // Act
+        HttpStatusCode status;
+        try
+        {
+            using var response = await server.Client.GetAsync("/flows/api/runs?search=order&to=0001-01-02T00:00:00Z&includeTotal=true");
+            status = response.StatusCode;
+        }
+        catch (Exception)
+        {
+            status = HttpStatusCode.InternalServerError;
+        }
+
+        // Assert — 200 (empty page) or 400, never 500.
+        Assert.NotEqual(HttpStatusCode.InternalServerError, status);
+    }
+
     // ── Test doubles ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
