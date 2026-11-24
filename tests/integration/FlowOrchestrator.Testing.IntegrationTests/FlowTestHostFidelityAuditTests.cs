@@ -142,6 +142,9 @@ public sealed class FlowTestHostFidelityAuditTests
     {
         // Arrange
         var stepKeys = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        // The listener sees every FlowOrchestrator meter in the process, so count only this flow's measurements:
+        // a parallel test running another flow with a "process_items" loop otherwise lands here.
+        var flowId = new ForEachTestFlow().Id.ToString();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
@@ -150,11 +153,18 @@ public sealed class FlowTestHostFidelityAuditTests
         };
         listener.SetMeasurementEventCallback<double>((_, _, tags, _) =>
         {
+            string? key = null;
+            var ours = false;
             foreach (var tag in tags)
             {
-                if (tag.Key == "step_key" && tag.Value is string key && key.StartsWith("process_items.", StringComparison.Ordinal))
-                    stepKeys.TryAdd(key, 0);
+                if (tag.Key == "flow_id" && tag.Value is string id && id == flowId)
+                    ours = true;
+                else if (tag.Key == "step_key" && tag.Value is string stepKey && stepKey.StartsWith("process_items.", StringComparison.Ordinal))
+                    key = stepKey;
             }
+
+            if (ours && key is not null)
+                stepKeys.TryAdd(key, 0);
         });
         listener.Start();
 
