@@ -17,6 +17,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   signing / account keys, private keys, SAS, session ids, JWTs, …), and the *Why skipped* trace of a
   `When` condition that reads a secret-looking name no longer shows the resolved value. Masking is
   deliberately broad (a name such as `tokenCount` is masked too); operators still see payloads as stored.
+- **The webhook delivery log records the outcome the sender received.** A delivery refused by the legacy
+  `webhookSecret` / `X-Webhook-Key` check (401) was logged in the Webhooks tab as accepted (200), because
+  the security pipeline wrote its "accepted" row before that check ran. The row is now written after the
+  final decision: a refused delivery is logged as rejected with status 401 and reason `secret_invalid`
+  (also the `webhook_rejected_total` reason tag), and EventId 4006 is logged. The write does not depend on
+  the request's abort token, so a sender that disconnects cannot keep a refusal out of the log.
 
 ## [1.34.5] - 2026-11-24
 
