@@ -757,6 +757,9 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
 
 ### Performance
 
+- **Dashboard `Accept-Encoding` check no longer allocates.** It ran on every dashboard response (including
+  the 5 s auto-refresh polls) through `string.Split` + LINQ + substrings; it is now parsed over spans —
+  0 bytes per call, pinned by a test — with the same results (q=0 disable form, case, spacing).
 - **Four superlinear terms from #189 removed** (`docs/benchmarks/issue-189-superlinear-terms-2026-11-23.md`).
   - `RunTerminationClassifier` now classifies a run in one pass over a set of non-leaf keys. It used to
     scan every status for every status, which was O(n²); it is now O(n). At a 500-iteration loop the

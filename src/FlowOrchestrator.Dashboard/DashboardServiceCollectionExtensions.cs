@@ -1652,7 +1652,7 @@ public static class DashboardServiceCollectionExtensions
 
         var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
 
-        if (HasEncoding(accept, "br"))
+        if (AcceptEncoding.Has(accept, "br"))
         {
             response.Headers.ContentEncoding = "br";
             await using var brotli = new System.IO.Compression.BrotliStream(
@@ -1661,7 +1661,7 @@ public static class DashboardServiceCollectionExtensions
             return;
         }
 
-        if (HasEncoding(accept, "gzip"))
+        if (AcceptEncoding.Has(accept, "gzip"))
         {
             response.Headers.ContentEncoding = "gzip";
             await using var gzip = new System.IO.Compression.GZipStream(
@@ -1693,7 +1693,7 @@ public static class DashboardServiceCollectionExtensions
         var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
         var bytes = Encoding.UTF8.GetBytes(text);
 
-        if (HasEncoding(accept, "br"))
+        if (AcceptEncoding.Has(accept, "br"))
         {
             response.Headers.ContentEncoding = "br";
             await using var brotli = new System.IO.Compression.BrotliStream(
@@ -1702,7 +1702,7 @@ public static class DashboardServiceCollectionExtensions
             return;
         }
 
-        if (HasEncoding(accept, "gzip"))
+        if (AcceptEncoding.Has(accept, "gzip"))
         {
             response.Headers.ContentEncoding = "gzip";
             await using var gzip = new System.IO.Compression.GZipStream(
@@ -1731,83 +1731,19 @@ public static class DashboardServiceCollectionExtensions
 
         var accept = http.Request.Headers.AcceptEncoding.ToString();
 
-        if (HasEncoding(accept, "br"))
+        if (AcceptEncoding.Has(accept, "br"))
         {
             http.Response.Headers.ContentEncoding = "br";
             return http.Response.Body.WriteAsync(page.BrotliBytes, 0, page.BrotliBytes.Length);
         }
 
-        if (HasEncoding(accept, "gzip"))
+        if (AcceptEncoding.Has(accept, "gzip"))
         {
             http.Response.Headers.ContentEncoding = "gzip";
             return http.Response.Body.WriteAsync(page.GzipBytes, 0, page.GzipBytes.Length);
         }
 
         return http.Response.WriteAsync(page.Html);
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="acceptEncoding"/> advertises
-    /// <paramref name="token"/> as a coding with q-value &gt; 0.
-    /// </summary>
-    /// <remarks>
-    /// Per RFC 7231 §5.3.4, an entry like <c>br;q=0</c> means "do not use Brotli
-    /// even if you support it". This parser honors that: an explicit zero
-    /// q-value excludes the coding; any other (or omitted) q-value accepts it.
-    /// Full q-value precedence between codings (e.g. preferring <c>br;q=0.9</c>
-    /// over <c>gzip;q=0.5</c>) is not implemented because real-world browsers
-    /// only emit unweighted lists or the q=0 disable form.
-    /// </remarks>
-    private static bool HasEncoding(string acceptEncoding, string token)
-    {
-        if (string.IsNullOrEmpty(acceptEncoding))
-        {
-            return false;
-        }
-
-        foreach (var entry in acceptEncoding.Split(',').Select(p => p.Trim()))
-        {
-            if (entry.Length == 0)
-            {
-                continue;
-            }
-
-            // Split "<coding>" from "<coding>;<params>".
-            var semi = entry.IndexOf(';');
-            var coding = (semi < 0 ? entry : entry[..semi]).Trim();
-            if (!coding.Equals(token, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (semi < 0)
-            {
-                return true; // bare coding — implicitly q=1
-            }
-
-            // Walk the ";q=<value>" parameter list. Anything that's not a
-            // valid double, or any q-value > 0, is treated as accepted.
-            foreach (var p in entry[(semi + 1)..].Split(';').Select(x => x.Trim()))
-            {
-                if (!p.StartsWith("q=", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var value = p[2..].Trim();
-                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var q)
-                    && q <= 0d)
-                {
-                    return false;
-                }
-
-                return true;
-            }
-
-            return true; // matched coding, no q parameter
-        }
-
-        return false;
     }
 
     /// <summary>
