@@ -364,6 +364,8 @@ where one provider behaved differently from the others.
   step `Skipped` with the same reason and evaluation trace the continuation writes, records dependents
   whose prerequisites can no longer be met as skipped, and repeats until the run is stable — then closes it
   if nothing is left.
+  A `ForEach` child's clause is evaluated in its iteration's scope there too, so `@steps('sibling')` reads
+  this iteration's sibling, as in the continuation.
 - **One failed recovery dispatch no longer abandons the rest of the run.** A dispatch that threw ended the
   run's recovery pass, so its other ready steps (and loop admissions) waited for the next restart. The
   failure is now logged (EventId 5026), its ledger row released as before, and the remaining steps are
@@ -409,6 +411,9 @@ where one provider behaved differently from the others.
   moved to `LoggerMessage` (EventIds 3140-3154). **Read before upgrading:** saving a schedule again with
   the cron it already runs no longer schedules an extra tick; a chain that died (its tick dead-lettered
   after `MaxDeliveryCount` failures) is re-seeded by the next restart.
+- **Dashboard schedule Resume no longer fails on an override an older version persisted unvalidated.** It
+  falls back to the manifest cron and clears the override (as startup sync does), and registers with the
+  runtime before saving the state, instead of answering `500` on every attempt.
 - **Dashboard `PUT /api/schedules/{jobId}/cron` rejects malformed and oversized bodies.** A non-object
   body (`[]`), a non-string `cronExpression` (`5`) or malformed JSON threw out of the endpoint (`500`);
   they now answer `400`. The body cap (`MaxBodyBytes`) was checked only against `Content-Length`, so a

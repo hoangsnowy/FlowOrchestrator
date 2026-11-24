@@ -49,6 +49,49 @@ public sealed class ScheduleCronEndpointAuditTests
     }
 
     /// <summary>
+    /// Resume of a schedule whose persisted override does not parse (written by a version that did not validate
+    /// it) falls back to the manifest cron and clears the override, instead of answering 500 on every attempt.
+    /// </summary>
+    [Fact]
+    public async Task Resume_with_an_unparseable_persisted_override_falls_back_to_the_manifest_cron()
+    {
+        // Arrange
+        using var server = new DashboardTestServer();
+        var flowId = Guid.NewGuid();
+        var jobId = RecurringTriggerJobId.Create(flowId, "cron");
+        server.FlowStore.GetByIdAsync(flowId).Returns(new FlowDefinitionRecord
+        {
+            Id = flowId,
+            Name = "F",
+            ManifestJson = "{\"triggers\":{\"cron\":{\"type\":\"Cron\",\"inputs\":{\"cronExpression\":\"0 * * * *\"}}}}"
+        });
+        server.ScheduleStateStore.GetAsync(jobId).Returns(new FlowScheduleState
+        {
+            JobId = jobId, FlowId = flowId, FlowName = "F", TriggerKey = "cron", IsPaused = true, CronOverride = "not a cron"
+        });
+        server.TriggerDispatcher
+            .When(d => d.RegisterOrUpdate(Arg.Any<string>(), Arg.Any<Guid>(), Arg.Any<string>(), "not a cron"))
+            .Do(_ => throw new ArgumentException("CRON expression is invalid."));
+
+        // Act
+        HttpStatusCode status;
+        try
+        {
+            using var response = await server.Client.PostAsync($"/flows/api/schedules/{jobId}/resume", content: null);
+            status = response.StatusCode;
+        }
+        catch (Exception)
+        {
+            status = HttpStatusCode.InternalServerError;
+        }
+
+        // Assert — resumed on the manifest cron; the bad override is cleared.
+        Assert.Equal(HttpStatusCode.OK, status);
+        server.TriggerDispatcher.Received(1).RegisterOrUpdate(jobId, flowId, "cron", "0 * * * *");
+        await server.ScheduleStateStore.Received(1).SaveAsync(Arg.Is<FlowScheduleState>(s => !s.IsPaused && s.CronOverride == null));
+    }
+
+    /// <summary>
     /// 500 ON MALFORMED INPUT. The cron endpoint calls <c>TryGetProperty</c> / <c>GetString</c> on
     /// whatever JSON arrives: a non-object body or a non-string <c>cronExpression</c> throws
     /// <see cref="InvalidOperationException"/>, and malformed JSON throws <c>JsonException</c>.

@@ -1423,14 +1423,27 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var existing = await scheduleStateStore.GetAsync(jobId);
-            var cronExpr = existing?.CronOverride ?? ExtractCronExpression(flow.ManifestJson, triggerKey);
-            if (cronExpr is null)
+
+            // An override persisted by an older version may not parse (the cron endpoint did not validate it).
+            // Fall back to the manifest cron and clear the override — what startup sync does for the same row —
+            // instead of failing every Resume with a 500 until someone PUTs a valid expression.
+            var cronOverride = existing?.CronOverride;
+            if (cronOverride is not null && !Schedules.CronExpressionValidator.IsValid(cronOverride))
+            {
+                cronOverride = null;
+            }
+
+            var cronExpr = cronOverride ?? ExtractCronExpression(flow.ManifestJson, triggerKey);
+            if (cronExpr is null || !Schedules.CronExpressionValidator.IsValid(cronExpr))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response,new { error = "Cron expression not found for this trigger." });
+                await WriteJsonAsync(http.Response,new { error = "No valid cron expression found for this trigger." });
                 return;
             }
 
+            // Register first, persist second (same order as the cron endpoint): a runtime that still rejects the
+            // expression leaves the stored state untouched.
+            triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, cronExpr);
             await scheduleStateStore.SaveAsync(new FlowScheduleState
             {
                 JobId = jobId,
@@ -1438,9 +1451,8 @@ public static class DashboardServiceCollectionExtensions
                 FlowName = flow.Name,
                 TriggerKey = triggerKey,
                 IsPaused = false,
-                CronOverride = existing?.CronOverride
+                CronOverride = cronOverride
             });
-            triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, cronExpr);
             await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
         });
 
