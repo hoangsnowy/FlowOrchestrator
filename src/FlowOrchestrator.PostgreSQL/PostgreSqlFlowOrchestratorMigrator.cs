@@ -56,8 +56,16 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
         _runSearchIndexRequested = runSearchIndexRequested;
     }
 
-    /// <summary>The background build of the run-search index, if one was started; completes when it ends.</summary>
-    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
+    /// <summary>
+    /// The background (<c>CONCURRENTLY</c>) build of the run-search index started by <see cref="StartAsync"/>, or a
+    /// completed task when none was started. Completes when the build ends; it never faults (a failed build is
+    /// logged and retried on the next start).
+    /// </summary>
+    /// <remarks>
+    /// For code that runs the migrator outside a host (tests, the storage copy tool) and must not bulk-load
+    /// <c>flow_runs</c> while the build is still running.
+    /// </remarks>
+    public Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>Applies the schema; starts the background run-search index build when <c>pg_trgm</c> is available.</summary>
     /// <param name="cancellationToken">Host start-up cancellation.</param>

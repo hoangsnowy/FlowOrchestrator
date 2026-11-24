@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>$(FlowOrchestratorTargetFrameworks)</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>FlowOrchestrator.StorageMigration</PackageId>
+    <Description>Copies FlowOrchestrator storage (flow definitions, run history, outputs, schedules, signals, webhook logs) between SQL Server and PostgreSQL, with preflight checks, bulk-load paths and an order-independent content checksum. Library behind the flow-orchestrator storage copy tool (package FlowOrchestrator.Cli).</Description>
+    <PackageTags>flow;orchestration;workflow;storage;migration;sqlserver;postgresql</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FlowOrchestrator.SqlServer\FlowOrchestrator.SqlServer.csproj" />
+    <ProjectReference Include="..\FlowOrchestrator.PostgreSQL\FlowOrchestrator.PostgreSQL.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FlowOrchestrator.StorageMigration.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.StorageMigration.IntegrationTests" />
+  </ItemGroup>
+
+</Project>
