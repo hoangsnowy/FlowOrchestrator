@@ -109,13 +109,13 @@ public sealed class FlowDashboardAuthorizationOptions
         {
             if (AdditionalAuthenticationSchemes is not { Length: > 0 } configured)
                 return [];
-            var schemes = new List<string>(configured.Length);
-            foreach (var scheme in configured.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => r.Trim()))
-            {
-                if (!string.Equals(scheme, AuthenticationScheme, StringComparison.Ordinal) && !schemes.Contains(scheme, StringComparer.Ordinal))
-                    schemes.Add(scheme);
-            }
-            return schemes;
+            // Startup-only: one LINQ query is clearer than a loop and its allocations do not matter here.
+            return configured
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(r => r.Trim())
+                .Where(scheme => !string.Equals(scheme, AuthenticationScheme, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
         }
     }
 
