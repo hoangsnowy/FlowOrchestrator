@@ -128,6 +128,21 @@ public sealed partial class FlowOrchestratorEngine
     private async Task<bool> HasInFlightWorkAsync(Guid runId)
     {
         var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
+        return await HasInFlightWorkAsync(runId, statuses).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Snapshot form of <see cref="HasInFlightWorkAsync(Guid)"/>: decides against a status map the caller
+    /// already read, so a completion gate can take every one of its checks on the same snapshot.
+    /// </summary>
+    /// <param name="runId">The run being inspected.</param>
+    /// <param name="statuses">Every status row in the run, as the caller just read it.</param>
+    /// <remarks>
+    /// Two store reads (claims, ledger) plus O(n) walks over the map; the claim and ledger reads follow the
+    /// status read, so a key claimed or dispatched in between reads as in flight — the conservative side.
+    /// </remarks>
+    private async Task<bool> HasInFlightWorkAsync(Guid runId, IReadOnlyDictionary<string, StepStatus> statuses)
+    {
         if (statuses.Values.Any(IsInFlight))
         {
             return true;
@@ -186,6 +201,22 @@ public sealed partial class FlowOrchestratorEngine
             return;
         }
 
+        await CompleteActiveRunAsync(runId, status).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Moves a still-<c>Running</c> run to <paramref name="status"/> and, when this call won that
+    /// transition, publishes <see cref="RunCompletedEvent"/>. Performs no in-flight check of its own.
+    /// </summary>
+    /// <param name="runId">The run to complete.</param>
+    /// <param name="status">The terminal run status.</param>
+    /// <remarks>
+    /// Callers must have established on a fresh snapshot that nothing is in flight —
+    /// <see cref="TryCompleteRunAsync"/> does it with <see cref="HasInFlightWorkAsync(Guid)"/>, the graph
+    /// continuation with its own single-snapshot gate.
+    /// </remarks>
+    private async Task CompleteActiveRunAsync(Guid runId, string status)
+    {
         // Idempotent, race-safe completion: only the call that actually transitions the run out of
         // Running publishes the lifecycle event and bumps telemetry. Collapses the race between the
         // graph continuation and the periodic timeout sweep (single- or multi-instance) without a

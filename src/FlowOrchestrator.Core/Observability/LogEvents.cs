@@ -115,4 +115,10 @@ public static class LogEvents
     /// too; the step stays <c>Running</c> with nothing queued.
     /// </summary>
     public static readonly EventId RetryRestoreFailed = new(3014, nameof(RetryRestoreFailed));
+
+    /// <summary>
+    /// A graph continuation went round more passes than the manifest can need without converging, and
+    /// left the run open rather than complete it while steps were still ready or owed a skip row.
+    /// </summary>
+    public static readonly EventId ContinuationPassLimitReached = new(3015, nameof(ContinuationPassLimitReached));
 }

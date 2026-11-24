@@ -16,75 +16,92 @@ namespace FlowOrchestrator.Core.Execution;
 /// </summary>
 public sealed partial class FlowOrchestratorEngine
 {
+    /// <summary>
+    /// Drives the run forward after <paramref name="step"/> reached a status: cascade-skips blocked
+    /// steps, advances parked loops, evaluates <c>When</c> clauses, dispatches every ready step, and —
+    /// when nothing is left to do — completes the run.
+    /// </summary>
+    /// <param name="ctx">Execution context of the step whose completion triggered this continuation.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="step">The step that just reached a status; used for loop-event attribution.</param>
+    /// <param name="result">The step's result; its <see cref="IStepResult.DelayNextStep"/> delays the dependents.</param>
+    /// <remarks>
+    /// <para>
+    /// The body runs in passes until a fixpoint. One pass is: blocked-step cascade-skip, loop advance,
+    /// then ready-step <c>When</c>-evaluation and dispatch. A <c>When</c>-skip writes a status row that
+    /// can block a dependent (which then needs a cascade-skip row of its own, or the loop iteration it
+    /// belongs to never settles) or unblock one, so a pass that skipped anything is followed by another
+    /// pass on the re-read map. Before this the blocked pass ran once, ahead of the <c>When</c> loop, so
+    /// the dependents of a <c>When</c>-skipped step never got a row.
+    /// </para>
+    /// <para>
+    /// The completion gate decides on ONE status snapshot: nothing in flight, no claim or dispatch-ledger
+    /// row without a status row, and — the part that closes the premature-completion race — no step the
+    /// planner reports ready or blocked on that same snapshot. A parallel branch completing on another
+    /// worker writes its terminal row and only then starts its own continuation. If the gate's snapshot
+    /// already holds that row, a join it unlocked is ready here, and this continuation goes round again
+    /// and dispatches it itself; the ledger absorbs the other worker's duplicate attempt. If the snapshot
+    /// does not hold the row, the branch reads as in flight and this gate stays open, and the other
+    /// worker's continuation — whose first read follows both terminal writes — sees the join ready.
+    /// Either way the join is dispatched before anyone can close the run.
+    /// </para>
+    /// <para>
+    /// <b>Complexity per step completion.</b> Each pass is O(n) in the status-map size for the planner's
+    /// evaluation — the same order as the status read it evaluates, which already returns every row —
+    /// plus O(1) store calls per ready or blocked step. Extra passes happen only when the previous one
+    /// wrote a skip row, so they are bounded by the depth of the skip cascade one completion triggers;
+    /// the common completion runs exactly one pass. On the non-enqueue path the gate costs three reads
+    /// (statuses, claims, ledger) plus one evaluation of the snapshot it already holds. The previous gate
+    /// cost five reads (statuses and claims, then statuses, claims and ledger again inside
+    /// <c>TryCompleteRunAsync</c>), so the race fix saves two round-trips per completion that reaches it.
+    /// </para>
+    /// </remarks>
     private async Task RunGraphContinuationAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, IStepResult result)
     {
         var statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
-        var evaluation = _graphPlanner.Evaluate(flow, statuses);
+        FlowGraphEvaluation? evaluation = null;
 
-        // Tracks whether this pass actually wrote a status row. The re-read below exists to observe
-        // those writes; when nothing was skipped — the common case, since most completions unblock
-        // no dependents at all — the map in hand is already current and re-fetching it costs a full
-        // round-trip returning every step row in the run, on every step completion.
-        var skippedAny = false;
-
-        foreach (var blockedStepKey in evaluation.BlockedStepKeys)
-        {
-            if (!await _runtimeStore.TryClaimStepAsync(ctx.RunId, blockedStepKey).ConfigureAwait(false))
-            {
-                continue;
-            }
-
-            skippedAny = true;
-
-            var metadata = flow.Manifest.Steps.FindStep(blockedStepKey);
-            await _runtimeStore.RecordSkippedStepAsync(
-                ctx.RunId,
-                blockedStepKey,
-                metadata?.Type ?? "Unknown",
-                StepSkipReasons.PrerequisitesUnmet).ConfigureAwait(false);
-
-            if (_observabilityOptions.EnableOpenTelemetry)
-            {
-                _telemetry.StepSkippedCounter.Add(
-                    1,
-                    new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                    new KeyValuePair<string, object?>("step_key", blockedStepKey),
-                    new KeyValuePair<string, object?>("reason", "prerequisites_unmet"));
-            }
-        }
-
-        if (skippedAny)
-        {
-            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
-        }
-
-        // Loop advance: the step that just finished may have been the last outstanding child of an
-        // enclosing loop — which either frees a concurrency slot for the next iteration, or, when no
-        // iteration is left, settles the loop. Both run BEFORE evaluating the graph so the steps
-        // they unblock become ready in this same pass. Runs after the blocked-step pass above,
-        // because a child skipped there is exactly what can complete the last iteration.
-        var (admitted, settledAny) = await AdvanceLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false);
-        if (admitted > 0 || settledAny)
-        {
-            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
-        }
-
-        evaluation = _graphPlanner.Evaluate(flow, statuses);
-
-        var termination = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
+        string? termination = null;
+        var terminationResolved = false;
 
         // Admitted iterations count as enqueued work: they hold a dispatch-ledger row but no status
-        // row yet, so the completion gate at the bottom of this method cannot see them and would
-        // close the run out from under them.
-        var enqueued = admitted;
-        if (termination is null)
+        // row yet, so this continuation must not take a completion decision under them.
+        var enqueued = 0;
+
+        for (var pass = 1; ; pass++)
         {
-            // When-evaluation may skip steps and unblock new dependents; loop until the
-            // ready set is stable (no further skips produced).
-            var safetyCounter = 0;
-            while (true)
+            evaluation ??= _graphPlanner.Evaluate(flow, statuses);
+
+            // Re-read only when this pass actually wrote a status row: most completions unblock no
+            // dependents at all, and re-fetching costs a round-trip returning every step row in the run.
+            if (await SkipBlockedStepsAsync(ctx, flow, evaluation.BlockedStepKeys).ConfigureAwait(false))
             {
-                var anyWhenSkipped = false;
+                statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+            }
+
+            // Loop advance: the step that just finished — or one skipped by this or an earlier pass — may
+            // have been the last outstanding child of an enclosing loop, which either frees a concurrency
+            // slot for the next iteration or settles the loop. Runs before the ready-step evaluation so
+            // the steps it unblocks become ready in this same pass, and after the blocked pass because a
+            // child skipped there is exactly what can complete the last iteration.
+            var (admitted, settledAny) = await AdvanceLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false);
+            enqueued += admitted;
+            if (admitted > 0 || settledAny)
+            {
+                statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+            }
+
+            evaluation = _graphPlanner.Evaluate(flow, statuses);
+
+            if (!terminationResolved)
+            {
+                termination = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
+                terminationResolved = true;
+            }
+
+            var anyWhenSkipped = false;
+            if (termination is null)
+            {
                 foreach (var readyStepKey in evaluation.ReadyStepKeys)
                 {
                     var metadata = flow.Manifest.Steps.FindStep(readyStepKey);
@@ -114,49 +131,127 @@ public sealed partial class FlowOrchestratorEngine
                         enqueued++;
                     }
                 }
+            }
 
-                if (!anyWhenSkipped) break;
-                if (++safetyCounter > flow.Manifest.Steps.Count + 4) break;
-
+            if (anyWhenSkipped && !PassLimitReached(flow, pass))
+            {
+                // The skip rows just written can block dependents (cascade-skipped next pass), unblock
+                // others, or complete a loop iteration: go round on a fresh map.
                 statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+                evaluation = null;
+                continue;
+            }
 
-                // A When-skip recorded just above may have been the LAST outstanding child of an
-                // enclosing loop — and it happened after the advance pass at the top of this method,
-                // with no later step completion to re-trigger it. Advance here so the next iteration
-                // is admitted (or the loop's downstream steps become ready) in the next sweep
-                // instead of parking the run.
-                var (whenAdmitted, whenSettled) = await AdvanceLoopsAsync(ctx, flow, step, statuses).ConfigureAwait(false);
-                enqueued += whenAdmitted;
-                if (whenAdmitted > 0 || whenSettled)
+            if (enqueued > 0)
+            {
+                return;
+            }
+
+            // Completion gate — every check below reads the same snapshot.
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+            if (await HasInFlightWorkAsync(ctx.RunId, statuses).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            // A step the planner reports ready on this snapshot (dependencies terminal, no status row, and
+            // no ledger row — the in-flight check just returned for a dispatched one) or blocked (owed its
+            // cascade-skip row) is work nobody has done yet. Do it here rather than close the run: the
+            // continuation that unlocked it may have read an older map and walked away. Under a
+            // cancel/timeout verdict ready steps are never dispatched, so they do not hold the run open.
+            evaluation = _graphPlanner.Evaluate(flow, statuses);
+            if (evaluation.BlockedStepKeys.Count > 0 || (termination is null && evaluation.ReadyStepKeys.Count > 0))
+            {
+                if (PassLimitReached(flow, pass))
                 {
-                    statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+                    // Safety net against a cascade that does not converge. Leave the run open rather than
+                    // close it under unfinished work; recovery re-dispatches ready steps.
+                    EngineLog.ContinuationPassLimitReached(_logger, ctx.RunId, pass);
+                    return;
                 }
 
-                evaluation = _graphPlanner.Evaluate(flow, statuses);
+                continue;
+            }
+
+            // Single source of truth — same classifier that FlowRunRecoveryHostedService uses.
+            termination ??= RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
+
+            await CompleteActiveRunAsync(ctx.RunId, termination).ConfigureAwait(false);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> once <paramref name="pass"/> exceeds the number of passes a
+    /// converging continuation could need: one per step in the manifest, across every scope, plus slack.
+    /// </summary>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="pass">The 1-based number of the pass that just finished.</param>
+    /// <remarks>
+    /// Every extra pass is caused by a status row the previous one wrote, so a converging cascade needs
+    /// at most one pass per dependency level. The deep count walks nested scopes and is only taken once
+    /// the cheap top-level bound is exceeded, so the common completion never pays for it.
+    /// </remarks>
+    private static bool PassLimitReached(IFlowDefinition flow, int pass)
+    {
+        const int slack = 4;
+        return pass > flow.Manifest.Steps.Count + slack && pass > CountStepsDeep(flow.Manifest.Steps) + slack;
+
+        static int CountStepsDeep(StepCollection steps)
+        {
+            var count = 0;
+            foreach (var metadata in steps.Values)
+            {
+                count++;
+                if (metadata is IScopedStep scoped)
+                {
+                    count += CountStepsDeep(scoped.Steps);
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// Records a <see cref="StepStatus.Skipped"/> row with <see cref="StepSkipReasons.PrerequisitesUnmet"/>
+    /// for every blocked step whose claim this worker wins.
+    /// </summary>
+    /// <param name="ctx">Execution context of the run.</param>
+    /// <param name="flow">The flow being executed.</param>
+    /// <param name="blockedStepKeys">Steps whose dependencies reached a terminal status they do not accept.</param>
+    /// <returns><see langword="true"/> when at least one skip row was written.</returns>
+    /// <remarks>O(1) store calls per blocked step: a claim, plus a skip write when the claim is won.</remarks>
+    private async Task<bool> SkipBlockedStepsAsync(IExecutionContext ctx, IFlowDefinition flow, IReadOnlyList<string> blockedStepKeys)
+    {
+        var skippedAny = false;
+        foreach (var blockedStepKey in blockedStepKeys)
+        {
+            if (!await _runtimeStore.TryClaimStepAsync(ctx.RunId, blockedStepKey).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            skippedAny = true;
+
+            var metadata = flow.Manifest.Steps.FindStep(blockedStepKey);
+            await _runtimeStore.RecordSkippedStepAsync(
+                ctx.RunId,
+                blockedStepKey,
+                metadata?.Type ?? "Unknown",
+                StepSkipReasons.PrerequisitesUnmet).ConfigureAwait(false);
+
+            if (_observabilityOptions.EnableOpenTelemetry)
+            {
+                _telemetry.StepSkippedCounter.Add(
+                    1,
+                    new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
+                    new KeyValuePair<string, object?>("step_key", blockedStepKey),
+                    new KeyValuePair<string, object?>("reason", "prerequisites_unmet"));
             }
         }
 
-        if (enqueued > 0)
-        {
-            return;
-        }
-
-        statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
-        if (statuses.Values.Any(IsInFlight))
-        {
-            return;
-        }
-
-        var claimed = await _runtimeStore.GetClaimedStepKeysAsync(ctx.RunId).ConfigureAwait(false);
-        if (AnyMissingStatus(claimed, statuses))
-        {
-            return;
-        }
-
-        // Single source of truth — same classifier that FlowRunRecoveryHostedService uses.
-        termination ??= RunTerminationClassifier.ComputeTerminalStatus(flow, statuses);
-
-        await TryCompleteRunAsync(ctx.RunId, termination).ConfigureAwait(false);
+        return skippedAny;
     }
 
     /// <summary>

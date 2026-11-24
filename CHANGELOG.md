@@ -150,6 +150,21 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   `StepRetryOutcome.NotFailed`), a retry that loses the race gets `409` (`Conflict`), and
   `IFlowOrchestrator.RetryStepAsync` returns a `StepRetryResult` instead of the step's result. The accepted
   response body is unchanged. See [Migrating to 2.0](docs/articles/migrating-to-2.0.md#manual-retry-is-dispatched-and-accepts-only-a-failed-step).
+- **A run is no longer completed while a parallel join is ready but not yet dispatched.** Two branches
+  finishing at the same moment on different workers: the first continuation's completion gate re-read the
+  statuses, saw the second branch already terminal, found nothing in flight and closed the run, while the
+  second branch's continuation was still about to dispatch the join (observed 1 in 1,000 runs across 3
+  replicas in the stress harness). The gate now takes every check on one status snapshot and also asks the
+  graph planner about that snapshot: a step that is ready (or owed a cascade-skip row) keeps the run open,
+  and the gate dispatches it itself — the dispatch ledger absorbs the other worker's duplicate. The gate
+  also does two fewer store reads per completion than before (EventId 3015 if a continuation ever fails
+  to converge).
+- **Dependents of a `When`-skipped step are cascade-skipped.** The blocked-step pass ran once, before the
+  `When` evaluation, so a step needing `Succeeded` from a `When`-skipped step got no row at all: at top
+  level a `Skipped`-accepting step after it was silently dropped and the run closed `Skipped`; inside a
+  `ForEach` the iteration never settled and the run stayed `Running` for ever. The continuation now runs
+  the blocked-step, loop-advance and `When` passes to a fixpoint. Cascade-skips are transitive as a result
+  (`a` fails → `b` and `c` both `Skipped`, where `c` used to have no row); a retry still resets all of them.
 
 ### Security
 
