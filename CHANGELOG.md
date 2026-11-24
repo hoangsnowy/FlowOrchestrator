@@ -8,12 +8,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- **A signal delivered by a client that disconnects no longer strands the waiting step.** With
-  OpenTelemetry on, `FlowSignalDispatcher` read the waiter for the wait-time metric with the request
-  token *after* the signal was durably delivered. SQL Server and PostgreSQL honour that token, so an
-  aborted request threw there, before the resume dispatch, and the `WaitForSignal` step stayed parked
-  until its timeout (up to 24 h). The read now uses `CancellationToken.None`, like the dispatch itself.
-  Same failure class as 1.26.1 and #188. Found by the 2.0 stress harness; fixed on main in #270.
+- **A signal delivered by a client that disconnects no longer strands the waiting step.** The dashboard
+  signal endpoint passes the request's abort token to `FlowSignalDispatcher`, which used it in two places
+  *after* the signal was durably delivered:
+  - the delivery write itself. SqlClient reports a cancel that lands while the `UPDATE` is in flight by
+    throwing even when the statement has committed, so on **SQL Server** the waiter was marked delivered
+    while the resume dispatch was never sent, and every retry of the signal was answered 409 "already
+    delivered";
+  - with OpenTelemetry on, the waiter read for the wait-time metric (SQL Server and PostgreSQL).
+
+  Either way the `WaitForSignal` step stayed parked until its timeout (up to 24 h). Both now use
+  `CancellationToken.None`, like the resume dispatch. Measured with the 2.0 stress harness (client
+  disconnects at random points, then retries): SQL Server + Hangfire 127 of 630 runs stranded before,
+  **0** after; the "unhandled exception" error logs from those aborts are gone too. Same failure class
+  as 1.26.1 and #188.
 
 ## [1.34.4] - 2026-11-23
 
