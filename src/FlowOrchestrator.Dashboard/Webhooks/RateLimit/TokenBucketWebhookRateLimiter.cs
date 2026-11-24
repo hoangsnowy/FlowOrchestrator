@@ -19,12 +19,18 @@ namespace FlowOrchestrator.Dashboard.Webhooks.RateLimit;
 public sealed class TokenBucketWebhookRateLimiter : IWebhookRateLimiter, IDisposable
 {
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new();
-    private bool _disposed;
+
+    // 0 = live, 1 = disposed. Dispose() runs on the host's shutdown thread while requests are still in
+    // TryAcquire, so every read goes through Volatile.Read (IsDisposed) and the write is an Interlocked
+    // exchange; a plain bool field read twice in one method may legally be read once.
+    private int _disposed;
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <inheritdoc/>
     public RateLimitDecision TryAcquire(string key, WebhookRateLimitOptions options)
     {
-        if (!options.IsEnabled || _disposed)
+        if (!options.IsEnabled || IsDisposed)
             return new RateLimitDecision(true, TimeSpan.Zero);
 
         var (tokenLimit, tokensPerPeriod) = Parameters(options);
@@ -53,9 +59,14 @@ public sealed class TokenBucketWebhookRateLimiter : IWebhookRateLimiter, IDispos
             {
                 lease = bucket.Limiter.AttemptAcquire(permitCount: 1);
             }
-            catch (ObjectDisposedException) when (attempt == 0 && !_disposed)
+            catch (ObjectDisposedException) when (attempt == 0 || IsDisposed)
             {
-                continue;
+                // Dispose() won the race after the entry check: fail open exactly like that check,
+                // instead of letting ObjectDisposedException escape into the request during shutdown.
+                if (IsDisposed)
+                    return new RateLimitDecision(true, TimeSpan.Zero);
+
+                continue;   // a concurrent parameter change disposed the bucket this call read; re-read once
             }
 
             using (lease)
@@ -86,8 +97,7 @@ public sealed class TokenBucketWebhookRateLimiter : IWebhookRateLimiter, IDispos
     /// <summary>Disposes every internal limiter; further calls are no-ops.</summary>
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         foreach (var bucket in _buckets.Values)
         {
             DisposeQuietly(bucket.Limiter);
