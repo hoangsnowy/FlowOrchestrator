@@ -225,6 +225,39 @@ public sealed class DashboardSurfaceAuditTests
     }
 
     /// <summary>
+    /// With host-wide replay protection (<c>UseReplayProtection(300)</c>, as shown in triggers.md) a
+    /// body-only scheme such as GitHub — which sends no timestamp header — must be accepted: the gate keys
+    /// it on the signed body hash, as <c>ReplayProtectionGate</c>'s own remarks describe, instead of
+    /// demanding an (unsigned, attacker-controlled) timestamp header.
+    /// </summary>
+    [Fact]
+    public async Task Host_wide_replay_protection_accepts_GitHub_delivery_that_carries_no_timestamp_header()
+    {
+        // Arrange
+        using var server = new DashboardTestServer(o => o.UseWebhookSecurity(s => s.UseReplayProtection(toleranceSeconds: 300)));
+        var id = Guid.NewGuid();
+        const string key = "ghs_cookbook_secret";
+        // Inputs exactly as the docs' GitHub cookbook entry (minus the IP preset).
+        RegisterEnabled(server, WebhookFlow(id, new Dictionary<string, object?>
+        {
+            ["webhookSlug"] = "github-events",
+            ["webhookHmacKey"] = key,
+            ["webhookSignatureScheme"] = "GitHub",
+            ["webhookNonceHeader"] = "X-GitHub-Delivery",
+        }));
+        var body = Encoding.UTF8.GetBytes("{\"zen\":\"Keep it logically awesome.\"}");
+        using var request = JsonPost("/flows/api/webhook/github-events", body);
+        request.Headers.Add("X-Hub-Signature-256", GitHubSignature(key, body));
+        request.Headers.Add("X-GitHub-Delivery", Guid.NewGuid().ToString());
+
+        // Act
+        using var response = await server.Client.SendAsync(request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>
     /// When the signature did NOT verify (Audit mode lets the delivery through the pipeline), the legacy
     /// shared-secret check still applies — skipping it is reserved for a verified signature.
     /// </summary>

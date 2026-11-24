@@ -287,6 +287,22 @@ Two complementary defences:
   `webhookNonceHeader` (e.g. `X-GitHub-Delivery`) or
   `SHA-256(timestamp || body)` when no header is supplied.
 
+Once a signature scheme has verified the request, only signed material counts,
+because a replayer chooses every unsigned header:
+
+- **Signed timestamp** (Stripe, Slack, Zoom, Calendly, Mailgun): the skew window
+  applies to the signed timestamp and the replay key is derived from it (or from
+  the signed token). Unsigned timestamp / nonce headers are ignored.
+- **Body-only signature** (GitHub, Shopify, Linear, Dropbox, Bitbucket,
+  Atlassian, Teams, …): no timestamp header is required — these publishers send
+  none — and any unsigned one is ignored. The replay key is `SHA-256(body)`, held
+  for `2 × webhookReplayToleranceSeconds` from the server clock: a byte-identical
+  delivery inside that window is rejected `409`, and after it no replay protection
+  is possible without a signed timestamp. Note that a publisher's own "redeliver"
+  of the same payload inside the window is rejected too.
+- **No signature**: a timestamp header is required (`409 missing_timestamp`
+  otherwise) and the explicit `webhookNonceHeader`, when configured, is the key.
+
 The `WebhookReplayJanitor` background service purges expired entries
 every minute. For multi-replica deployments use the SQL Server or
 PostgreSQL backend (see [Storage](storage.md#webhook-hardening-backends-v125))
