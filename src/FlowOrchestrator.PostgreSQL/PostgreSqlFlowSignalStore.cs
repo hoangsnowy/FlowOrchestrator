@@ -10,6 +10,13 @@ namespace FlowOrchestrator.PostgreSQL;
 /// </summary>
 public sealed class PostgreSqlFlowSignalStore : IFlowSignalStore
 {
+    /// <summary>
+    /// Upper bound on update / re-read rounds in <see cref="DeliverSignalAsync"/>. Each extra round only
+    /// happens when a concurrent delivery took the oldest waiter first, so it is bounded by the number of
+    /// waiters registered for one signal name on one run.
+    /// </summary>
+    private const int MaxDeliveryAttempts = 8;
+
     private readonly string _connectionString;
 
     public PostgreSqlFlowSignalStore(string connectionString)
@@ -51,61 +58,77 @@ public sealed class PostgreSqlFlowSignalStore : IFlowSignalStore
         CancellationToken ct = default)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
+        var args = new { RunId = runId, SignalName = signalName, PayloadJson = payloadJson };
 
-        // Atomic conditional update; RETURNING gives us the delivered row's identity. The CTE
-        // narrows to the single oldest waiter so concurrent deliveries can never race past each other.
-        var delivered = await conn.QueryFirstOrDefaultAsync<DeliveryRow>(
-            new CommandDefinition(
-                """
-                WITH target AS (
-                    SELECT run_id, step_key
+        // Signal names match case-insensitively, like InMemoryFlowSignalStore (OrdinalIgnoreCase) and
+        // SQL Server (case-insensitive collation). lower() on the column cannot seek
+        // ix_flow_signal_waiters_run_id_signal_name past its run_id prefix, which is all it needs: every
+        // lookup pins run_id first and a run has a handful of waiters, so the signal_name predicate
+        // filters a few rows of an index range scan.
+        for (var attempt = 0; attempt < MaxDeliveryAttempts; attempt++)
+        {
+            // Atomic conditional update; RETURNING gives us the delivered row's identity. FOR UPDATE (no
+            // SKIP LOCKED) makes a concurrent delivery of the same waiter wait for the lock holder, like
+            // SQL Server. When the holder commits, PostgreSQL re-checks the row, finds it delivered and —
+            // because of LIMIT 1 — returns no row instead of moving on to the next waiter; the follow-up
+            // read below sorts that out. SKIP LOCKED used to report a locked waiter as missing (NotFound).
+            var delivered = await conn.QueryFirstOrDefaultAsync<DeliveryRow>(
+                new CommandDefinition(
+                    """
+                    WITH target AS (
+                        SELECT run_id, step_key
+                        FROM flow_signal_waiters
+                        WHERE run_id = @RunId
+                          AND lower(signal_name) = lower(@SignalName)
+                          AND delivered_at IS NULL
+                        ORDER BY created_at
+                        LIMIT 1
+                        FOR UPDATE
+                    )
+                    UPDATE flow_signal_waiters w
+                    SET delivered_at = NOW(),
+                        payload_json = @PayloadJson
+                    FROM target
+                    WHERE w.run_id = target.run_id AND w.step_key = target.step_key
+                    RETURNING w.step_key AS StepKey, w.delivered_at AS DeliveredAt;
+                    """,
+                    args,
+                    cancellationToken: ct)).ConfigureAwait(false);
+
+            if (delivered is { StepKey: { } key, DeliveredAt: { } deliveredAt })
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.Delivered, key, deliveredAt);
+            }
+
+            // No update happened — distinguish missing waiter from already-delivered waiter. An
+            // undelivered row sorts first: it means the update lost a race for an older waiter that a
+            // concurrent delivery took, so this delivery tries the next waiter instead of giving up.
+            var existing = await conn.QueryFirstOrDefaultAsync<DeliveryRow>(
+                new CommandDefinition(
+                    """
+                    SELECT step_key AS StepKey, delivered_at AS DeliveredAt
                     FROM flow_signal_waiters
-                    WHERE run_id = @RunId
-                      AND signal_name = @SignalName
-                      AND delivered_at IS NULL
-                    ORDER BY created_at
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE flow_signal_waiters w
-                SET delivered_at = NOW(),
-                    payload_json = @PayloadJson
-                FROM target
-                WHERE w.run_id = target.run_id AND w.step_key = target.step_key
-                RETURNING w.step_key AS StepKey, w.delivered_at AS DeliveredAt;
-                """,
-                new
-                {
-                    RunId = runId,
-                    SignalName = signalName,
-                    PayloadJson = payloadJson
-                },
-                cancellationToken: ct)).ConfigureAwait(false);
+                    WHERE run_id = @RunId AND lower(signal_name) = lower(@SignalName)
+                    ORDER BY (delivered_at IS NOT NULL), created_at
+                    LIMIT 1;
+                    """,
+                    args,
+                    cancellationToken: ct)).ConfigureAwait(false);
 
-        if (delivered is { StepKey: { } key, DeliveredAt: { } deliveredAt })
-        {
-            return new SignalDeliveryResult(SignalDeliveryStatus.Delivered, key, deliveredAt);
+            if (existing is null)
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
+            }
+
+            if (existing.DeliveredAt is { } prior)
+            {
+                return new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, existing.StepKey, prior);
+            }
         }
 
-        // No update happened — distinguish missing waiter from already-delivered waiter.
-        var existing = await conn.QueryFirstOrDefaultAsync<DeliveryRow>(
-            new CommandDefinition(
-                """
-                SELECT step_key AS StepKey, delivered_at AS DeliveredAt
-                FROM flow_signal_waiters
-                WHERE run_id = @RunId AND signal_name = @SignalName
-                ORDER BY created_at
-                LIMIT 1;
-                """,
-                new { RunId = runId, SignalName = signalName },
-                cancellationToken: ct)).ConfigureAwait(false);
-
-        if (existing is { DeliveredAt: { } prior })
-        {
-            return new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, existing.StepKey, prior);
-        }
-
-        return new SignalDeliveryResult(SignalDeliveryStatus.NotFound, null, null);
+        // Every attempt lost a race to a concurrent delivery of a different waiter of this signal.
+        // Report what is there now rather than spin; the caller treats it like a duplicate delivery.
+        return new SignalDeliveryResult(SignalDeliveryStatus.AlreadyDelivered, null, null);
     }
 
     public async ValueTask<FlowSignalWaiter?> GetWaiterAsync(

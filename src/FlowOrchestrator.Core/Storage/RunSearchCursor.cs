@@ -28,6 +28,13 @@ public readonly record struct RunSearchCursor(DateTimeOffset StartedAt, Guid Id)
     /// <summary>Upper bound on the length of an encoded cursor; longer input is rejected without decoding.</summary>
     public const int MaxEncodedLength = 64;
 
+    /// <summary>
+    /// Sorts runs into list order with .NET <see cref="Guid"/> ordering for the tie-break: the order
+    /// <see cref="Precedes"/> pages by. Used by the default <see cref="IFlowRunStore.SearchRunsAsync"/>.
+    /// </summary>
+    internal static readonly IComparer<FlowRunRecord> ListOrder = Comparer<FlowRunRecord>.Create(
+        static (a, b) => a.StartedAt != b.StartedAt ? b.StartedAt.CompareTo(a.StartedAt) : a.Id.CompareTo(b.Id));
+
     /// <summary>Creates the cursor that continues after <paramref name="run"/>.</summary>
     /// <param name="run">The last row of a page.</param>
     /// <returns>The keyset position of that row.</returns>

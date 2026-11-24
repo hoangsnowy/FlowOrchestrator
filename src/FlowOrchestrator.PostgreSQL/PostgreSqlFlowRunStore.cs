@@ -290,7 +290,9 @@ public sealed class PostgreSqlFlowRunStore :
             LIMIT @Take OFFSET @Skip
             """;
 
-        var parameters = new { FlowId = flowId, Status = status, Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom?.ToUniversalTime(), StartedTo = startedTo?.ToUniversalTime() };
+        // The status filter is case-insensitive on every provider; canonicalising the parameter keeps it an
+        // equality on the bare column so ix_flow_runs_flow_id_status_started_at still serves it.
+        var parameters = new { FlowId = flowId, Status = status is null ? null : RunStatusNames.Canonicalize(status), Skip = skip, Take = take, SearchLike = searchLike, StartedFrom = startedFrom?.ToUniversalTime(), StartedTo = startedTo?.ToUniversalTime() };
         var totalCount = 0;
         var rows = (await conn.QueryAsync<FlowRunRecord, int, FlowRunRecord>(
             pageSql,
@@ -822,7 +824,7 @@ public sealed class PostgreSqlFlowRunStore :
                 RunId = runId,
                 FlowId = flowId,
                 TriggerKey = triggerKey,
-                IdempotencyKey = idempotencyKey,
+                IdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey),
                 TimeoutAtUtc = timeoutAtUtc
             });
     }
@@ -865,6 +867,12 @@ public sealed class PostgreSqlFlowRunStore :
         return affected > 0;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Does not apply to a run whose cancel was already requested: a user cancel that landed between the
+    /// caller's deadline check and this write wins, so the run stays <c>Cancelled</c> and a later retry's
+    /// <see cref="ExtendDeadlineAsync"/> cannot clear it (it only un-latches timeout-induced cancels).
+    /// </remarks>
     public async Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
@@ -877,6 +885,7 @@ public sealed class PostgreSqlFlowRunStore :
                 cancel_requested_at_utc = COALESCE(cancel_requested_at_utc, NOW())
             WHERE run_id = @RunId
               AND timed_out_at_utc IS NULL
+              AND cancel_requested = FALSE
             """,
             new { RunId = runId, Reason = reason });
 
@@ -909,7 +918,7 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         return await conn.ExecuteScalarAsync<Guid?>(
             """
@@ -954,7 +963,7 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         var affected = await conn.ExecuteAsync(
             """

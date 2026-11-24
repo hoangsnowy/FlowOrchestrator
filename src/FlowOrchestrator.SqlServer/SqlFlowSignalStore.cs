@@ -25,10 +25,12 @@ internal sealed class SqlFlowSignalStore : IFlowSignalStore
         CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connectionString);
+        // HOLDLOCK, UPDLOCK: see SqlFlowStore.SaveAsync — without them a concurrent first registration of
+        // the same (run, step) can race past the match probe into a PK violation.
         await conn.ExecuteAsync(
             new CommandDefinition(
                 """
-                MERGE [FlowSignalWaiters] AS target
+                MERGE [FlowSignalWaiters] WITH (HOLDLOCK, UPDLOCK) AS target
                 USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
                 ON target.RunId = source.RunId AND target.StepKey = source.StepKey
                 WHEN MATCHED THEN

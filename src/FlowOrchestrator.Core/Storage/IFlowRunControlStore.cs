@@ -28,11 +28,21 @@ public interface IFlowRunControlStore
     /// </summary>
     /// <returns><see langword="true"/> if the record was found and updated; <see langword="false"/> otherwise.</returns>
     /// <remarks>
+    /// <para>
+    /// Applies only while the timeout is not yet latched <b>and no cancel has been requested</b>: a user
+    /// cancel recorded first wins, so the run stays <c>Cancelled</c> and keeps its reason. Without that
+    /// guard a cancel landing between the caller's deadline check and this write was relabelled a timeout,
+    /// and a later retry's <see cref="ExtendDeadlineAsync"/> then cleared the user's cancel. When
+    /// <paramref name="reason"/> is <see langword="null"/>, an existing cancel reason is kept, falling back
+    /// to <c>"Run timed out."</c>.
+    /// </para>
+    /// <para>
     /// Invoked from two places: lazily by the engine when a step is dispatched after the deadline has
     /// passed, and proactively by the periodic timeout-enforcement hosted service
     /// (<c>FlowTimeoutEnforcementHostedService</c>). Also sets the cancellation latch so in-flight
     /// steps short-circuit on their next dispatch — a fresh execution window can be granted afterwards
     /// via <see cref="ExtendDeadlineAsync"/>.
+    /// </para>
     /// </remarks>
     Task<bool> MarkTimedOutAsync(Guid runId, string? reason);
 

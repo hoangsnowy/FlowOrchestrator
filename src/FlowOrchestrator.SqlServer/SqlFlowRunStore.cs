@@ -121,7 +121,7 @@ public sealed class SqlFlowRunStore :
             INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, InputJson, JobId, StartedAt)
             VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET());
 
-            MERGE FlowSteps AS target
+            MERGE FlowSteps WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
             ON target.RunId = source.RunId AND target.StepKey = source.StepKey
             WHEN MATCHED THEN
@@ -879,7 +879,7 @@ public sealed class SqlFlowRunStore :
             INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, ErrorMessage, EvaluationTraceJson, StartedAt, CompletedAt)
             VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Skipped', @Reason, @EvaluationTraceJson, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
 
-            MERGE FlowSteps AS target
+            MERGE FlowSteps WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
             ON target.RunId = source.RunId AND target.StepKey = source.StepKey
             WHEN MATCHED THEN
@@ -911,9 +911,11 @@ public sealed class SqlFlowRunStore :
     public async Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
     {
         await using var conn = new SqlConnection(_connectionString);
+        // HOLDLOCK, UPDLOCK: see SqlFlowStore.SaveAsync — keeps a concurrent first configure of one run
+        // from racing past the match probe into a PK violation.
         await conn.ExecuteAsync(
             """
-            MERGE FlowRunControls AS target
+            MERGE FlowRunControls WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId) AS source
             ON target.RunId = source.RunId
             WHEN MATCHED THEN
@@ -931,7 +933,7 @@ public sealed class SqlFlowRunStore :
                 RunId = runId,
                 FlowId = flowId,
                 TriggerKey = triggerKey,
-                IdempotencyKey = idempotencyKey,
+                IdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey),
                 TimeoutAtUtc = timeoutAtUtc
             });
     }
@@ -974,6 +976,12 @@ public sealed class SqlFlowRunStore :
         return affected > 0;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Does not apply to a run whose cancel was already requested: a user cancel that landed between the
+    /// caller's deadline check and this write wins, so the run stays <c>Cancelled</c> and a later retry's
+    /// <see cref="ExtendDeadlineAsync"/> cannot clear it (it only un-latches timeout-induced cancels).
+    /// </remarks>
     public async Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
     {
         await using var conn = new SqlConnection(_connectionString);
@@ -986,6 +994,7 @@ public sealed class SqlFlowRunStore :
                 CancelRequestedAtUtc = COALESCE(CancelRequestedAtUtc, SYSDATETIMEOFFSET())
             WHERE RunId = @RunId
               AND TimedOutAtUtc IS NULL
+              AND CancelRequested = 0
             """,
             new { RunId = runId, Reason = reason });
 
@@ -1018,7 +1027,7 @@ public sealed class SqlFlowRunStore :
     {
         await using var conn = new SqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         var runId = await conn.ExecuteScalarAsync<Guid?>(
             """
@@ -1065,7 +1074,7 @@ public sealed class SqlFlowRunStore :
     {
         await using var conn = new SqlConnection(_connectionString);
         var normalizedTriggerKey = triggerKey.Trim().ToLowerInvariant();
-        var normalizedIdempotencyKey = idempotencyKey.Trim().ToLowerInvariant();
+        var normalizedIdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey);
 
         // Same race and the same fix as TryClaimStepAsync: HOLDLOCK + UPDLOCK serialise concurrent
         // registrations of one key, and a duplicate-key error still means "someone else won".

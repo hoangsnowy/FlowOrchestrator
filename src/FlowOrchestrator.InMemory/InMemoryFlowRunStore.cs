@@ -120,6 +120,10 @@ public sealed class InMemoryFlowRunStore :
             StartedAt = startedAt
         };
 
+        // The SQL Server / PostgreSQL upserts leave EvaluationTraceJson untouched on a restart (and
+        // RecordSkippedStepAsync COALESCEs a null trace into the existing one), so carry it over instead
+        // of dropping it with the replaced record.
+        _steps.TryGetValue(key, out var previous);
         _steps[key] = new FlowStepRecord
         {
             RunId = runId,
@@ -132,7 +136,8 @@ public sealed class InMemoryFlowRunStore :
             Status = "Running",
             StartedAt = startedAt,
             CompletedAt = null,
-            AttemptCount = attempt
+            AttemptCount = attempt,
+            EvaluationTraceJson = previous?.EvaluationTraceJson
         };
 
         // Maintain the per-run secondary index so GetStepStatusesAsync and
@@ -860,16 +865,34 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(run?.Status);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// An upsert like the SQL Server MERGE / PostgreSQL <c>ON CONFLICT</c>: configuring an existing record
+    /// rewrites the flow, trigger, idempotency key and deadline but keeps its cancel and timeout latches,
+    /// so a cancel recorded before a late configure is not silently dropped.
+    /// </remarks>
     public Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
     {
-        _runControls[runId] = new FlowRunControlRecord
-        {
-            RunId = runId,
-            FlowId = flowId,
-            TriggerKey = triggerKey,
-            IdempotencyKey = idempotencyKey,
-            TimeoutAtUtc = timeoutAtUtc
-        };
+        var storedKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey);
+        _runControls.AddOrUpdate(
+            runId,
+            static (id, args) => new FlowRunControlRecord
+            {
+                RunId = id,
+                FlowId = args.flowId,
+                TriggerKey = args.triggerKey,
+                IdempotencyKey = args.storedKey,
+                TimeoutAtUtc = args.timeoutAtUtc
+            },
+            static (_, existing, args) =>
+            {
+                existing.FlowId = args.flowId;
+                existing.TriggerKey = args.triggerKey;
+                existing.IdempotencyKey = args.storedKey;
+                existing.TimeoutAtUtc = args.timeoutAtUtc;
+                return existing;
+            },
+            (flowId, triggerKey, storedKey, timeoutAtUtc));
 
         return Task.CompletedTask;
     }
@@ -910,14 +933,17 @@ public sealed class InMemoryFlowRunStore :
             return Task.FromResult(false);
         }
 
-        if (control.TimedOutAtUtc is not null)
+        // A user cancel that landed first wins: latching the timeout over it would relabel the run
+        // TimedOut and let a later retry's ExtendDeadlineAsync clear the user's cancel. Same guard as
+        // the SQL backends' "AND CancelRequested = 0".
+        if (control.TimedOutAtUtc is not null || control.CancelRequested)
         {
             return Task.FromResult(false);
         }
 
         control.TimedOutAtUtc = DateTimeOffset.UtcNow;
         control.CancelRequested = true;
-        control.CancelReason = reason ?? "Run timed out.";
+        control.CancelReason = reason ?? control.CancelReason ?? "Run timed out.";
         control.CancelRequestedAtUtc ??= DateTimeOffset.UtcNow;
 
         return Task.FromResult(true);
@@ -1207,6 +1233,6 @@ public sealed class InMemoryFlowRunStore :
 
     private static (Guid FlowId, string TriggerKey, string IdempotencyKey) NormalizeIdempotencyKey(Guid flowId, string triggerKey, string idempotencyKey)
     {
-        return (flowId, triggerKey.Trim().ToLowerInvariant(), idempotencyKey.Trim().ToLowerInvariant());
+        return (flowId, triggerKey.Trim().ToLowerInvariant(), IdempotencyKeyStorage.Normalize(idempotencyKey));
     }
 }

@@ -148,6 +148,77 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   built in (22% extra storage, asynchronous indexing, hyphenated ids split into common words — see the
   benchmark doc).
 
+### Changed — **breaking:** step keys must be storage-safe
+
+Flow validation (run by the flow-sync hosted service at startup) now rejects three kinds of step key that
+the stores could not keep apart. Each one used to be accepted and fail later, at runtime, on some
+providers only:
+
+- **Keys that differ only by case within one scope** (`Notify` / `notify`, also between the children of one
+  `ForEach`). `StepCollection` is ordinal, but every `StepKey` column on SQL Server inherits the database's
+  case-insensitive collation, so both steps shared one claim, one dispatch row and one status row and the
+  run never finished. Message: `Step keys '…' and '…' differ only by case; …`.
+- **Keys containing `:`**, at any nesting level. `:` separates the outputs-key namespace
+  (`"{stepKey}:input"`, `"__trigger:data"`), so a step named `x:input` overwrote step `x`'s inputs.
+  Message: `Step key '…' contains ':', which is reserved as the outputs-key separator …`.
+- **Keys longer than 250 characters** (`FlowGraphPlanner.MaxStepKeyLength`), measured on the flattened
+  path (`loop.child`). The stores persist `"{stepKey}:input"` in a 256-character column; longer keys failed
+  the write with a truncation error on SQL Server / PostgreSQL. Message: `Step key '…' is N characters long;
+  the maximum is 250 …`.
+
+#### Read before upgrading
+
+- A flow with such a key now **fails startup** instead of misbehaving. Rename the step and every
+  `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
+  [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
+
+### Fixed — the storage providers agree on one contract
+
+A storage audit compared SQL Server, PostgreSQL and InMemory call by call; each item below is a place
+where one provider behaved differently from the others.
+
+- **SQL Server: concurrent first saves no longer fail with a primary-key violation.** Every `MERGE` upsert
+  now takes `WITH (HOLDLOCK, UPDLOCK)`, the pattern `SqlFlowStore.SaveAsync` already used. Two dashboard
+  replicas pausing a never-saved schedule at once hit `PK_FlowScheduleStates`; the same race was latent in
+  `RegisterWaiterAsync` (`FlowSignalWaiters`), the outputs upsert (`FlowOutputs`) and `ConfigureRunAsync`
+  (`FlowRunControls`).
+- **Idempotency keys longer than 256 characters no longer return 500 on SQL Server / PostgreSQL.** The
+  `Idempotency-Key` header is uncapped but the key columns hold 256 characters. All three stores now
+  normalise through the new `IdempotencyKeyStorage.Normalize`: trimmed and lower-cased as before, and a key
+  that is still longer than 256 characters is stored as `sha256:` + its hex SHA-256 (71 characters), so
+  duplicates are still detected. No schema change.
+- **PostgreSQL: a duplicate signal delivery racing the first one reports `AlreadyDelivered` (409), not
+  `NotFound` (404).** `DeliverSignalAsync` used `FOR UPDATE SKIP LOCKED`, which skipped the waiter the
+  first delivery was holding. It now waits for the lock like SQL Server, and when two waiters share a
+  signal name a delivery that loses the oldest one moves on to the next.
+- **PostgreSQL: signal names and the run-list status filter are case-insensitive**, as on SQL Server and
+  InMemory. Signal names compare with `lower()` on both sides (lookups pin `run_id` first, so the index
+  range scan is unchanged); the status filter is canonicalised to the persisted spelling with the new
+  `RunStatusNames.Canonicalize`, so the status indexes stay usable.
+- **A user cancel is no longer relabelled a timeout.** `MarkTimedOutAsync` no longer applies when a cancel
+  was already requested (all three stores). A cancel that landed between the engine's deadline check and
+  the timeout write used to turn the run `TimedOut`, and a later retry then cleared the user's cancel.
+- **InMemory matches the SQL stores** in four places: trigger headers are stored as a case-insensitive
+  snapshot (a caller's ordinal dictionary made `@triggerHeaders()['x-request-id']` miss, and a reused
+  dictionary rewrote a started run's headers); `ConfigureRunAsync` updates an existing control record
+  instead of replacing it, so an earlier cancel survives; `MarkTimedOutAsync` without a reason keeps an
+  existing reason; and a step's `When` evaluation trace survives a restart of the step.
+- **The default `IFlowRunStore.SearchRunsAsync` (custom stores) pages exactly when runs share a start
+  time.** Its first page was not sorted into cursor order and ties were dropped with a fixed 8-row slack,
+  so tied runs could be repeated or skipped. Every page is now sorted, and tie groups at the cursor and at
+  the page boundary are read whole.
+
+#### Read before upgrading
+
+- **PostgreSQL:** `POST …/signals/{name}` now matches `Approval` and `approval` as one signal, and
+  `?status=failed` finds `Failed` runs. If two waiters of one run were told apart only by the case of
+  their signal name, rename one.
+- **Custom stores:** `IFlowRunControlStore.MarkTimedOutAsync` must return `false` without writing when
+  `CancelRequested` is already set, and keep an existing `CancelReason` when `reason` is `null`. Call
+  `IdempotencyKeyStorage.Normalize` on idempotency keys (and `IdempotencyKeyStorage.ToStorageForm` on the
+  copy passed to `ConfigureRunAsync`) to deduplicate exactly like the built-in stores. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
+
 ### Fixed
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates

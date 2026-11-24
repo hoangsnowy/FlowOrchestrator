@@ -103,8 +103,10 @@ internal sealed class SqlOutputsRepository : IOutputsRepository
     private async Task UpsertAsync(Guid runId, string key, string? valueJson)
     {
         await using var conn = new SqlConnection(_connectionString);
+        // HOLDLOCK, UPDLOCK: see SqlFlowStore.SaveAsync — a bare MERGE lets two concurrent first writes of
+        // one (run, key), e.g. a redelivered step persisting its output twice, collide on PK_FlowOutputs.
         await conn.ExecuteAsync("""
-            MERGE FlowOutputs AS target
+            MERGE FlowOutputs WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId, @Key AS [Key]) AS source
             ON target.RunId = source.RunId AND target.[Key] = source.[Key]
             WHEN MATCHED THEN
