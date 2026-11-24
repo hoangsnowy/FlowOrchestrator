@@ -46,7 +46,7 @@ public sealed class IsStepDispatchedDefaultImplementationTests
         public Task<FlowRunRecord?> GetRunDetailAsync(Guid runId) => throw new NotSupportedException();
         public Task<DashboardStatistics> GetStatisticsAsync() => throw new NotSupportedException();
         public Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync() => throw new NotSupportedException();
-        public Task RetryStepAsync(Guid runId, string stepKey) => throw new NotSupportedException();
+        public Task<bool> RetryStepAsync(Guid runId, string stepKey) => throw new NotSupportedException();
         public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default) => throw new NotSupportedException();

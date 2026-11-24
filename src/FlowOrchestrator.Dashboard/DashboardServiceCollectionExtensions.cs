@@ -1022,8 +1022,25 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // The check above is a stale read, so it is only the cheap answer: the engine's reset is a
+            // compare-and-swap on Failed and decides. The engine dispatches the new attempt through the runtime
+            // and returns; the handler never runs inside this request (RFC 2.0 S4). No request token is passed:
+            // everything after the engine's durable reset must outlive a client that disconnects.
             var engine = http.RequestServices.GetRequiredService<IFlowOrchestrator>();
-            await engine.RetryStepAsync(run.FlowId, runId, stepKey);
+            var outcome = await engine.RetryStepAsync(run.FlowId, runId, stepKey);
+            if (outcome is StepRetryResult { Accepted: false } rejected)
+            {
+                var notFailed = rejected.Outcome == StepRetryOutcome.NotFailed;
+                http.Response.StatusCode = notFailed ? StatusCodes.Status400BadRequest : StatusCodes.Status409Conflict;
+                await WriteJsonAsync(http.Response, new
+                {
+                    error = notFailed
+                        ? "Step not found or is not in Failed state."
+                        : $"Step '{stepKey}' is already being retried."
+                });
+                return;
+            }
+
             await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 

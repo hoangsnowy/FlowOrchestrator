@@ -245,7 +245,7 @@ From the dashboard, open a failed run and click **Retry** on the failed step. Th
 POST /flows/api/runs/{runId}/steps/{stepKey}/retry
 ```
 
-FlowOrchestrator resets the step to `Pending`, preserves all prior step outputs, and re-dispatches the step via the runtime adapter from the failure point. Steps that already succeeded are not re-executed.
+FlowOrchestrator resets the step (only a `Failed` step: anything else answers `400`), preserves all prior step outputs, and re-dispatches the step via the runtime adapter from the failure point. The response returns once the attempt is queued; the step runs on the runtime, not inside the request. Of two concurrent retries of the same step one is accepted and the other answers `409`. Steps that already succeeded are not re-executed.
 
 ## Cancel a Running Flow
 

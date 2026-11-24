@@ -135,6 +135,78 @@ public sealed partial class SqlFlowRunStoreTests
     }
 
     [Fact]
+    public async Task RetryStepAsync_resets_a_Failed_step_once_and_clears_its_claim_and_ledger_row()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await SeedTerminalStepAsync(runId, "Failed");
+
+        // Act
+        var first = await _store.RetryStepAsync(runId, "step1");
+        var second = await _store.RetryStepAsync(runId, "step1");
+
+        // Assert
+        Assert.True(first);
+        Assert.False(second);
+        var step = await _store.GetStepAsync(runId, "step1");
+        Assert.Equal("Running", step!.Status);
+        Assert.Null(step.ErrorMessage);
+        Assert.Null(step.CompletedAt);
+        Assert.Equal("Running", await _store.GetRunStatusAsync(runId));
+        Assert.False(await _store.IsStepClaimedAsync(runId, "step1"));
+        Assert.False(await _store.IsStepDispatchedAsync(runId, "step1"));
+    }
+
+    [Fact]
+    public async Task RetryStepAsync_on_a_step_that_is_not_Failed_changes_nothing()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await SeedTerminalStepAsync(runId, "Succeeded");
+
+        // Act
+        var succeeded = await _store.RetryStepAsync(runId, "step1");
+        var missing = await _store.RetryStepAsync(runId, "never_started");
+
+        // Assert
+        Assert.False(succeeded);
+        Assert.False(missing);
+        Assert.Equal("Succeeded", (await _store.GetStepAsync(runId, "step1"))!.Status);
+        Assert.Equal("Succeeded", await _store.GetRunStatusAsync(runId));
+        Assert.True(await _store.IsStepClaimedAsync(runId, "step1"));
+        Assert.True(await _store.IsStepDispatchedAsync(runId, "step1"));
+    }
+
+    [Fact]
+    public async Task RetryStepAsync_under_contention_has_exactly_one_winner_and_never_throws()
+    {
+        for (var round = 0; round < Rounds; round++)
+        {
+            // Arrange
+            var runId = Guid.NewGuid();
+            await SeedTerminalStepAsync(runId, "Failed");
+
+            // Act
+            var results = await ContendAsync(Contenders, _ => _store.RetryStepAsync(runId, "step1"));
+
+            // Assert
+            Assert.Equal(1, results.Count(won => won));
+            Assert.False(await _store.IsStepClaimedAsync(runId, "step1"));
+        }
+    }
+
+    /// <summary>A finished run whose only step ended in <paramref name="status"/> and still holds its claim and ledger row.</summary>
+    private async Task SeedTerminalStepAsync(Guid runId, string status)
+    {
+        await _store.StartRunAsync(Guid.NewGuid(), "RetryFlow", runId, "manual", null, null);
+        await _store.TryRecordDispatchAsync(runId, "step1");
+        await _store.TryClaimStepAsync(runId, "step1");
+        await _store.RecordStepStartAsync(runId, "step1", "Work", null, null);
+        await _store.RecordStepCompleteAsync(runId, "step1", status, null, status == "Failed" ? "boom" : null);
+        await _store.CompleteRunAsync(runId, status);
+    }
+
+    [Fact]
     public async Task RecordSkippedStepAsync_writes_the_step_and_one_skipped_attempt_with_the_trace()
     {
         // Arrange

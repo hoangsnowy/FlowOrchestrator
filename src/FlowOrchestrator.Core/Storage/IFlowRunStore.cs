@@ -282,10 +282,30 @@ public interface IFlowRunStore
     Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync();
 
     /// <summary>
-    /// Resets a step back to a re-runnable state so it can be re-enqueued by the retry flow.
-    /// Clears <c>Running</c>/<c>Failed</c> status and increments attempt count.
+    /// Resets a <c>Failed</c> step back to a re-runnable state for a manual retry, only if it is still
+    /// <c>Failed</c>, and reports whether this call made the reset.
     /// </summary>
-    Task RetryStepAsync(Guid runId, string stepKey);
+    /// <param name="runId">The run containing the step.</param>
+    /// <param name="stepKey">The step to reset.</param>
+    /// <returns>
+    /// <see langword="true"/> when this call reset a <c>Failed</c> step; <see langword="false"/> when the step
+    /// has no row or is not <c>Failed</c> (for example because a concurrent retry reset it first). Nothing is
+    /// changed when it returns <see langword="false"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// On success, one transaction: the step row becomes <c>Running</c> with its output, error and
+    /// completion time cleared; the run goes back to <c>Running</c> with no completion time; and the step's
+    /// claim and dispatch-ledger rows are deleted so the engine can dispatch and claim the new attempt.
+    /// </para>
+    /// <para>
+    /// The <c>Failed</c> check and the reset must be one atomic step (a conditional <c>UPDATE</c> and its row
+    /// count, inside the same transaction as the deletes). Before 2.0 the reset was unconditional and
+    /// unbatched, so a second concurrent retry deleted the first retry's claim and the handler ran twice at
+    /// once (RFC 2.0 S4). There is deliberately no default implementation.
+    /// </para>
+    /// </remarks>
+    Task<bool> RetryStepAsync(Guid runId, string stepKey);
 
     /// <summary>
     /// Clears cascade-skip records (<see cref="StepSkipReasons.PrerequisitesUnmet"/>) for the

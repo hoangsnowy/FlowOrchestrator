@@ -563,25 +563,38 @@ public sealed class SqlFlowRunStore :
         return rows.AsList();
     }
 
-    public async Task RetryStepAsync(Guid runId, string stepKey)
+    /// <inheritdoc/>
+    public async Task<bool> RetryStepAsync(Guid runId, string stepKey)
     {
         await using var conn = new SqlConnection(_connectionString);
-        await conn.ExecuteAsync("""
+
+        // One transaction. The first UPDATE's predicate is the compare-and-swap: a second concurrent retry
+        // blocks on the step row's lock, then re-reads a row that is no longer Failed and changes nothing —
+        // in particular it no longer deletes the first retry's claim (RFC 2.0 S4). The claim and ledger
+        // deletes (v1.22) let the engine dispatch and claim the new attempt.
+        var won = await conn.ExecuteScalarAsync<int>("""
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
             UPDATE FlowSteps
             SET Status = 'Running', OutputJson = NULL, ErrorMessage = NULL, CompletedAt = NULL, StartedAt = SYSDATETIMEOFFSET()
-            WHERE RunId = @RunId AND StepKey = @StepKey
+            WHERE RunId = @RunId AND StepKey = @StepKey AND Status = 'Failed';
+
+            DECLARE @Won INT = @@ROWCOUNT;
+
+            IF @Won > 0
+            BEGIN
+                UPDATE FlowRuns SET Status = 'Running', CompletedAt = NULL WHERE Id = @RunId;
+                DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey;
+                DELETE FROM FlowStepDispatches WHERE RunId = @RunId AND StepKey = @StepKey;
+            END
+
+            COMMIT TRANSACTION;
+
+            SELECT @Won;
             """, new { RunId = runId, StepKey = stepKey });
 
-        await conn.ExecuteAsync(
-            "UPDATE FlowRuns SET Status = 'Running', CompletedAt = NULL WHERE Id = @Id",
-            new { Id = runId });
-
-        // v1.22: clear the execute-time claim + dispatch-ledger entry so the retried step
-        // can re-claim and re-dispatch. Without this the engine's gates would silent-skip.
-        await conn.ExecuteAsync(
-            "DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey;" +
-            "DELETE FROM FlowStepDispatches WHERE RunId = @RunId AND StepKey = @StepKey;",
-            new { RunId = runId, StepKey = stepKey });
+        return won > 0;
     }
 
     public async Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)

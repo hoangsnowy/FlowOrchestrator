@@ -70,7 +70,7 @@ The sequence from trigger to completion:
 
 6. **Advance** — `FlowGraphPlanner.Evaluate` evaluates `runAfter` conditions. If one or more steps are now unblocked, they are dispatched via `IStepDispatcher`. If a step returned `StepStatus.Pending`, the engine calls `ReleaseDispatchAsync` then `IStepDispatcher.ScheduleStepAsync(delay)` to reschedule. If all steps are complete, the run is marked `Succeeded` or `Failed`.
 
-7. **On failure** — The dashboard exposes a **Retry** button that calls `FlowOrchestratorEngine.RetryStepAsync()`, which resets the step to `Pending` and re-dispatches it from the failure point. Preceding outputs are preserved.
+7. **On failure** — The dashboard exposes a **Retry** button that calls `FlowOrchestratorEngine.RetryStepAsync()`. Only a `Failed` step can be retried: the store resets it with a compare-and-swap (so of two concurrent retries one wins and the other gets `409`), and the engine re-dispatches it through `IStepDispatcher` from the failure point; the handler runs on the runtime, not in the request. Preceding outputs are preserved.
 
 ## Startup Sequence
 

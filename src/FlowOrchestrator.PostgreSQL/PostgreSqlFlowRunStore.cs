@@ -482,30 +482,42 @@ public sealed class PostgreSqlFlowRunStore :
         return rows.AsList();
     }
 
-    public async Task RetryStepAsync(Guid runId, string stepKey)
+    /// <inheritdoc/>
+    public async Task<bool> RetryStepAsync(Guid runId, string stepKey)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
-        await conn.ExecuteAsync(
+
+        // One statement, so one transaction. The step UPDATE's predicate is the compare-and-swap: a second
+        // concurrent retry blocks on the row lock, re-checks the committed row (no longer Failed) and changes
+        // nothing — in particular it no longer deletes the first retry's claim (RFC 2.0 S4). Every other
+        // sub-statement is gated on the swap having won. The claim and ledger deletes (v1.22) let the engine
+        // dispatch and claim the new attempt.
+        var won = await conn.ExecuteScalarAsync<long>(
             """
-            UPDATE flow_steps
-            SET status = 'Running', output_json = NULL, error_message = NULL,
-                completed_at = NULL, started_at = NOW()
-            WHERE run_id = @RunId AND step_key = @StepKey
+            WITH won AS (
+                UPDATE flow_steps
+                SET status = 'Running', output_json = NULL, error_message = NULL,
+                    completed_at = NULL, started_at = NOW()
+                WHERE run_id = @RunId AND step_key = @StepKey AND status = 'Failed'
+                RETURNING 1
+            ),
+            run_reset AS (
+                UPDATE flow_runs SET status = 'Running', completed_at = NULL
+                WHERE id = @RunId AND EXISTS (SELECT 1 FROM won)
+            ),
+            claim_cleared AS (
+                DELETE FROM flow_step_claims
+                WHERE run_id = @RunId AND step_key = @StepKey AND EXISTS (SELECT 1 FROM won)
+            ),
+            ledger_cleared AS (
+                DELETE FROM flow_step_dispatches
+                WHERE run_id = @RunId AND step_key = @StepKey AND EXISTS (SELECT 1 FROM won)
+            )
+            SELECT COUNT(*) FROM won
             """,
             new { RunId = runId, StepKey = stepKey });
 
-        await conn.ExecuteAsync(
-            "UPDATE flow_runs SET status = 'Running', completed_at = NULL WHERE id = @Id",
-            new { Id = runId });
-
-        // v1.22: clear the execute-time claim + dispatch-ledger entry so the retried step
-        // can re-claim and re-dispatch. Without this the engine's gates would silent-skip.
-        await conn.ExecuteAsync(
-            """
-            DELETE FROM flow_step_claims WHERE run_id = @RunId AND step_key = @StepKey;
-            DELETE FROM flow_step_dispatches WHERE run_id = @RunId AND step_key = @StepKey;
-            """,
-            new { RunId = runId, StepKey = stepKey });
+        return won > 0;
     }
 
     public async Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)

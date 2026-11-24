@@ -198,12 +198,11 @@ public sealed class ForEachLoopBarrierEdgeCaseTests
     }
 
     [Fact]
-    public async Task RetryingASettledLoopStep_doesNotStrandTheRunOnItsBarrier()
+    public async Task RetryingASettledLoopStep_isRejected_andLeavesTheRunSucceeded()
     {
-        // Arrange — a completed run, then an operator re-runs the loop step from the dashboard.
-        // RetryStepAsync clears the dispatch ledger for the retried key only, so the re-executed
-        // ForEach re-arms the barrier while its children are suppressed as already-dispatched;
-        // the loop can only settle again from its own continuation.
+        // Arrange — a completed run, then an operator tries to re-run the Succeeded loop step. Since 2.0
+        // only a Failed step can be retried (RFC P-1(c)); before, the re-executed ForEach re-armed its
+        // barrier while its children were suppressed as already-dispatched.
         await using var host = await FlowTestHost.For<ForEachTestFlow>()
             .WithHandler<EchoStepHandler>("Echo")
             .WithHandler<ForEachStepHandler>("ForEach")
@@ -215,16 +214,18 @@ public sealed class ForEachLoopBarrierEdgeCaseTests
         Assert.Equal(RunStatus.Succeeded, first.Status);
 
         // Act
+        object? retry;
         using (var scope = host.Services.CreateScope())
         {
             var orchestrator = scope.ServiceProvider.GetRequiredService<IFlowOrchestrator>();
             var flow = scope.ServiceProvider.GetServices<IFlowDefinition>().OfType<ForEachTestFlow>().First();
-            await orchestrator.RetryStepAsync(flow.Id, first.RunId, "process_items");
+            retry = await orchestrator.RetryStepAsync(flow.Id, first.RunId, "process_items");
         }
 
         var result = await host.WaitForRunAsync(first.RunId, TerminalTimeout);
 
-        // Assert — the run reaches a terminal state again and the loop is not left Running.
+        // Assert — refused, and the finished run is untouched.
+        Assert.Equal(StepRetryOutcome.NotFailed, Assert.IsType<StepRetryResult>(retry).Outcome);
         Assert.False(result.TimedOut);
         Assert.Equal(RunStatus.Succeeded, result.Status);
         Assert.Equal(StepStatus.Succeeded, result.Steps["process_items"].Status);

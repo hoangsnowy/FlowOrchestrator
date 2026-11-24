@@ -73,6 +73,9 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3013, Level = LogLevel.Warning, Message = "Released {Count} orphaned execution claim(s) with no step status for run {RunId}: {StepKeys}.")]
     public static partial void OrphanedClaimsReleased(ILogger logger, int count, Guid runId, string stepKeys);
 
+    [LoggerMessage(EventId = 3014, Level = LogLevel.Error, Message = "A manual retry of step {StepKey} could not be dispatched, and putting the step back to Failed failed too; the step stays Running with nothing queued until the run timeout sweep or a restart closes the run.")]
+    public static partial void RetryRestoreFailed(ILogger logger, Exception ex, string stepKey);
+
     [LoggerMessage(EventId = 1010, Level = LogLevel.Warning, Message = "Trigger rejected: flow {FlowId} ('{TriggerKey}') is disabled.")]
     public static partial void TriggerRejectedDisabledFlow(ILogger logger, Guid flowId, string triggerKey);
 }

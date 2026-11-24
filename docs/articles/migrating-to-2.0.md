@@ -375,6 +375,8 @@ Skip this step if the [Step 0 inventory](#step-0--before-you-start) found nothin
 | `IFlowEventReader.GetRunEventsAsync` | removed; **`FlowRunTimeline.Build(run)`** (`FlowOrchestrator.Core.Storage`) derives the same `FlowEventRecord` list from `IFlowRunStore.GetRunDetailAsync(runId)` | Call it instead; delete your reader implementation and its registration |
 | `LogEvents.EventPersistenceFailed` (EventId 3002) | removed; 3002 is retired | Drop alert rules on 3002 |
 | direct queries on `FlowEvents` / `flow_events` | the table is no longer written | Read `GET {base}/api/runs/{runId}/events`, `FlowStepAttempts`, or OpenTelemetry spans |
+| `IFlowOrchestrator.RetryStepAsync` returned the step's result after running it inline | returns a **`StepRetryResult`** (`Accepted` / `NotFailed` / `Conflict`) once the new attempt is dispatched | Do not read a step output from the return value; wait for the run (see [Step 7](#manual-retry-is-dispatched-and-accepts-only-a-failed-step)) |
+| `IFlowRunStore.RetryStepAsync` → `Task` | `Task<bool>`: resets only a `Failed` step, atomically | Custom stores: see the checklist below |
 
 ### Custom storage backend
 
@@ -407,6 +409,15 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       `WITH (UPDLOCK, HOLDLOCK)`; on PostgreSQL `INSERT … ON CONFLICT DO NOTHING`.
 - [ ] Trigger headers read back from storage use a case-insensitive dictionary
       (`StringComparer.OrdinalIgnoreCase`).
+- [ ] The conditional transitions added in 2.0 have **no default implementation**, and each must be one
+      atomic step (a conditional `UPDATE` and its row count, inside one transaction):
+      - `IFlowRunStore.TryCompleteRunningStepAsync` — completes a step only while it is `Running`
+        (the `ForEach` settle);
+      - `IFlowRunStore.RetryStepAsync` — `Failed` → `Running`, run back to `Running`, claim and ledger
+        rows deleted, or nothing at all;
+      - `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` — deletes claims with no step row older than
+        the given age (on the clock that stamped them) together with their ledger rows.
+- [ ] `RecordSkippedStepAsync` writes the step row and its attempt row in one transaction.
 - [ ] Optional members with default implementations (`IsStepClaimedAsync`, `IsStepDispatchedAsync`,
       `GetStepAsync`, `SearchRunsAsync`, …) are worth overriding with point queries: the defaults fetch
       whole sets.
@@ -478,8 +489,29 @@ builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhook
     sec.UseEnforcementMode(WebhookEnforcementMode.Audit)));   // or .Off
 ```
 
+### Manual retry is dispatched, and accepts only a failed step
+
+The dashboard Retry button (`POST {base}/api/runs/{runId}/steps/{stepKey}/retry`) and
+`IFlowOrchestrator.RetryStepAsync` used to run the step's handler inline, inside the HTTP request, while
+the response said "retry enqueued". Two concurrent retries could also run the handler twice at once. Now:
+
+- the retry resets the step with a compare-and-swap on `Failed` and **dispatches** the new attempt through
+  the runtime; the call returns as soon as it is queued, and the result arrives through the run like any
+  other attempt;
+- **only a `Failed` step can be retried.** A `Succeeded`, `Skipped` (including one skipped because the run
+  was cancelled or timed out) or still-running step is refused: the endpoint answers `400`, the engine
+  returns `StepRetryOutcome.NotFailed`, and nothing changes. 1.x allowed the engine call on any step;
+- of two concurrent retries, one is accepted and the other gets **`409`** (`StepRetryOutcome.Conflict`).
+
+The response body for an accepted retry is unchanged. If a script read the step's outcome right after the
+retry call, poll `GET {base}/api/runs/{runId}` instead.
+
 ### Smaller changes
 
+- A step whose start cannot be recorded (the run-control read or the start write throws) is no longer run
+  anyway: the engine releases its claim and rethrows, so the runtime retries the job. Startup recovery and
+  the timeout sweep release a claim left without a step row by a crashed worker once it is older than
+  `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off).
 - `@triggerHeaders()['name']` is case-insensitive in every step on SQL Server / PostgreSQL storage
   (1.34.3); it used to be case-sensitive after the entry step.
 - The Hangfire package no longer brings the OpenTelemetry SDK or `Microsoft.Extensions.Logging`

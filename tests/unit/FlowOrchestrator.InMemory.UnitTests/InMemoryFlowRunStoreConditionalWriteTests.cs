@@ -145,6 +145,74 @@ public sealed class InMemoryFlowRunStoreConditionalWriteTests
         Assert.True(await _sut.IsStepClaimedAsync(runId, "b"));
     }
 
+    [Fact]
+    public async Task RetryStepAsync_ResetsAFailedStepOnce_AndClearsItsClaimAndLedgerRow()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "RetryFlow", runId, "manual", null, null);
+        await _sut.TryRecordDispatchAsync(runId, "step1");
+        await _sut.TryClaimStepAsync(runId, "step1");
+        await _sut.RecordStepStartAsync(runId, "step1", "Work", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "step1", "Failed", null, "boom");
+        await _sut.CompleteRunAsync(runId, "Failed");
+
+        // Act
+        var first = await _sut.RetryStepAsync(runId, "step1");
+        var second = await _sut.RetryStepAsync(runId, "step1");
+
+        // Assert
+        Assert.True(first);
+        Assert.False(second);
+        var step = await _sut.GetStepAsync(runId, "step1");
+        Assert.Equal("Running", step!.Status);
+        Assert.Null(step.ErrorMessage);
+        Assert.Equal("Running", await _sut.GetRunStatusAsync(runId));
+        Assert.False(await _sut.IsStepClaimedAsync(runId, "step1"));
+        Assert.False(await _sut.IsStepDispatchedAsync(runId, "step1"));
+    }
+
+    [Fact]
+    public async Task RetryStepAsync_OnAStepThatIsNotFailed_ChangesNothing()
+    {
+        // Arrange - a Succeeded step keeps its claim and ledger row: they are what makes it execute once.
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "RetryFlow", runId, "manual", null, null);
+        await _sut.TryRecordDispatchAsync(runId, "step1");
+        await _sut.TryClaimStepAsync(runId, "step1");
+        await _sut.RecordStepStartAsync(runId, "step1", "Work", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "step1", "Succeeded", """{"ok":true}""", null);
+        await _sut.CompleteRunAsync(runId, "Succeeded");
+
+        // Act
+        var succeeded = await _sut.RetryStepAsync(runId, "step1");
+        var missing = await _sut.RetryStepAsync(runId, "never_started");
+
+        // Assert
+        Assert.False(succeeded);
+        Assert.False(missing);
+        Assert.Equal("Succeeded", (await _sut.GetStepAsync(runId, "step1"))!.Status);
+        Assert.Equal("Succeeded", await _sut.GetRunStatusAsync(runId));
+        Assert.True(await _sut.IsStepClaimedAsync(runId, "step1"));
+        Assert.True(await _sut.IsStepDispatchedAsync(runId, "step1"));
+    }
+
+    [Fact]
+    public async Task RetryStepAsync_UnderContention_HasExactlyOneWinner()
+    {
+        // Arrange
+        var runId = Guid.NewGuid();
+        await _sut.StartRunAsync(Guid.NewGuid(), "RetryFlow", runId, "manual", null, null);
+        await _sut.RecordStepStartAsync(runId, "step1", "Work", null, null);
+        await _sut.RecordStepCompleteAsync(runId, "step1", "Failed", null, "boom");
+
+        // Act
+        var results = await ContendAsync(64, () => _sut.RetryStepAsync(runId, "step1"));
+
+        // Assert
+        Assert.Equal(1, results.Count(won => won));
+    }
+
     /// <summary>A clock that only moves when the test says so.</summary>
     private sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     {

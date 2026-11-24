@@ -591,41 +591,56 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(result);
     }
 
-    public Task RetryStepAsync(Guid runId, string stepKey)
+    /// <inheritdoc/>
+    public Task<bool> RetryStepAsync(Guid runId, string stepKey)
     {
-        if (_steps.TryGetValue((runId, stepKey), out var step))
+        if (!_steps.TryGetValue((runId, stepKey), out var step))
         {
+            return FalseTask;
+        }
+
+        // The record lock serialises the Failed check with the reset (and with TryCompleteRunningStepAsync),
+        // so of two concurrent retries only one resets the step; the other changes nothing, and in particular
+        // does not delete the winner's claim (RFC 2.0 S4).
+        lock (step)
+        {
+            if (!string.Equals(step.Status, StepStatus.Failed.ToString(), StringComparison.Ordinal))
+            {
+                return FalseTask;
+            }
+
             step.Status = "Running";
             step.OutputJson = null;
             step.ErrorMessage = null;
             step.CompletedAt = null;
             step.StartedAt = DateTimeOffset.UtcNow;
-        }
 
-        if (_runs.TryGetValue(runId, out var run))
-        {
-            run.Status = "Running";
-            run.CompletedAt = null;
-        }
+            if (_runs.TryGetValue(runId, out var run))
+            {
+                run.Status = "Running";
+                run.CompletedAt = null;
+            }
 
-        // Release any prior execute-time claim so the retried RunStepAsync can re-claim.
-        // Mirrored in SqlFlowRunStore + PostgreSqlFlowRunStore. Pre-v1.22 the schedule-time
-        // claim was orphaned across retries; the engine now treats the claim as exclusive to
-        // a single attempt, so retry must clear it.
-        _stepClaims.TryRemove((runId, stepKey), out _);
-        if (_claimsByRun.TryGetValue(runId, out var set))
-        {
-            set.TryRemove(stepKey, out _);
-        }
-        // Also clear the dispatch ledger entry so the engine's TryRecordDispatchAsync gate
-        // accepts the re-dispatch. Without this, retry would silent-skip enqueue.
-        _stepDispatches.TryRemove((runId, stepKey), out _);
-        if (_dispatchesByRun.TryGetValue(runId, out var dset))
-        {
-            dset.TryRemove(stepKey, out _);
-        }
+            // Release any prior execute-time claim so the retried RunStepAsync can re-claim.
+            // Mirrored in SqlFlowRunStore + PostgreSqlFlowRunStore. Pre-v1.22 the schedule-time
+            // claim was orphaned across retries; the engine now treats the claim as exclusive to
+            // a single attempt, so retry must clear it.
+            _stepClaims.TryRemove((runId, stepKey), out _);
+            if (_claimsByRun.TryGetValue(runId, out var set))
+            {
+                set.TryRemove(stepKey, out _);
+            }
 
-        return Task.CompletedTask;
+            // Also clear the dispatch ledger entry so the engine's TryRecordDispatchAsync gate
+            // accepts the re-dispatch. Without this, retry would silent-skip enqueue.
+            _stepDispatches.TryRemove((runId, stepKey), out _);
+            if (_dispatchesByRun.TryGetValue(runId, out var dset))
+            {
+                dset.TryRemove(stepKey, out _);
+            }
+
+            return TrueTask;
+        }
     }
 
     public Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)

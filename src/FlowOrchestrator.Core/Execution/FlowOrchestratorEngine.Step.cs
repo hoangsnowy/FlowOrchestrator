@@ -410,19 +410,24 @@ public sealed partial class FlowOrchestratorEngine
         activity?.SetTag("run.id", runId.ToString());
         activity?.SetTag("step.key", stepKey);
 
-        if (_observabilityOptions.EnableOpenTelemetry)
-        {
-            _telemetry.StepRetriesCounter.Add(
-                1,
-                new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
-                new KeyValuePair<string, object?>("step_key", stepKey));
-        }
-
         var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
             ?? throw new InvalidOperationException($"Step '{stepKey}' not found in flow manifest.");
+
+        // Only a Failed step can be retried (RFC 2.0 S4). This read is a cheap early answer so a retry of a
+        // step that is not Failed has no side effect at all (no deadline refresh, no event); it is stale by
+        // nature, and the store's conditional reset below is what actually decides.
+        var current = await _runStore.GetStepAsync(runId, stepKey).ConfigureAwait(false);
+        if (!string.Equals(current?.Status, nameof(StepStatus.Failed), StringComparison.Ordinal))
+        {
+            activity?.SetTag("flow.step.retry.outcome", nameof(StepRetryOutcome.NotFailed));
+            return new StepRetryResult(runId, stepKey, StepRetryOutcome.NotFailed);
+        }
+
+        // Cancellation is honoured up to the durable reset and never after it.
+        ct.ThrowIfCancellationRequested();
 
         var ctx = new ExecutionContext { RunId = runId };
         ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
@@ -438,7 +443,26 @@ public sealed partial class FlowOrchestratorEngine
         var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
         await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
 
-        await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
+        // The compare-and-swap: Failed → Running, claim and ledger cleared, in one transaction. Of two
+        // concurrent retries that both passed the read above, exactly one gets true here; the other
+        // changes nothing. Before 2.0 the reset was unconditional, so the second retry deleted the first
+        // one's claim and the handler ran twice at once.
+        if (!await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false))
+        {
+            activity?.SetTag("flow.step.retry.outcome", nameof(StepRetryOutcome.Conflict));
+            return new StepRetryResult(runId, stepKey, StepRetryOutcome.Conflict);
+        }
+
+        // Durable from here on: nothing below takes the caller's token, so a caller that goes away (an HTTP
+        // request whose client disconnected) cannot leave the step reset but never dispatched.
+        activity?.SetTag("flow.step.retry.outcome", nameof(StepRetryOutcome.Accepted));
+        if (_observabilityOptions.EnableOpenTelemetry)
+        {
+            _telemetry.StepRetriesCounter.Add(
+                1,
+                new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
+                new KeyValuePair<string, object?>("step_key", stepKey));
+        }
 
         // When the original failure of this step caused the DAG continuation to eagerly
         // mark downstream blocked steps as Skipped (with reason
@@ -455,16 +479,68 @@ public sealed partial class FlowOrchestratorEngine
         {
             RunId = runId,
             StepKey = stepKey
-        }, ct).ConfigureAwait(false);
+        }, CancellationToken.None).ConfigureAwait(false);
 
         var step = new StepInstance(stepKey, stepMeta.Type)
         {
             RunId = runId,
+            TriggerData = ctx.TriggerData,
+            TriggerHeaders = ctx.TriggerHeaders,
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?>(stepMeta.Inputs)
         };
 
-        return await RunStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
+        // Dispatched through the runtime like every other attempt, never executed on the caller's thread:
+        // before 2.0 the dashboard ran the handler inside the HTTP request while answering "retry enqueued".
+        // The reset cleared the ledger row, so the reservation normally succeeds; if another party recorded
+        // it in between, dispatch anyway — a duplicate attempt is absorbed by the claim, a missing one would
+        // strand the step.
+        try
+        {
+            await _runStore.TryRecordDispatchAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+            await DispatchReservedStepAsync(ctx, flow, step, delay: null).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Catch-all-and-rethrow: put the step back to Failed so the operator can retry it again, rather
+            // than leave it Running with nothing queued. Never swallowed.
+            await RestoreFailedAfterUndispatchedRetryAsync(flow, runId, stepKey, current!).ConfigureAwait(false);
+            throw;
+        }
+
+        return new StepRetryResult(runId, stepKey, StepRetryOutcome.Accepted);
+    }
+
+    /// <summary>
+    /// Best-effort undo of an accepted retry whose dispatch threw: moves the step back from
+    /// <see cref="StepStatus.Running"/> to <see cref="StepStatus.Failed"/> with its previous output and error,
+    /// then closes the run again if nothing else is in flight.
+    /// </summary>
+    /// <param name="flow">The flow owning the run.</param>
+    /// <param name="runId">The run whose retry could not be dispatched.</param>
+    /// <param name="stepKey">The retried step.</param>
+    /// <param name="previous">The step row as read before the reset.</param>
+    /// <remarks>
+    /// Runs on the failure path only and swallows its own failure (logged): the caller rethrows the dispatch
+    /// exception. The conditional write means a step that a duplicate delivery already started is left alone.
+    /// </remarks>
+    private async Task RestoreFailedAfterUndispatchedRetryAsync(IFlowDefinition flow, Guid runId, string stepKey, FlowStepRecord previous)
+    {
+        try
+        {
+            if (!await _runStore.TryCompleteRunningStepAsync(
+                    runId, stepKey, nameof(StepStatus.Failed), previous.OutputJson, previous.ErrorMessage).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
+            await TryCompleteRunAsync(runId, RunTerminationClassifier.ComputeTerminalStatus(flow, statuses)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.RetryRestoreFailed(_logger, ex, stepKey);
+        }
     }
 
     /// <summary>

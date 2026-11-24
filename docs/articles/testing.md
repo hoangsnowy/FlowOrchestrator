@@ -111,7 +111,7 @@ public async Task Order_with_invalid_total_marks_run_Failed()
 
 ### 3. Manual retry
 
-The engine does not auto-retry on failure. Trigger, observe the failure, then call `IFlowOrchestrator.RetryStepAsync` to re-run the step:
+The engine does not auto-retry on failure. Trigger, observe the failure, then call `IFlowOrchestrator.RetryStepAsync` to re-run the `Failed` step. The call only dispatches the new attempt (it returns a `StepRetryResult`), so wait for the run afterwards:
 
 ```csharp
 var orchestrator = host.Services.GetRequiredService<IFlowOrchestrator>();

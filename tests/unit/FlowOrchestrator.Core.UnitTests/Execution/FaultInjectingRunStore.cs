@@ -12,6 +12,12 @@ internal sealed class FaultInjectingRunStore(IFlowRunStore inner) : IFlowRunStor
     private Exception? _nextStartFault;
     private string? _nextStartFaultKey;
 
+    /// <summary>
+    /// Runs before every <see cref="RetryStepAsync"/> is forwarded; a test awaits a gate here to line two
+    /// concurrent retries up in front of the store's conditional reset.
+    /// </summary>
+    public Func<Guid, string, Task>? BeforeRetryStep { get; set; }
+
     /// <summary>Makes the next <see cref="RecordStepStartAsync"/> for <paramref name="stepKey"/> throw <paramref name="fault"/>.</summary>
     public void FailNextStepStart(string stepKey, Exception fault)
     {
@@ -71,7 +77,15 @@ internal sealed class FaultInjectingRunStore(IFlowRunStore inner) : IFlowRunStor
 
     public Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync() => inner.GetActiveRunsAsync();
 
-    public Task RetryStepAsync(Guid runId, string stepKey) => inner.RetryStepAsync(runId, stepKey);
+    public async Task<bool> RetryStepAsync(Guid runId, string stepKey)
+    {
+        if (BeforeRetryStep is { } hook)
+        {
+            await hook(runId, stepKey);
+        }
+
+        return await inner.RetryStepAsync(runId, stepKey);
+    }
 
     public Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
         => inner.ResetCascadeSkippedDependentsAsync(runId, stepKeys);

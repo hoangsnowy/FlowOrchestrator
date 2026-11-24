@@ -136,6 +136,17 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
     start can run the step twice, and a restart faster than the timeout leaves the claim to the next
     startup. The lease redesign (RFC P3) closes both. **Custom stores:** new
     `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` (no default implementation).
+- **Dashboard Retry no longer runs the step inside the HTTP request, and two concurrent retries no longer
+  run it twice** (RFC 2.0 S4, P-1(c)). The engine ran the handler inline while the endpoint answered "retry
+  enqueued", and the store's reset deleted the claim unconditionally, so a second retry deleted the first
+  one's claim and executed the handler again concurrently. The store reset is now a compare-and-swap on
+  `Failed` in one transaction (`IFlowRunStore.RetryStepAsync` returns `Task<bool>`), and the engine
+  dispatches the new attempt through `IStepDispatcher` with `CancellationToken.None` after the reset; if the
+  dispatch throws, the step is put back to `Failed` (EventId 3014 if that fails too).
+  **Read before upgrading:** only a `Failed` step can be retried — anything else gets `400` (engine:
+  `StepRetryOutcome.NotFailed`), a retry that loses the race gets `409` (`Conflict`), and
+  `IFlowOrchestrator.RetryStepAsync` returns a `StepRetryResult` instead of the step's result. The accepted
+  response body is unchanged. See [Migrating to 2.0](docs/articles/migrating-to-2.0.md#manual-retry-is-dispatched-and-accepts-only-a-failed-step).
 
 ### Security
 

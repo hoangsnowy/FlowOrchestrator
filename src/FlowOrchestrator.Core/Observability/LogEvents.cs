@@ -109,4 +109,10 @@ public static class LogEvents
     /// <c>FlowRunControlOptions.OrphanedClaimTimeout</c> (a worker died between claim and start).
     /// </summary>
     public static readonly EventId OrphanedClaimsReleased = new(3013, nameof(OrphanedClaimsReleased));
+
+    /// <summary>
+    /// A manual retry was accepted but its dispatch threw, and moving the step back to <c>Failed</c> failed
+    /// too; the step stays <c>Running</c> with nothing queued.
+    /// </summary>
+    public static readonly EventId RetryRestoreFailed = new(3014, nameof(RetryRestoreFailed));
 }

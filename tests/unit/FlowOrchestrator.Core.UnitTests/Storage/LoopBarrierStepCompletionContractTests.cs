@@ -71,7 +71,7 @@ public sealed class LoopBarrierStepCompletionContractTests
     [Fact]
     public async Task RecordStepStartAsync_onASettledLoopStep_startsAFreshAttemptForTheReArmedBarrier()
     {
-        // Arrange - a retried ForEach re-executes and re-arms its barrier, so the loop key must
+        // Arrange - a re-executed ForEach (a redelivery after the claim was released) re-arms its barrier, so the loop key must
         // accept a second Running attempt after it was already settled once.
         var store = new InMemoryFlowRunStore();
         var runId = Guid.NewGuid();
@@ -80,7 +80,6 @@ public sealed class LoopBarrierStepCompletionContractTests
         await store.RecordStepCompleteAsync(runId, "loop", StepStatus.Succeeded.ToString(), "{\"iterations\":2}", null);
 
         // Act
-        await store.RetryStepAsync(runId, "loop");
         await store.RecordStepStartAsync(runId, "loop", "ForEach", null, null);
         var parked = await store.GetStepStatusesAsync(runId);
         await store.RecordStepCompleteAsync(runId, "loop", StepStatus.Succeeded.ToString(), "{\"iterations\":2}", null);

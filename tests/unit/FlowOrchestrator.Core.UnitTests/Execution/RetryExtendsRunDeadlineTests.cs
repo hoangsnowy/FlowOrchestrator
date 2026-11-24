@@ -25,6 +25,9 @@ public sealed class RetryExtendsRunDeadlineTests
     private readonly IOutputsRepository _outputsRepo = Substitute.For<IOutputsRepository>();
     private readonly IExecutionContextAccessor _ctxAccessor = Substitute.For<IExecutionContextAccessor>();
     private FlowRegistry _flowRepo = FlowRegistry.Empty;
+
+    /// <summary>Steps the substituted dispatcher was handed, in order; a manual retry lands here.</summary>
+    private readonly Queue<IStepInstance> _dispatched = new();
     private readonly ILogger<FlowOrchestratorEngine> _logger =
         Substitute.For<ILogger<FlowOrchestratorEngine>>();
 
@@ -35,6 +38,12 @@ public sealed class RetryExtendsRunDeadlineTests
         Func<string, IStepResult> resultForStep)
     {
         var dispatcher = Substitute.For<IStepDispatcher>();
+        dispatcher.EnqueueStepAsync(default!, default!, default!, default)
+            .ReturnsForAnyArgs(call =>
+            {
+                _dispatched.Enqueue(call.Arg<IStepInstance>()!);
+                return new ValueTask<string?>("job");
+            });
 
         _stepExecutor.ExecuteAsync(
                 Arg.Any<IExecutionContext>(),
@@ -101,8 +110,11 @@ public sealed class RetryExtendsRunDeadlineTests
         // Deadline lapses while the run sits Failed, latching it TimedOut.
         await store.MarkTimedOutAsync(runId, "Deadline exceeded");
 
-        // Act — dashboard Retry.
-        await engine.RetryStepAsync(flowId, runId, "step1");
+        // Act — dashboard Retry, then the runtime runs the attempt it dispatched.
+        var retry = await engine.RetryStepAsync(flowId, runId, "step1");
+        Assert.True(Assert.IsType<StepRetryResult>(retry).Accepted);
+        var retriedAttempt = _dispatched.Dequeue();
+        await engine.RunStepAsync(new CoreExecutionContext { RunId = runId }, flow, retriedAttempt);
 
         // Assert — the handler actually ran on retry; the run reaches Succeeded.
         Assert.Equal(2, attempt);
@@ -139,7 +151,10 @@ public sealed class RetryExtendsRunDeadlineTests
         await store.MarkTimedOutAsync(runId, "Deadline exceeded");
 
         // Act
-        await engine.RetryStepAsync(flowId, runId, "step1");
+        var retry = await engine.RetryStepAsync(flowId, runId, "step1");
+        Assert.True(Assert.IsType<StepRetryResult>(retry).Accepted);
+        var retriedAttempt = _dispatched.Dequeue();
+        await engine.RunStepAsync(new CoreExecutionContext { RunId = runId }, flow, retriedAttempt);
 
         // Assert — handler ran; run Succeeded; no timeout bound restored.
         Assert.Equal("Succeeded", await store.GetRunStatusAsync(runId));

@@ -30,6 +30,10 @@ internal sealed class LoopBarrierEngineHarness
     private readonly IFlowDefinition _flow;
     private readonly List<IStepInstance> _pending = [];
     private readonly List<string> _enqueued = [];
+    private Exception? _nextDispatchFault;
+
+    /// <summary>Makes the next dispatcher call throw <paramref name="fault"/> instead of queueing the step.</summary>
+    public void FailNextDispatch(Exception fault) => Volatile.Write(ref _nextDispatchFault, fault);
 
     /// <summary>Creates a harness bound to <paramref name="flow"/>.</summary>
     /// <param name="flow">Flow definition executed by the harness.</param>
@@ -61,6 +65,11 @@ internal sealed class LoopBarrierEngineHarness
 
         ValueTask<string?> Capture(NSubstitute.Core.CallInfo call)
         {
+            if (Interlocked.Exchange(ref _nextDispatchFault, null) is { } fault)
+            {
+                return ValueTask.FromException<string?>(fault);
+            }
+
             var step = call.Arg<IStepInstance>()!;
             lock (_pending)
             {
