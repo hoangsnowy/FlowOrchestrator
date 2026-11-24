@@ -54,10 +54,11 @@ public sealed class RunControlStateMachineTests
     }
 
     [Fact]
-    public async Task RequestCancelThenMarkTimedOut_TimedOutWins()
+    public async Task RequestCancelThenMarkTimedOut_CancelWins()
     {
-        // Arrange — cancel first, then a separate timeout signal arrives.
-        // The timed-out timestamp must be set; cancel state remains true (forced by MarkTimedOutAsync).
+        // Arrange — cancel first, then a separate timeout signal arrives (the sweep read the control
+        // record before the user's cancel landed). The earlier user cancel must win: latching the timeout
+        // over it would relabel the run TimedOut and let a later retry's ExtendDeadlineAsync clear it.
         var store = new InMemoryFlowRunStore();
         var runId = Guid.NewGuid();
         await store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
@@ -68,11 +69,12 @@ public sealed class RunControlStateMachineTests
 
         // Assert
         Assert.True(cancelOk);
-        Assert.True(timeoutOk);
+        Assert.False(timeoutOk);
         var control = await store.GetRunControlAsync(runId);
         Assert.NotNull(control);
         Assert.True(control!.CancelRequested);
-        Assert.NotNull(control.TimedOutAtUtc);
+        Assert.Null(control.TimedOutAtUtc);
+        Assert.Equal("user-cancel", control.CancelReason);
     }
 
     [Fact]

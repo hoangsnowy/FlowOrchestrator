@@ -867,6 +867,12 @@ public sealed class PostgreSqlFlowRunStore :
         return affected > 0;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Does not apply to a run whose cancel was already requested: a user cancel that landed between the
+    /// caller's deadline check and this write wins, so the run stays <c>Cancelled</c> and a later retry's
+    /// <see cref="ExtendDeadlineAsync"/> cannot clear it (it only un-latches timeout-induced cancels).
+    /// </remarks>
     public async Task<bool> MarkTimedOutAsync(Guid runId, string? reason)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
@@ -879,6 +885,7 @@ public sealed class PostgreSqlFlowRunStore :
                 cancel_requested_at_utc = COALESCE(cancel_requested_at_utc, NOW())
             WHERE run_id = @RunId
               AND timed_out_at_utc IS NULL
+              AND cancel_requested = FALSE
             """,
             new { RunId = runId, Reason = reason });
 

@@ -17,11 +17,13 @@ public sealed class SqlStoreDivergenceAuditTests : IClassFixture<SqlServerFixtur
 {
     private readonly SqlFlowRunStore _runs;
     private readonly SqlFlowScheduleStateStore _schedules;
+    private readonly SqlFlowSignalStore _signals;
 
     public SqlStoreDivergenceAuditTests(SqlServerFixture fixture)
     {
         _runs = new SqlFlowRunStore(fixture.ConnectionString);
         _schedules = new SqlFlowScheduleStateStore(fixture.ConnectionString);
+        _signals = new SqlFlowSignalStore(fixture.ConnectionString);
     }
 
     [Fact]
@@ -124,5 +126,113 @@ public sealed class SqlStoreDivergenceAuditTests : IClassFixture<SqlServerFixtur
         // Assert
         Assert.True(registered);
         Assert.Equal(runId, found);
+    }
+
+    [Fact]
+    public async Task SignalStore_RegisterWaiterAsync_concurrent_first_registrations_never_throw()
+    {
+        // Arrange — same bare-MERGE race as the schedule state, on FlowSignalWaiters' (RunId, StepKey) key.
+        const int rounds = 8;
+        const int contenders = 16;
+
+        // Act
+        var failure = await Record.ExceptionAsync(async () =>
+        {
+            for (var round = 0; round < rounds; round++)
+            {
+                var runId = Guid.NewGuid();
+                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var tasks = Enumerable.Range(0, contenders).Select(_ => Task.Run(async () =>
+                {
+                    await gate.Task;
+                    await _signals.RegisterWaiterAsync(runId, "wait", "approval", null);
+                })).ToArray();
+                gate.SetResult();
+                await Task.WhenAll(tasks);
+            }
+        });
+
+        // Assert
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public async Task ConfigureRunAsync_concurrent_first_configures_of_one_run_never_throw()
+    {
+        // Arrange — FlowRunControls MERGE, same race.
+        const int rounds = 8;
+        const int contenders = 16;
+        var flowId = Guid.NewGuid();
+
+        // Act
+        var failure = await Record.ExceptionAsync(async () =>
+        {
+            for (var round = 0; round < rounds; round++)
+            {
+                var runId = Guid.NewGuid();
+                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var tasks = Enumerable.Range(0, contenders).Select(_ => Task.Run(async () =>
+                {
+                    await gate.Task;
+                    await _runs.ConfigureRunAsync(runId, flowId, "manual", null, null);
+                })).ToArray();
+                gate.SetResult();
+                await Task.WhenAll(tasks);
+            }
+        });
+
+        // Assert
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public async Task ConfigureRunAsync_accepts_an_idempotency_key_longer_than_256_chars()
+    {
+        // Arrange — FlowRunControls.IdempotencyKey is NVARCHAR(256) too; the trigger path writes it first.
+        var runId = Guid.NewGuid();
+        var key = new string('k', 300);
+
+        // Act
+        await _runs.ConfigureRunAsync(runId, Guid.NewGuid(), "webhook", key, null);
+        var control = await _runs.GetRunControlAsync(runId);
+
+        // Assert
+        Assert.Equal(IdempotencyKeyStorage.Normalize(key), control!.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task TryRegisterIdempotencyKey_long_keys_deduplicate_on_the_normalised_digest()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var key = new string('k', 300);
+        Assert.True(await _runs.TryRegisterIdempotencyKeyAsync(flowId, "webhook", key, Guid.NewGuid()));
+
+        // Act
+        var duplicate = await _runs.TryRegisterIdempotencyKeyAsync(flowId, "webhook", " " + key.ToUpperInvariant(), Guid.NewGuid());
+        var other = await _runs.TryRegisterIdempotencyKeyAsync(flowId, "webhook", key + "x", Guid.NewGuid());
+
+        // Assert
+        Assert.False(duplicate);
+        Assert.True(other);
+    }
+
+    [Fact]
+    public async Task MarkTimedOutAsync_after_a_user_cancel_does_not_apply()
+    {
+        // Arrange — the sweep read the control row before the user's cancel landed; the cancel wins.
+        var runId = Guid.NewGuid();
+        await _runs.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        Assert.True(await _runs.RequestCancelAsync(runId, "operator stop"));
+
+        // Act
+        var applied = await _runs.MarkTimedOutAsync(runId, "Run exceeded its timeout deadline.");
+        var control = await _runs.GetRunControlAsync(runId);
+
+        // Assert
+        Assert.False(applied);
+        Assert.Null(control!.TimedOutAtUtc);
+        Assert.True(control.CancelRequested);
+        Assert.Equal("operator stop", control.CancelReason);
     }
 }
