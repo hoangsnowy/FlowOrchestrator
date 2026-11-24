@@ -68,10 +68,27 @@ public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowRetenti
         return ValueTask.FromResult<object?>(null);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Stores a case-insensitive snapshot, like the SQL Server / PostgreSQL repositories, which serialise
+    /// the headers at save time and rehydrate them into an <see cref="StringComparer.OrdinalIgnoreCase"/>
+    /// dictionary. Keeping the caller's dictionary by reference made <c>@triggerHeaders()['x-request-id']</c>
+    /// depend on the caller's comparer, and let a caller that reused its dictionary rewrite the headers of
+    /// a run already started. Indexer assignment keeps two casings of one name from throwing: the last wins.
+    /// </remarks>
     public ValueTask SaveTriggerHeadersAsync(ITriggerContext ctx, IFlowDefinition flow, ITrigger trigger)
     {
-        if (trigger.Headers is not null)
-            _triggerHeaders[ctx.RunId] = trigger.Headers;
+        if (trigger.Headers is { } headers)
+        {
+            var snapshot = new Dictionary<string, string>(headers.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, value) in headers)
+            {
+                snapshot[name] = value;
+            }
+
+            _triggerHeaders[ctx.RunId] = snapshot;
+        }
+
         return ValueTask.CompletedTask;
     }
 

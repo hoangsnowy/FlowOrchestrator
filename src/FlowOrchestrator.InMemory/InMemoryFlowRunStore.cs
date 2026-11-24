@@ -120,6 +120,10 @@ public sealed class InMemoryFlowRunStore :
             StartedAt = startedAt
         };
 
+        // The SQL Server / PostgreSQL upserts leave EvaluationTraceJson untouched on a restart (and
+        // RecordSkippedStepAsync COALESCEs a null trace into the existing one), so carry it over instead
+        // of dropping it with the replaced record.
+        _steps.TryGetValue(key, out var previous);
         _steps[key] = new FlowStepRecord
         {
             RunId = runId,
@@ -132,7 +136,8 @@ public sealed class InMemoryFlowRunStore :
             Status = "Running",
             StartedAt = startedAt,
             CompletedAt = null,
-            AttemptCount = attempt
+            AttemptCount = attempt,
+            EvaluationTraceJson = previous?.EvaluationTraceJson
         };
 
         // Maintain the per-run secondary index so GetStepStatusesAsync and

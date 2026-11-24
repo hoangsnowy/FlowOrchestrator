@@ -411,7 +411,18 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       for the loser — never throw a duplicate-key error. On SQL Server use
       `WITH (UPDLOCK, HOLDLOCK)`; on PostgreSQL `INSERT … ON CONFLICT DO NOTHING`.
 - [ ] Trigger headers read back from storage use a case-insensitive dictionary
-      (`StringComparer.OrdinalIgnoreCase`).
+      (`StringComparer.OrdinalIgnoreCase`), and are a snapshot taken at save time, not the caller's
+      dictionary.
+- [ ] **Idempotency keys** go through `IdempotencyKeyStorage.Normalize` before they are stored or looked up
+      (trim, lower-case, and a `sha256:` digest for keys over 256 characters), and the copy passed to
+      `ConfigureRunAsync` through `IdempotencyKeyStorage.ToStorageForm`. That is what the built-in stores
+      do, so a key deduplicates the same way whichever backend you move to.
+- [ ] **`MarkTimedOutAsync`** returns `false` without writing when the timeout is already latched **or a
+      cancel was already requested** (a user cancel wins), and keeps an existing `CancelReason` when
+      `reason` is `null`. **`ConfigureRunAsync`** is an upsert that keeps the cancel / timeout fields of an
+      existing record.
+- [ ] Signal names and run-status filters compare case-insensitively (`RunStatusNames.Canonicalize` maps a
+      status filter onto the persisted spelling without giving up an index).
 - [ ] The conditional transitions added in 2.0 have **no default implementation**, and each must be one
       atomic step (a conditional `UPDATE` and its row count, inside one transaction):
       - `IFlowRunStore.TryCompleteRunningStepAsync` — completes a step only while it is `Running`
@@ -516,7 +527,15 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
   the timeout sweep release a claim left without a step row by a crashed worker once it is older than
   `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off).
 - `@triggerHeaders()['name']` is case-insensitive in every step on SQL Server / PostgreSQL storage
-  (1.34.3); it used to be case-sensitive after the entry step.
+  (1.34.3); it used to be case-sensitive after the entry step. InMemory storage now does the same even
+  when the trigger was raised with an ordinal dictionary.
+- **PostgreSQL:** signal names (`POST {base}/api/runs/{runId}/signals/{name}`) and the run-list status
+  filter (`?status=failed`) are case-insensitive, as they already were on SQL Server and InMemory. A
+  duplicate signal delivery that races the first one now gets `409` (already delivered) instead of `404`.
+- An idempotency key longer than 256 characters is accepted on SQL Server / PostgreSQL (it returned `500`)
+  and stored as a `sha256:` digest; shorter keys are stored exactly as before.
+- A run the user cancelled stays `Cancelled` even when its deadline passes while the cancel is being
+  recorded; it used to be relabelled `TimedOut`, and a later retry could then clear the cancel.
 - The Hangfire package no longer brings the OpenTelemetry SDK or `Microsoft.Extensions.Logging`
   transitively. Hosts on the generic host are unaffected; a bare `new ServiceCollection().AddLogging()`
   needs a direct `Microsoft.Extensions.Logging` reference.

@@ -77,4 +77,109 @@ public sealed class InMemoryStoreDivergenceAuditTests
         // Assert
         Assert.Equal("operator stop", control!.CancelReason);
     }
+    [Fact]
+    public async Task MarkTimedOut_after_a_user_cancel_does_not_relabel_the_run_timed_out()
+    {
+        // Arrange — the sweep read the control record before the user's cancel landed; the cancel wins.
+        var store = new InMemoryFlowRunStore();
+        var runId = Guid.NewGuid();
+        await store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        await store.RequestCancelAsync(runId, "operator stop");
+
+        // Act
+        var applied = await store.MarkTimedOutAsync(runId, "Run exceeded its timeout deadline.");
+        var control = await store.GetRunControlAsync(runId);
+
+        // Assert
+        Assert.False(applied);
+        Assert.Null(control!.TimedOutAtUtc);
+        Assert.True(control.CancelRequested);
+        Assert.Equal("operator stop", control.CancelReason);
+    }
+
+    [Fact]
+    public async Task ConfigureRun_on_an_existing_record_keeps_the_cancel_latch_like_the_sql_upserts()
+    {
+        // Arrange — SQL Server MERGE / PostgreSQL ON CONFLICT update only flow, trigger, key and deadline.
+        var store = new InMemoryFlowRunStore();
+        var runId = Guid.NewGuid();
+        var flowId = Guid.NewGuid();
+        var deadline = DateTimeOffset.UtcNow.AddHours(1);
+        await store.ConfigureRunAsync(runId, Guid.NewGuid(), "manual", null, null);
+        await store.RequestCancelAsync(runId, "operator stop");
+
+        // Act
+        await store.ConfigureRunAsync(runId, flowId, "webhook", "key-1", deadline);
+        var control = await store.GetRunControlAsync(runId);
+
+        // Assert
+        Assert.True(control!.CancelRequested);
+        Assert.Equal("operator stop", control.CancelReason);
+        Assert.NotNull(control.CancelRequestedAtUtc);
+        Assert.Equal(flowId, control.FlowId);
+        Assert.Equal("webhook", control.TriggerKey);
+        Assert.Equal("key-1", control.IdempotencyKey);
+        Assert.Equal(deadline, control.TimeoutAtUtc);
+    }
+
+    [Fact]
+    public async Task RecordStepStart_keeps_the_evaluation_trace_like_the_sql_stores()
+    {
+        // Arrange — SQL Server / PostgreSQL RecordStepStartAsync upserts leave EvaluationTraceJson untouched.
+        var store = new InMemoryFlowRunStore();
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "TraceFlow", runId, "manual", null, null);
+        await store.RecordSkippedStepAsync(runId, "gate", "Work", "When clause false", "{\"expression\":\"x\"}");
+
+        // Act
+        await store.RecordStepStartAsync(runId, "gate", "Work", null, null);
+        var detail = await store.GetRunDetailAsync(runId);
+
+        // Assert
+        var step = Assert.Single(detail!.Steps!, s => s.StepKey == "gate");
+        Assert.Equal("{\"expression\":\"x\"}", step.EvaluationTraceJson);
+    }
+
+    [Fact]
+    public async Task RecordSkippedStep_without_a_trace_keeps_the_previous_trace_like_the_sql_stores()
+    {
+        // Arrange — SQL Server ISNULL / PostgreSQL COALESCE(@trace, existing).
+        var store = new InMemoryFlowRunStore();
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "TraceFlow", runId, "manual", null, null);
+        await store.RecordSkippedStepAsync(runId, "gate", "Work", "When clause false", "{\"expression\":\"x\"}");
+
+        // Act
+        await store.RecordSkippedStepAsync(runId, "gate", "Work", "Run is Cancelled.", null);
+        var detail = await store.GetRunDetailAsync(runId);
+
+        // Assert
+        var step = Assert.Single(detail!.Steps!, s => s.StepKey == "gate");
+        Assert.Equal("{\"expression\":\"x\"}", step.EvaluationTraceJson);
+    }
+
+    [Fact]
+    public async Task Idempotency_key_longer_than_256_chars_deduplicates_and_is_kept_as_its_digest()
+    {
+        // Arrange — same normalisation as SQL Server / PostgreSQL (IdempotencyKeyStorage).
+        var store = new InMemoryFlowRunStore();
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var key = new string('k', 300);
+
+        // Act
+        var first = await store.TryRegisterIdempotencyKeyAsync(flowId, "webhook", key, runId);
+        var duplicate = await store.TryRegisterIdempotencyKeyAsync(flowId, "webhook", "  " + key.ToUpperInvariant() + " ", Guid.NewGuid());
+        var other = await store.TryRegisterIdempotencyKeyAsync(flowId, "webhook", key + "x", Guid.NewGuid());
+        var found = await store.FindRunIdByIdempotencyKeyAsync(flowId, "webhook", key);
+        await store.ConfigureRunAsync(runId, flowId, "webhook", key, null);
+        var control = await store.GetRunControlAsync(runId);
+
+        // Assert
+        Assert.True(first);
+        Assert.False(duplicate);
+        Assert.True(other);
+        Assert.Equal(runId, found);
+        Assert.Equal(IdempotencyKeyStorage.Normalize(key), control!.IdempotencyKey);
+    }
 }
