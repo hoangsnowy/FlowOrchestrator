@@ -27,6 +27,19 @@ public sealed class IsStepDispatchedDefaultImplementationTests
         Assert.False(otherRun);
     }
 
+    [Fact]
+    public async Task Default_lease_of_unsent_dispatches_returns_nothing()
+    {
+        // Arrange — a provider that predates the unsent-dispatch lease keeps its pre-lease behaviour.
+        IFlowRunStore store = new LedgerOnlyRunStore(Guid.NewGuid(), ["a"]);
+
+        // Act
+        var leased = await store.LeaseUnsentDispatchesAsync(TimeSpan.Zero, 100);
+
+        // Assert
+        Assert.Empty(leased);
+    }
+
     /// <summary>A provider that implements the ledger read but not the point lookup.</summary>
     private sealed class LedgerOnlyRunStore(Guid ownerRunId, string[] keys) : IFlowRunStore
     {

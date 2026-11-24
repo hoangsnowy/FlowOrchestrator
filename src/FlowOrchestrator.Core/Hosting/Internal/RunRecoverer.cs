@@ -379,13 +379,17 @@ internal sealed class RunRecoverer
             try
             {
                 // CancellationToken.None: the ledger row is already durable (RFC 2.0 P-1(d)).
-                await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
+                var jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
                 redelivered++;
                 HostingLog.RecoveryRedeliveredLostStep(_logger, stepKey, run.Id);
+
+                // Annotate the re-delivery: an unannotated row reads as a hand-off that never returned, and the
+                // unsent-dispatch sweep would deliver the step yet again.
+                await AnnotateBestEffortAsync(ctx.RunId, stepKey, jobId).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // The ledger row stays, so the next startup tries again.
+                // The ledger row stays, so the next startup (or the unsent-dispatch sweep) tries again.
                 failed++;
                 HostingLog.RecoveryRedeliveryFailed(_logger, ex, stepKey, run.Id);
             }
@@ -472,19 +476,24 @@ internal sealed class RunRecoverer
             throw;
         }
 
-        if (jobId is not null)
-        {
-            try
-            {
-                await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                HostingLog.RecoveryDispatchAnnotateFailed(_logger, ex, step.Key);
-            }
-        }
-
+        await AnnotateBestEffortAsync(ctx.RunId, step.Key, jobId).ConfigureAwait(false);
         return true;
+    }
+
+    /// <summary>
+    /// Records the runtime job id — or <see cref="DispatchLedgerMarker.AcceptedWithoutJobId"/> when the runtime
+    /// gave none — on the step's ledger row; a failure is logged, never thrown.
+    /// </summary>
+    private async Task AnnotateBestEffortAsync(Guid runId, string stepKey, string? jobId)
+    {
+        try
+        {
+            await _runStore.AnnotateDispatchAsync(runId, stepKey, DispatchLedgerMarker.For(jobId), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            HostingLog.RecoveryDispatchAnnotateFailed(_logger, ex, stepKey);
+        }
     }
 
     private async Task<IExecutionContext> BuildContextAsync(FlowRunRecord run)

@@ -18,6 +18,7 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 │  FlowGraphPlanner       — DAG evaluation                 │
 │  FlowTimeoutEnforcementHostedService — timeout sweep     │
 │  FlowRunRecoveryHostedService — re-dispatch on startup   │
+│  FlowUnsentDispatchRecoveryHostedService — resend lost   │
 │  FlowSyncHostedService  — flow upsert + cron sync        │
 │  RecurringTriggerSync   — effective cron, every runtime  │
 │  FlowRegistry           — O(1) flow lookup by id         │
@@ -80,6 +81,8 @@ The sequence from trigger to completion:
 2. Synchronises cron triggers through `IRecurringTriggerSync.SyncTriggersAsync(flowId, isEnabled)`. Core's single `RecurringTriggerSync` resolves the effective cron — removed for disabled flows and dashboard-paused schedules, the persisted override from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true`, else the manifest cron — and hands it to the runtime's `IRecurringTriggerDispatcher` (Hangfire `IRecurringJobManager`, the in-process `PeriodicTimer` registry, or Service Bus scheduled messages). Job ids come from `RecurringTriggerJobId` (`flow-{flowId}-{triggerKey}`).
 
 `FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart. Recovery is a scheduling path, so it applies the same rules as the graph continuation before dispatching: a ready step whose `When` clause is false is recorded `Skipped` (with its evaluation trace) instead of running, a step whose prerequisites finished in an unaccepted status is skipped, and a dispatch that throws is logged without abandoning the run's other steps.
+
+`FlowUnsentDispatchRecoveryHostedService` covers what startup recovery cannot see. The engine writes a step's dispatch-ledger row *before* it calls the runtime and annotates it with the runtime's job/message id afterwards, and recovery skips every ledgered key. A row still without an id after `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s) means the send never returned — the process died mid-send, or the send hung — so the sweep leases the row (`IFlowRunStore.LeaseUnsentDispatchesAsync`, atomic across replicas) and enqueues the step again. It runs at startup and then every half of the timeout. A duplicate delivery is absorbed by the execution claim.
 
 This means the database always reflects the code — no manual migration step required when you add or rename a flow.
 

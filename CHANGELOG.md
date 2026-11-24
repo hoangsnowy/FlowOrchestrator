@@ -392,6 +392,32 @@ where one provider behaved differently from the others.
   stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
   before rethrowing (EventId 3011 if that release also fails). The `Pending` re-poll path still re-asserts
   it afterwards so the runtime's job retry can re-claim.
+- **A dispatch whose send never returned no longer strands the run for ever.** The stress harness
+  (crash-recovery, SQL Server + Service Bus emulator, 3 replicas, 600 runs, 6 hard kills) left 29 of 2,927
+  dispatch-ledger rows with no `DispatchJobId`, and 26 of those runs stayed `Running` for good. The ledger row
+  is written before the runtime send; a replica killed while the send is in flight — or a send stuck in the
+  Azure Service Bus client's retry loop (60 s `TryTimeout`, 3 retries, so up to about four minutes, logging
+  nothing until it gives up) — leaves the row unannotated, and startup recovery skips every ledgered key.
+  - New `FlowUnsentDispatchRecoveryHostedService`, registered by `AddFlowOrchestrator`, re-delivers such
+    steps on every replica: once at startup, then every half of the new
+    `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s; at most every 30 s; `null` turns it off).
+    A row qualifies when it has no job id, is older than the timeout, its run is `Running`, its step is not
+    claimed, and the step has no status row or a `Pending` one. EventIds 5040–5044.
+  - New `IFlowRunStore.LeaseUnsentDispatchesAsync` selects and re-stamps qualifying rows in one atomic
+    statement, so replicas never lease the same row twice inside one window. Implemented by SQL Server
+    (`UPDATE TOP … OUTPUT` with `READPAST`), PostgreSQL (`FOR UPDATE SKIP LOCKED`) and InMemory. The default
+    interface implementation returns nothing, so custom stores compile unchanged and keep the old behaviour.
+  - Schema: a filtered index `IX_FlowStepDispatches_Unsent` (SQL Server) / partial index
+    `ix_flow_step_dispatches_unsent` (PostgreSQL) on the dispatch time of rows with no job id, created by the
+    migrator. It holds only in-flight or stranded rows.
+  - The store cannot tell "never sent" from "sent, but the process died before the annotation", so both are
+    re-delivered: a duplicate is absorbed by the execution claim, a lost message strands the run. A send
+    still legitimately in flight after the timeout is also delivered twice — raise the timeout if your
+    broker is that slow.
+- **A dispatch that fails with `OperationCanceledException` now releases its ledger row too.** The release
+  added for broker failures excluded cancellation, but no token reaches the dispatcher, so a cancellation
+  there is the adapter's own timeout (`TaskCanceledException`); the row stayed behind and the step never ran.
+  Startup recovery's re-delivery of lost in-process steps now also annotates the row it re-sent.
 - **A signal delivered by a client that disconnects no longer strands the waiting step.** With
   OpenTelemetry on, `FlowSignalDispatcher` read the waiter for the wait-time metric with the request
   token *after* the signal was durably delivered; on SQL Server / PostgreSQL an aborted request threw

@@ -319,6 +319,11 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (run_id, step_key)
         );
 
+        -- Rows whose runtime hand-off never returned (no job id), for the unsent-dispatch sweep. Partial, so it
+        -- holds only in-flight or stranded dispatches and stays tiny however large the ledger grows.
+        CREATE INDEX IF NOT EXISTS ix_flow_step_dispatches_unsent
+            ON flow_step_dispatches (dispatched_at) WHERE dispatch_job_id IS NULL;
+
         CREATE TABLE IF NOT EXISTS flow_signal_waiters (
             run_id        UUID         NOT NULL,
             step_key      VARCHAR(256) NOT NULL,

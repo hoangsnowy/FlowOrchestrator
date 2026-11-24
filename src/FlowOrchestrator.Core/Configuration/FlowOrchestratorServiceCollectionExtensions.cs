@@ -108,6 +108,9 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddHostedService<FlowRetentionHostedService>();
         services.AddHostedService<FlowRunRecoveryHostedService>();
         services.AddHostedService<FlowTimeoutEnforcementHostedService>();
+        // Re-delivers steps whose ledger row was written but whose runtime hand-off never returned
+        // (process died mid-send, or the send hung). No-op on a store without LeaseUnsentDispatchesAsync.
+        services.AddHostedService<FlowUnsentDispatchRecoveryHostedService>();
 
         services.AddSingleton<IFlowGraphPlanner, FlowGraphPlanner>();
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();

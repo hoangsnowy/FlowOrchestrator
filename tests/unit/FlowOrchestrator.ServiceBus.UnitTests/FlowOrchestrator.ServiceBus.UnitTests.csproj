@@ -29,6 +29,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\FlowOrchestrator.Core\FlowOrchestrator.Core.csproj" />
     <ProjectReference Include="..\..\..\src\FlowOrchestrator.ServiceBus\FlowOrchestrator.ServiceBus.csproj" />
+    <!-- Pure in-process store: lets the unsent-dispatch tests drive the real engine against the real dispatcher. -->
+    <ProjectReference Include="..\..\..\src\FlowOrchestrator.InMemory\FlowOrchestrator.InMemory.csproj" />
   </ItemGroup>
 
 </Project>

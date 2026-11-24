@@ -66,6 +66,32 @@ public sealed class FlowRunControlOptions
     /// </remarks>
     public TimeSpan? OrphanedClaimTimeout { get; set; } = DefaultOrphanedClaimTimeout;
 
+    /// <summary>The default for <see cref="UnsentDispatchTimeout"/>: 60 seconds.</summary>
+    public static readonly TimeSpan DefaultUnsentDispatchTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a dispatch-ledger row may go without a runtime job/message id before it is treated as never
+    /// handed to the runtime and the step is re-delivered. <see langword="null"/> or a non-positive value
+    /// turns the re-delivery off.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The engine records the ledger row before it calls the runtime and annotates it with the returned id
+    /// afterwards. A process that dies while the send is in flight — or a send that hangs inside the
+    /// broker client's retry loop — leaves the row without an id, and startup recovery skips ledgered keys,
+    /// so the step would never run and the run would stay <c>Running</c> for ever. A background sweep
+    /// (<see cref="Hosting.FlowUnsentDispatchRecoveryHostedService"/>) re-delivers such rows on every
+    /// replica, once at startup and then every half of this value (at most every 30 s).
+    /// </para>
+    /// <para>
+    /// The age is the only evidence the sender is gone. A send still legitimately in flight for longer than
+    /// this — the Azure Service Bus client's default retry policy allows about four minutes — is delivered
+    /// twice; the execution claim lets only one delivery run the step. Lower values recover faster and
+    /// duplicate more often.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? UnsentDispatchTimeout { get; set; } = DefaultUnsentDispatchTimeout;
+
     /// <summary>
     /// Name of the HTTP header that carries the caller-supplied idempotency key
     /// (e.g. <c>"Idempotency-Key"</c>). Requests carrying a key that matches an

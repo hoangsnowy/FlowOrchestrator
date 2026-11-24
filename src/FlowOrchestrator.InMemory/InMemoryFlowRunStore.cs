@@ -41,7 +41,8 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
     // Value: when the claim was taken (UTC), read by ReleaseOrphanedClaimsAsync.
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DateTimeOffset> _stepClaims = new();
-    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), string?> _stepDispatches = new();
+    // Value: the runtime job id (null until annotated) and when the row was recorded or last leased.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DispatchEntry> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
 
     // Cached completed tasks for the point-lookup reads, which run on the engine's per-step-completion
@@ -700,7 +701,7 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
-        var added = _stepDispatches.TryAdd((runId, stepKey), null);
+        var added = _stepDispatches.TryAdd((runId, stepKey), new DispatchEntry(null, Clock.GetUtcNow()));
         if (added)
         {
             _dispatchesByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
@@ -710,7 +711,11 @@ public sealed class InMemoryFlowRunStore :
 
     public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
     {
-        _stepDispatches[(runId, stepKey)] = jobId;
+        _stepDispatches.AddOrUpdate(
+            (runId, stepKey),
+            static (_, arg) => new DispatchEntry(arg.JobId, arg.Now),
+            static (_, entry, arg) => entry with { JobId = arg.JobId },
+            (JobId: jobId, Now: Clock.GetUtcNow()));
         // Annotate is called only after a successful TryRecordDispatch so the
         // per-run index already contains this step key; no maintenance needed.
         return Task.CompletedTask;
@@ -740,6 +745,56 @@ public sealed class InMemoryFlowRunStore :
         // O(1) on the flat dispatch dictionary. The interface default would copy the run's whole
         // ledger into a HashSet to test one key.
         => _stepDispatches.ContainsKey((runId, stepKey)) ? TrueTask : FalseTask;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(dispatch rows of the active runs) per call — walks each <c>Running</c> run's ledger index; the
+    /// sweep that calls it runs at most every 30 s, never on the step-completion path. Each row is leased with
+    /// a compare-and-swap on its entry, so two concurrent callers never lease the same row.
+    /// </remarks>
+    public Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (maxCount <= 0)
+        {
+            return Task.FromResult<IReadOnlyList<UnsentDispatch>>([]);
+        }
+
+        var now = Clock.GetUtcNow();
+        var cutoff = now - (minimumAge < TimeSpan.Zero ? TimeSpan.Zero : minimumAge);
+        List<UnsentDispatch>? leased = null;
+
+        foreach (var run in _runs.Values)
+        {
+            if (run.Status != "Running" || !_dispatchesByRun.TryGetValue(run.Id, out var dispatchSet))
+            {
+                continue;
+            }
+
+            foreach (var stepKey in dispatchSet.Keys)
+            {
+                if (leased is not null && leased.Count >= maxCount)
+                {
+                    return Task.FromResult<IReadOnlyList<UnsentDispatch>>(leased);
+                }
+
+                var key = (run.Id, stepKey);
+                if (!_stepDispatches.TryGetValue(key, out var entry)
+                    || entry.JobId is not null
+                    || entry.At > cutoff
+                    || _stepClaims.ContainsKey(key)
+                    || (_steps.TryGetValue(key, out var step) && ParseStepStatus(step.Status) != StepStatus.Pending)
+                    || !_stepDispatches.TryUpdate(key, entry with { At = now }, entry))
+                {
+                    continue;
+                }
+
+                (leased ??= []).Add(new UnsentDispatch(run.Id, run.FlowId, stepKey));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<UnsentDispatch>>(leased ?? []);
+    }
 
     public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
@@ -1235,4 +1290,9 @@ public sealed class InMemoryFlowRunStore :
     {
         return (flowId, triggerKey.Trim().ToLowerInvariant(), IdempotencyKeyStorage.Normalize(idempotencyKey));
     }
+
+    /// <summary>One dispatch-ledger row: the runtime job id once annotated, and when it was recorded or last leased.</summary>
+    /// <param name="JobId">The runtime job/message id; <see langword="null"/> until the hand-off returns.</param>
+    /// <param name="At">When the row was recorded, re-stamped when <see cref="LeaseUnsentDispatchesAsync"/> leases it.</param>
+    private readonly record struct DispatchEntry(string? JobId, DateTimeOffset At);
 }

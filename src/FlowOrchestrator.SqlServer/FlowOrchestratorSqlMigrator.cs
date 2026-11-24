@@ -436,6 +436,11 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
             );
         END
 
+        -- Rows whose runtime hand-off never returned (no job id), for the unsent-dispatch sweep. Filtered,
+        -- so it holds only in-flight or stranded dispatches and stays tiny however large the ledger grows.
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowStepDispatches_Unsent' AND object_id = OBJECT_ID(N'[FlowStepDispatches]'))
+            CREATE INDEX IX_FlowStepDispatches_Unsent ON [FlowStepDispatches]([DispatchedAt]) WHERE [DispatchJobId] IS NULL;
+
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowSignalWaiters')
         BEGIN
             CREATE TABLE [FlowSignalWaiters] (
