@@ -80,8 +80,8 @@ public sealed class WebhookSecurityOptionsBuilder
         return this;
     }
 
-    /// <summary>Sets the trusted-proxy depth for <c>X-Forwarded-For</c> parsing.</summary>
-    /// <param name="depth">Number of trusted reverse-proxies; 0 disables XFF.</param>
+    /// <summary>Sets <see cref="WebhookSecurityOptions.ForwardedHeaderDepth"/>: how many trusted reverse proxies sit in front of the host.</summary>
+    /// <param name="depth">Number of trusted reverse proxies, each of which appends the address it received the request from; 0 ignores <c>X-Forwarded-For</c>.</param>
     public WebhookSecurityOptionsBuilder UseForwardedHeaders(int depth)
     {
         if (depth < 0) throw new ArgumentOutOfRangeException(nameof(depth));
