@@ -31,6 +31,12 @@ public static class LogEvents
     /// </summary>
     public static readonly EventId IdempotencyKeyReleaseFailed = new(1011, nameof(IdempotencyKeyReleaseFailed));
 
+    /// <summary>
+    /// A scheduled trigger named a key the flow's manifest does not declare as a cron trigger (an orphaned
+    /// recurring job from a renamed or removed trigger); no run was started.
+    /// </summary>
+    public static readonly EventId StaleScheduleRejected = new(1012, nameof(StaleScheduleRejected));
+
     /// <summary>A step transitioned to <c>Running</c>.</summary>
     public static readonly EventId StepStarted = new(2000, nameof(StepStarted));
 

@@ -234,10 +234,26 @@ public sealed partial class FlowOrchestratorEngine
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// A schedule for a trigger key the current manifest does not declare as a
+    /// <see cref="TriggerType.Cron"/> trigger is rejected: logged (EventId 1012) and answered with a
+    /// <see cref="FlowTriggerResult"/> whose <see cref="FlowTriggerResult.RunId"/> is <see langword="null"/>,
+    /// without starting a run. Recurring jobs outlive the code that created them — Hangfire keeps
+    /// <c>flow-{flowId}-{triggerKey}</c> in its storage and a Service Bus tick can already be in the broker —
+    /// and the trigger sync only walks the triggers the manifest still declares, so a renamed or deleted cron
+    /// trigger left its job firing real runs for ever. Not thrown, so a runtime does not retry the orphaned job.
+    /// </remarks>
     public async ValueTask<object?> TriggerByScheduleAsync(Guid flowId, string triggerKey, string? jobId = null, CancellationToken ct = default)
     {
         var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
+
+        // O(1) dictionary lookup per tick; the manifest is immutable after startup.
+        if (!flow.Manifest.Triggers.TryGetValue(triggerKey, out var trigger) || trigger.Type != TriggerType.Cron)
+        {
+            EngineLog.StaleScheduleRejected(_logger, flowId, triggerKey, jobId);
+            return new FlowTriggerResult(null);
+        }
 
         var ctx = new TriggerContext
         {

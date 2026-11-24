@@ -189,6 +189,12 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   A trigger that already dispatched an entry keeps its key: that run is alive. **Custom stores:** new
   `IFlowRunControlStore.ReleaseIdempotencyKeyAsync` (default: no-op returning `false`, which keeps the old
   behaviour); it must delete the key only while it still maps to the given run.
+- **A renamed or removed cron trigger stops starting runs.** Recurring jobs outlive the code that made
+  them (Hangfire keeps `flow-{flowId}-{triggerKey}` in its storage; a Service Bus tick can already be in
+  the broker), and the trigger sync only walks the triggers the manifest still declares, so the old job
+  kept firing real runs on the old schedule. `TriggerByScheduleAsync` now rejects a key the manifest does
+  not declare as a `Cron` trigger: no run, a `null` run id, and a warning (EventId 1012) naming the job to
+  remove.
 
 ### Security
 
