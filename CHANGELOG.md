@@ -6,9 +6,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.7] - 2026-11-24
+
+Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
+[GHSA-jp6f-v95r-vrv7](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-jp6f-v95r-vrv7) (a webhook trigger naming an unknown signature scheme skipped
+signature verification) and [GHSA-mgh4-hgh4-7767](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-mgh4-hgh4-7767) (the webhook client address was
+read from the wrong `X-Forwarded-For` entry). Hosts that receive webhooks should upgrade; read the notes on
+startup validation and `ForwardedHeaderDepth` below.
+
 ### Security
 
-- **A webhook signature scheme nothing can verify no longer turns signature checking off.** When a
+- **A webhook signature scheme nothing can verify no longer turns signature checking off** ([GHSA-jp6f-v95r-vrv7](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-jp6f-v95r-vrv7)). When a
   trigger's `webhookSignatureScheme` named a scheme that is not built in, not registered with
   `RegisterScheme` / `AddWebhookSignatureVerifier`, or was `Custom` with an unregistered
   signed-payload strategy, the pipeline found no spec and skipped the signature gate, so unsigned
@@ -16,7 +24,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
   EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
   `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
-- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote.** Proxies append the
+- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote** ([GHSA-mgh4-hgh4-7767](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-mgh4-hgh4-7767)). Proxies append the
   address they received the request from, so behind N trusted proxies the caller is the
   `X-Forwarded-For` entry N positions from the right. The pipeline read the entry one further left,
   which the caller supplies itself: with `UseForwardedHeaders(1)` behind a single proxy, any caller could
