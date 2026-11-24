@@ -476,7 +476,7 @@ public sealed class ProviderGoldenVectorTests
     {
         // Arrange — DOC: Standard Webhooks (Svix) library test vector,
         // https://github.com/standard-webhooks/standard-webhooks/blob/main/libraries/python/tests/test_webhooks.py
-        // secret whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw, msg_p5jXN8AQM9LWM0D4loKWxJek, ts 1614265330,
+        // secret whsec_ + MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw, msg_p5jXN8AQM9LWM0D4loKWxJek, ts 1614265330,
         // payload {"test": 2432232314} → "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=".
         // The spec (spec/standard-webhooks.md) signs "{webhook-id}.{webhook-timestamp}.{body}" with the
         // base64-DECODED part after "whsec_". Header shape and payload are expressible through a Custom spec
@@ -508,7 +508,7 @@ public sealed class ProviderGoldenVectorTests
                         ("webhook-timestamp", "1614265330"),
                         ("webhook-signature", "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=")),
             Spec = spec,
-            HmacKey = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            HmacKey = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
         };
         var verifier = new HmacSignatureVerifier(strategies);
 

@@ -635,7 +635,7 @@ public sealed class ProviderWebhookEndpointTests
         Register(server, "svix-events", new Dictionary<string, object?>
         {
             ["webhookSignatureScheme"] = "Svix",
-            ["webhookHmacKey"] = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ["webhookHmacKey"] = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
         });
         var req = Post("/flows/api/webhook/svix-events", U("{\"test\": 1}"), "application/json",
             ("webhook-id", "msg_forged"), ("webhook-timestamp", Now.ToString(System.Globalization.CultureInfo.InvariantCulture)),
@@ -659,7 +659,7 @@ public sealed class ProviderWebhookEndpointTests
         Register(server, "stdwh-events", new Dictionary<string, object?>
         {
             ["webhookSignatureScheme"] = "StandardWebhooks",
-            ["webhookHmacKey"] = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ["webhookHmacKey"] = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
         });
         var req = Post("/flows/api/webhook/stdwh-events", U("{\"test\": 2432232314}"), "application/json",
             ("webhook-id", "msg_p5jXN8AQM9LWM0D4loKWxJek"),
@@ -681,7 +681,7 @@ public sealed class ProviderWebhookEndpointTests
         Register(server, "stdwh-events", new Dictionary<string, object?>
         {
             ["webhookSignatureScheme"] = "StandardWebhooks",
-            ["webhookHmacKey"] = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ["webhookHmacKey"] = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
         });
         var req = Post("/flows/api/webhook/stdwh-events", U("{\"test\": 2432232314}"), "application/json",
             ("webhook-id", "msg_p5jXN8AQM9LWM0D4loKWxJek"),

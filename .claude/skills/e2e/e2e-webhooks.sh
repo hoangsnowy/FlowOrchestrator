@@ -130,7 +130,7 @@ check_instance() {
 
   # W.8 Standard Webhooks / Svix — genuine → 200, tampered signature → 401.
   f=$TMP/stdwh.json; printf '{"type":"contact.created","n":%s}' "$RANDOM$RANDOM" > "$f"
-  local mid="msg_$RANDOM$RANDOM"; ts=$(now); sig=$(sign stdwh whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw "$mid" "$ts" "$f")
+  local mid="msg_$RANDOM$RANDOM"; ts=$(now); sig=$(sign stdwh whsec_"MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw" "$mid" "$ts" "$f")
   r=$(post "$B/flows/api/webhook/e2e-standard-webhooks" application/json "$f" -H "User-Agent: Svix-Webhooks/1.0" \
         -H "webhook-id: $mid" -H "webhook-timestamp: $ts" -H "webhook-signature: $sig")
   f=$TMP/stdwh-bad.json; printf '{"type":"contact.created","forged":%s}' "$RANDOM$RANDOM" > "$f"

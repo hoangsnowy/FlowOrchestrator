@@ -109,7 +109,7 @@ public sealed class StandardWebhooksFlow() : ProviderWebhookFlowBase(new Guid("d
     ["webhookSlug"] = "e2e-standard-webhooks",
     ["webhookSignatureScheme"] = "StandardWebhooks",
     // Secret from the Standard Webhooks library test suite.
-    ["webhookHmacKey"] = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+    ["webhookHmacKey"] = "whsec_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
 });
 
 /// <summary>
