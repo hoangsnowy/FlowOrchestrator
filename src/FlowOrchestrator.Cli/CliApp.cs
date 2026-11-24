@@ -71,7 +71,7 @@ internal static class CliApp
         var command = parsed.Command!;
         using var loggerFactory = command.Verbose ? LoggerFactory.Create(b => b.AddProvider(new TextWriterLoggerProvider(stderr))) : null;
         command.Options.LoggerFactory = loggerFactory;
-        var progress = new ConsoleProgress(stdout, command.Verbose, command.Quiet);
+        var progress = new ConsoleProgress(stdout, stderr, command.Verbose, command.Quiet);
 
         var mode = command.VerifyOnly ? "Verifying" : command.Options.DryRun ? "Dry run:" : "Copying";
         if (!command.Quiet)
@@ -141,6 +141,8 @@ internal static class CliApp
 
         foreach (var note in result.Notes)
             await stdout.WriteLineAsync("note: " + note).ConfigureAwait(false);
+        foreach (var warning in result.Warnings)
+            await stdout.WriteLineAsync("warning: " + warning).ConfigureAwait(false);
 
         var outcome = result.DryRun ? "Dry run finished" : result.VerifyOnly ? "Verification finished" : "Copy finished";
         await stdout.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
@@ -151,19 +153,29 @@ internal static class CliApp
     private sealed class ConsoleProgress : IProgress<FlowStorageCopyProgress>
     {
         private readonly TextWriter _out;
+        private readonly TextWriter _err;
         private readonly bool _verbose;
         private readonly bool _quiet;
         private readonly Lock _gate = new();
 
-        public ConsoleProgress(TextWriter output, bool verbose, bool quiet)
+        public ConsoleProgress(TextWriter output, TextWriter error, bool verbose, bool quiet)
         {
             _out = output;
+            _err = error;
             _verbose = verbose;
             _quiet = quiet;
         }
 
         public void Report(FlowStorageCopyProgress value)
         {
+            // A warning (an unencrypted or unvalidated connection) goes to stderr, even with --quiet.
+            if (value.Phase == FlowStorageCopyPhase.Warning)
+            {
+                lock (_gate)
+                    _err.WriteLine("warning: " + value.Message);
+                return;
+            }
+
             if (_quiet)
                 return;
             // Batch reports are noise for a large table unless asked for; the first and the last are kept.

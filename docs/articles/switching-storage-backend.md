@@ -39,9 +39,18 @@ connection strings) for the other direction.
 - **Keep passwords off the command line.** Every connection value accepts `env:NAME`:
 
   ```bash
-  export FO_SQL='Server=sql01;Database=FlowOrchestrator;User Id=fo;Password=...;TrustServerCertificate=True'
+  export FO_SQL='Server=sql01;Database=FlowOrchestrator;User Id=fo;Password=...'
   export FO_PG='Host=pg01;Database=flow_orchestrator;Username=fo;Password=...'
   ```
+- **Keep the connections encrypted.** The copy moves every trigger payload, header and step output across
+  the network, and it uses your connection strings exactly as given. Microsoft.Data.SqlClient encrypts and
+  validates the server certificate by default (`Encrypt=Mandatory`). When a SQL Server connection string
+  sets `Encrypt=False` / `Encrypt=Optional`, or `TrustServerCertificate=True`, the tool still connects as
+  told but prints a `warning:` line to stderr (even with `--quiet`) and repeats it in the summary. From
+  code the same text is in `FlowStorageCopyResult.Warnings`, is reported as a `FlowStorageCopyPhase.Warning`
+  progress event, and is logged at `Warning` (event id 7404). Fix it by giving the server a certificate the
+  copy machine trusts, not by turning validation off. `Encrypt=Strict` always validates the certificate,
+  so `TrustServerCertificate` is not reported alongside it.
 
 ### 1. Stop new work and drain
 

@@ -75,6 +75,13 @@ internal abstract class StorageEndpoint : IAsyncDisposable
     /// <summary>Server and database, for messages (never the credentials).</summary>
     public abstract string Display { get; }
 
+    /// <summary>
+    /// Describes what the operator's connection string turns off in the driver's transport security, one
+    /// sentence per weakness; empty when it keeps the driver's secure defaults.
+    /// </summary>
+    /// <param name="side"><c>source</c> or <c>target</c>, for the message.</param>
+    public virtual IReadOnlyList<string> DescribeTransportWeaknesses(string side) => [];
+
     /// <summary>Creates an unopened connection.</summary>
     protected abstract DbConnection CreateConnection();
 

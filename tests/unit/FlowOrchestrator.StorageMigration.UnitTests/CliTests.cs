@@ -238,6 +238,30 @@ public sealed class CliTests
     }
 
     [Fact]
+    public async Task A_transport_warning_reaches_stderr_even_with_quiet_and_is_repeated_in_the_summary()
+    {
+        // Arrange
+        const string warning = "The source connection (SQL Server sql / flows) sets TrustServerCertificate=True: ...";
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        CliApp.Executor executor = (_, _, progress, _) =>
+        {
+            progress.Report(new FlowStorageCopyProgress(FlowStorageCopyPhase.Warning, null, 0, null, warning));
+            progress.Report(new FlowStorageCopyProgress(FlowStorageCopyPhase.Preflight, null, 0, null, "Reading the source schema."));
+            return Task.FromResult(new FlowStorageCopyResult { Tables = [], Notes = [], Warnings = [warning] });
+        };
+
+        // Act
+        var code = await CliApp.RunAsync([.. Minimal, "--quiet"], stdout, stderr, name => Env.GetValueOrDefault(name), CancellationToken.None, executor);
+
+        // Assert
+        Assert.Equal(ExitCodes.Success, code);
+        Assert.Contains("warning: " + warning, stderr.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Reading the source schema.", stdout.ToString(), StringComparison.Ordinal);
+        Assert.Contains("warning: " + warning, stdout.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_usage_error_exits_2_without_running_anything()
     {
         // Arrange

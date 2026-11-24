@@ -17,6 +17,12 @@ public enum FlowStorageCopyPhase
 
     /// <summary>The run has finished.</summary>
     Completed,
+
+    /// <summary>
+    /// Something the operator should fix, reported before any data is read; the run continues. Today: a SQL Server
+    /// connection string that disables encryption or certificate validation (see <see cref="FlowStorageCopyResult.Warnings"/>).
+    /// </summary>
+    Warning,
 }
 
 /// <summary>A progress report from <see cref="FlowStorageCopier"/>.</summary>

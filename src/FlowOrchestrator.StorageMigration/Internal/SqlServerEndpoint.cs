@@ -24,6 +24,40 @@ internal sealed class SqlServerEndpoint : StorageEndpoint
     /// <inheritdoc/>
     public override string Display => $"SQL Server {_builder.DataSource} / {(_builder.InitialCatalog is { Length: > 0 } db ? db : "(default database)")}";
 
+    /// <inheritdoc/>
+    public override IReadOnlyList<string> DescribeTransportWeaknesses(string side) => DescribeTransportWeaknesses(_builder, side, Display);
+
+    /// <summary>
+    /// Lists the transport-security defaults of Microsoft.Data.SqlClient (<c>Encrypt=Mandatory</c>, server
+    /// certificate validated) that <paramref name="builder"/> explicitly turns off.
+    /// </summary>
+    /// <param name="builder">The operator's connection string; it is honoured as given, only described here.</param>
+    /// <param name="side"><c>source</c> or <c>target</c>.</param>
+    /// <param name="display">Server and database, without credentials.</param>
+    /// <remarks>
+    /// <c>Encrypt=Strict</c> (TDS 8) always validates the certificate, so <c>TrustServerCertificate</c> is only
+    /// reported when it actually takes effect.
+    /// </remarks>
+    internal static IReadOnlyList<string> DescribeTransportWeaknesses(SqlConnectionStringBuilder builder, string side, string display)
+    {
+        List<string>? warnings = null;
+        if (builder.Encrypt == SqlConnectionEncryptOption.Optional)
+        {
+            (warnings ??= []).Add(
+                $"The {side} connection ({display}) sets Encrypt=False/Optional: unless the server forces encryption, every copied row "
+                + "(trigger payloads, headers, step outputs) crosses the network in clear text. Remove it to use the SqlClient default, Encrypt=Mandatory.");
+        }
+
+        if (builder.TrustServerCertificate && builder.Encrypt != SqlConnectionEncryptOption.Strict)
+        {
+            (warnings ??= []).Add(
+                $"The {side} connection ({display}) sets TrustServerCertificate=True: the server certificate is not validated, so the "
+                + "connection can be intercepted. Give the server a certificate this machine trusts (or set HostNameInCertificate) and remove it.");
+        }
+
+        return warnings ?? [];
+    }
+
     /// <summary>Lower-cased server (without a <c>tcp:</c> prefix or the default port) and database.</summary>
     internal static string NormalizeIdentity(string dataSource, string database)
     {

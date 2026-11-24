@@ -30,6 +30,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Verification:** row count plus an order-independent SHA-256 content checksum per table, computed from
   normalized values on both sides; `--verify-only` re-runs it. Exit codes `0` ok, `2` usage, `3` preflight
   refused, `4` mismatch, `5` copy failed, `130` cancelled. Connection values accept `env:NAME`.
+- **Transport-security warning:** connection strings are used exactly as given, but a SQL Server one that sets
+  `Encrypt=False`/`Optional` or `TrustServerCertificate=True` prints a `warning:` line to stderr (even with
+  `--quiet`) and in the summary; from code it is `FlowStorageCopyResult.Warnings`, a
+  `FlowStorageCopyPhase.Warning` progress event and a `Warning` log (event 7404).
 - `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
   are now public, for code that runs a migrator outside a host and must wait for its background index build.
 - Runbook, table mapping and limits: [Switching Storage Backend](docs/articles/switching-storage-backend.md).

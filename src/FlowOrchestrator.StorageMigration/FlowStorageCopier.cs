@@ -65,6 +65,7 @@ public sealed partial class FlowStorageCopier
         await using var source = CreateEndpoint(_options.SourceProvider, _options.SourceConnectionString);
         await using var target = CreateEndpoint(_options.TargetProvider, _options.TargetConnectionString);
         EnsureDistinct(source, target);
+        var warnings = ReportTransportWarnings(source, target, progress);
 
         Report(progress, FlowStorageCopyPhase.Preflight, null, 0, null, $"Reading the source schema ({source.Display}).");
         var sourceSchema = await source.ReadSchemaAsync(cancellationToken).ConfigureAwait(false);
@@ -112,7 +113,7 @@ public sealed partial class FlowStorageCopier
             Report(progress, FlowStorageCopyPhase.Completed, null, 0, null, "Dry run complete.");
             return new FlowStorageCopyResult
             {
-                Tables = results, DryRun = true, TargetSchemaCreated = schemaCreated, Notes = notes, Elapsed = clock.Elapsed,
+                Tables = results, DryRun = true, TargetSchemaCreated = schemaCreated, Notes = notes, Warnings = warnings, Elapsed = clock.Elapsed,
             };
         }
 
@@ -143,7 +144,7 @@ public sealed partial class FlowStorageCopier
 
         var result = new FlowStorageCopyResult
         {
-            Tables = results, TargetSchemaCreated = schemaCreated, Notes = notes, Elapsed = clock.Elapsed,
+            Tables = results, TargetSchemaCreated = schemaCreated, Notes = notes, Warnings = warnings, Elapsed = clock.Elapsed,
         };
         LogCopyCompleted(result.TotalCopiedRows, results.Count, clock.Elapsed);
         Report(progress, FlowStorageCopyPhase.Completed, null, result.TotalCopiedRows, null, "Copy complete.");
@@ -171,6 +172,7 @@ public sealed partial class FlowStorageCopier
         await using var source = CreateEndpoint(_options.SourceProvider, _options.SourceConnectionString);
         await using var target = CreateEndpoint(_options.TargetProvider, _options.TargetConnectionString);
         EnsureDistinct(source, target);
+        var warnings = ReportTransportWarnings(source, target, progress);
 
         var sourceSchema = await source.ReadSchemaAsync(cancellationToken).ConfigureAwait(false);
         RequireCompleteSourceSchema(sourceSchema);
@@ -191,7 +193,7 @@ public sealed partial class FlowStorageCopier
         }
 
         await VerifyTablesAsync(source, target, tables, results, cutoff, progress, cancellationToken).ConfigureAwait(false);
-        var result = new FlowStorageCopyResult { Tables = results, VerifyOnly = true, Notes = notes, Elapsed = clock.Elapsed };
+        var result = new FlowStorageCopyResult { Tables = results, VerifyOnly = true, Notes = notes, Warnings = warnings, Elapsed = clock.Elapsed };
         Report(progress, FlowStorageCopyPhase.Completed, null, 0, null, "Verification complete.");
         ThrowIfMismatched(result);
         return result;
@@ -521,6 +523,23 @@ public sealed partial class FlowStorageCopier
         }
     }
 
+    /// <summary>
+    /// Reports and logs every transport-security weakness of the two connection strings, before any data is read.
+    /// The connection strings are used exactly as the operator gave them.
+    /// </summary>
+    private List<string> ReportTransportWarnings(StorageEndpoint source, StorageEndpoint target, IProgress<FlowStorageCopyProgress>? progress)
+    {
+        var warnings = new List<string>(source.DescribeTransportWeaknesses("source"));
+        warnings.AddRange(target.DescribeTransportWeaknesses("target"));
+        foreach (var warning in warnings)
+        {
+            LogTransportWarning(warning);
+            Report(progress, FlowStorageCopyPhase.Warning, null, 0, null, warning);
+        }
+
+        return warnings;
+    }
+
     private static void Report(
         IProgress<FlowStorageCopyProgress>? progress, FlowStorageCopyPhase phase, string? table, long done, long? total, string message) =>
         progress?.Report(new FlowStorageCopyProgress(phase, table, done, total, message));
@@ -533,4 +552,7 @@ public sealed partial class FlowStorageCopier
 
     [LoggerMessage(EventId = 7403, Level = LogLevel.Information, Message = "Storage copy completed: {Rows} rows in {Tables} tables in {Elapsed}.")]
     private partial void LogCopyCompleted(long rows, int tables, TimeSpan elapsed);
+
+    [LoggerMessage(EventId = 7404, Level = LogLevel.Warning, Message = "Insecure storage connection: {Warning}")]
+    private partial void LogTransportWarning(string warning);
 }

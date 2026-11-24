@@ -92,6 +92,33 @@ public sealed class FlowStorageCopierTests
         Assert.Equal(left, right);
     }
 
+    [Theory]
+    [InlineData("Server=s;Database=d", new string[0])]
+    [InlineData("Server=s;Database=d;Encrypt=True", new string[0])]
+    [InlineData("Server=s;Database=d;Encrypt=Strict;TrustServerCertificate=True", new string[0])]
+    [InlineData("Server=s;Database=d;Encrypt=False", new[] { "Encrypt=False/Optional" })]
+    [InlineData("Server=s;Database=d;Encrypt=Optional", new[] { "Encrypt=False/Optional" })]
+    [InlineData("Server=s;Database=d;TrustServerCertificate=True", new[] { "TrustServerCertificate=True" })]
+    [InlineData("Server=s;Database=d;Encrypt=False;TrustServerCertificate=True", new[] { "Encrypt=False/Optional", "TrustServerCertificate=True" })]
+    public async Task A_SQL_Server_connection_that_weakens_transport_security_is_described_not_changed(string connectionString, string[] expected)
+    {
+        // Arrange
+        await using var endpoint = new SqlServerEndpoint(connectionString, 30);
+
+        // Act
+        var warnings = endpoint.DescribeTransportWeaknesses("target");
+
+        // Assert — one sentence per weakness, naming the side and the server, never rewriting the connection string.
+        Assert.Equal(expected.Length, warnings.Count);
+        for (var i = 0; i < expected.Length; i++)
+        {
+            Assert.Contains(expected[i], warnings[i], StringComparison.Ordinal);
+            Assert.StartsWith("The target connection (SQL Server s / d)", warnings[i], StringComparison.Ordinal);
+        }
+
+        Assert.Equal(connectionString, endpoint.ConnectionString);
+    }
+
     [Fact]
     public void A_result_is_verified_only_when_every_verified_table_matched()
     {

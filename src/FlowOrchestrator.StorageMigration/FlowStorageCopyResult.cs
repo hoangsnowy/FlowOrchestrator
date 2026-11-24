@@ -55,6 +55,16 @@ public sealed class FlowStorageCopyResult
     /// <summary>Things the operator should know: skipped tables, precision notes, follow-up actions.</summary>
     public required IReadOnlyList<string> Notes { get; init; }
 
+    /// <summary>
+    /// Transport-security weaknesses in the connection strings the operator supplied: a SQL Server connection
+    /// with <c>Encrypt=False</c>/<c>Optional</c>, or with <c>TrustServerCertificate=True</c>.
+    /// </summary>
+    /// <remarks>
+    /// The copy honours the connection strings as given and never overrides them. Each warning is also reported as a
+    /// <see cref="FlowStorageCopyPhase.Warning"/> progress event and logged, before any data is read.
+    /// </remarks>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
     /// <summary>Wall-clock duration of the run.</summary>
     public TimeSpan Elapsed { get; init; }
 

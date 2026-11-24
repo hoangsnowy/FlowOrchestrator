@@ -150,6 +150,10 @@ public sealed class StorageCopyPreflightTests
         Assert.Equal(2, result.Tables.Single(t => t.Table == "FlowSteps").SourceRows);
         Assert.Equal(0, result.TotalCopiedRows);
         Assert.False(await HasFlowRunsTableAsync(FlowStorageProvider.SqlServer, targetCs));
+        // The Testcontainers SQL Server connection string sets TrustServerCertificate=True: honoured, but reported.
+        var warning = Assert.Single(result.Warnings);
+        Assert.StartsWith("The target connection (SQL Server ", warning, StringComparison.Ordinal);
+        Assert.Contains("TrustServerCertificate=True", warning, StringComparison.Ordinal);
     }
 
     [Fact]
