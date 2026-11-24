@@ -33,3 +33,6 @@
 
 - name: Run search at production scale + FlowEvents cost (2026-11-23)
   href: run-search-2026-11-23.md
+
+- name: Bounded step_key metric tag (2026-11-24)
+  href: metric-step-key-2026-11-24.md

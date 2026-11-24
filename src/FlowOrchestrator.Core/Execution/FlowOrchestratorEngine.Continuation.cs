@@ -246,7 +246,9 @@ public sealed partial class FlowOrchestratorEngine
                 _telemetry.StepSkippedCounter.Add(
                     1,
                     new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                    new KeyValuePair<string, object?>("step_key", blockedStepKey),
+                    // Template key, not the runtime key: bounded metric cardinality. O(key length) per call, no
+                    // allocation in steady state (MetricStepKey) — independent of the run's step count.
+                    new KeyValuePair<string, object?>("step_key", MetricStepKey.For(blockedStepKey)),
                     new KeyValuePair<string, object?>("reason", "prerequisites_unmet"));
             }
         }
@@ -506,7 +508,9 @@ public sealed partial class FlowOrchestratorEngine
             _telemetry.StepSkippedCounter.Add(
                 1,
                 new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                new KeyValuePair<string, object?>("step_key", stepKey),
+                // Template key, not the runtime key: bounded metric cardinality. O(key length) per call, no
+                // allocation in steady state (MetricStepKey) — independent of the run's step count.
+                new KeyValuePair<string, object?>("step_key", MetricStepKey.For(stepKey)),
                 new KeyValuePair<string, object?>("reason", "when_false"));
         }
 

@@ -136,7 +136,7 @@ public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
                 _telemetry.SignalWaitMs.Record(
                     waitMs,
                     new KeyValuePair<string, object?>("flow_id", run.FlowId.ToString()),
-                    new KeyValuePair<string, object?>("step_key", result.StepKey),
+                    new KeyValuePair<string, object?>("step_key", MetricStepKey.For(result.StepKey)),
                     new KeyValuePair<string, object?>("signal_name", signalName));
             }
         }

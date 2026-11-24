@@ -149,6 +149,10 @@ red without any extra configuration.
 | `webhook_body_bytes` | histogram | bytes | `flow` — body size of every webhook receive (v1.25) |
 | `webhook_processing_ms` | histogram | ms | `flow`, `result` — wall-clock pipeline processing time (v1.25) |
 
+`step_key` is the **manifest** key: a ForEach child reports as `process_items.validate`, not
+`process_items.37.validate`, so a 500-item loop is one series rather than 500. Spans (`step.key`) and
+log scopes keep the full runtime key, which is where a single iteration is diagnosed.
+
 ### Distributed tracing across the runtime
 
 A single `traceId` connects everything from the inbound HTTP request to the last step's exit:
