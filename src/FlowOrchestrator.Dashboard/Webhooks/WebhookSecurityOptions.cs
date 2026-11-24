@@ -44,10 +44,16 @@ public sealed class WebhookSecurityOptions
     public WebhookRateLimitOptions RateLimit { get; set; } = new();
 
     /// <summary>
-    /// How deep into the <c>X-Forwarded-For</c> chain the dashboard trusts. Set
-    /// to the number of trusted reverse-proxies in front of the host. <c>0</c>
-    /// disables XFF and uses the direct socket address.
+    /// Number of trusted reverse proxies in front of the host (load balancer, ingress, CDN …), used to read
+    /// the webhook caller's address from <c>X-Forwarded-For</c> for IP allow / deny lists and per-IP rate
+    /// limits. <c>0</c> (default) ignores the header and uses the socket address.
     /// </summary>
+    /// <remarks>
+    /// Each proxy appends the address it received the request from, so behind N proxies the client is the
+    /// entry N positions from the right; entries further left were sent by the caller and are not trusted.
+    /// With fewer than N entries the socket address is used. Set it to exactly the number of proxies you
+    /// operate: one too many lets a caller choose its own address, one too few reports a proxy's address.
+    /// </remarks>
     public int ForwardedHeaderDepth { get; set; }
 
     /// <summary>

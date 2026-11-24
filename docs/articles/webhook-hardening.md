@@ -102,6 +102,15 @@ HMAC verifier is generic — set `webhookSignatureScheme` and the wire
 format is resolved through `PartnerSchemeRegistry`. Use `Custom` for any
 publisher not on the built-in list.
 
+A `webhookSignatureScheme` value that nothing can verify — not a built-in
+name, not registered with `RegisterScheme` or `AddWebhookSignatureVerifier`,
+or `Custom` with a signed-payload strategy that was never registered with
+`AddCustomSignatureStrategy` — is a configuration error, not "unsigned":
+`MapFlowDashboard` throws for a registered flow that names one (in `Enforce`
+and `Audit`), and a delivery to such a trigger is rejected with `401` /
+`signature_scheme_unknown` (`Audit` records it and lets it through; EventId
+4012). Leave the input out, or set it to `None`, for an unsigned trigger.
+
 ### GitHub (`X-Hub-Signature-256`)
 
 ```csharp
@@ -369,20 +378,31 @@ the well-known partner ranges.
 
 ### Reverse-proxy / `X-Forwarded-For`
 
-`WebhookSecurityOptions.ForwardedHeaderDepth` controls how deep into the
-XFF chain the dashboard trusts:
+`WebhookSecurityOptions.ForwardedHeaderDepth` is the **number of trusted
+reverse proxies in front of the app** (load balancer, ingress, CDN …). It
+decides which address the IP allow / deny lists and per-IP rate limits see:
 
 ```csharp
 opts.UseWebhookSecurity(sec => sec.UseForwardedHeaders(depth: 1));
 ```
 
-- `0` (default) — use `HttpContext.Connection.RemoteIpAddress` directly. Only
-  trusts the immediate socket peer.
-- `1` — trust 1 reverse-proxy hop; read the second-from-last entry in
-  `X-Forwarded-For` as the client.
-- `N` — trust N hops. Never set this higher than the actual number of
-  proxies you control: every extra hop is an attacker-controlled IP if the
-  client itself can spoof the header.
+Every proxy **appends the address it received the request from** to
+`X-Forwarded-For` (never its own). Behind N proxies the last N entries were
+written by your proxies, and the leftmost of those — the entry N positions
+from the right — is the caller. Anything further left came in the caller's
+own header and is ignored. This is the same rule as ASP.NET Core's
+`ForwardedHeadersMiddleware` with `ForwardLimit = N`.
+
+- `0` (default) — ignore the header; use `HttpContext.Connection.RemoteIpAddress`.
+- `1` — one proxy (e.g. nginx with `$proxy_add_x_forwarded_for`): the **last**
+  entry is the caller. `X-Forwarded-For: 192.30.252.10, 203.0.113.50` resolves
+  to `203.0.113.50`; the first entry was sent by the caller.
+- `2` — e.g. CDN → ingress → app: the second entry from the right.
+- If the header has fewer than N entries, the socket address is used.
+
+Set it to exactly the number of proxies you operate. One too many lets a
+caller choose its own address (allow-list bypass, rate-limit evasion); one too
+few reports a proxy's address for every caller.
 
 ## Body size cap
 
@@ -414,8 +434,8 @@ Counters and histograms (see [Observability](observability.md#what-is-emitted)):
 - `webhook_body_bytes`
 - `webhook_processing_ms{flow,result}`
 
-EventIds 4000–4099 reserved; 4000–4011 allocated today (4000, 4004, 4006 and
-4009 are reserved but not currently emitted). Full list in
+EventIds 4000–4099 reserved; 4000–4012 allocated today (4000, 4004 and 4009
+are reserved but not currently emitted). Full list in
 [Observability — EventIds](observability.md#logger-scopes-and-eventids).
 
 The existing `flow.webhook.receive` activity gains tags

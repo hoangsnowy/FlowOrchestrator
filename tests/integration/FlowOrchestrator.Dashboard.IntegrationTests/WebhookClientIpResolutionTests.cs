@@ -6,10 +6,9 @@ namespace FlowOrchestrator.Dashboard.Tests;
 
 /// <summary>
 /// Unit coverage for <see cref="WebhookSecurityPipeline.ResolveClientIp"/> X-Forwarded-For handling.
-/// Focus: the spoofing regression where a header carrying fewer hops than the configured trusted-proxy
-/// depth caused the index to clamp to 0 — the leftmost, fully attacker-controlled XFF entry — which was
-/// then trusted for the IP allowlist and the rate-limit key. The fix must NOT return that leftmost value;
-/// it falls back to the transport-level remote address instead.
+/// Proxies APPEND the address of the peer they received the request from, so behind N trusted proxies the
+/// client is the entry N positions from the right; a header with fewer than N entries is not trusted at all
+/// and the transport-level remote address is used (never the leftmost, caller-controlled entry).
 /// </summary>
 public sealed class WebhookClientIpResolutionTests
 {
@@ -42,21 +41,21 @@ public sealed class WebhookClientIpResolutionTests
     }
 
     [Fact]
-    public void ResolveClientIp_HopsEqualToDepth_DoesNotReturnLeftmostAttackerValue()
+    public void ResolveClientIp_HopsEqualToDepth_ReturnsTheEntryTheOuterProxyAppended()
     {
-        // Arrange — boundary: hops.Length == forwardedDepth. There is no hop "before" the trusted
-        // proxies, so the entire chain is untrusted and must be ignored.
-        var attacker = IPAddress.Parse("203.0.113.99");
-        var proxy = IPAddress.Parse("10.0.0.1");
-        var realRemote = IPAddress.Parse("198.51.100.10");
-        var http = Context(xff: $"{attacker}, {proxy}", remote: realRemote);
+        // Arrange — boundary: hops.Length == forwardedDepth. Client → outer proxy 10.0.0.1 → inner proxy
+        // 10.0.0.2 → app. Each proxy appends the peer it received the request from, so the outer proxy wrote
+        // the client and the inner proxy wrote the outer proxy: every entry is proxy-written and hops[^2] is
+        // the client.
+        var client = IPAddress.Parse("203.0.113.99");
+        var outerProxy = IPAddress.Parse("10.0.0.1");
+        var http = Context(xff: $"{client}, {outerProxy}", remote: IPAddress.Parse("10.0.0.2"));
 
         // Act
         var resolved = WebhookSecurityPipeline.ResolveClientIp(http, forwardedDepth: 2);
 
         // Assert
-        Assert.NotEqual(attacker, resolved);
-        Assert.Equal(realRemote, resolved);
+        Assert.Equal(client, resolved);
     }
 
     [Fact]
@@ -75,14 +74,17 @@ public sealed class WebhookClientIpResolutionTests
     }
 
     [Fact]
-    public void ResolveClientIp_HopsLongerThanDepth_ReturnsClientHopBeforeTrustedProxies()
+    public void ResolveClientIp_HopsLongerThanDepth_ReturnsClientAndIgnoresCallerSuppliedEntries()
     {
-        // Arrange — legitimate case: client, proxy1, proxy2 with depth 2. The entry just before the
-        // two trusted proxies (the real client) is selected.
+        // Arrange — client → proxy1 → proxy2 → app with depth 2, and the client sent its own
+        // "X-Forwarded-For: <forged>". proxy1 appends the client, proxy2 appends proxy1 (no proxy ever lists
+        // itself; proxy2 is the socket peer), so the header reads "forged, client, proxy1". The entries left of
+        // the two proxy-written ones came from the caller and must not be selected.
+        var forged = IPAddress.Parse("192.30.252.10");
         var client = IPAddress.Parse("203.0.113.50");
         var proxy1 = IPAddress.Parse("10.0.0.1");
         var proxy2 = IPAddress.Parse("10.0.0.2");
-        var http = Context(xff: $"{client}, {proxy1}, {proxy2}", remote: IPAddress.Parse("10.0.0.2"));
+        var http = Context(xff: $"{forged}, {client}, {proxy1}", remote: proxy2);
 
         // Act
         var resolved = WebhookSecurityPipeline.ResolveClientIp(http, forwardedDepth: 2);
