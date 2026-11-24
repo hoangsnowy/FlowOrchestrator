@@ -1003,6 +1003,90 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
 
+## [1.34.7] - 2026-11-24
+
+Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
+[GHSA-jp6f-v95r-vrv7](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-jp6f-v95r-vrv7) (a webhook trigger naming an unknown signature scheme skipped
+signature verification) and [GHSA-mgh4-hgh4-7767](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-mgh4-hgh4-7767) (the webhook client address was
+read from the wrong `X-Forwarded-For` entry). Hosts that receive webhooks should upgrade; read the notes on
+startup validation and `ForwardedHeaderDepth` below.
+
+### Security
+
+- **A webhook signature scheme nothing can verify no longer turns signature checking off** ([GHSA-jp6f-v95r-vrv7](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-jp6f-v95r-vrv7)). When a
+  trigger's `webhookSignatureScheme` named a scheme that is not built in, not registered with
+  `RegisterScheme` / `AddWebhookSignatureVerifier`, or was `Custom` with an unregistered
+  signed-payload strategy, the pipeline found no spec and skipped the signature gate, so unsigned
+  deliveries were accepted. Such a delivery is now rejected with `401` and reason
+  `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
+  EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
+  `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
+- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote** ([GHSA-mgh4-hgh4-7767](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-mgh4-hgh4-7767)). Proxies append the
+  address they received the request from, so behind N trusted proxies the caller is the
+  `X-Forwarded-For` entry N positions from the right. The pipeline read the entry one further left,
+  which the caller supplies itself: with `UseForwardedHeaders(1)` behind a single proxy, any caller could
+  pick the address used for `webhookIpAllowList` / deny lists and per-IP rate limiting, and a caller
+  that sent no header got the proxy's address. The client is now `hops[^N]` (the same rule as ASP.NET
+  Core's `ForwardedHeadersMiddleware` with `ForwardLimit = N`); with fewer than N entries the socket
+  address is used. **Check your setting:** it must equal the number of proxies in front of the app. A
+  value raised by one to compensate for the old behaviour now trusts a caller-supplied entry.
+
+## [1.34.6] - 2026-11-24
+
+Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
+[GHSA-q3pv-v2mj-hrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-q3pv-v2mj-hrmj):
+read-only dashboard views did not mask common API-key header and input names. Hosts that give read-only
+dashboard access (`flow-viewer`, or anonymous access outside `Development`) should upgrade.
+
+### Security
+
+- **Read-only dashboard callers no longer see credentials whose names use separators**
+  ([GHSA-q3pv-v2mj-hrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-q3pv-v2mj-hrmj)). Values are masked
+  for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
+  name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
+  `Ocp-Apim-Subscription-Key`, `pwd` and similar names were served unmasked in run detail, run lists,
+  flow manifests and the webhook delivery log. Names are now normalised first (case ignored; `-`, `_`, `.`
+  and spaces dropped), the list of name fragments is extended (API / subscription / function / access /
+  signing / account keys, private keys, SAS, session ids, JWTs, …), and the *Why skipped* trace of a
+  `When` condition that reads a secret-looking name no longer shows the resolved value. Masking is
+  deliberately broad (a name such as `tokenCount` is masked too); operators still see payloads as stored.
+- **The webhook delivery log records the outcome the sender received.** A delivery refused by the legacy
+  `webhookSecret` / `X-Webhook-Key` check (401) was logged in the Webhooks tab as accepted (200), because
+  the security pipeline wrote its "accepted" row before that check ran. The row is now written after the
+  final decision: a refused delivery is logged as rejected with status 401 and reason `secret_invalid`
+  (also the `webhook_rejected_total` reason tag), and EventId 4006 is logged. The write does not depend on
+  the request's abort token, so a sender that disconnects cannot keep a refusal out of the log.
+- **An over-long replay nonce no longer fails the webhook request.** With replay protection on and no
+  signature scheme, the nonce comes from the configured header (`webhookNonceHeader`) and was stored
+  verbatim; a value longer than the 256-character nonce column made SQL Server / PostgreSQL reject the
+  insert and the endpoint answered 500. A nonce over 256 characters is now registered as `sha256:` + its
+  hex SHA-256 (new public `WebhookReplayNonceStorage` helper in `FlowOrchestrator.Core.Storage`, used by
+  the replay gate and all three built-in stores), so a long nonce still gets replay protection. No schema
+  change; shorter nonces are stored as before.
+
+## [1.34.5] - 2026-11-24
+
+Patch release for the 1.34 line (.NET 8 / 9 / 10). A `WaitForSignal` step could stay parked until its
+timeout when the client that delivered its signal disconnected mid-request — on SQL Server even without
+telemetry. Hosts that deliver signals over the dashboard endpoint should upgrade.
+
+### Fixed
+
+- **A signal delivered by a client that disconnects no longer strands the waiting step.** The dashboard
+  signal endpoint passes the request's abort token to `FlowSignalDispatcher`, which used it in two places
+  *after* the signal was durably delivered:
+  - the delivery write itself. SqlClient reports a cancel that lands while the `UPDATE` is in flight by
+    throwing even when the statement has committed, so on **SQL Server** the waiter was marked delivered
+    while the resume dispatch was never sent, and every retry of the signal was answered 409 "already
+    delivered";
+  - with OpenTelemetry on, the waiter read for the wait-time metric (SQL Server and PostgreSQL).
+
+  Either way the `WaitForSignal` step stayed parked until its timeout (up to 24 h). Both now use
+  `CancellationToken.None`, like the resume dispatch. Measured with the 2.0 stress harness (client
+  disconnects at random points, then retries): SQL Server + Hangfire 127 of 630 runs stranded before,
+  **0** after; the "unhandled exception" error logs from those aborts are gone too. Same failure class
+  as 1.26.1 and #188.
+
 ## [1.34.4] - 2026-11-23
 
 Security release for the 1.34 line (.NET 8 / 9 / 10). Webhook replay protection trusted an unsigned
