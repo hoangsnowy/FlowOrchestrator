@@ -58,6 +58,7 @@ internal sealed class EvalContext
         string s => $"'{s}'",
         bool b => b ? "true" : "false",
         decimal d => d.ToString(CultureInfo.InvariantCulture),
+        double dbl => dbl.ToString("R", CultureInfo.InvariantCulture),
         _ => value.ToString() ?? "null"
     };
 }

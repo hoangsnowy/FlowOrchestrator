@@ -25,6 +25,18 @@ public static class LogEvents
     /// <summary>A run start could not be persisted to the run store. Engine continues; log is informational.</summary>
     public static readonly EventId RunStartTrackingFailed = new(1003, nameof(RunStartTrackingFailed));
 
+    /// <summary>
+    /// A trigger failed before dispatching any step and the compensation that frees its idempotency key
+    /// (cancel and fail the dead run, release the key) failed too.
+    /// </summary>
+    public static readonly EventId IdempotencyKeyReleaseFailed = new(1011, nameof(IdempotencyKeyReleaseFailed));
+
+    /// <summary>
+    /// A scheduled trigger named a key the flow's manifest does not declare as a cron trigger (an orphaned
+    /// recurring job from a renamed or removed trigger); no run was started.
+    /// </summary>
+    public static readonly EventId StaleScheduleRejected = new(1012, nameof(StaleScheduleRejected));
+
     /// <summary>A step transitioned to <c>Running</c>.</summary>
     public static readonly EventId StepStarted = new(2000, nameof(StepStarted));
 
@@ -115,4 +127,10 @@ public static class LogEvents
     /// too; the step stays <c>Running</c> with nothing queued.
     /// </summary>
     public static readonly EventId RetryRestoreFailed = new(3014, nameof(RetryRestoreFailed));
+
+    /// <summary>
+    /// A graph continuation went round more passes than the manifest can need without converging, and
+    /// left the run open rather than complete it while steps were still ready or owed a skip row.
+    /// </summary>
+    public static readonly EventId ContinuationPassLimitReached = new(3015, nameof(ContinuationPassLimitReached));
 }

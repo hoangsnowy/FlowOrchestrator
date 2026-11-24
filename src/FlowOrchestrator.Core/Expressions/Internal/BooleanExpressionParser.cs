@@ -89,6 +89,37 @@ internal sealed class BooleanExpressionParser
         return left;
     }
 
+    /// <summary>
+    /// Converts a number token to <see cref="decimal"/>, or to <see cref="double"/> when it is well-formed
+    /// but outside the decimal range — matching how <see cref="BooleanExpressionComparer.UnwrapJson"/> treats
+    /// a JSON number of the same magnitude.
+    /// </summary>
+    /// <remarks>
+    /// The lexer accepts any run of digits and dots, so a malformed literal such as <c>1.2.3</c> reaches here.
+    /// It must surface as <see cref="FlowExpressionException"/> — the authoring-error contract the engine
+    /// turns into a <c>When</c>-skip with a trace — never as the <see cref="FormatException"/> /
+    /// <see cref="OverflowException"/> of <see cref="decimal.Parse(string, IFormatProvider)"/>, which escaped
+    /// the continuation after the upstream step was already recorded and stranded the run.
+    /// </remarks>
+    private object ParseNumberLiteral(Token t)
+    {
+        const NumberStyles style = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint;
+        if (decimal.TryParse(t.Text, style, CultureInfo.InvariantCulture, out var d))
+        {
+            return d;
+        }
+
+        if (double.TryParse(t.Text, style, CultureInfo.InvariantCulture, out var dbl) && double.IsFinite(dbl))
+        {
+            return dbl;
+        }
+
+        throw new FlowExpressionException(
+            _source,
+            stepKey: string.Empty,
+            $"Invalid number literal '{t.Text}' at position {t.Position} in expression '{_source}'.");
+    }
+
     private IExprNode ParsePrimary()
     {
         var t = Peek();
@@ -110,7 +141,7 @@ internal sealed class BooleanExpressionParser
             }
             case TokenKind.Number:
                 Consume();
-                return new LiteralNode(decimal.Parse(t.Text, CultureInfo.InvariantCulture));
+                return new LiteralNode(ParseNumberLiteral(t));
             case TokenKind.String:
                 Consume();
                 return new LiteralNode(t.Text);

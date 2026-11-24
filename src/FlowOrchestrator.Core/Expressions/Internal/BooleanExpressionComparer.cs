@@ -5,19 +5,30 @@ namespace FlowOrchestrator.Core.Expressions.Internal;
 /// <summary>
 /// Type unification + binary comparison helpers used by <see cref="ComparisonNode"/>.
 /// Implements the type rules documented on <see cref="BooleanExpressionEvaluator"/>:
-/// numbers compare as <see cref="decimal"/>, strings ordinally, bools directly,
-/// and any other type combination throws <see cref="FlowExpressionException"/>.
+/// numbers compare as <see cref="decimal"/> (as <see cref="double"/> when either side is outside the
+/// decimal range), strings ordinally, bools directly, and any other type combination throws
+/// <see cref="FlowExpressionException"/>.
 /// </summary>
 internal static class BooleanExpressionComparer
 {
     /// <summary>
     /// Coerces <paramref name="value"/> to a comparable .NET primitive — most JSON kinds
-    /// to their idiomatic .NET equivalent, every numeric type to <see cref="decimal"/>.
+    /// to their idiomatic .NET equivalent, every numeric type to <see cref="decimal"/>, except a
+    /// floating-point value outside the decimal range (or not finite), which stays <see cref="double"/>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Marked <see langword="internal"/> rather than <see langword="private"/> because the
     /// <see cref="EvalContext"/> resolver pipeline calls it on every LHS resolution to
     /// pre-unwrap the value before caching.
+    /// </para>
+    /// <para>
+    /// Idempotent, which matters because it therefore runs twice on an LHS value (once when the
+    /// resolver caches it, once in <see cref="Compare"/>): a JSON number such as <c>1e300</c> unwraps
+    /// to a <see cref="double"/>, and the second pass used to cast that to <see cref="decimal"/> and
+    /// throw <see cref="OverflowException"/> — outside the <see cref="FlowExpressionException"/>
+    /// contract, so the run was stranded after the upstream step had already been recorded.
+    /// </para>
     /// </remarks>
     internal static object? UnwrapJson(object? value)
     {
@@ -31,7 +42,7 @@ internal static class BooleanExpressionComparer
                 JsonValueKind.True => true,
                 JsonValueKind.False => false,
                 JsonValueKind.String => el.GetString(),
-                JsonValueKind.Number => el.TryGetDecimal(out var d) ? d : (object?)el.GetDouble(),
+                JsonValueKind.Number => el.TryGetDecimal(out var d) ? d : FromDouble(el.GetDouble()),
                 JsonValueKind.Object or JsonValueKind.Array => el.GetRawText(),
                 _ => null
             };
@@ -46,12 +57,22 @@ internal static class BooleanExpressionComparer
             uint ui => (decimal)ui,
             long l => (decimal)l,
             ulong ul => (decimal)ul,
-            float f => (decimal)f,
-            double dbl => (decimal)dbl,
+            float f => FromDouble(f),
+            double dbl => FromDouble(dbl),
             decimal d => d,
             _ => value
         };
     }
+
+    /// <summary>
+    /// Exclusive bound of the values a <see cref="double"/> can be cast to <see cref="decimal"/> without
+    /// overflow. <c>(double)decimal.MaxValue</c> rounds UP past <see cref="decimal.MaxValue"/>, so the
+    /// comparison against it must be strict.
+    /// </summary>
+    private const double DecimalRange = (double)decimal.MaxValue;
+
+    private static object FromDouble(double value) =>
+        value > -DecimalRange && value < DecimalRange ? (decimal)value : value;
 
     /// <summary>Applies binary comparison <paramref name="op"/> to <paramref name="leftRaw"/> and <paramref name="rightRaw"/>.</summary>
     public static bool Compare(object? leftRaw, object? rightRaw, TokenKind op, string source)
@@ -82,6 +103,25 @@ internal static class BooleanExpressionComparer
                 TokenKind.Lt => ld < rd,
                 TokenKind.Gte => ld >= rd,
                 TokenKind.Lte => ld <= rd,
+                _ => throw Unreachable(op, source)
+            };
+        }
+
+        // At least one side is a double (outside the decimal range): compare both as double. Ordering is
+        // exact for every such pair — the in-range side converts to the nearest double, and an in-range
+        // value can never round across an out-of-range one.
+        if (left is decimal or double && right is decimal or double)
+        {
+            var lf = left is decimal ldd ? (double)ldd : (double)left;
+            var rf = right is decimal rdd ? (double)rdd : (double)right;
+            return op switch
+            {
+                TokenKind.Eq => lf == rf,
+                TokenKind.Neq => lf != rf,
+                TokenKind.Gt => lf > rf,
+                TokenKind.Lt => lf < rf,
+                TokenKind.Gte => lf >= rf,
+                TokenKind.Lte => lf <= rf,
                 _ => throw Unreachable(op, source)
             };
         }
@@ -126,7 +166,7 @@ internal static class BooleanExpressionComparer
         null => "null",
         string => "string",
         bool => "bool",
-        decimal => "number",
+        decimal or double => "number",
         _ => value.GetType().Name
     };
 

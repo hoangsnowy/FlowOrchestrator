@@ -113,6 +113,29 @@ public sealed partial class PostgreSqlFlowRunStoreTests
     }
 
     [Fact]
+    public async Task ReleaseIdempotencyKeyAsync_RemovesOnlyTheRegistrationOfTheGivenRun()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var owner = Guid.NewGuid();
+        await _store.TryRegisterIdempotencyKeyAsync(flowId, "webhook", "Order-1", owner);
+
+        // Act
+        var releasedByOther = await _store.ReleaseIdempotencyKeyAsync(flowId, "webhook", "order-1", Guid.NewGuid());
+        var stillOwned = await _store.FindRunIdByIdempotencyKeyAsync(flowId, "webhook", "order-1");
+        var releasedByOwner = await _store.ReleaseIdempotencyKeyAsync(flowId, " WEBHOOK ", "order-1 ", owner);
+        var afterRelease = await _store.FindRunIdByIdempotencyKeyAsync(flowId, "webhook", "order-1");
+        var reRegistered = await _store.TryRegisterIdempotencyKeyAsync(flowId, "webhook", "order-1", Guid.NewGuid());
+
+        // Assert
+        Assert.False(releasedByOther);
+        Assert.Equal(owner, stillOwned);
+        Assert.True(releasedByOwner);
+        Assert.Null(afterRelease);
+        Assert.True(reRegistered);
+    }
+
+    [Fact]
     public async Task TryRegisterIdempotencyKeyAsync_under_contention_has_exactly_one_winner_and_never_throws()
     {
         // Arrange

@@ -202,6 +202,60 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   `StepRetryOutcome.NotFailed`), a retry that loses the race gets `409` (`Conflict`), and
   `IFlowOrchestrator.RetryStepAsync` returns a `StepRetryResult` instead of the step's result. The accepted
   response body is unchanged. See [Migrating to 2.0](docs/articles/migrating-to-2.0.md#manual-retry-is-dispatched-and-accepts-only-a-failed-step).
+- **A run is no longer completed while a parallel join is ready but not yet dispatched.** Two branches
+  finishing at the same moment on different workers: the first continuation's completion gate re-read the
+  statuses, saw the second branch already terminal, found nothing in flight and closed the run, while the
+  second branch's continuation was still about to dispatch the join (observed 1 in 1,000 runs across 3
+  replicas in the stress harness). The gate now takes every check on one status snapshot and also asks the
+  graph planner about that snapshot: a step that is ready (or owed a cascade-skip row) keeps the run open,
+  and the gate dispatches it itself — the dispatch ledger absorbs the other worker's duplicate. The gate
+  also does two fewer store reads per completion than before (EventId 3015 if a continuation ever fails
+  to converge).
+- **Dependents of a `When`-skipped step are cascade-skipped.** The blocked-step pass ran once, before the
+  `When` evaluation, so a step needing `Succeeded` from a `When`-skipped step got no row at all: at top
+  level a `Skipped`-accepting step after it was silently dropped and the run closed `Skipped`; inside a
+  `ForEach` the iteration never settled and the run stayed `Running` for ever. The continuation now runs
+  the blocked-step, loop-advance and `When` passes to a fixpoint. Cascade-skips are transitive as a result
+  (`a` fails → `b` and `c` both `Skipped`, where `c` used to have no row); a retry still resets all of them.
+- **A malformed or out-of-range number in a `When` clause no longer strands the run.** `1.2.3` threw
+  `FormatException` from the parser, and a value outside the `decimal` range (`1e300` in a payload, or a
+  36-digit literal) threw `OverflowException` from the comparer. Neither is the `FlowExpressionException`
+  the engine turns into a `When`-skip, so the exception escaped after the upstream step was recorded
+  `Succeeded` and the run stayed `Running`. A malformed literal is now an authoring error (the step is
+  skipped with the message in its trace); an out-of-range number compares correctly, as `double`, against
+  the other operand. In-range numbers still compare as exact `decimal`.
+- **A `When` clause on a `ForEach` body step can reference a sibling in the same iteration.** The `When`
+  resolver did not get the step's runtime key, so `@steps('work').output.ok` on `loop.0.check` looked for a
+  top-level `work`, resolved `null`, and the step was silently skipped. It now resolves in the iteration's
+  scope, exactly like the step's inputs. New overload `WhenClauseEvaluator.EvaluateAsync(ctx, flow,
+  metadata, currentStepKey)`.
+- **A null-conditional in the middle of a path resolves.** Only a leading `?.` was stripped, so
+  `@triggerBody()?.order?.id` looked for a property named `order?` and resolved `null`. `?.` and `?[` are
+  now honoured anywhere in a trigger-body, step-output, `ForEach` source or poll-condition path.
+- **A retry with the same `Idempotency-Key` after a failed trigger starts the run.** The key was
+  registered before the run was started and its entry steps dispatched; when that dispatch threw (broker
+  blip, 5xx to the caller), the caller's retry with the same key was answered "duplicate" of a run that
+  never started work. When a trigger fails before dispatching or skipping any entry step, the engine now
+  cancel-latches the dead run (so a message the broker did accept is skipped, not run twice), completes it
+  `Failed` (so startup recovery does not resurrect it), and releases the key (EventId 1011 if that fails).
+  A trigger that already dispatched an entry keeps its key: that run is alive. **Custom stores:** new
+  `IFlowRunControlStore.ReleaseIdempotencyKeyAsync` (default: no-op returning `false`, which keeps the old
+  behaviour); it must delete the key only while it still maps to the given run.
+- **A renamed or removed cron trigger stops starting runs.** Recurring jobs outlive the code that made
+  them (Hangfire keeps `flow-{flowId}-{triggerKey}` in its storage; a Service Bus tick can already be in
+  the broker), and the trigger sync only walks the triggers the manifest still declares, so the old job
+  kept firing real runs on the old schedule. `TriggerByScheduleAsync` now rejects a key the manifest does
+  not declare as a `Cron` trigger: no run, a `null` run id, and a warning (EventId 1012) naming the job to
+  remove.
+- **A `WaitForSignal` that timed out can be retried.** The handler keeps the expired waiter as a
+  tombstone, and the retry reset the step but not the waiter, so the retried attempt failed at once with
+  the same "not received within Ns". Retry now removes a waiter that never received a signal (after the
+  durable reset, with `CancellationToken.None`), so the attempt registers a fresh wait.
+- **One run's stray `OperationCanceledException` no longer aborts the timeout sweep for every later
+  run.** The per-run catch excluded every `OperationCanceledException`, so an HTTP-backed store's client
+  timeout (`TaskCanceledException`) on one run escaped `EnforceDueTimeoutsAsync` and skipped the rest of
+  the tick. It is now logged per run (EventId 3005) like any other fault; only an OCE while the sweep's own
+  token is cancelled propagates.
 
 ### Security
 

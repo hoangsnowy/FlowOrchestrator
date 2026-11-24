@@ -76,6 +76,15 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3014, Level = LogLevel.Error, Message = "A manual retry of step {StepKey} could not be dispatched, and putting the step back to Failed failed too; the step stays Running with nothing queued until the run timeout sweep or a restart closes the run.")]
     public static partial void RetryRestoreFailed(ILogger logger, Exception ex, string stepKey);
 
+    [LoggerMessage(EventId = 3015, Level = LogLevel.Warning, Message = "Graph continuation for run {RunId} stopped after {Passes} passes without converging; the run is left open for recovery instead of being completed under unfinished work.")]
+    public static partial void ContinuationPassLimitReached(ILogger logger, Guid runId, int passes);
+
+    [LoggerMessage(EventId = 1011, Level = LogLevel.Error, Message = "A trigger for run {RunId} failed before dispatching any step, and abandoning that run or releasing its idempotency key failed too; a retry with the same key may be answered as a duplicate of the dead run.")]
+    public static partial void IdempotencyKeyReleaseFailed(ILogger logger, Exception ex, Guid runId);
+
+    [LoggerMessage(EventId = 1012, Level = LogLevel.Warning, Message = "Schedule rejected: flow {FlowId} declares no cron trigger '{TriggerKey}' (job {JobId}); no run started. Remove the orphaned recurring job.")]
+    public static partial void StaleScheduleRejected(ILogger logger, Guid flowId, string triggerKey, string? jobId);
+
     [LoggerMessage(EventId = 1010, Level = LogLevel.Warning, Message = "Trigger rejected: flow {FlowId} ('{TriggerKey}') is disabled.")]
     public static partial void TriggerRejectedDisabledFlow(ILogger logger, Guid flowId, string triggerKey);
 }
