@@ -569,10 +569,13 @@ public static class DashboardServiceCollectionExtensions
             // replay / rate-limit / IP allowlist plug into the same gate chain
             // in later phases).
             var pipeline = http.RequestServices.GetService<WebhookSecurityPipeline>();
+            // The pipeline's "accepted" log row is held until the legacy key check below has run, so a delivery
+            // refused there is logged as the rejection it is, never as accepted.
+            var acceptance = new WebhookSecurityPipeline.DeferredAcceptance();
             if (pipeline is not null && triggerInputs is not null)
             {
                 var inputsRo = (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>(triggerInputs, StringComparer.OrdinalIgnoreCase);
-                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, http.RequestAborted);
+                var verdict = await pipeline.EvaluateDeferringAcceptanceAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, acceptance, http.RequestAborted);
                 if (verdict.Decision == WebhookSecurityPipeline.Decision.Reject)
                 {
                     http.Response.StatusCode = verdict.StatusCode;
@@ -589,11 +592,23 @@ public static class DashboardServiceCollectionExtensions
                     ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
                 if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
                 {
+                    var keyLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+                    if (keyLogger is not null)
+                        WebhookLog.SecretInvalid(keyLogger, flow.Id, triggerKey);
+                    if (pipeline is not null)
+                    {
+                        // "secret_invalid" is the reason the webhook_rejected_total metric documents for this check.
+                        await pipeline.RecordRejectionAfterPipelineAsync(
+                            http, flow.Id, triggerKey, "secret_invalid",
+                            StatusCodes.Status401Unauthorized, buffered.Bytes, headers, acceptance);
+                    }
                     http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                     await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
                     return;
                 }
             }
+
+            pipeline?.CommitAcceptance(acceptance);
 
             var ctx = new TriggerContext
             {
