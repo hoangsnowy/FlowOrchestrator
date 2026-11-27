@@ -34,8 +34,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     without a timeout) failed with `WaitForSignal step requires a non-empty 'signalName' input` instead of
     timing out or parking again.
 
-  The Hangfire dispatcher now hands the job plain CLR values (string, number, bool, dictionary, list), so
-  inputs, `__loopItem` and poll bookkeeping (`__pollAttempt`, `__pollStartedAtUtc`) survive every re-check.
+  The Hangfire dispatcher now carries every input that holds a `JsonElement` as one System.Text.Json string
+  (reserved input key `__hangfireJsonInputs`, removed again on the worker), so the job argument holds only
+  strings and primitives and inputs, `__loopItem` and poll bookkeeping (`__pollAttempt`,
+  `__pollStartedAtUtc`) come back exactly as resolved on every re-check.
   Re-check jobs **already queued by an earlier release (1.34.7 and before)** are repaired when they run:
   destroyed inputs are restored from the manifest (expressions resolve again from the run's stored trigger
   data), `__loopItem` is recomputed, and a poll's destroyed bookkeeping restarts, so such a poll begins a

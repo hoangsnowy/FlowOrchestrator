@@ -42,7 +42,7 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         // full IFlowDefinition via IFlowRepository — this avoids serialising the manifest
         // (and types like RunAfterCondition) through Hangfire's Newtonsoft.Json serializer.
         var flowId = flow.Id;
-        // Resolved inputs are JsonElement values, which Newtonsoft destroys; hand Hangfire plain CLR ones.
+        // Resolved inputs are JsonElement values, which Hangfire's argument store destroys; carry them as a JSON string.
         var jobStep = HangfireStepJobArguments.PrepareForEnqueue(step);
         var start = Stopwatch.GetTimestamp();
         var ok = false;

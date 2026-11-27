@@ -226,7 +226,7 @@ public sealed class PendingRecheckInputsTests : IDisposable
     }
 
     [Fact]
-    public async Task PollRecheckJob_StoredArguments_CarryTheResolvedInputsAsPlainJson()
+    public async Task PollRecheckJob_StoredArguments_CarryTheResolvedInputsAsOneJsonString()
     {
         // Arrange — the first attempt runs, the re-check job is left in the schedule.
         var runId = Guid.NewGuid();
@@ -242,9 +242,16 @@ public sealed class PendingRecheckInputsTests : IDisposable
         using var stepArgument = JsonDocument.Parse(args.RootElement[2].GetString()!);
         var inputs = stepArgument.RootElement.GetProperty("Inputs");
         Assert.DoesNotContain("JsonElement", inputs.GetRawText(), StringComparison.Ordinal);
-        Assert.Equal("A1", inputs.GetProperty("shipmentId").GetString());
-        Assert.True(inputs.GetProperty("pollEnabled").GetBoolean());
-        Assert.Equal(1, inputs.GetProperty("__pollAttempt").GetInt32());
+        foreach (var input in inputs.EnumerateObject())
+        {
+            // Only strings and primitives reach Hangfire's serializer.
+            Assert.True(input.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array), input.Name);
+        }
+
+        using var carried = JsonDocument.Parse(inputs.GetProperty(HangfireStepJobArguments.EncodedInputsKey).GetString()!);
+        Assert.Equal("A1", carried.RootElement.GetProperty("shipmentId").GetString());
+        Assert.True(carried.RootElement.GetProperty("pollEnabled").GetBoolean());
+        Assert.Equal(1, carried.RootElement.GetProperty("__pollAttempt").GetInt32());
     }
 
     [Fact]
