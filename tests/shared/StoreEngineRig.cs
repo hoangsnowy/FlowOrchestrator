@@ -59,6 +59,9 @@ internal sealed class StoreEngineRig
         executor.ExecuteAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>())
             .Returns(call => execute(call.Arg<IStepInstance>()));
 
+        // A lease keeper, as AddFlowOrchestrator() registers one: every step then runs under an execution
+        // lease, the production shape the frontier scenarios must hold under.
+        var controlOptions = new FlowRunControlOptions();
         Engine = new FlowOrchestratorEngine(
             dispatcher,
             new FlowGraphPlanner(),
@@ -70,11 +73,13 @@ internal sealed class StoreEngineRig
             new FlowRegistry([flow]),
             [runtimeStore],
             [controlStore],
-            new FlowRunControlOptions(),
+            controlOptions,
             new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
             NullLogger<FlowOrchestratorEngine>.Instance,
-            NoopFlowEventNotifier.Instance);
+            NoopFlowEventNotifier.Instance,
+            signalStore: null,
+            leaseKeeper: new StepLeaseKeeper(controlOptions));
     }
 
     /// <summary>The engine under test.</summary>

@@ -59,42 +59,26 @@ status rows per iteration at 1 000 items on SQL Server). Now (RFC 2.0 §3.5,
   full read when the run has nothing else open, or by startup recovery — no longer by whichever unrelated
   step happens to complete next (see the migration guide).
 
-### Added — `flow-orchestrator storage copy`: move a database between SQL Server and PostgreSQL
+### Changed — `FlowOrchestrator.SqlServer` depends on Microsoft.Data.SqlClient 8.0
 
-- **New .NET tool `FlowOrchestrator.Cli`** (command `flow-orchestrator`) and **library
-  `FlowOrchestrator.StorageMigration`** (`FlowStorageCopier`). `flow-orchestrator storage copy --from sqlserver|postgresql
-  --from-connection … --to postgresql|sqlserver --to-connection … [--dry-run] [--verify-only] [--batch-size N]`
-  copies everything FlowOrchestrator stores — flow definitions (with the enabled flag), runs, steps, step
-  attempts, outputs (trigger body / headers, step inputs / outputs), run controls, idempotency keys, the
-  dispatch ledger and claims, schedule state (cron overrides, paused triggers), signal waiters, the webhook
-  delivery / rejection log, unexpired replay nonces, and the 1.x `FlowEvents` table when the source still has
-  it — so a SQL Server customer can move to PostgreSQL (or back) keeping the run history.
-- **Preflight, nothing written on refusal:** in-flight runs (`Running`) on the source (`--force` copies them
-  as they are), a target that already holds FlowOrchestrator rows, a source schema older than 2.0
-  (`--migrate-source` upgrades it in place), a schema with columns the tool does not know, and the same
-  database on both sides. The target schema is created by the target backend's own 2.0 migrator.
-- **Bulk paths, bounded memory:** keyset-ordered batches (`SqlBulkCopy` into SQL Server, binary `COPY` into
-  PostgreSQL), one transaction per table, `--resume` after an interruption; ids are kept and the
-  `WebhookRejections` identity / sequence is moved past them.
-- **Verification:** row count plus an order-independent SHA-256 content checksum per table, computed from
-  normalized values on both sides; `--verify-only` re-runs it. Exit codes `0` ok, `2` usage, `3` preflight
-  refused, `4` mismatch, `5` copy failed, `130` cancelled. Connection values accept `env:NAME`.
-- **Transport-security warning:** connection strings are used exactly as given, but a SQL Server one that sets
-  `Encrypt=False`/`Optional` or `TrustServerCertificate=True` prints a `warning:` line to stderr (even with
-  `--quiet`) and in the summary; from code it is `FlowStorageCopyResult.Warnings`, a
-  `FlowStorageCopyPhase.Warning` progress event and a `Warning` log (event 7404).
+- **Microsoft.Data.SqlClient 7.1.2 → 8.0.0.** 8.0 ships a `net10.0` build, so the transitive
+  `System.Security.Cryptography.Pkcs` pin that lifted 7.1.2's `net9.0` dependency group out of the
+  vulnerable 9.0.x line is gone (it now resolves the patched 10.0.x line; `dotnet list package --vulnerable`
+  is clean).
+- **Read before upgrading — SqlClient 8.0 changes two connection defaults** for every SQL Server connection
+  your host makes, FlowOrchestrator's included:
+  - an omitted `MultiSubnetFailover` now means `true` for eligible TCP connections;
+  - waiting for a pooled connection now spends the same `Connect Timeout` budget as the login, so
+    `Open` can time out sooner under pool exhaustion. `Switch.Microsoft.Data.SqlClient.UseOverallConnectTimeoutForPoolWait = false`
+    restores the separate budgets.
+
+  Set either explicitly in the connection string or through the AppContext switch to keep 7.x behaviour. See the
+  [SqlClient 8.0 release notes](https://github.com/dotnet/SqlClient/releases/tag/v8.0.0).
+
+### Changed — migrator background index build is awaitable
+
 - `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
   are now public, for code that runs a migrator outside a host and must wait for its background index build.
-- Runbook, table mapping and limits: [Switching Storage Backend](docs/articles/switching-storage-backend.md).
-
-#### Read before using it
-
-- **Timestamps lose their seventh digit SQL Server → PostgreSQL** (100 ns → 1 µs, truncated) and are stored
-  in UTC; PostgreSQL → SQL Server is exact. **Hangfire storage is not copied** — drain the queues; recurring
-  jobs are re-registered from the manifests and the copied schedule state on start-up. The SQL Server
-  run-search token index is rebuilt by `UseRunSearchIndex()`'s back-fill, not copied.
-- Text PostgreSQL cannot store (U+0000, unpaired surrogates) and keys that collide under a case-insensitive
-  SQL Server collation stop the copy with the table, row key and column named.
 
 ### Added — per-signal authorization and bearer-token access for `WaitForSignal`
 
@@ -286,6 +270,99 @@ providers only:
 - A flow with such a key now **fails startup** instead of misbehaving. Rename the step and every
   `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
   [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
+
+### Fixed — a worker killed mid-step no longer leaves its run `Running` for ever (step execution leases)
+
+The execution claim that makes a step run once (`FlowStepClaims`) never expired. A worker killed in the middle of
+a handler — or between its claim and its start write, or between its handler and its completion write — left its
+claim behind; every redelivery of the step exited as "claimed by another worker", and the run stayed `Running`
+until an operator stepped in (RFC 2.0 C1). The pre-release stress harness hit it on every backend: 23 of 600 runs
+on SQL Server + Hangfire, 10 on PostgreSQL + Hangfire, 9 on Service Bus, with 6 hard kills.
+
+- A step is now claimed under a **lease** (`FlowRunControlOptions.StepLeaseDuration`, default 60 s). The
+  process running it renews it every `StepLeaseRenewInterval` (default 20 s, at most a third of the lease), so a
+  live handler is never taken over however long it runs.
+- Once the owner stops renewing, the next delivery of the step **takes the expired lease over** (the runtime's own
+  redelivery: Hangfire's invisibility timeout, a Service Bus lock expiry) and runs the step again. A step that
+  reached a terminal status is never taken over, so execution stays once-only for completed work.
+- `FlowStepLeaseHostedService` renews the process's leases and, every half lease (1–30 s), **redelivers** steps
+  whose lease expired without a terminal status, for runtimes whose redelivery came while the lease was still
+  live, or never came. Every replica runs it; the selection is atomic.
+- Every write of an attempt is **fenced** by its lease: a stalled worker that returns after a takeover has its
+  completion rejected (and skips its output write once a renewal told it), so it cannot overwrite the new owner's
+  outcome. A loop step parked on its barrier pins its lease, so it is never re-run.
+
+**Read before upgrading.**
+- An interrupted attempt now runs again after a crash — at-least-once for the attempt the crash cut short, as
+  in Temporal. Make handlers with side effects idempotent, as the at-least-once runtimes already required.
+- `StepLeaseDuration = null` restores the 1.x claim. Claims written by 1.x have no lease and stay permanent.
+- New table `FlowStepLeases` / `flow_step_leases` with a filtered index; `FlowStepClaims` is not altered.
+- Custom storage backends must implement six new `IFlowRunRuntimeStore` members (`TryAcquireStepLeaseAsync`,
+  `RenewStepLeasesAsync`, `ReleaseStepLeaseAsync`, `PinStepLeaseAsync`, `TryRecordLeasedStepCompleteAsync`,
+  `LeaseExpiredStepLeasesAsync`); there is no default implementation. See the migration guide's checklist.
+- `FlowOrchestratorEngine` takes an optional `StepLeaseKeeper`; a hand-built engine without one keeps 1.x claims.
+- Logs: EventIds 3030-3032 (takeover, lease lost, pin failed) and 5050-5054 (sweep, renewal).
+
+### Fixed — Hangfire.PostgreSql: a step whose worker was killed waits for the lock timeout, now flagged at startup
+
+- **On Hangfire.PostgreSql job storage, a step whose worker process is killed during a Hangfire state
+  change runs again only after `DistributedLockTimeout` (10 min by default), not after
+  `InvisibilityTimeout`.** Hangfire.PostgreSql keeps distributed locks as rows in its `lock` table, and
+  nothing releases a row when the process that wrote it dies (upstream
+  [hangfire-postgres/Hangfire.PostgreSql#329](https://github.com/hangfire-postgres/Hangfire.PostgreSql/issues/329)).
+  The worker takes the job's `job:{id}:state-lock` for Enqueued → Processing and for Processing →
+  Succeeded. A kill inside either change leaves the row behind. The job is re-fetched once
+  `InvisibilityTimeout` has passed, and the worker that re-fetches it then waits on the orphaned row. Each
+  re-fetch until the row expires parks one more worker. Until then the step has a dispatch-ledger row,
+  no claim and no status row, which looks like a lost job. The 3-replica crash-recovery stress run
+  (60 s invisibility, 120 s quiet period) reported three runs in that state. Hangfire.SqlServer is not
+  affected: its `sp_getapplock` locks belong to the session and are released when the connection drops.
+- **`UseHangfire()` now logs a startup warning (EventId 3160) when the Hangfire job storage is
+  Hangfire.PostgreSql and `DistributedLockTimeout` is longer than `InvisibilityTimeout`.** The package
+  defaults (30 min / 10 min) do not warn. To keep crash recovery at the invisibility timeout, set
+  `PostgreSqlStorageOptions.DistributedLockTimeout` to at most `InvisibilityTimeout`. See
+  [Production checklist → Hangfire on PostgreSQL](docs/articles/production-checklist.md#hangfire-on-postgresql).
+  The check reads the options by name, because FlowOrchestrator does not reference the community package.
+  Integration tests against real PostgreSQL pin it to Hangfire.PostgreSql 1.21.1, together with the
+  recovery behaviour behind it.
+
+### Fixed — a trigger killed after registering its idempotency key no longer loses the delivery
+
+- **A retry is no longer absorbed as a duplicate of a run that never started (RFC 2.0 S7).** `TriggerAsync`
+  registers the `Idempotency-Key` before it creates the run. A process killed in between left the key
+  pointing at a run with no dispatched or recorded step, and possibly no run row at all. Every retry of
+  that delivery was then answered `Duplicate` with the dead run's id, so the run was lost silently. The
+  in-process compensation (`AbandonUnstartedRunAsync`) only covers an exception, not a kill. The stress
+  harness lost 1 run of 600 this way in its crash-recovery scenario. A duplicate trigger now takes the key
+  over when the registration is older than the new `FlowRunControlOptions.IdempotencyReservationTimeout`
+  (default **30 s**) and its run has **no dispatch-ledger row and no step row**. The retry starts a fresh
+  run, and the dead run is cancel-latched and completed `Failed`; its cancel reason names the run that
+  replaced it. A younger registration, or one whose run started work, is still answered `Duplicate`. The
+  store decides in one atomic operation, with the age measured on the clock that stamped the registration
+  (`SYSDATETIMEOFFSET()` / `NOW()` / the in-memory store's clock), so of N concurrent retries exactly one
+  starts the run and the rest are duplicates of it. If the first trigger was only slow, the steps it
+  dispatches after the takeover are skipped by the termination gate. A takeover logs EventId 1013
+  (Warning); EventId 1014 means completing the dead run failed, but its cancel latch is already set.
+- **No schema change:** `FlowIdempotencyKeys.CreatedAtUtc` / `flow_idempotency_keys.created_at_utc` already
+  stamp each registration.
+
+#### Read before upgrading
+
+- **Custom stores:** `IFlowRunControlStore` has a new required member, `TryTakeOverStaleIdempotencyKeyAsync`.
+  It has no default implementation, because a silent fallback would hide the lost delivery. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend)
+  for the contract.
+- A trigger that stalls for longer than `IdempotencyReservationTimeout` between registering its key and
+  dispatching its first step has its run cancelled, and the retry's run takes over. Raise the value if
+  your store can stall for that long. Setting zero or a negative value throws `ArgumentOutOfRangeException`.
+- **PostgreSQL:** a takeover holds a per-run advisory lock on the dead run (class `1179601234`, key
+  `hashtext(run_id::text)`), exclusive, while it checks and swaps. Every write of a ledger or step row
+  (`TryRecordDispatchAsync`, `RecordStepStartAsync`, `RecordSkippedStepAsync`) takes the same lock shared
+  in its existing statement or transaction, so no first dispatch of the dead run can slip in before the
+  latch commits. Only the run being taken over waits; shared with shared never waits, so dispatches of
+  other runs, and of the same run among themselves, are unaffected (measured within noise: about +2 µs
+  per insert on the server, no extra round trip). **SQL Server** takes key-range locks on the dead run's
+  rows only. Neither store takes a lock for a duplicate of a fresh or started run.
 
 ### Fixed — starting a PostgreSQL host beside running ones takes no table locks
 

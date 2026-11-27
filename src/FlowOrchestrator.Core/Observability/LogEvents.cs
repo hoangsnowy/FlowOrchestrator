@@ -37,6 +37,19 @@ public static class LogEvents
     /// </summary>
     public static readonly EventId StaleScheduleRejected = new(1012, nameof(StaleScheduleRejected));
 
+    /// <summary>
+    /// A duplicate trigger took over an idempotency key whose registration was older than
+    /// <c>FlowRunControlOptions.IdempotencyReservationTimeout</c> and whose run never started work (the
+    /// trigger that registered it died before creating the run); the retry starts a new run.
+    /// </summary>
+    public static readonly EventId IdempotencyReservationTakenOver = new(1013, nameof(IdempotencyReservationTakenOver));
+
+    /// <summary>
+    /// After taking over a stale idempotency reservation, completing the abandoned run as <c>Failed</c>
+    /// failed; the run's cancel latch is already set, so none of its steps can execute.
+    /// </summary>
+    public static readonly EventId StaleReservationRunCompletionFailed = new(1014, nameof(StaleReservationRunCompletionFailed));
+
     /// <summary>A step transitioned to <c>Running</c>.</summary>
     public static readonly EventId StepStarted = new(2000, nameof(StepStarted));
 
@@ -133,4 +146,16 @@ public static class LogEvents
     /// left the run open rather than complete it while steps were still ready or owed a skip row.
     /// </summary>
     public static readonly EventId ContinuationPassLimitReached = new(3015, nameof(ContinuationPassLimitReached));
+
+    /// <summary>
+    /// A delivery took over a step whose execution lease had expired without a terminal status: the worker
+    /// that held it died or lost its store, and the step runs again.
+    /// </summary>
+    public static readonly EventId StepLeaseTakenOver = new(3030, nameof(StepLeaseTakenOver));
+
+    /// <summary>An attempt found that another worker had taken its expired lease over; its outcome was discarded.</summary>
+    public static readonly EventId StepLeaseLost = new(3031, nameof(StepLeaseLost));
+
+    /// <summary>The lease of a loop step parked on its barrier could not be made permanent.</summary>
+    public static readonly EventId StepLeasePinFailed = new(3032, nameof(StepLeasePinFailed));
 }

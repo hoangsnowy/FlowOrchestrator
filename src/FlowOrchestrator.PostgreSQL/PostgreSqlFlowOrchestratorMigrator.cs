@@ -62,7 +62,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     /// logged and retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, the storage copy tool) and must not bulk-load
+    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not bulk-load
     /// <c>flow_runs</c> while the build is still running.
     /// </remarks>
     public Task BackgroundIndexBuild => _backgroundIndexBuild;
@@ -333,6 +333,23 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             claimed_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             PRIMARY KEY (run_id, step_key)
         );
+
+        -- Execution leases (2.0, RFC C1): the claim row says "taken", this row says by whom, until when, and under
+        -- which fence. A claim without a lease row is permanent (skip claims, claims written before 2.0).
+        -- expires_at is NULL once the lease is no longer live (released, pinned, or its step terminal); the row
+        -- is kept so the fence keeps rising across attempts.
+        CREATE TABLE IF NOT EXISTS flow_step_leases (
+            run_id         UUID         NOT NULL,
+            step_key       VARCHAR(256) NOT NULL,
+            fence          BIGINT       NOT NULL,
+            owner          VARCHAR(128) NOT NULL,
+            expires_at     TIMESTAMPTZ  NULL,
+            redelivered_at TIMESTAMPTZ  NULL,
+            PRIMARY KEY (run_id, step_key)
+        );
+
+        -- Live leases only, for the expired-lease sweep: stays as small as the number of steps executing.
+        {EnsureIndex("flow_step_leases", "ix_flow_step_leases_live", "(expires_at) WHERE expires_at IS NOT NULL")}
 
         CREATE TABLE IF NOT EXISTS flow_run_controls (
             run_id                  UUID         NOT NULL PRIMARY KEY,

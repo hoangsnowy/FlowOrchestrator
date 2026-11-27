@@ -218,8 +218,6 @@ dotnet add package FlowOrchestrator.Dashboard     # REST API + SPA dashboard
 dotnet add package FlowOrchestrator.Testing       # FlowTestHost — in-process integration test helper
 dotnet add package FlowOrchestrator.OpenTelemetry # one-call OTel: traces + metrics + logs over OTLP
 
-# Moving between SQL Server and PostgreSQL (run history included)
-dotnet tool install --global FlowOrchestrator.Cli # flow-orchestrator storage copy --from sqlserver --to postgresql ...
 ```
 
 Which packages a host references, by runtime:
@@ -423,8 +421,6 @@ Upgrading from 1.x to 2.0: see the [migration guide](https://hoangsnowy.github.i
 | `FlowOrchestrator.Dashboard` | `net10.0` · `net11.0` |
 | `FlowOrchestrator.Testing` | `net10.0` · `net11.0` |
 | `FlowOrchestrator.OpenTelemetry` | `net10.0` · `net11.0` |
-| `FlowOrchestrator.StorageMigration` | `net10.0` · `net11.0` |
-| `FlowOrchestrator.Cli` (.NET tool) | `net10.0` · `net11.0` |
 
 ---
 

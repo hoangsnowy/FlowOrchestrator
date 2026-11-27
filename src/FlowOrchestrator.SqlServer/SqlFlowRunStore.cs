@@ -586,6 +586,7 @@ public sealed class SqlFlowRunStore :
             BEGIN
                 UPDATE FlowRuns SET Status = 'Running', CompletedAt = NULL WHERE Id = @RunId;
                 DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey;
+                UPDATE FlowStepLeases SET ExpiresAt = NULL WHERE RunId = @RunId AND StepKey = @StepKey;
                 DELETE FROM FlowStepDispatches WHERE RunId = @RunId AND StepKey = @StepKey;
             END
 
@@ -633,6 +634,11 @@ public sealed class SqlFlowRunStore :
             FROM FlowStepClaims AS fsc
             INNER JOIN @Reset AS r ON r.StepKey = fsc.StepKey
             WHERE fsc.RunId = @RunId;
+
+            UPDATE fsl SET ExpiresAt = NULL
+            FROM FlowStepLeases AS fsl
+            INNER JOIN @Reset AS r ON r.StepKey = fsl.StepKey
+            WHERE fsl.RunId = @RunId;
 
             DELETE fsd
             FROM FlowStepDispatches AS fsd
@@ -937,9 +943,295 @@ public sealed class SqlFlowRunStore :
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.ExecuteAsync(
-            "DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey",
+            """
+            DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey;
+            UPDATE FlowStepLeases SET ExpiresAt = NULL WHERE RunId = @RunId AND StepKey = @StepKey AND ExpiresAt IS NOT NULL;
+            """,
             new { RunId = runId, StepKey = stepKey });
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One transaction. The claim insert takes a key-range lock in update mode on the claim (as
+    /// <see cref="TryClaimStepAsync"/>); a takeover then locks the lease row (<c>UPDLOCK, HOLDLOCK</c>) BEFORE it
+    /// reads the step's status in a separate statement, and <see cref="TryRecordLeasedStepCompleteAsync"/> locks
+    /// the same lease row before it writes the status — so a completion that committed first is always seen,
+    /// under locking read committed and under RCSI alike. The lease row is upserted on a fresh claim so its fence
+    /// keeps rising across attempts (a Pending re-poll or a manual retry deletes the claim, never the lease row).
+    /// Expiry is measured on <c>SYSDATETIMEOFFSET()</c>.
+    /// </remarks>
+    public async Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        try
+        {
+            var fence = await conn.ExecuteScalarAsync<long?>(
+                """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+
+                DECLARE @Fence BIGINT = NULL;
+
+                INSERT INTO FlowStepClaims (RunId, StepKey, ClaimedAt)
+                SELECT @RunId, @StepKey, SYSDATETIMEOFFSET()
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM FlowStepClaims WITH (UPDLOCK, HOLDLOCK)
+                    WHERE RunId = @RunId AND StepKey = @StepKey);
+
+                IF @@ROWCOUNT = 1
+                BEGIN
+                    MERGE FlowStepLeases WITH (HOLDLOCK, UPDLOCK) AS target
+                    USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
+                    ON target.RunId = source.RunId AND target.StepKey = source.StepKey
+                    WHEN MATCHED THEN
+                        UPDATE SET Fence = target.Fence + 1, Owner = @Owner,
+                                   ExpiresAt = DATEADD(MILLISECOND, @LeaseMs, SYSDATETIMEOFFSET()), RedeliveredAt = NULL
+                    WHEN NOT MATCHED THEN
+                        INSERT (RunId, StepKey, Fence, Owner, ExpiresAt)
+                        VALUES (@RunId, @StepKey, 1, @Owner, DATEADD(MILLISECOND, @LeaseMs, SYSDATETIMEOFFSET()));
+
+                    SELECT @Fence = Fence FROM FlowStepLeases WHERE RunId = @RunId AND StepKey = @StepKey;
+                END
+                ELSE
+                BEGIN
+                    DECLARE @Current BIGINT = NULL;
+                    SELECT @Current = Fence
+                    FROM FlowStepLeases WITH (UPDLOCK, HOLDLOCK)
+                    WHERE RunId = @RunId AND StepKey = @StepKey
+                      AND ExpiresAt IS NOT NULL AND ExpiresAt < SYSDATETIMEOFFSET();
+
+                    IF @Current IS NOT NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM FlowSteps
+                           WHERE RunId = @RunId AND StepKey = @StepKey AND Status NOT IN ('Running', 'Pending'))
+                    BEGIN
+                        UPDATE FlowStepLeases
+                        SET Fence = @Current + 1, Owner = @Owner,
+                            ExpiresAt = DATEADD(MILLISECOND, @LeaseMs, SYSDATETIMEOFFSET()), RedeliveredAt = NULL
+                        WHERE RunId = @RunId AND StepKey = @StepKey;
+                        SET @Fence = @Current + 1;
+                    END
+                END
+
+                COMMIT TRANSACTION;
+                SELECT @Fence;
+                """,
+                new { RunId = runId, StepKey = stepKey, Owner = ownerId, LeaseMs = LeaseMilliseconds(duration) }).ConfigureAwait(false);
+
+            return fence is { } f ? new StepLease(runId, stepKey, f) : null;
+        }
+        catch (SqlException ex) when (SqlUniqueViolation.Matches(ex))
+        {
+            // A concurrent claimer won the insert race.
+            return null;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>One round trip: one fenced <c>UPDATE … OUTPUT</c> per lease, in batches below the parameter limit.</remarks>
+    public async Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration)
+    {
+        if (leases.Count == 0)
+        {
+            return [];
+        }
+
+        var renewed = new List<StepLease>(leases.Count);
+        await using var conn = new SqlConnection(_connectionString);
+        const int perBatch = 500;   // 3 parameters each, well below SQL Server's 2100
+        var sql = new System.Text.StringBuilder(Math.Min(perBatch, leases.Count) * 200);
+        for (var start = 0; start < leases.Count; start += perBatch)
+        {
+            var count = Math.Min(perBatch, leases.Count - start);
+            sql.Clear();
+            var parameters = new DynamicParameters();
+            parameters.Add("LeaseMs", LeaseMilliseconds(duration));
+            sql.Append("DECLARE @Renewed TABLE (RunId UNIQUEIDENTIFIER, StepKey NVARCHAR(256), Fence BIGINT);\n");
+            for (var i = 0; i < count; i++)
+            {
+                var lease = leases[start + i];
+                parameters.Add($"r{i}", lease.RunId);
+                parameters.Add($"k{i}", lease.StepKey);
+                parameters.Add($"f{i}", lease.Fence);
+                sql.Append("UPDATE FlowStepLeases SET ExpiresAt = DATEADD(MILLISECOND, @LeaseMs, SYSDATETIMEOFFSET()) ")
+                   .Append("OUTPUT inserted.RunId, inserted.StepKey, inserted.Fence INTO @Renewed ")
+                   .Append($"WHERE RunId = @r{i} AND StepKey = @k{i} AND Fence = @f{i} AND ExpiresAt IS NOT NULL;\n");
+            }
+
+            sql.Append("SELECT RunId, StepKey, Fence FROM @Renewed;");
+            var rows = await conn.QueryAsync<(Guid RunId, string StepKey, long Fence)>(sql.ToString(), parameters).ConfigureAwait(false);
+            foreach (var (runId, stepKey, fence) in rows)
+            {
+                renewed.Add(new StepLease(runId, stepKey, fence));
+            }
+        }
+
+        return renewed;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One transaction: the claim is deleted only while the lease row still carries this fence; the lease row is
+    /// kept (its expiry cleared) so the next attempt's fence is higher.
+    /// </remarks>
+    public async Task<bool> ReleaseStepLeaseAsync(StepLease lease)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var won = await conn.ExecuteScalarAsync<int>(
+            """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
+            UPDATE FlowStepLeases
+            SET ExpiresAt = NULL
+            WHERE RunId = @RunId AND StepKey = @StepKey AND Fence = @Fence;
+
+            DECLARE @Won INT = @@ROWCOUNT;
+            IF @Won > 0
+                DELETE FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey;
+
+            COMMIT TRANSACTION;
+            SELECT @Won;
+            """,
+            new { lease.RunId, lease.StepKey, lease.Fence }).ConfigureAwait(false);
+        return won > 0;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> PinStepLeaseAsync(StepLease lease)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var rows = await conn.ExecuteAsync(
+            "UPDATE FlowStepLeases SET ExpiresAt = NULL WHERE RunId = @RunId AND StepKey = @StepKey AND Fence = @Fence",
+            new { lease.RunId, lease.StepKey, lease.Fence }).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One transaction: the lease row is locked first (the takeover in <see cref="TryAcquireStepLeaseAsync"/> locks
+    /// it too, so the two serialise), the fence and the claim are checked, then the same writes as
+    /// <see cref="RecordStepCompleteAsync"/>. A terminal status clears the lease's expiry, which makes the claim
+    /// permanent and drops the row from the live-lease index. The token index write, when on, follows the
+    /// commit, as in <see cref="TryCompleteRunningStepAsync"/>.
+    /// </remarks>
+    public async Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var tokens = _tokenIndex?.TokenizeStep(lease.StepKey, errorMessage, outputJson);
+        var parameters = new
+        {
+            lease.RunId,
+            lease.StepKey,
+            lease.Fence,
+            Status = status,
+            OutputJson = outputJson,
+            ErrorMessage = errorMessage,
+            Terminal = status is not (nameof(StepStatus.Running) or nameof(StepStatus.Pending)),
+            SearchTokens = tokens,
+        };
+
+        var won = tokens is not null
+            ? await conn.ExecuteScalarAsync<int>(RecordLeasedStepCompleteSql + """
+
+                DECLARE @SearchStartedAt DATETIMEOFFSET = CASE WHEN @Won > 0 THEN (SELECT StartedAt FROM FlowRuns WHERE Id = @RunId) END;
+                DECLARE @SearchRunId UNIQUEIDENTIFIER = @RunId;
+                """ + SqlServerRunSearchTokenIndex.InsertTokensSql + """
+
+                SELECT @Won;
+                """, parameters).ConfigureAwait(false)
+            : await conn.ExecuteScalarAsync<int>(RecordLeasedStepCompleteSql + "SELECT @Won;", parameters).ConfigureAwait(false);
+
+        if (won > 0 && _externalIndex is { } index)
+        {
+            var document = new StepSearchDocument(lease.RunId, lease.StepKey, status, errorMessage, outputJson);
+            await IndexBestEffortAsync(() => index.IndexStepAsync(document, CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        return won > 0;
+    }
+
+    private const string RecordLeasedStepCompleteSql = """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+
+            DECLARE @Won INT = 0;
+            SELECT @Won = 1
+            FROM FlowStepLeases WITH (UPDLOCK, HOLDLOCK)
+            WHERE RunId = @RunId AND StepKey = @StepKey AND Fence = @Fence
+              AND EXISTS (SELECT 1 FROM FlowStepClaims WHERE RunId = @RunId AND StepKey = @StepKey);
+
+            IF @Won > 0
+            BEGIN
+                UPDATE FlowSteps
+                SET Status = @Status, OutputJson = @OutputJson, ErrorMessage = @ErrorMessage, CompletedAt = SYSDATETIMEOFFSET()
+                WHERE RunId = @RunId AND StepKey = @StepKey;
+
+                UPDATE attempts
+                SET Status = @Status, OutputJson = @OutputJson, ErrorMessage = @ErrorMessage, CompletedAt = SYSDATETIMEOFFSET()
+                FROM FlowStepAttempts AS attempts
+                INNER JOIN (
+                    SELECT TOP (1) RunId, StepKey, AttemptNo
+                    FROM FlowStepAttempts
+                    WHERE RunId = @RunId AND StepKey = @StepKey
+                    ORDER BY AttemptNo DESC
+                ) AS latest
+                    ON latest.RunId = attempts.RunId
+                   AND latest.StepKey = attempts.StepKey
+                   AND latest.AttemptNo = attempts.AttemptNo;
+
+                IF @Terminal = 1
+                    UPDATE FlowStepLeases SET ExpiresAt = NULL WHERE RunId = @RunId AND StepKey = @StepKey;
+            END
+
+            COMMIT TRANSACTION;
+
+            """;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One statement: <c>UPDATE TOP … OUTPUT</c> selects and stamps the rows atomically, and <c>READPAST</c> makes a
+    /// concurrent sweep on another replica skip rows this one holds. The candidate scan is served by the filtered
+    /// index <c>IX_FlowStepLeases_Live</c>, so its cost follows the number of steps executing, not the history.
+    /// </remarks>
+    public async Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount)
+    {
+        if (maxCount <= 0)
+        {
+            return [];
+        }
+
+        await using var conn = new SqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(Guid RunId, Guid FlowId, string StepKey)>(
+            """
+            UPDATE TOP (@MaxCount) l
+            SET l.RedeliveredAt = SYSDATETIMEOFFSET()
+            OUTPUT inserted.RunId, r.FlowId, inserted.StepKey
+            FROM FlowStepLeases AS l WITH (ROWLOCK, READPAST)
+            INNER JOIN FlowRuns AS r ON r.Id = l.RunId
+            WHERE l.ExpiresAt IS NOT NULL
+              AND l.ExpiresAt < SYSDATETIMEOFFSET()
+              AND (l.RedeliveredAt IS NULL OR l.RedeliveredAt <= DATEADD(MILLISECOND, -@BackoffMs, SYSDATETIMEOFFSET()))
+              AND r.Status = 'Running'
+              AND EXISTS (
+                  SELECT 1 FROM FlowStepClaims AS c
+                  WHERE c.RunId = l.RunId AND c.StepKey = l.StepKey)
+              AND NOT EXISTS (
+                  SELECT 1 FROM FlowSteps AS s
+                  WHERE s.RunId = l.RunId AND s.StepKey = l.StepKey AND s.Status NOT IN ('Running', 'Pending'));
+            """,
+            new { MaxCount = maxCount, BackoffMs = LeaseMilliseconds(redeliveryBackoff) }).ConfigureAwait(false);
+
+        var expired = new List<ExpiredStepLease>();
+        foreach (var (runId, flowId, stepKey) in rows)
+        {
+            expired.Add(new ExpiredStepLease(runId, flowId, stepKey));
+        }
+
+        return expired;
+    }
+
+    private static int LeaseMilliseconds(TimeSpan value) => (int)Math.Clamp(value.TotalMilliseconds, 0, int.MaxValue);
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge)
@@ -971,6 +1263,11 @@ public sealed class SqlFlowRunStore :
             FROM FlowStepDispatches AS d
             INNER JOIN @Released AS r ON r.StepKey = d.StepKey
             WHERE d.RunId = @RunId;
+
+            UPDATE l SET ExpiresAt = NULL
+            FROM FlowStepLeases AS l
+            INNER JOIN @Released AS r ON r.StepKey = l.StepKey
+            WHERE l.RunId = @RunId;
 
             COMMIT TRANSACTION;
 
@@ -1270,6 +1567,114 @@ public sealed class SqlFlowRunStore :
         }
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// One batch. An unlocked probe (the same predicate, read without locks) answers the common case — a
+    /// duplicate of a fresh reservation, or of a run that started work however old — without a transaction or
+    /// a range lock; webhook providers re-deliver for days, so late duplicates of live runs are routine. Only a
+    /// reservation the probe sees as stale and unstarted enters the transaction, where one <c>UPDATE</c>
+    /// re-checks the whole
+    /// predicate: owner, age on <c>SYSDATETIMEOFFSET()</c> (the clock that stamped <c>CreatedAtUtc</c>), and no
+    /// <c>FlowStepDispatches</c> / <c>FlowSteps</c> row for the stale run.
+    /// </para>
+    /// <para>
+    /// Locks: <c>UPDLOCK, HOLDLOCK</c> on the key row serialises concurrent takeovers (the second re-evaluates
+    /// after the first commits, sees the new owner and matches nothing). <c>HOLDLOCK</c> on the two
+    /// <c>NOT EXISTS</c> probes takes key-range locks on the stale run's prefix of both clustered primary keys
+    /// (<c>RunId, StepKey</c>), so a slow original trigger cannot insert its first ledger or step row between
+    /// the probe and the commit; such an insert waits and lands after the cancel latch, which this transaction
+    /// sets, so the step it dispatches is skipped by the termination gate.
+    /// </para>
+    /// </remarks>
+    public async Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+        Guid flowId,
+        string triggerKey,
+        string idempotencyKey,
+        Guid staleRunId,
+        Guid newRunId,
+        TimeSpan reservationTimeout)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<Guid?>(
+            """
+            SET XACT_ABORT ON;
+
+            DECLARE @Owner UNIQUEIDENTIFIER = NULL;
+            DECLARE @Candidate BIT = 0;
+
+            SELECT @Owner = RunId,
+                   @Candidate = CASE
+                       WHEN RunId = @StaleRunId
+                        AND DATEDIFF_BIG(MILLISECOND, CreatedAtUtc, SYSDATETIMEOFFSET()) >= @TimeoutMs
+                        AND NOT EXISTS (SELECT 1 FROM FlowStepDispatches WHERE RunId = @StaleRunId)
+                        AND NOT EXISTS (SELECT 1 FROM FlowSteps WHERE RunId = @StaleRunId)
+                       THEN 1 ELSE 0 END
+            FROM FlowIdempotencyKeys
+            WHERE FlowId = @FlowId
+              AND TriggerKey = @TriggerKey
+              AND IdempotencyKey = @IdempotencyKey;
+
+            IF @Candidate = 1
+            BEGIN
+                BEGIN TRANSACTION;
+
+                UPDATE k
+                SET RunId = @NewRunId,
+                    CreatedAtUtc = SYSDATETIMEOFFSET()
+                FROM FlowIdempotencyKeys AS k WITH (UPDLOCK, HOLDLOCK)
+                WHERE k.FlowId = @FlowId
+                  AND k.TriggerKey = @TriggerKey
+                  AND k.IdempotencyKey = @IdempotencyKey
+                  AND k.RunId = @StaleRunId
+                  AND DATEDIFF_BIG(MILLISECOND, k.CreatedAtUtc, SYSDATETIMEOFFSET()) >= @TimeoutMs
+                  AND NOT EXISTS (SELECT 1 FROM FlowStepDispatches AS d WITH (HOLDLOCK) WHERE d.RunId = @StaleRunId)
+                  AND NOT EXISTS (SELECT 1 FROM FlowSteps AS s WITH (HOLDLOCK) WHERE s.RunId = @StaleRunId);
+
+                IF @@ROWCOUNT > 0
+                BEGIN
+                    MERGE FlowRunControls WITH (HOLDLOCK, UPDLOCK) AS target
+                    USING (SELECT @StaleRunId AS RunId) AS source
+                    ON target.RunId = source.RunId
+                    WHEN MATCHED THEN
+                        UPDATE SET
+                            CancelRequested = 1,
+                            CancelReason = CASE WHEN target.CancelRequested = 1 THEN target.CancelReason ELSE @Reason END,
+                            CancelRequestedAtUtc = COALESCE(target.CancelRequestedAtUtc, SYSDATETIMEOFFSET())
+                    WHEN NOT MATCHED THEN
+                        INSERT (RunId, FlowId, TriggerKey, IdempotencyKey, TimeoutAtUtc, CancelRequested, CancelReason, CancelRequestedAtUtc)
+                        VALUES (@StaleRunId, @FlowId, @ControlTriggerKey, @ControlIdempotencyKey, NULL, 1, @Reason, SYSDATETIMEOFFSET());
+                END
+
+                -- Read the owner under the transaction: ours when the UPDATE matched, otherwise whoever
+                -- committed a takeover first (our UPDATE waited on its lock).
+                SET @Owner = (
+                    SELECT RunId
+                    FROM FlowIdempotencyKeys
+                    WHERE FlowId = @FlowId
+                      AND TriggerKey = @TriggerKey
+                      AND IdempotencyKey = @IdempotencyKey);
+
+                COMMIT TRANSACTION;
+            END
+
+            SELECT @Owner;
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = triggerKey.Trim().ToLowerInvariant(),
+                IdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey),
+                StaleRunId = staleRunId,
+                NewRunId = newRunId,
+                TimeoutMs = (long)reservationTimeout.TotalMilliseconds,
+                Reason = IdempotencyKeyStorage.TakenOverCancelReason(newRunId),
+                // The control record keeps the caller's spelling, like ConfigureRunAsync.
+                ControlTriggerKey = triggerKey,
+                ControlIdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey)
+            }).ConfigureAwait(false);
+    }
+
     public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
         await using var conn = new SqlConnection(_connectionString);
@@ -1306,6 +1711,12 @@ public sealed class SqlFlowRunStore :
             DELETE fsc
             FROM FlowStepClaims fsc
             INNER JOIN FlowRuns fr ON fr.Id = fsc.RunId
+            WHERE fr.CompletedAt IS NOT NULL
+              AND fr.CompletedAt < @CutoffUtc;
+
+            DELETE fsl
+            FROM FlowStepLeases fsl
+            INNER JOIN FlowRuns fr ON fr.Id = fsl.RunId
             WHERE fr.CompletedAt IS NOT NULL
               AND fr.CompletedAt < @CutoffUtc;
 

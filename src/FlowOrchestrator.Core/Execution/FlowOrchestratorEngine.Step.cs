@@ -73,7 +73,24 @@ public sealed partial class FlowOrchestratorEngine
             // Pre-1.22 the claim was at schedule time which assumed 1:1 enqueue→execute — broken
             // under broadcast. Released by RetryStepAsync and the Pending re-schedule path so the
             // SAME step can claim again on a fresh attempt.
-            var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+            //
+            // 2.0 (RFC C1): with the lease keeper the claim is a lease that expires unless renewed, and a lease
+            // whose worker died is taken over here — before, a worker killed mid-handler left a claim that made
+            // every redelivery exit, and the run stayed Running for ever. Every write this attempt makes from
+            // now on is fenced by the lease, so an attempt that lost it cannot overwrite its successor's work.
+            // O(1) per step execution: one claim statement, one keeper insert.
+            StepLease? lease = null;
+            bool claimed;
+            if (_leaseKeeper is { Duration: { } leaseDuration } keeper)
+            {
+                lease = await _runtimeStore.TryAcquireStepLeaseAsync(ctx.RunId, step.Key, keeper.OwnerId, leaseDuration).ConfigureAwait(false);
+                claimed = lease is not null;
+            }
+            else
+            {
+                claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+            }
+
             if (!claimed)
             {
                 activity?.SetTag("flow.step.claim_lost", true);
@@ -86,6 +103,14 @@ public sealed partial class FlowOrchestratorEngine
                 }
 
                 return null;
+            }
+
+            // Renewed until this attempt is over — the handler, its completion write and the continuation.
+            using var leaseHandle = lease is null ? null : _leaseKeeper!.Track(lease);
+            if (lease is { Fence: > 1 })
+            {
+                activity?.SetTag("flow.step.lease_taken_over", true);
+                EngineLog.StepLeaseTakenOver(_logger, step.Key, lease.Fence);
             }
 
             // From here until the start write succeeds the step is claimed with no status row. A failure
@@ -101,7 +126,7 @@ public sealed partial class FlowOrchestratorEngine
             catch (Exception)
             {
                 // Catch-all-and-rethrow: never swallowed, cancellation included.
-                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
                 throw;
             }
 
@@ -130,7 +155,7 @@ public sealed partial class FlowOrchestratorEngine
             {
                 // Catch-all-and-rethrow, as above: logged, released, never swallowed.
                 EngineLog.StepStartTrackingFailed(_logger, ex);
-                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
                 throw;
             }
 
@@ -140,6 +165,17 @@ public sealed partial class FlowOrchestratorEngine
             try
             {
                 result = await _stepExecutor.ExecuteAsync(ctx, flow, step).ConfigureAwait(false);
+
+                // A renewal already found the lease taken over: the step's new owner writes its output. The
+                // fenced completion below rejects this attempt in any case; skipping the output write keeps
+                // it from overwriting the new owner's output in the window before that.
+                if (leaseHandle is { IsLost: true })
+                {
+                    EngineLog.StepLeaseLost(_logger, step.Key, lease!.Fence);
+                    activity?.SetTag("flow.step.lease_lost", true);
+                    return null;
+                }
+
                 await _outputsRepository.SaveStepOutputAsync(ctx, flow, step, result).ConfigureAwait(false);
             }
             // Handler boundary: any exception (including OperationCanceledException) is captured
@@ -180,15 +216,55 @@ public sealed partial class FlowOrchestratorEngine
             var isBarrierParked = result.Status == StepStatus.Running;
             if (!isBarrierParked)
             {
+                var recorded = true;
                 try
                 {
                     var outputJson = SafeSerialize(result.Result);
-                    await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
-                        .ConfigureAwait(false);
+                    if (lease is not null)
+                    {
+                        recorded = await _runtimeStore.TryRecordLeasedStepCompleteAsync(lease, result.Status.ToString(), outputJson, result.FailedReason)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
+                            .ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // The completion is not durable. With a lease, the step stays Running under a lease that
+                    // stops being renewed once this attempt is over, so the expired-lease sweep runs it again
+                    // (RFC 2.0 S3) instead of the run waiting on it for ever.
                     EngineLog.StepCompletionTrackingFailed(_logger, ex);
+                }
+
+                if (!recorded)
+                {
+                    // Another worker took the expired lease over and owns the step now: its attempt records the
+                    // outcome and runs the continuation. Doing either here would race it.
+                    EngineLog.StepLeaseLost(_logger, step.Key, lease!.Fence);
+                    activity?.SetTag("flow.step.lease_lost", true);
+                    return null;
+                }
+            }
+            else if (lease is not null)
+            {
+                // Parked on its loop barrier: the handler has returned and nothing renews the lease any more, yet
+                // the step must not be run again (that would fan the loop out a second time). Make it permanent;
+                // the barrier settle records the step's terminal status.
+                try
+                {
+                    if (!await _runtimeStore.PinStepLeaseAsync(lease).ConfigureAwait(false))
+                    {
+                        EngineLog.StepLeaseLost(_logger, step.Key, lease.Fence);
+                        activity?.SetTag("flow.step.lease_lost", true);
+                        return null;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    EngineLog.StepLeasePinFailed(_logger, ex, step.Key);
                 }
             }
 
@@ -245,12 +321,23 @@ public sealed partial class FlowOrchestratorEngine
                     // this is a completion write rather than a start+complete pair.
                     try
                     {
-                        await _runStore.RecordStepCompleteAsync(
-                            ctx.RunId,
-                            step.Key,
-                            StepStatus.Skipped.ToString(),
-                            null,
-                            $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                        if (lease is not null)
+                        {
+                            await _runtimeStore.TryRecordLeasedStepCompleteAsync(
+                                lease,
+                                StepStatus.Skipped.ToString(),
+                                null,
+                                $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await _runStore.RecordStepCompleteAsync(
+                                ctx.RunId,
+                                step.Key,
+                                StepStatus.Skipped.ToString(),
+                                null,
+                                $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                        }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -290,7 +377,7 @@ public sealed partial class FlowOrchestratorEngine
                 catch (Exception)
                 {
                     // Catch-all-and-rethrow, as on the dispatch failure below: never swallowed.
-                    await ReleaseClaimAfterFailedHandOffAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                    await ReleaseClaimAfterFailedHandOffAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
                     await ReassertDispatchAfterFailedRescheduleAsync(ctx.RunId, step.Key).ConfigureAwait(false);
                     throw;
                 }
@@ -305,7 +392,7 @@ public sealed partial class FlowOrchestratorEngine
                     EngineLog.PendingRescheduleLedgerTaken(_logger, step.Key);
                 }
 
-                await _runtimeStore.ReleaseStepClaimAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                await ReleaseClaimAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
 
                 // Reschedule the poll. If the dispatcher throws (transient queue/broker error)
                 // after the claim was released, the step must not be left status Pending, unclaimed
@@ -668,16 +755,17 @@ public sealed partial class FlowOrchestratorEngine
     /// </summary>
     /// <param name="runId">The run owning the step.</param>
     /// <param name="stepKey">The step whose hand-off failed.</param>
+    /// <param name="lease">The attempt's lease; <see langword="null"/> when leases are off.</param>
     /// <remarks>
     /// Swallows its own failure (logged): it runs on the failure path and must never mask the
     /// original exception, which the caller rethrows. If the store is down hard enough that this fails
     /// too, the claim stays held and the run is closed by the timeout sweep — no worse than before.
     /// </remarks>
-    private async Task ReleaseClaimAfterFailedHandOffAsync(Guid runId, string stepKey)
+    private async Task ReleaseClaimAfterFailedHandOffAsync(Guid runId, string stepKey, StepLease? lease)
     {
         try
         {
-            await _runtimeStore.ReleaseStepClaimAsync(runId, stepKey).ConfigureAwait(false);
+            await ReleaseClaimAsync(runId, stepKey, lease).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -686,12 +774,24 @@ public sealed partial class FlowOrchestratorEngine
     }
 
     /// <summary>
+    /// Releases this attempt's execution claim: fenced when it holds a lease (a lease another worker took over
+    /// is left alone), unconditional otherwise.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The claimed step.</param>
+    /// <param name="lease">The attempt's lease; <see langword="null"/> when leases are off.</param>
+    /// <returns>A task that completes once the release is durable.</returns>
+    private Task ReleaseClaimAsync(Guid runId, string stepKey, StepLease? lease)
+        => lease is null ? _runtimeStore.ReleaseStepClaimAsync(runId, stepKey) : _runtimeStore.ReleaseStepLeaseAsync(lease);
+
+    /// <summary>
     /// Best-effort release of the execution claim and the dispatch-ledger row of a step whose start
     /// (run-control read or start write) threw after the claim was won, so the step is neither claimed
     /// nor reserved while it has no status row. O(1): two point deletes, on the failure path only.
     /// </summary>
     /// <param name="runId">The run owning the step.</param>
     /// <param name="stepKey">The step whose start failed.</param>
+    /// <param name="lease">The attempt's lease; <see langword="null"/> when leases are off.</param>
     /// <remarks>
     /// <para>
     /// The claim goes first. The runtime's retry of the job then claims the step again and runs it; the
@@ -706,11 +806,11 @@ public sealed partial class FlowOrchestratorEngine
     /// <c>FlowRunControlOptions.OrphanedClaimTimeout</c>.
     /// </para>
     /// </remarks>
-    private async Task ReleaseAfterFailedStartAsync(Guid runId, string stepKey)
+    private async Task ReleaseAfterFailedStartAsync(Guid runId, string stepKey, StepLease? lease)
     {
         try
         {
-            await _runtimeStore.ReleaseStepClaimAsync(runId, stepKey).ConfigureAwait(false);
+            await ReleaseClaimAsync(runId, stepKey, lease).ConfigureAwait(false);
             await _runStore.ReleaseDispatchAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

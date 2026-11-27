@@ -4,6 +4,7 @@ using FlowOrchestrator.Hangfire.Telemetry;
 using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace FlowOrchestrator.Hangfire;
 
@@ -27,6 +28,12 @@ public static class HangfireFlowOrchestratorBuilderExtensions
     /// <see cref="TraceContextHangfireFilter"/> into <see cref="GlobalJobFilters"/> once per process so
     /// W3C trace context crosses the enqueue / perform boundary.
     /// </para>
+    /// <para>
+    /// On Hangfire.PostgreSql job storage, a hosted check logs a warning at startup when
+    /// <c>DistributedLockTimeout</c> is longer than <c>InvisibilityTimeout</c>: that storage's locks
+    /// outlive a killed process, so a step whose worker died mid state change waits for the lock
+    /// timeout before it runs again.
+    /// </para>
     /// </remarks>
     /// <param name="builder">The FlowOrchestrator builder to register into.</param>
     /// <returns>The same builder for chaining.</returns>
@@ -42,6 +49,10 @@ public static class HangfireFlowOrchestratorBuilderExtensions
         // Job targets Hangfire activates on the worker. TryAdd keeps a repeated UseHangfire() idempotent.
         services.TryAddTransient<IHangfireFlowTrigger, HangfireFlowOrchestrator>();
         services.TryAddTransient<IHangfireStepRunner, HangfireFlowOrchestrator>();
+
+        // Startup warning for a Hangfire.PostgreSql lock timeout that outlives its invisibility timeout,
+        // which turns crash recovery into a lock-timeout wait. TryAddEnumerable: one check per host.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, HangfirePostgreSqlLockTimeoutCheck>());
 
         // W3C trace-context propagation across the enqueue / dequeue boundary. Idempotent —
         // registering twice does not stack the filter. The GlobalJobFilters.Filters collection wraps

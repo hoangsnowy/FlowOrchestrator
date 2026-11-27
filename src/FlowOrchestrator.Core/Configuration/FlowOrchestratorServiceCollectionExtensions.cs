@@ -111,6 +111,10 @@ public static class FlowOrchestratorServiceCollectionExtensions
         // Re-delivers steps whose ledger row was written but whose runtime hand-off never returned
         // (process died mid-send, or the send hung). No-op on a store without LeaseUnsentDispatchesAsync.
         services.AddHostedService<FlowUnsentDispatchRecoveryHostedService>();
+        // Step execution leases (RFC 2.0 C1): the keeper renews the leases of steps executing here, and the
+        // sweep redelivers steps whose lease expired because the worker running them died.
+        services.TryAddSingleton<StepLeaseKeeper>();
+        services.AddHostedService<FlowStepLeaseHostedService>();
 
         services.AddSingleton<IFlowGraphPlanner, FlowGraphPlanner>();
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();

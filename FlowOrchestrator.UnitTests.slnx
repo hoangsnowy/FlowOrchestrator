@@ -9,8 +9,6 @@
     <Project Path="src/FlowOrchestrator.ServiceBus/FlowOrchestrator.ServiceBus.csproj" />
     <Project Path="src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj" />
     <Project Path="src/FlowOrchestrator.OpenTelemetry/FlowOrchestrator.OpenTelemetry.csproj" />
-    <Project Path="src/FlowOrchestrator.StorageMigration/FlowOrchestrator.StorageMigration.csproj" />
-    <Project Path="src/FlowOrchestrator.Cli/FlowOrchestrator.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/unit/">
     <Project Path="tests/unit/FlowOrchestrator.Core.UnitTests/FlowOrchestrator.Core.UnitTests.csproj" />
@@ -20,6 +18,5 @@
     <Project Path="tests/unit/FlowOrchestrator.SqlServer.UnitTests/FlowOrchestrator.SqlServer.UnitTests.csproj" />
     <Project Path="tests/unit/FlowOrchestrator.PostgreSQL.UnitTests/FlowOrchestrator.PostgreSQL.UnitTests.csproj" />
     <Project Path="tests/unit/FlowOrchestrator.Dashboard.UnitTests/FlowOrchestrator.Dashboard.UnitTests.csproj" />
-    <Project Path="tests/unit/FlowOrchestrator.StorageMigration.UnitTests/FlowOrchestrator.StorageMigration.UnitTests.csproj" />
   </Folder>
 </Solution>

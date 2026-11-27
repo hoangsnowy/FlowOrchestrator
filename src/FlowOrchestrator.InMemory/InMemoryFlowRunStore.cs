@@ -42,6 +42,12 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
     // Value: when the claim was taken (UTC), read by ReleaseOrphanedClaimsAsync.
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DateTimeOffset> _stepClaims = new();
+    // Execution leases (2.0, RFC C1), next to the claim they qualify: a claim without an entry is permanent.
+    // Every lease transition (acquire, takeover, renew, release, pin, fenced completion, sweep) runs under
+    // _leaseGate, so a takeover and a fenced completion of one step serialise. ExpiresAt is null once the lease
+    // is no longer live; the entry is kept so the fence keeps rising across attempts.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), LeaseState> _leases = new();
+    private readonly Lock _leaseGate = new();
     // Value: the runtime job id (null until annotated) and when the row was recorded or last leased.
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DispatchEntry> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
@@ -50,7 +56,8 @@ public sealed class InMemoryFlowRunStore :
     // path: Task.FromResult(bool) allocates a fresh Task on every call.
     private static readonly Task<bool> TrueTask = Task.FromResult(true);
     private static readonly Task<bool> FalseTask = Task.FromResult(false);
-    private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
+    // Value: the run the key maps to and when it was registered on Clock, read by TryTakeOverStaleIdempotencyKeyAsync.
+    private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), IdempotencyReservation> _idempotency = new();
 
     // ── Secondary per-run indexes ─────────────────────────────────────────────
     //
@@ -646,6 +653,7 @@ public sealed class InMemoryFlowRunStore :
             // claim was orphaned across retries; the engine now treats the claim as exclusive to
             // a single attempt, so retry must clear it.
             _stepClaims.TryRemove((runId, stepKey), out _);
+            ClearLease((runId, stepKey));
             if (_claimsByRun.TryGetValue(runId, out var set))
             {
                 set.TryRemove(stepKey, out _);
@@ -695,6 +703,7 @@ public sealed class InMemoryFlowRunStore :
             }
 
             _stepClaims.TryRemove((runId, stepKey), out _);
+            ClearLease((runId, stepKey));
             if (_claimsByRun.TryGetValue(runId, out var claimSet))
             {
                 claimSet.TryRemove(stepKey, out _);
@@ -965,11 +974,184 @@ public sealed class InMemoryFlowRunStore :
     public Task ReleaseStepClaimAsync(Guid runId, string stepKey)
     {
         _stepClaims.TryRemove((runId, stepKey), out _);
+        ClearLease((runId, stepKey));
         if (_claimsByRun.TryGetValue(runId, out var set))
         {
             set.TryRemove(stepKey, out _);
         }
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration)
+    {
+        var key = (runId, stepKey);
+        lock (_leaseGate)
+        {
+            var now = Clock.GetUtcNow();
+            if (_stepClaims.TryAdd(key, now))
+            {
+                _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+                var fresh = _leases.GetOrAdd(key, static _ => new LeaseState());
+                return Task.FromResult<StepLease?>(Stamp(fresh, key, ownerId, now + duration));
+            }
+
+            if (!_leases.TryGetValue(key, out var state)
+                || state.ExpiresAt is not { } expiresAt
+                || expiresAt >= now
+                || (_steps.TryGetValue(key, out var step) && IsTerminal(step.Status)))
+            {
+                return Task.FromResult<StepLease?>(null);
+            }
+
+            return Task.FromResult<StepLease?>(Stamp(state, key, ownerId, now + duration));
+        }
+
+        static StepLease Stamp(LeaseState state, (Guid RunId, string StepKey) key, string ownerId, DateTimeOffset expiresAt)
+        {
+            state.Fence++;
+            state.Owner = ownerId;
+            state.ExpiresAt = expiresAt;
+            state.RedeliveredAt = null;
+            return new StepLease(key.RunId, key.StepKey, state.Fence);
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration)
+    {
+        var renewed = new List<StepLease>(leases.Count);
+        lock (_leaseGate)
+        {
+            var expiresAt = Clock.GetUtcNow() + duration;
+            // Renewal cadence (every RenewInterval), not a step-completion path: the Where reads clearer here.
+            foreach (var (lease, state) in leases
+                .Select(l => (Lease: l, State: _leases.GetValueOrDefault((l.RunId, l.StepKey))))
+                .Where(x => x.State is { ExpiresAt: not null } s && s.Fence == x.Lease.Fence))
+            {
+                state!.ExpiresAt = expiresAt;
+                renewed.Add(lease);
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<StepLease>>(renewed);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> ReleaseStepLeaseAsync(StepLease lease)
+    {
+        var key = (lease.RunId, lease.StepKey);
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue(key, out var state) || state.Fence != lease.Fence)
+            {
+                return FalseTask;
+            }
+
+            state.ExpiresAt = null;
+            _stepClaims.TryRemove(key, out _);
+            if (_claimsByRun.TryGetValue(lease.RunId, out var set))
+            {
+                set.TryRemove(lease.StepKey, out _);
+            }
+
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> PinStepLeaseAsync(StepLease lease)
+    {
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue((lease.RunId, lease.StepKey), out var state) || state.Fence != lease.Fence)
+            {
+                return FalseTask;
+            }
+
+            state.ExpiresAt = null;
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage)
+    {
+        var key = (lease.RunId, lease.StepKey);
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue(key, out var state) || state.Fence != lease.Fence || !_stepClaims.ContainsKey(key))
+            {
+                return FalseTask;
+            }
+
+            RecordStepCompleteAsync(lease.RunId, lease.StepKey, status, outputJson, errorMessage);
+            if (IsTerminal(status))
+            {
+                state.ExpiresAt = null;
+            }
+
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>O(leases ever taken in live runs): a scan of the lease map under the gate, at sweep cadence only.</remarks>
+    public Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount)
+    {
+        List<ExpiredStepLease>? expired = null;
+        lock (_leaseGate)
+        {
+            var now = Clock.GetUtcNow();
+            var backoffCutoff = now - (redeliveryBackoff < TimeSpan.Zero ? TimeSpan.Zero : redeliveryBackoff);
+            foreach (var (key, state) in _leases)
+            {
+                if (expired is not null && expired.Count >= maxCount)
+                {
+                    break;
+                }
+
+                if (state.ExpiresAt is not { } expiresAt
+                    || expiresAt >= now
+                    || (state.RedeliveredAt is { } at && at > backoffCutoff)
+                    || !_stepClaims.ContainsKey(key)
+                    || !_runs.TryGetValue(key.RunId, out var run)
+                    || run.Status != "Running"
+                    || (_steps.TryGetValue(key, out var step) && IsTerminal(step.Status)))
+                {
+                    continue;
+                }
+
+                state.RedeliveredAt = now;
+                (expired ??= []).Add(new ExpiredStepLease(key.RunId, run.FlowId, key.StepKey));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<ExpiredStepLease>>(expired ?? []);
+    }
+
+    private void ClearLease((Guid RunId, string StepKey) key)
+    {
+        lock (_leaseGate)
+        {
+            if (_leases.TryGetValue(key, out var state))
+            {
+                state.ExpiresAt = null;
+            }
+        }
+    }
+
+    private static bool IsTerminal(string status)
+        => !string.Equals(status, nameof(StepStatus.Running), StringComparison.Ordinal)
+           && !string.Equals(status, nameof(StepStatus.Pending), StringComparison.Ordinal);
+
+    /// <summary>One step's execution lease; mutated only under <c>_leaseGate</c>.</summary>
+    private sealed class LeaseState
+    {
+        public long Fence;
+        public string Owner = string.Empty;
+        public DateTimeOffset? ExpiresAt;
+        public DateTimeOffset? RedeliveredAt;
     }
 
     /// <inheritdoc/>
@@ -998,6 +1180,7 @@ public sealed class InMemoryFlowRunStore :
             }
 
             claimSet.TryRemove(stepKey, out _);
+            ClearLease(key);
             if (_stepDispatches.TryRemove(key, out _) && _dispatchesByRun.TryGetValue(runId, out var dispatchSet))
             {
                 dispatchSet.TryRemove(stepKey, out _);
@@ -1155,9 +1338,9 @@ public sealed class InMemoryFlowRunStore :
     public Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
     {
         var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
-        if (_idempotency.TryGetValue(key, out var runId))
+        if (_idempotency.TryGetValue(key, out var reservation))
         {
-            return Task.FromResult<Guid?>(runId);
+            return Task.FromResult<Guid?>(reservation.RunId);
         }
 
         return Task.FromResult<Guid?>(null);
@@ -1166,7 +1349,7 @@ public sealed class InMemoryFlowRunStore :
     public Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
     {
         var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
-        var added = _idempotency.TryAdd(key, runId);
+        var added = _idempotency.TryAdd(key, new IdempotencyReservation(runId, Clock.GetUtcNow()));
         return Task.FromResult(added);
     }
 
@@ -1176,8 +1359,97 @@ public sealed class InMemoryFlowRunStore :
         var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
 
         // Conditional on the value: a registration that already points at another run is not ours to drop.
-        var removed = _idempotency.TryRemove(new KeyValuePair<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid>(key, runId));
+        // TryRemove(KeyValuePair) compares the whole value, so a takeover landing in between makes it miss.
+        var removed = _idempotency.TryGetValue(key, out var current)
+            && current.RunId == runId
+            && _idempotency.TryRemove(new KeyValuePair<(Guid FlowId, string TriggerKey, string IdempotencyKey), IdempotencyReservation>(key, current));
         return Task.FromResult(removed);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Age is judged on <see cref="Clock"/>, the clock that stamped the registration. Concurrent takeovers are
+    /// decided by one compare-and-swap on the whole reservation value (run id and registration time), so
+    /// exactly one wins; the losers return the winner's run id.
+    /// </para>
+    /// <para>
+    /// The started-work probe reads the per-run step and dispatch indexes without excluding a concurrent
+    /// first write, unlike the SQL stores' locked probe: taking a lock on the engine's dispatch path for a
+    /// case that needs a trigger stalled in-process for longer than the timeout is not worth its cost. A
+    /// process crash, the case the takeover exists for, also loses this store, so it cannot leave a stale
+    /// reservation behind; the cancel latch set after the swap still skips every step the stalled trigger
+    /// dispatches after it.
+    /// </para>
+    /// </remarks>
+    public Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+        Guid flowId,
+        string triggerKey,
+        string idempotencyKey,
+        Guid staleRunId,
+        Guid newRunId,
+        TimeSpan reservationTimeout)
+    {
+        var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
+        if (!_idempotency.TryGetValue(key, out var current))
+        {
+            return Task.FromResult<Guid?>(null);
+        }
+
+        if (current.RunId != staleRunId
+            || Clock.GetUtcNow() - current.RegisteredAt < reservationTimeout
+            || HasStartedWork(staleRunId))
+        {
+            return Task.FromResult<Guid?>(current.RunId);
+        }
+
+        if (!_idempotency.TryUpdate(key, new IdempotencyReservation(newRunId, Clock.GetUtcNow()), current))
+        {
+            // A concurrent takeover (or a release) changed the value first: answer whoever holds the key now.
+            return Task.FromResult<Guid?>(_idempotency.TryGetValue(key, out var winner) ? winner.RunId : null);
+        }
+
+        LatchTakenOverRun(staleRunId, flowId, triggerKey, idempotencyKey, newRunId);
+        return Task.FromResult<Guid?>(newRunId);
+    }
+
+    /// <summary>Whether <paramref name="runId"/> has a dispatch-ledger row or a step status row.</summary>
+    private bool HasStartedWork(Guid runId)
+        => (_dispatchesByRun.TryGetValue(runId, out var dispatched) && !dispatched.IsEmpty)
+           || (_stepKeysByRun.TryGetValue(runId, out var steps) && !steps.IsEmpty);
+
+    /// <summary>
+    /// Sets the cancel latch of a run whose reservation was taken over, creating its control record when the
+    /// trigger died before <see cref="ConfigureRunAsync"/>; a cancel already recorded keeps its reason.
+    /// </summary>
+    private void LatchTakenOverRun(Guid staleRunId, Guid flowId, string triggerKey, string idempotencyKey, Guid newRunId)
+    {
+        var now = Clock.GetUtcNow();
+        var reason = IdempotencyKeyStorage.TakenOverCancelReason(newRunId);
+        _runControls.AddOrUpdate(
+            staleRunId,
+            static (id, args) => new FlowRunControlRecord
+            {
+                RunId = id,
+                FlowId = args.flowId,
+                TriggerKey = args.triggerKey,
+                IdempotencyKey = IdempotencyKeyStorage.ToStorageForm(args.idempotencyKey),
+                CancelRequested = true,
+                CancelReason = args.reason,
+                CancelRequestedAtUtc = args.now
+            },
+            static (_, existing, args) =>
+            {
+                if (!existing.CancelRequested)
+                {
+                    existing.CancelRequested = true;
+                    existing.CancelReason = args.reason;
+                }
+
+                existing.CancelRequestedAtUtc ??= args.now;
+                return existing;
+            },
+            (flowId, triggerKey, idempotencyKey, reason, now));
     }
 
     public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
@@ -1219,6 +1491,11 @@ public sealed class InMemoryFlowRunStore :
             _stepClaims.TryRemove(key, out _);
         }
 
+        foreach (var key in _leases.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
+        {
+            _leases.TryRemove(key, out _);
+        }
+
         // The dispatch ledger is keyed independently of _steps: TryRecordDispatchAsync can record a
         // key that never produced a step row (dispatched, then the run was cancelled before the
         // worker picked it up), so it cannot be folded into the loop above without leaking exactly
@@ -1234,7 +1511,7 @@ public sealed class InMemoryFlowRunStore :
             _stepAttempts.TryRemove(key, out _);
         }
 
-        foreach (var key in _idempotency.Where(kvp => obsolete.Contains(kvp.Value)).Select(kvp => kvp.Key).ToArray())
+        foreach (var key in _idempotency.Where(kvp => obsolete.Contains(kvp.Value.RunId)).Select(kvp => kvp.Key).ToArray())
         {
             _idempotency.TryRemove(key, out _);
         }
@@ -1452,4 +1729,7 @@ public sealed class InMemoryFlowRunStore :
     /// <param name="JobId">The runtime job/message id; <see langword="null"/> until the hand-off returns.</param>
     /// <param name="At">When the row was recorded, re-stamped when <see cref="LeaseUnsentDispatchesAsync"/> leases it.</param>
     private readonly record struct DispatchEntry(string? JobId, DateTimeOffset At);
+
+    /// <summary>An idempotency-key registration: the run it maps to and when it was registered.</summary>
+    private readonly record struct IdempotencyReservation(Guid RunId, DateTimeOffset RegisteredAt);
 }

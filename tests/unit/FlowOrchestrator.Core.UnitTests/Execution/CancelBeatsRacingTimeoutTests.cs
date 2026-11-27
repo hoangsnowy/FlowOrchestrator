@@ -42,6 +42,10 @@ public sealed class CancelBeatsRacingTimeoutTests
 
         public Task<bool> ReleaseIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
             => inner.ReleaseIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey, runId);
+
+        public Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+            Guid flowId, string triggerKey, string idempotencyKey, Guid staleRunId, Guid newRunId, TimeSpan reservationTimeout)
+            => inner.TryTakeOverStaleIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey, staleRunId, newRunId, reservationTimeout);
     }
 
     private static IFlowDefinition TwoStepFlow()
