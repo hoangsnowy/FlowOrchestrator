@@ -170,7 +170,8 @@ public sealed class LegacyStepJobCompatibilityTests : IAsyncDisposable
         // Act
         await PerformAsync(job);
 
-        // Assert — without the decode the step saw no shipment id and no poll settings, and succeeded at once.
+        // Assert — without the decode the manifest filled the shipment id back in, but pollMinAttempts and the
+        // attempt count were gone, so the delivered shipment did not stay Pending.
         Assert.Equal(["S8"], _calls.ShipmentIds);
         Assert.Equal(StepStatus.Pending, await GetStepStatusAsync(runId, "track"));
     }
