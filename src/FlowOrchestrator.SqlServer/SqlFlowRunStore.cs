@@ -767,6 +767,116 @@ public sealed class SqlFlowRunStore :
             StringComparer.Ordinal);
     }
 
+    /// <summary>Most keys bound in one statement: SQL Server allows 2 100 parameters per request.</summary>
+    private const int StatusLookupChunkSize = 1000;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Clustered-key seeks on <c>(RunId, StepKey)</c>, at most <see cref="StatusLookupChunkSize"/> keys per
+    /// statement. Each statement is a fresh read-committed (RCSI: statement-snapshot) read on its own
+    /// connection, so it sees every write committed before it started — the visibility the engine's frontier
+    /// read relies on.
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
+        if (stepKeys.Count == 0)
+        {
+            return map;
+        }
+
+        await using var conn = new SqlConnection(_connectionString);
+        foreach (var chunk in stepKeys.Distinct(StringComparer.Ordinal).Chunk(StatusLookupChunkSize))
+        {
+            var rows = await conn.QueryAsync<(string StepKey, string Status)>(
+                "SELECT StepKey, Status FROM FlowSteps WHERE RunId = @RunId AND StepKey IN @StepKeys",
+                new { RunId = runId, StepKeys = chunk }).ConfigureAwait(false);
+            foreach (var (stepKey, status) in rows)
+            {
+                map[stepKey] = ParseStepStatus(status);
+            }
+        }
+
+        return map;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Served by the filtered index <c>IX_FlowSteps_RunId_Open</c>, which holds only Running and Pending rows;
+    /// the predicate below is its filter verbatim, as literals, so the optimizer can match it.
+    /// </remarks>
+    public async Task<bool> HasRunningOrPendingStepAsync(Guid runId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        var open = await conn.ExecuteScalarAsync<int>(
+            """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM FlowSteps
+                WHERE RunId = @RunId AND [Status] IN (N'Running', N'Pending')) THEN 1 ELSE 0 END
+            """,
+            new { RunId = runId }).ConfigureAwait(false);
+
+        return open == 1;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A clustered-key range seek on <c>(RunId, StepKey LIKE '{loop}.%')</c> — the loop's own rows — grouped by
+    /// iteration on the server, so one row travels back. The iteration segment is parsed with guarded string
+    /// functions (<c>TRY_CAST</c>, a <c>CASE</c> around every length) because SQL Server may evaluate an
+    /// expression before the predicate that would have filtered its row out. Only canonical indices (no
+    /// leading zero, at most nine digits) count, which is the form the engine writes. "Terminal" is every
+    /// status but Running and Pending — the same verdict <c>ParseStepStatus</c> reaches, which reads an
+    /// unrecognised status as Failed — so this count and the status map can never disagree.
+    /// </remarks>
+    public async Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
+    {
+        if (iterations <= 0 || bodyStepKeys.Count == 0)
+        {
+            return 0;
+        }
+
+        var body = bodyStepKeys.Distinct(StringComparer.Ordinal).ToArray();
+        await using var conn = new SqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<int>(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT p.Iteration
+                FROM FlowSteps AS s
+                CROSS APPLY (SELECT SUBSTRING(s.StepKey, @PrefixLength + 1, 256) AS Rest) AS r
+                CROSS APPLY (SELECT CHARINDEX(N'.', r.Rest) AS Dot) AS d
+                CROSS APPLY (SELECT
+                    LEFT(r.Rest, CASE WHEN d.Dot > 0 THEN d.Dot - 1 ELSE 0 END) AS Iteration,
+                    CASE WHEN d.Dot > 0 THEN SUBSTRING(r.Rest, d.Dot + 1, 256) ELSE N'' END AS Child) AS p
+                WHERE s.RunId = @RunId
+                  AND s.StepKey LIKE @Pattern ESCAPE N'\'
+                  AND s.[Status] NOT IN (N'Running', N'Pending')
+                  AND d.Dot BETWEEN 2 AND 10
+                  AND p.Iteration NOT LIKE N'%[^0-9]%'
+                  AND (p.Iteration = N'0' OR p.Iteration NOT LIKE N'0%')
+                  AND TRY_CAST(p.Iteration AS INT) < @Iterations
+                  AND p.Child IN @Body
+                GROUP BY p.Iteration
+                HAVING COUNT(*) = @BodyCount) AS settled
+            """,
+            new
+            {
+                RunId = runId,
+                Pattern = EscapeLikePrefix(loopStepKey) + ".%",
+                PrefixLength = loopStepKey.Length + 1,
+                Iterations = iterations,
+                Body = body,
+                BodyCount = body.Length
+            }).ConfigureAwait(false);
+    }
+
+    /// <summary>Escapes <c>LIKE</c> wildcards in <paramref name="value"/> for an <c>ESCAPE '\'</c> pattern.</summary>
+    private static string EscapeLikePrefix(string value) => value
+        .Replace("\\", "\\\\", StringComparison.Ordinal)
+        .Replace("%", "\\%", StringComparison.Ordinal)
+        .Replace("_", "\\_", StringComparison.Ordinal)
+        .Replace("[", "\\[", StringComparison.Ordinal);
+
     public async Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
     {
         await using var conn = new SqlConnection(_connectionString);

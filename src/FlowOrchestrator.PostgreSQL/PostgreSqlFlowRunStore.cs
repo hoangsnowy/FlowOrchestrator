@@ -687,6 +687,99 @@ public sealed class PostgreSqlFlowRunStore :
             StringComparer.Ordinal);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Primary-key lookups on <c>(run_id, step_key)</c> for the whole key set in one statement
+    /// (<c>= ANY(@StepKeys)</c> binds a single array parameter). The statement runs on its own connection
+    /// under <c>READ COMMITTED</c>, so its snapshot is taken when it starts and holds every write committed
+    /// before — the visibility the engine's frontier read relies on.
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
+        if (stepKeys.Count == 0)
+        {
+            return map;
+        }
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(string StepKey, string Status)>(
+            """
+            SELECT step_key AS "StepKey", status AS "Status"
+            FROM flow_steps
+            WHERE run_id = @RunId AND step_key = ANY(@StepKeys)
+            """,
+            new { RunId = runId, StepKeys = stepKeys.Distinct(StringComparer.Ordinal).ToArray() }).ConfigureAwait(false);
+        foreach (var (stepKey, status) in rows)
+        {
+            map[stepKey] = ParseStepStatus(status);
+        }
+
+        return map;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Served by the partial index <c>ix_flow_steps_run_id_open</c>, which holds only Running and Pending rows;
+    /// the predicate below implies its <c>WHERE</c>, so the planner can use it.
+    /// </remarks>
+    public async Task<bool> HasRunningOrPendingStepAsync(Guid runId)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<bool>(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM flow_steps
+                WHERE run_id = @RunId AND status IN ('Running', 'Pending'))
+            """,
+            new { RunId = runId }).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A primary-key range read of the run's rows filtered to the loop's prefix, grouped by iteration on the
+    /// server, so one row travels back. The key shape is checked with an anchored regular expression before
+    /// the iteration segment is cast (inside a <c>CASE</c>, because PostgreSQL does not promise to evaluate
+    /// the regex first). Only canonical indices count — no leading zero, at most nine digits — which is the
+    /// form the engine writes. "Terminal" is every status but Running and Pending, compared case-insensitively:
+    /// the verdict <c>ParseStepStatus</c> reaches, which reads an unrecognised status as Failed.
+    /// </remarks>
+    public async Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
+    {
+        if (iterations <= 0 || bodyStepKeys.Count == 0)
+        {
+            return 0;
+        }
+
+        var body = bodyStepKeys.Distinct(StringComparer.Ordinal).ToArray();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<int>(
+            """
+            SELECT COUNT(*)::int FROM (
+                SELECT split_part(r.rest, '.', 1) AS iteration
+                FROM flow_steps AS s
+                CROSS JOIN LATERAL (SELECT substr(s.step_key, @PrefixLength + 1) AS rest) AS r
+                WHERE s.run_id = @RunId
+                  AND left(s.step_key, @PrefixLength) = @Prefix
+                  AND lower(s.status) NOT IN ('running', 'pending')
+                  AND r.rest ~ '^(0|[1-9][0-9]{0,8})\.[^.]+$'
+                  AND (CASE WHEN r.rest ~ '^(0|[1-9][0-9]{0,8})\.[^.]+$'
+                            THEN split_part(r.rest, '.', 1)::int END) < @Iterations
+                  AND split_part(r.rest, '.', 2) = ANY(@Body)
+                GROUP BY 1
+                HAVING COUNT(*) = @BodyCount) AS settled
+            """,
+            new
+            {
+                RunId = runId,
+                Prefix = loopStepKey + ".",
+                PrefixLength = loopStepKey.Length + 1,
+                Iterations = iterations,
+                Body = body,
+                BodyCount = body.Length
+            }).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

@@ -402,6 +402,10 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
         -- heap. With them the scan is index-only. Postgres has supported INCLUDE since 11.
         {EnsureIndex("flow_steps", "ix_flow_steps_run_id_started_at", "(run_id, started_at) INCLUDE (step_key, step_type, status, job_id, completed_at)")}
         {EnsureIndex("flow_steps", "ix_flow_steps_step_key_run_id", "(step_key, run_id)")}
+        -- The open rows only (#189 P0-1): HasRunningOrPendingStepAsync, the completion gate's first check, runs
+        -- on every step completion that dispatched nothing. Partial, so it holds the steps currently Running or
+        -- Pending and the probe costs O(open steps), not O(steps in the run).
+        {EnsureIndex("flow_steps", "ix_flow_steps_run_id_open", "(run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')")}
         {EnsureIndex("flow_step_attempts", "ix_flow_step_attempts_run_id_started_at", "(run_id, started_at)")}
         {EnsureIndex("flow_step_attempts", "ix_flow_step_attempts_run_id_step_key_attempt_no", "(run_id, step_key, attempt_no)")}
 

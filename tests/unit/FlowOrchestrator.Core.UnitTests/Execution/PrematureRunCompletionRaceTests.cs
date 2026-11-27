@@ -16,7 +16,7 @@ namespace FlowOrchestrator.Core.Tests.Execution;
 /// <list type="number">
 ///   <item><c>a</c> completes; its continuation reads statuses (<c>b</c> still Running), so the join is only "waiting" and nothing is enqueued.</item>
 ///   <item><c>b</c> completes and writes <c>Succeeded</c>, but its continuation has not yet recorded the join's dispatch-ledger row.</item>
-///   <item><c>a</c>'s continuation re-reads statuses for the completion gate: nothing in flight, no claim or ledger row without a status row — so it completes the run.</item>
+///   <item><c>a</c>'s continuation reaches the completion gate: nothing in flight, no claim or ledger row without a status row — so it completes the run.</item>
 ///   <item><c>b</c>'s continuation then dispatches the join into a run that is already terminal.</item>
 /// </list>
 /// The completion gate never re-evaluates the graph on the fresh status map, so a step that has become
@@ -85,14 +85,15 @@ public sealed class PrematureRunCompletionRaceTests
             {
                 if (caller == "a" && callIndex == 2)
                 {
-                    // Before a's completion-gate re-read: let b finish its handler and write Succeeded,
-                    // and wait until b's continuation has started (its status row is now terminal).
+                    // Before a's completion gate (its open-row check): let b finish its handler and write
+                    // Succeeded, and wait until b's continuation has started (its status row is now terminal).
                     bHandlerRelease.Set();
                     await bInContinuation.Task.WaitAsync(GateTimeout);
                 }
                 else if (caller == "b" && callIndex == 1)
                 {
-                    // b's continuation holds here — it has not yet recorded the join's dispatch row.
+                    // b's continuation holds at its frontier read — it has not yet recorded the join's
+                    // dispatch row.
                     bInContinuation.TrySetResult();
                     await aDone.Task.WaitAsync(GateTimeout);
                 }
@@ -124,8 +125,11 @@ public sealed class PrematureRunCompletionRaceTests
     }
 
     /// <summary>
-    /// Runtime-store decorator that invokes a hook before every <see cref="GetStepStatusesAsync"/> call,
-    /// passing the caller label carried by <see cref="Caller"/> and that caller's 1-based call index.
+    /// Runtime-store decorator that invokes a hook before every status read — either
+    /// <c>GetStepStatusesAsync</c> overload and <c>HasRunningOrPendingStepAsync</c> — passing the caller label
+    /// carried by <see cref="Caller"/> and that caller's 1-based read index. A continuation's first read is
+    /// its frontier read; for a top-level step that completes with nothing to dispatch, its second is the
+    /// completion gate's open-row check.
     /// </summary>
     private sealed class GatedStatusStore(InMemoryFlowRunStore inner, Func<string?, int, Task> hook) : IFlowRunRuntimeStore
     {
@@ -134,6 +138,27 @@ public sealed class PrematureRunCompletionRaceTests
 
         public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
         {
+            await BeforeReadAsync();
+            return await inner.GetStepStatusesAsync(runId);
+        }
+
+        public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+        {
+            await BeforeReadAsync();
+            return await inner.GetStepStatusesAsync(runId, stepKeys);
+        }
+
+        public async Task<bool> HasRunningOrPendingStepAsync(Guid runId)
+        {
+            await BeforeReadAsync();
+            return await inner.HasRunningOrPendingStepAsync(runId);
+        }
+
+        public Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
+            => inner.CountSettledIterationsAsync(runId, loopStepKey, iterations, bodyStepKeys);
+
+        private Task BeforeReadAsync()
+        {
             var caller = Caller.Value;
             var index = caller switch
             {
@@ -141,8 +166,7 @@ public sealed class PrematureRunCompletionRaceTests
                 "b" => Interlocked.Increment(ref _bCalls),
                 _ => 0
             };
-            await hook(caller, index);
-            return await inner.GetStepStatusesAsync(runId);
+            return hook(caller, index);
         }
 
         public Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId) => inner.GetClaimedStepKeysAsync(runId);

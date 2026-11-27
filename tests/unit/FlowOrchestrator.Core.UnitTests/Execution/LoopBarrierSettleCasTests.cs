@@ -204,13 +204,26 @@ public sealed class LoopBarrierSettleCasTests
             Volatile.Write(ref _participants, participants);
         }
 
-        public async Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
+        public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
+            => GatedReadAsync(runId, () => inner.GetStepStatusesAsync(runId));
+
+        // The continuation's first read is the loop advance's keyed read of the loop row and its iterations,
+        // so the keyed overload goes through the same gate as the full one.
+        public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+            => GatedReadAsync(runId, () => inner.GetStepStatusesAsync(runId, stepKeys));
+
+        public Task<bool> HasRunningOrPendingStepAsync(Guid runId) => inner.HasRunningOrPendingStepAsync(runId);
+
+        public Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
+            => inner.CountSettledIterationsAsync(runId, loopStepKey, iterations, bodyStepKeys);
+
+        private async Task<IReadOnlyDictionary<string, StepStatus>> GatedReadAsync(Guid runId, Func<Task<IReadOnlyDictionary<string, StepStatus>>> read)
         {
             var participants = Volatile.Read(ref _participants);
             var arrival = participants == 0 ? int.MaxValue : Interlocked.Increment(ref _arrived);
             if (arrival > participants)
             {
-                return await inner.GetStepStatusesAsync(runId);
+                return await read();
             }
 
             if (arrival == participants)
@@ -219,10 +232,13 @@ public sealed class LoopBarrierSettleCasTests
             }
 
             await _allArrived.Task.WaitAsync(GateTimeout);
-            var statuses = await inner.GetStepStatusesAsync(runId);
+            var statuses = await read();
+            // A keyed read returns only the rows it asked for, so judge "both children terminal" on the store
+            // itself: what matters is that this read saw the loop Running after both completions committed.
+            var run = await inner.GetStepStatusesAsync(runId);
             if (statuses.GetValueOrDefault("loop") == StepStatus.Running
-                && statuses.GetValueOrDefault("loop.0.work") == StepStatus.Succeeded
-                && statuses.GetValueOrDefault("loop.1.work") == StepStatus.Succeeded)
+                && run.GetValueOrDefault("loop.0.work") == StepStatus.Succeeded
+                && run.GetValueOrDefault("loop.1.work") == StepStatus.Succeeded)
             {
                 Interlocked.Increment(ref _staleRunning);
             }

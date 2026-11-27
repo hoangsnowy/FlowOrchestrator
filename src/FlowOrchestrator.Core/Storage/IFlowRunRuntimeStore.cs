@@ -9,7 +9,92 @@ namespace FlowOrchestrator.Core.Storage;
 public interface IFlowRunRuntimeStore
 {
     /// <summary>Returns the current <see cref="StepStatus"/> for every step in the run.</summary>
+    /// <remarks>
+    /// O(steps in the run) in rows returned. The engine calls it only when a run is about to close (the
+    /// terminal classification) and from startup recovery — never once per step completion; that path uses
+    /// <see cref="GetStepStatusesAsync(Guid, IReadOnlyCollection{string})"/>.
+    /// </remarks>
     Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId);
+
+    /// <summary>
+    /// Returns the current <see cref="StepStatus"/> of each of <paramref name="stepKeys"/> that has a status
+    /// row; keys without one are absent from the result.
+    /// </summary>
+    /// <param name="runId">The run owning the steps.</param>
+    /// <param name="stepKeys">Runtime step keys to look up. May contain duplicates; may be empty.</param>
+    /// <returns>A map keyed with <see cref="StringComparer.Ordinal"/> holding only keys that have a row.</returns>
+    /// <remarks>
+    /// <para>
+    /// The engine's per-step-completion read (#189 P0-1). When step <c>X</c> reaches a status, only the steps
+    /// that depend on <c>X</c> can change classification, so the continuation asks for those steps and their
+    /// dependencies — a handful of keys — instead of every row in the run. Implement it as indexed point
+    /// lookups on <c>(RunId, StepKey)</c>; a provider with a statement parameter limit must chunk.
+    /// </para>
+    /// <para>
+    /// <b>Visibility contract (write-skew rule, RFC 2.0 §3.5).</b> The call must observe every status write
+    /// that committed before it started. Run it as its own statement against the primary — never inside a
+    /// transaction that predates the caller's write, never against a read replica. Two steps that complete
+    /// concurrently then cannot both miss the join that waits on them: whichever commits last reads the
+    /// other's row.
+    /// </para>
+    /// <para>There is deliberately no default implementation: falling back to the whole map would silently keep
+    /// the continuation O(steps in the run).</para>
+    /// </remarks>
+    Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys);
+
+    /// <summary>
+    /// Returns whether any step of the run currently has a <see cref="StepStatus.Running"/> or
+    /// <see cref="StepStatus.Pending"/> status row.
+    /// </summary>
+    /// <param name="runId">The run to inspect.</param>
+    /// <returns><see langword="true"/> when at least one such row exists.</returns>
+    /// <remarks>
+    /// <para>
+    /// The first check of the run-completion gate, asked on every step completion that dispatched nothing.
+    /// A Running or Pending row is work that will run a continuation of its own later (a handler still
+    /// executing, a ForEach parked on its barrier, a poll waiting for its next attempt), so the gate can stand
+    /// down without reading the run. Only when this returns <see langword="false"/> does the engine read the
+    /// whole status map, claims and dispatch ledger to decide whether to close the run.
+    /// </para>
+    /// <para>
+    /// Back it with an index on the open rows only (a filtered or partial index on
+    /// <c>Status IN ('Running','Pending')</c>), so the cost follows the number of open steps, not the run's
+    /// length. The same visibility contract as
+    /// <see cref="GetStepStatusesAsync(Guid, IReadOnlyCollection{string})"/> applies. A
+    /// <see langword="false"/> that should have been <see langword="true"/> only costs the full read; a
+    /// <see langword="true"/> that should have been <see langword="false"/> keeps a finished run open, so
+    /// never answer from a cache.
+    /// </para>
+    /// </remarks>
+    Task<bool> HasRunningOrPendingStepAsync(Guid runId);
+
+    /// <summary>
+    /// Counts the iterations <c>i</c> in <c>[0, <paramref name="iterations"/>)</c> of the loop instance
+    /// <paramref name="loopStepKey"/> in which every one of <paramref name="bodyStepKeys"/> —
+    /// <c>"{loopStepKey}.{i}.{child}"</c> — has a terminal status (<see cref="StepStatus.Succeeded"/>,
+    /// <see cref="StepStatus.Failed"/> or <see cref="StepStatus.Skipped"/>).
+    /// </summary>
+    /// <param name="runId">The run owning the loop.</param>
+    /// <param name="loopStepKey">Runtime key of the loop step, e.g. <c>"loop"</c> or <c>"outer.2.inner"</c>.</param>
+    /// <param name="iterations">The loop's iteration count; indices at or above it are not counted.</param>
+    /// <param name="bodyStepKeys">The loop body's direct child keys (single segments, no dots), each listed once.</param>
+    /// <returns>The number of settled iterations.</returns>
+    /// <remarks>
+    /// <para>
+    /// Drives the ForEach barrier and admission gate (#189 P0-1): the loop settles when the count reaches
+    /// <paramref name="iterations"/>, and admission keeps <c>[0, count + ConcurrencyLimit)</c> started. Only
+    /// a row whose key is exactly <c>{loop}.{i}.{child}</c>, with <c>i</c> a canonical decimal index and
+    /// <c>child</c> one of <paramref name="bodyStepKeys"/>, counts — rows of nested loops
+    /// (<c>{loop}.{i}.{child}.{j}.{grandchild}</c>) do not.
+    /// </para>
+    /// <para>
+    /// The answer travels as one row. Server-side it is a range read over the loop's own rows, so implement it
+    /// against the <c>(RunId, StepKey)</c> key with a prefix predicate. The same visibility contract as
+    /// <see cref="GetStepStatusesAsync(Guid, IReadOnlyCollection{string})"/> applies; it is what makes two
+    /// iterations that settle concurrently admit both replacements.
+    /// </para>
+    /// </remarks>
+    Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys);
 
     /// <summary>
     /// Returns the set of step keys that have been claimed (locked) for execution

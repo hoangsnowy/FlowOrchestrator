@@ -28,4 +28,10 @@
     <ProjectReference Include="..\..\..\src\FlowOrchestrator.SqlServer\FlowOrchestrator.SqlServer.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Engine-over-a-real-store rig and the frontier store contract, shared by every store's tests (#189 P0-1). -->
+    <Compile Include="..\..\shared\StoreEngineRig.cs" Link="Shared\StoreEngineRig.cs" />
+    <Compile Include="..\..\shared\FrontierStoreContract.cs" Link="Shared\FrontierStoreContract.cs" />
+  </ItemGroup>
+
 </Project>

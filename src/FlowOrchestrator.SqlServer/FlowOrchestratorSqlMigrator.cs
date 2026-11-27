@@ -451,6 +451,13 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
 
             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_StepKey_RunId' AND object_id = OBJECT_ID(N'[FlowSteps]'))
                 CREATE INDEX IX_FlowSteps_StepKey_RunId ON [FlowSteps]([StepKey], [RunId]);
+
+            -- The open rows only (#189 P0-1): HasRunningOrPendingStepAsync, the completion gate's first check,
+            -- runs on every step completion that dispatched nothing. Filtered, so it holds the steps currently
+            -- Running or Pending and its seek costs O(open steps), not O(steps in the run). The query repeats
+            -- this exact literal predicate so the optimizer can match it.
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]'))
+                CREATE INDEX IX_FlowSteps_RunId_Open ON [FlowSteps]([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending');
         END
 
         IF EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepAttempts')
