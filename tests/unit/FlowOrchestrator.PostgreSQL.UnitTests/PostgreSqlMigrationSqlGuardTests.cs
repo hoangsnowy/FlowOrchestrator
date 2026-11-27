@@ -48,4 +48,32 @@ public sealed class PostgreSqlMigrationSqlGuardTests
         line.StartsWith("CREATE INDEX", StringComparison.OrdinalIgnoreCase)
         || line.StartsWith("CREATE UNIQUE INDEX", StringComparison.OrdinalIgnoreCase)
         || line.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase);
+
+    [Theory]
+    [MemberData(nameof(StartupSql))]
+    public void The_open_step_index_is_never_built_in_the_startup_batch(string name, string sql)
+    {
+        // Arrange - #189 P0-1: a plain CREATE INDEX on flow_steps holds SHARE, blocking every step write, for the
+        // whole build of an upgraded table. It belongs to the background CONCURRENTLY path only.
+
+        // Act
+        var mentions = sql.Contains("ix_flow_steps_run_id_open", StringComparison.Ordinal);
+
+        // Assert
+        Assert.False(mentions, $"{name} builds ix_flow_steps_run_id_open; build it CONCURRENTLY in the background.");
+    }
+
+    [Fact]
+    public void The_open_step_index_is_built_concurrently_with_the_store_s_predicate()
+    {
+        // Arrange
+        var ddl = PostgreSqlFlowOrchestratorMigrator.CreateOpenStepIndexSql;
+
+        // Act
+        var concurrently = ddl.StartsWith("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps", StringComparison.Ordinal);
+
+        // Assert
+        Assert.True(concurrently, ddl);
+        Assert.EndsWith("WHERE status IN ('Running', 'Pending')", ddl, StringComparison.Ordinal);
+    }
 }

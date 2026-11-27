@@ -809,7 +809,10 @@ public sealed class SqlFlowRunStore :
     /// <inheritdoc/>
     /// <remarks>
     /// Served by the filtered index <c>IX_FlowSteps_RunId_Open</c>, which holds only Running and Pending rows;
-    /// the predicate below is its filter verbatim, as literals, so the optimizer can match it.
+    /// the predicate below is its filter verbatim, as literals, so the optimizer can match it. The migrator
+    /// builds that index online in the background (or, on an edition without online builds, not at all on a
+    /// large table), so the query must not depend on it: until it exists the same statement seeks the run's
+    /// rows through the primary key — correct, only O(steps in the run) instead of O(open steps).
     /// </remarks>
     public async Task<bool> HasRunningOrPendingStepAsync(Guid runId)
     {

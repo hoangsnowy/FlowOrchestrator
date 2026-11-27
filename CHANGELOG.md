@@ -46,10 +46,21 @@ status rows per iteration at 1 000 items on SQL Server). Now (RFC 2.0 §3.5,
   `CountSettledIterationsAsync(runId, loopKey, iterations, bodyKeys)`. Each must see every write committed
   before it started — its own statement against the primary, never a replica or an older transaction. See
   [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
-- **New index on the step table**, created by the migrators on start: `IX_FlowSteps_RunId_Open` on SQL Server
-  (filtered on `Status IN ('Running', 'Pending')`) and `ix_flow_steps_run_id_open` on PostgreSQL (partial,
-  through the `EnsureIndex` guard). It holds only the open rows. On a large existing `FlowSteps` table the
-  first start builds it; pre-create it in a maintenance window if that matters (DDL in the migration guide).
+- **New index on the step table, built without blocking:** `IX_FlowSteps_RunId_Open` on SQL Server (filtered
+  on `Status IN ('Running', 'Pending')`) and `ix_flow_steps_run_id_open` on PostgreSQL (partial). It holds only
+  the open rows. Because `FlowSteps` is the busiest table, the migrators never build it in the startup batch:
+  - **SQL Server:** the run-search indexes' policy. `ONLINE = ON` in the background where the edition supports
+    it (Azure SQL Database, Managed Instance, Enterprise / Developer), with `WAIT_AT_LOW_PRIORITY` on Azure and
+    SQL Server 2022+, so startup does not wait and step writes do not queue behind it. On other editions it is
+    built at startup only while `FlowSteps` has at most `OfflineIndexBuildRowLimit` (2 000 000) rows;
+    above that it is skipped with warning 7220 naming the DDL to run in a maintenance window.
+  - **PostgreSQL:** `CREATE INDEX CONCURRENTLY` in the background, before the run-search index, leaving another
+    host's in-flight build alone and dropping and rebuilding an `INVALID` leftover of an interrupted one.
+
+  Until the index exists the engine is correct, and the completion gate's open-row check reads each run's
+  rows instead. Events 7216-7219 report the build (building, built, failed, left to another host).
+  Pre-building it by hand before the deployment still works (DDL in the migration guide), and the
+  migrators then find nothing to do.
 - **Custom `IFlowGraphPlanner` implementations** get `EvaluateFrontier` as a default interface member (a
   filtered `Evaluate`, same answer); override it to keep the per-completion cost independent of the run.
 - **Behaviour:** a step whose `RunAfter` accepts any status of a predecessor (an empty status list) is now

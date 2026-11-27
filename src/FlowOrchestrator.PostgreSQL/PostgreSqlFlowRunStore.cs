@@ -737,7 +737,10 @@ public sealed class PostgreSqlFlowRunStore :
     /// <inheritdoc/>
     /// <remarks>
     /// Served by the partial index <c>ix_flow_steps_run_id_open</c>, which holds only Running and Pending rows;
-    /// the predicate below implies its <c>WHERE</c>, so the planner can use it.
+    /// the predicate below implies its <c>WHERE</c>, so the planner can use it. The migrator builds that index
+    /// <c>CONCURRENTLY</c> in the background, so the query must not depend on it: until it exists (or while a
+    /// build is in flight and the index is still <c>INVALID</c>) the same statement reads the run's rows through
+    /// the primary key — correct, only O(steps in the run) instead of O(open steps).
     /// </remarks>
     public async Task<bool> HasRunningOrPendingStepAsync(Guid runId)
     {

@@ -121,6 +121,121 @@ public sealed class SqlMigratorConcurrentStartTests : IClassFixture<SqlServerFix
         Assert.Equal(2, await SearchIndexCountAsync(cs));
     }
 
+    [Fact]
+    public async Task Open_step_index_is_built_online_in_the_background_and_neither_start_nor_step_writes_wait_for_it()
+    {
+        // Arrange — an up-to-date schema without IX_FlowSteps_RunId_Open (an upgraded 1.x database), and an open
+        // write transaction on FlowSteps that parks the online build in its prepare phase.
+        var cs = await CreateSeededDatabaseWithoutSearchIndexesAsync(seedRuns: 1);
+        await RestoreSearchIndexesAsync(cs);
+        await DropOpenStepIndexAsync(cs);
+        var store = new SqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OpenStepIndexFlow", runId, "manual", null, null);
+        await store.RecordStepStartAsync(runId, "held", "Work", null, null);
+        await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+        await using var holder = new SqlConnection(cs);
+        await holder.OpenAsync();
+        var holderTx = holder.BeginTransaction();
+        await holder.ExecuteAsync("UPDATE FlowSteps SET Status = Status WHERE RunId = @runId AND StepKey = N'held'", new { runId }, holderTx);
+        var log = new CapturingLogger();
+        using var host = new FlowOrchestratorSqlMigrator(cs, log);
+        string? startFailure, writeFailure;
+        bool buildStillRunning;
+
+        // Act — the host starts while its build is parked, and a running host keeps writing steps.
+        try
+        {
+            startFailure = await OutcomeWithinBudgetAsync(host.StartAsync(CancellationToken.None));
+            await WaitUntilBuildIsParkedAsync(cs);
+            // An existing row: a new one would take a key-range lock next to the held row and wait for the
+            // holder itself, which says nothing about the build.
+            writeFailure = await OutcomeWithinBudgetAsync(
+                store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null));
+            buildStillRunning = !host.BackgroundIndexBuild.IsCompleted;
+        }
+        finally
+        {
+            holderTx.Rollback();
+        }
+
+        await host.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.True(startFailure is null, $"The start waited for the open-step index build: {startFailure}");
+        Assert.True(writeFailure is null, $"A FlowSteps write waited for the open-step index build: {writeFailure}");
+        Assert.True(buildStillRunning, "The build was not in flight during the writes, so the test proved nothing.");
+        Assert.True(await OpenStepIndexExistsAsync(cs));
+        Assert.Contains(log.Entries, e => e.EventId == 7217);
+        Assert.DoesNotContain(log.Entries, e => e.EventId == 7218);
+    }
+
+    [Fact]
+    public async Task Open_step_index_on_an_edition_without_online_builds_is_built_at_start_while_the_table_is_small()
+    {
+        // Arrange — the offline policy the run-search indexes follow: synchronous below OfflineIndexBuildRowLimit.
+        var cs = await CreateSeededDatabaseWithoutSearchIndexesAsync(seedRuns: 1);
+        await RestoreSearchIndexesAsync(cs);
+        await DropOpenStepIndexAsync(cs);
+        using var host = new FlowOrchestratorSqlMigrator(cs, new CapturingLogger()) { OnlineIndexBuildOverride = false };
+
+        // Act
+        await host.StartAsync(CancellationToken.None);
+
+        // Assert
+        Assert.True(host.BackgroundIndexBuild.IsCompleted);
+        Assert.True(await OpenStepIndexExistsAsync(cs));
+    }
+
+    [Fact]
+    public async Task Open_row_check_is_correct_before_the_open_step_index_exists()
+    {
+        // Arrange — no index at all: the store's query must still answer from the rows.
+        var cs = await CreateSeededDatabaseWithoutSearchIndexesAsync(seedRuns: 1);
+        await DropOpenStepIndexAsync(cs);
+        var store = new SqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OpenStepIndexFlow", runId, "manual", null, null);
+
+        // Act
+        var empty = await store.HasRunningOrPendingStepAsync(runId);
+        await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+        var running = await store.HasRunningOrPendingStepAsync(runId);
+        await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
+        var closed = await store.HasRunningOrPendingStepAsync(runId);
+
+        // Assert
+        Assert.False(await OpenStepIndexExistsAsync(cs));
+        Assert.False(empty);
+        Assert.True(running);
+        Assert.False(closed);
+    }
+
+    private static async Task RestoreSearchIndexesAsync(string cs)
+    {
+        await using var conn = new SqlConnection(cs);
+        await conn.ExecuteAsync(FlowOrchestratorSqlMigrator.BuildRunSearchIndexesSql(online: false));
+    }
+
+    private static async Task DropOpenStepIndexAsync(string cs)
+    {
+        await using var conn = new SqlConnection(cs);
+        await conn.ExecuteAsync("""
+            IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'FlowSteps'))
+                DROP INDEX [IX_FlowSteps_RunId_Open] ON [FlowSteps];
+            """);
+    }
+
+    private static async Task<bool> OpenStepIndexExistsAsync(string cs)
+    {
+        await using var conn = new SqlConnection(cs);
+        return await conn.ExecuteScalarAsync<bool>("""
+            SELECT CAST(CASE WHEN EXISTS (
+                SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'FlowSteps'))
+            THEN 1 ELSE 0 END AS BIT)
+            """);
+    }
+
     private async Task<string> CreateSeededDatabaseWithoutSearchIndexesAsync(int seedRuns = SeedRuns)
     {
         var name = "fo_start_" + Guid.NewGuid().ToString("N")[..12];

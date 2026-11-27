@@ -212,6 +212,138 @@ public sealed class PostgreSqlMigratorConcurrentIndexBuildTests : IClassFixture<
         Assert.NotEmpty(tables);
     }
 
+    [Fact]
+    public async Task Open_step_index_is_built_concurrently_in_the_background_and_neither_start_nor_step_writes_wait_for_it()
+    {
+        // Arrange — an up-to-date schema without the open-step index (an upgraded 1.x database), and an open
+        // snapshot that parks a CONCURRENTLY build in its wait for older snapshots.
+        var cs = await CreateMigratedDatabaseWithoutOpenStepIndexAsync();
+        var store = new PostgreSqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OpenStepIndexFlow", runId, "manual", null, null);
+        await using var snapshotHolder = await OpenSnapshotHolderAsync(cs);
+        var log = new CapturingLogger();
+        using var host = new PostgreSqlFlowOrchestratorMigrator(cs, log);
+        string? startFailure, writeFailure;
+        bool buildStillRunning;
+
+        // Act — the host starts while its build is parked, and a running host keeps writing steps.
+        try
+        {
+            startFailure = await OutcomeWithinBudgetAsync(host.StartAsync(CancellationToken.None));
+            await WaitUntilOpenStepBuildIsParkedAsync(cs);
+            writeFailure = await OutcomeWithinBudgetAsync(Task.Run(async () =>
+            {
+                await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+                await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
+            }));
+            buildStillRunning = !host.BackgroundIndexBuild.IsCompleted;
+        }
+        finally
+        {
+            await snapshotHolder.DisposeAsync();
+        }
+
+        await host.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.True(startFailure is null, $"The start waited for the open-step index build: {startFailure}");
+        Assert.True(writeFailure is null, $"A flow_steps write waited for the open-step index build: {writeFailure}");
+        Assert.True(buildStillRunning, "The build was not in flight during the writes, so the test proved nothing.");
+        Assert.True(await OpenStepIndexValidAsync(cs));
+        Assert.Contains(log.Entries, e => e.EventId == 7217);
+        Assert.DoesNotContain(log.Entries, e => e.EventId == 7218);
+    }
+
+    [Fact]
+    public async Task Open_step_index_left_invalid_by_an_interrupted_build_is_dropped_and_rebuilt()
+    {
+        // Arrange — the build is parked, then the host stops: PostgreSQL leaves the index INVALID.
+        var cs = await CreateMigratedDatabaseWithoutOpenStepIndexAsync();
+        await using (await OpenSnapshotHolderAsync(cs))
+        {
+            using var stopped = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger());
+            await stopped.StartAsync(CancellationToken.None);
+            await WaitUntilOpenStepBuildIsParkedAsync(cs);
+            await stopped.StopAsync(CancellationToken.None);
+            await stopped.BackgroundIndexBuild.WaitAsync(Budget);
+        }
+
+        var leftoverValid = await OpenStepIndexValidAsync(cs);
+        var log = new CapturingLogger();
+        using var restarted = new PostgreSqlFlowOrchestratorMigrator(cs, log);
+
+        // Act
+        await restarted.StartAsync(CancellationToken.None);
+        await restarted.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.False(leftoverValid);
+        Assert.True(await OpenStepIndexValidAsync(cs));
+        Assert.Contains(log.Entries, e => e.EventId == 7217);
+    }
+
+    [Fact]
+    public async Task Open_row_check_is_correct_before_the_open_step_index_exists()
+    {
+        // Arrange — no index at all: the store's query must still answer from the rows.
+        var cs = await CreateMigratedDatabaseWithoutOpenStepIndexAsync();
+        var store = new PostgreSqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OpenStepIndexFlow", runId, "manual", null, null);
+
+        // Act
+        var empty = await store.HasRunningOrPendingStepAsync(runId);
+        await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+        var running = await store.HasRunningOrPendingStepAsync(runId);
+        await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
+        var closed = await store.HasRunningOrPendingStepAsync(runId);
+
+        // Assert
+        Assert.Null(await OpenStepIndexValidAsync(cs));
+        Assert.False(empty);
+        Assert.True(running);
+        Assert.False(closed);
+    }
+
+    private async Task<string> CreateMigratedDatabaseWithoutOpenStepIndexAsync()
+    {
+        var cs = await CreateDatabaseAsync();
+        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger()))
+        {
+            await initial.StartAsync(CancellationToken.None);
+            await initial.BackgroundIndexBuild;
+        }
+
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.ExecuteAsync("DROP INDEX ix_flow_steps_run_id_open");
+        return cs;
+    }
+
+    private static async Task<bool?> OpenStepIndexValidAsync(string cs)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        return await conn.ExecuteScalarAsync<bool?>(PostgreSqlFlowOrchestratorMigrator.OpenStepIndexStateSql);
+    }
+
+    private static async Task WaitUntilOpenStepBuildIsParkedAsync(string cs)
+    {
+        const string ParkedSql = """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND query LIKE 'CREATE INDEX CONCURRENTLY%ix_flow_steps_run_id_open%'
+                  AND wait_event_type = 'Lock' AND wait_event = 'virtualxid')
+            """;
+        using var timeout = new CancellationTokenSource(Budget);
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync(timeout.Token);
+        while (!await conn.ExecuteScalarAsync<bool>(new CommandDefinition(ParkedSql, cancellationToken: timeout.Token)))
+        {
+            await Task.Delay(25, timeout.Token);
+        }
+    }
+
     private static string Warnings(CapturingLogger log) =>
         string.Join(" | ", log.Entries.Where(e => e.Level >= LogLevel.Warning).Select(e => $"{e.EventId} {e.Message}"));
 

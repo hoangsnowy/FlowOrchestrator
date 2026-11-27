@@ -723,12 +723,12 @@ rehearsal checks it on every run):
 |---|---|---|
 | SQL Server / Azure SQL | columns `FlowRuns.IdText`, `FlowRuns.RunSearchText` (computed, not persisted); indexes `IX_FlowRuns_IdText`, `IX_FlowRuns_StartedAt_Search` | run search — [below](#run-search-columns-and-indexes-sql-server--azure-sql) |
 | | filtered index `IX_FlowStepDispatches_Unsent` on `FlowStepDispatches([DispatchedAt]) WHERE [DispatchJobId] IS NULL` | unsent-dispatch recovery ([Step 7](#smaller-changes)); holds only in-flight rows |
-| | filtered index `IX_FlowSteps_RunId_Open` on `FlowSteps([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending')` | the completion gate's open-row check ([Step 7](#smaller-changes)); holds only running and pending steps |
+| | filtered index `IX_FlowSteps_RunId_Open` on `FlowSteps([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending')` | the completion gate's open-row check ([Step 7](#smaller-changes)); holds only running and pending steps; built like the run-search indexes — online in the background, or offline at startup only up to 2 000 000 rows |
 | | nullable column `WebhookReplayNonces.RegistrationId` (`UNIQUEIDENTIFIER`) | lets a rejected delivery release only its own replay nonce; `NULL` on rows written by 1.x, which simply never match a release |
 | | table `FlowStepLeases` with filtered index `IX_FlowStepLeases_Live` | step execution leases ([Step 7](#smaller-changes)); a new table, so `FlowStepClaims` is not altered |
 | PostgreSQL | index `ix_flow_runs_run_search_trgm` (built `CONCURRENTLY` in the background) | run search — [below](#run-search-index-postgresql) |
 | | partial index `ix_flow_step_dispatches_unsent` on `flow_step_dispatches(dispatched_at) WHERE dispatch_job_id IS NULL` | unsent-dispatch recovery |
-| | partial index `ix_flow_steps_run_id_open` on `flow_steps(run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')` | the completion gate's open-row check |
+| | partial index `ix_flow_steps_run_id_open` on `flow_steps(run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')` (built `CONCURRENTLY` in the background) | the completion gate's open-row check |
 | | nullable column `webhook_replay_nonces.registration_id` (`uuid`) | as for SQL Server |
 | | table `flow_step_leases` with partial index `ix_flow_step_leases_live` | as for SQL Server |
 
@@ -764,7 +764,10 @@ BEGIN
     );
     CREATE INDEX IX_FlowStepLeases_Live ON [FlowStepLeases]([ExpiresAt]) WHERE [ExpiresAt] IS NOT NULL;
 END
--- Reads the whole FlowSteps table once. On a large table, add WITH (ONLINE = ON) where the edition allows it.
+-- Optional: the migrator builds this one itself without blocking (online in the background where the edition
+-- allows it; offline at startup only while FlowSteps has at most 2 000 000 rows; otherwise warning 7220).
+-- On a large table and an edition without online builds, run it here in a maintenance window. Add
+-- WITH (ONLINE = ON) where the edition allows it.
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]'))
     CREATE INDEX IX_FlowSteps_RunId_Open ON [FlowSteps]([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending');
 ```
@@ -777,8 +780,9 @@ CREATE TABLE IF NOT EXISTS flow_step_leases (
     run_id uuid NOT NULL, step_key varchar(256) NOT NULL, fence bigint NOT NULL, owner varchar(128) NOT NULL,
     expires_at timestamptz NULL, redelivered_at timestamptz NULL, PRIMARY KEY (run_id, step_key));
 CREATE INDEX IF NOT EXISTS ix_flow_step_leases_live ON flow_step_leases (expires_at) WHERE expires_at IS NOT NULL;
--- On a large flow_steps table, build this one CONCURRENTLY (outside a transaction) before deploying.
-CREATE INDEX IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps (run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending');
+-- Optional: the migrator builds this one CONCURRENTLY in the background after startup. To have it in place
+-- before the deployment, run it here — outside a transaction, as CONCURRENTLY requires.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps (run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending');
 ```
 
 ### Run-search columns and indexes (SQL Server / Azure SQL)

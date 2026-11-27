@@ -26,6 +26,10 @@ namespace FlowOrchestrator.SqlServer;
 /// </list>
 /// <para>Until an index exists, <see cref="SqlFlowRunStore"/> uses query shapes that do not need it, so
 /// search stays correct, only slower.</para>
+/// <para><b>Open-step index (2.0, #189 P0-1).</b> <c>IX_FlowSteps_RunId_Open</c> (filtered on
+/// <c>Status IN ('Running', 'Pending')</c>) follows the same policy against the <c>FlowSteps</c> row count, and is
+/// built before the run-search indexes on the background path. Until it exists the completion gate's open-row
+/// check reads each run's rows through the primary key: correct, only slower.</para>
 /// <para><b>Several hosts starting together.</b> The index build runs under an exclusive application lock: on
 /// the online path a host that finds another one building leaves it to that host (event 7209); on the
 /// offline path it waits for that build and then finds nothing to do.</para>
@@ -66,7 +70,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     }
 
     /// <summary>
-    /// The background build of the run-search indexes started by <see cref="StartAsync"/>, or a completed task
+    /// The background build of the open-step and run-search indexes started by <see cref="StartAsync"/>, or a completed task
     /// when none was started. Completes when the build ends; it never faults (a failed build is logged and
     /// retried on the next start).
     /// </summary>
@@ -105,7 +109,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            await EnsureRunSearchIndexesAsync(conn, cancellationToken).ConfigureAwait(false);
+            await EnsureIndexesAsync(conn, cancellationToken).ConfigureAwait(false);
             LogMigrationsCompleted();
         }
         catch (Exception ex)
@@ -130,53 +134,111 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         }
     }
 
-    private async Task EnsureRunSearchIndexesAsync(SqlConnection conn, CancellationToken cancellationToken)
+    /// <summary>
+    /// Ensures the indexes that are too large to build inside the migration batch — the run-search indexes on
+    /// <c>FlowRuns</c> and the open-step index on <c>FlowSteps</c> — with one policy for both: online and in
+    /// the background where the edition supports it; otherwise synchronously while the table has at most
+    /// <see cref="OfflineIndexBuildRowLimit"/> rows; otherwise not at all, with a warning naming the DDL.
+    /// </summary>
+    private async Task EnsureIndexesAsync(SqlConnection conn, CancellationToken cancellationToken)
     {
         await using var probe = conn.CreateCommand();
-        probe.CommandText = RunSearchIndexProbeSql;
+        probe.CommandText = IndexProbeSql;
         int edition, compatibility, majorVersion;
-        long rows;
-        bool missing;
+        long runRows, stepRows;
+        bool searchMissing, openStepMissing;
         await using (var reader = await probe.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             edition = reader.GetInt32(0);
-            rows = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
-            missing = reader.GetInt32(2) > 0;
+            runRows = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+            searchMissing = reader.GetInt32(2) > 0;
             compatibility = reader.GetInt32(3);
             majorVersion = reader.GetInt32(4);
+            stepRows = reader.IsDBNull(5) ? 0 : reader.GetInt64(5);
+            openStepMissing = reader.GetInt32(6) > 0;
         }
 
         if (_runSearchIndexEnabled && compatibility < 130)
             LogTokenIndexNeedsCompatibilityLevel(compatibility);
 
-        if (!missing)
+        if (!searchMissing && !openStepMissing)
             return;
 
         if (OnlineIndexBuildOverride ?? SupportsOnlineIndexBuild(edition))
         {
-            LogBuildingIndexesOnline(rows);
             var lowPriority = SupportsLowPriorityIndexBuild(edition, majorVersion);
-            _backgroundIndexBuild = Task.Run(() => BuildIndexesInBackgroundAsync(lowPriority, _stopping.Token), CancellationToken.None);
+            if (openStepMissing)
+                LogBuildingOpenStepIndexOnline(stepRows);
+            if (searchMissing)
+                LogBuildingIndexesOnline(runRows);
+            _backgroundIndexBuild = Task.Run(
+                () => BuildIndexesInBackgroundAsync(openStepMissing, searchMissing, lowPriority, _stopping.Token),
+                CancellationToken.None);
             return;
         }
 
-        if (rows <= OfflineIndexBuildRowLimit)
+        if (openStepMissing)
         {
-            // Waits for another host's build instead of racing it; its IF NOT EXISTS guards then skip both.
-            await BuildRunSearchIndexesExclusiveAsync(online: false, lowPriority: false, OfflineIndexBuildTimeoutSeconds * 1000, OfflineIndexBuildTimeoutSeconds, cancellationToken)
-                .ConfigureAwait(false);
-            return;
+            if (stepRows <= OfflineIndexBuildRowLimit)
+            {
+                // Waits for another host's build instead of racing it; its IF NOT EXISTS guard then skips it.
+                await BuildIndexesExclusiveAsync(OpenStepIndexLock, BuildOpenStepIndexSql(online: false), OfflineIndexBuildTimeoutSeconds * 1000, OfflineIndexBuildTimeoutSeconds, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                LogOpenStepIndexSkipped(stepRows, BuildOpenStepIndexSql(online: false));
+            }
         }
 
-        LogIndexesSkipped(rows, BuildRunSearchIndexesSql(online: false));
+        if (searchMissing)
+        {
+            if (runRows <= OfflineIndexBuildRowLimit)
+            {
+                await BuildIndexesExclusiveAsync(RunSearchIndexLock, BuildRunSearchIndexesSql(online: false), OfflineIndexBuildTimeoutSeconds * 1000, OfflineIndexBuildTimeoutSeconds, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                LogIndexesSkipped(runRows, BuildRunSearchIndexesSql(online: false));
+            }
+        }
     }
 
-    private async Task BuildIndexesInBackgroundAsync(bool lowPriority, CancellationToken cancellationToken)
+    /// <summary>
+    /// The online path: builds the missing indexes one after the other, the small open-step index first, each
+    /// under its own application lock so a host that finds another one building leaves that build to it.
+    /// </summary>
+    private async Task BuildIndexesInBackgroundAsync(bool openStep, bool runSearch, bool lowPriority, CancellationToken cancellationToken)
     {
+        if (openStep)
+        {
+            try
+            {
+                if (await BuildIndexesExclusiveAsync(OpenStepIndexLock, BuildOpenStepIndexSql(online: true, lowPriority), lockTimeoutMs: 0, commandTimeoutSeconds: 0, cancellationToken).ConfigureAwait(false))
+                    LogOpenStepIndexBuilt();
+                else
+                    LogOpenStepIndexBuildInFlightElsewhere();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return; // Host stopping: retried on the next start.
+            }
+            catch (SqlException ex)
+            {
+                // The completion gate's open-row check stays correct without the index, only slower; the
+                // next start retries.
+                LogOpenStepIndexBuildFailed(ex);
+            }
+        }
+
+        if (!runSearch)
+            return;
+
         try
         {
-            if (await BuildRunSearchIndexesExclusiveAsync(online: true, lowPriority, lockTimeoutMs: 0, commandTimeoutSeconds: 0, cancellationToken).ConfigureAwait(false))
+            if (await BuildIndexesExclusiveAsync(RunSearchIndexLock, BuildRunSearchIndexesSql(online: true, lowPriority), lockTimeoutMs: 0, commandTimeoutSeconds: 0, cancellationToken).ConfigureAwait(false))
                 LogIndexesBuilt();
             else
                 LogIndexBuildInFlightElsewhere();
@@ -193,15 +255,21 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         }
     }
 
+    /// <summary>Application-lock resource serialising the run-search index builds across hosts.</summary>
+    private const string RunSearchIndexLock = "FlowOrchestrator.RunSearchIndexes";
+
+    /// <summary>Application-lock resource serialising the open-step index build across hosts.</summary>
+    private const string OpenStepIndexLock = "FlowOrchestrator.OpenStepIndex";
+
     /// <summary>
-    /// Runs <see cref="BuildRunSearchIndexesSql"/> while holding an exclusive application lock, so two hosts
-    /// starting together build the indexes once instead of racing: the loser of a race failed with error 1913
-    /// ("an index ... already exists") because both passed the <c>IF NOT EXISTS</c> guard before either
-    /// committed. That aborted the loser's start on the offline path and logged a false build failure (7206)
+    /// Runs <paramref name="sql"/> while holding the exclusive application lock <paramref name="lockResource"/>,
+    /// so two hosts starting together build an index once instead of racing: the loser of a race failed with
+    /// error 1913 ("an index ... already exists") because both passed the <c>IF NOT EXISTS</c> guard before
+    /// either committed. That aborted the loser's start on the offline path and logged a false build failure
     /// on the online one.
     /// </summary>
-    /// <param name="online">Build with <c>ONLINE = ON</c>.</param>
-    /// <param name="lowPriority">Wait for the build's table locks at low priority; see <see cref="BuildRunSearchIndexesSql"/>.</param>
+    /// <param name="lockResource">The application-lock resource for this group of indexes.</param>
+    /// <param name="sql">The guarded DDL.</param>
     /// <param name="lockTimeoutMs">How long to wait for another host's build; 0 gives up at once.</param>
     /// <param name="commandTimeoutSeconds">Timeout of the build itself; 0 for none.</param>
     /// <param name="cancellationToken">Cancels the wait or the build (SQL Server rolls it back).</param>
@@ -211,7 +279,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     /// the lock on every path, cancellation and errors included. A pooled connection would keep the session,
     /// and with it the lock, alive in the pool.
     /// </remarks>
-    internal async Task<bool> BuildRunSearchIndexesExclusiveAsync(bool online, bool lowPriority, int lockTimeoutMs, int commandTimeoutSeconds, CancellationToken cancellationToken)
+    internal async Task<bool> BuildIndexesExclusiveAsync(string lockResource, string sql, int lockTimeoutMs, int commandTimeoutSeconds, CancellationToken cancellationToken)
     {
         var unpooled = new SqlConnectionStringBuilder(_connectionString) { Pooling = false }.ConnectionString;
         await using var conn = new SqlConnection(unpooled);
@@ -221,10 +289,11 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         {
             acquire.CommandText = """
                 DECLARE @result INT;
-                EXEC @result = sp_getapplock @Resource = N'FlowOrchestrator.RunSearchIndexes', @LockMode = N'Exclusive',
+                EXEC @result = sp_getapplock @Resource = @lockResource, @LockMode = N'Exclusive',
                     @LockOwner = N'Session', @LockTimeout = @lockTimeoutMs;
                 SELECT @result;
                 """;
+            acquire.Parameters.AddWithValue("@lockResource", lockResource);
             acquire.Parameters.AddWithValue("@lockTimeoutMs", lockTimeoutMs);
             acquire.CommandTimeout = lockTimeoutMs == 0 ? 30 : (lockTimeoutMs / 1000) + 30;
             if (Convert.ToInt32(await acquire.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) < 0)
@@ -232,7 +301,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         }
 
         await using var build = conn.CreateCommand();
-        build.CommandText = BuildRunSearchIndexesSql(online, lowPriority);
+        build.CommandText = sql;
         build.CommandTimeout = commandTimeoutSeconds;
         await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         return true;
@@ -280,14 +349,40 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
             """;
     }
 
-    private const string RunSearchIndexProbeSql = """
+    /// <summary>
+    /// The DDL for <c>IX_FlowSteps_RunId_Open</c>, the filtered index behind
+    /// <see cref="SqlFlowRunStore.HasRunningOrPendingStepAsync"/> (#189 P0-1): only the Running and Pending rows,
+    /// so the completion gate's open-row check costs O(open steps).
+    /// </summary>
+    /// <param name="online">Build with <c>ONLINE = ON</c>.</param>
+    /// <param name="lowPriority">Add <c>WAIT_AT_LOW_PRIORITY</c>; see <see cref="BuildRunSearchIndexesSql"/>.</param>
+    /// <remarks>
+    /// Built outside the migration batch because <c>FlowSteps</c> is the hottest table: an offline build reads
+    /// the whole table under a lock that blocks every step write, which on an upgraded 1.x database would stall
+    /// the first start and every replica starting beside it. The store's query is correct without the index.
+    /// </remarks>
+    internal static string BuildOpenStepIndexSql(bool online, bool lowPriority = false)
+    {
+        var with = !online ? string.Empty
+            : lowPriority ? $" WITH (ONLINE = ON (WAIT_AT_LOW_PRIORITY (MAX_DURATION = {LowPriorityMaxDurationMinutes} MINUTES, ABORT_AFTER_WAIT = SELF)))"
+            : " WITH (ONLINE = ON)";
+        return $"""
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]'))
+                CREATE INDEX [IX_FlowSteps_RunId_Open] ON [FlowSteps]([RunId]) INCLUDE ([StepKey])
+                WHERE [Status] IN (N'Running', N'Pending'){with};
+            """;
+    }
+
+    private const string IndexProbeSql = """
         SELECT
             CAST(SERVERPROPERTY('EngineEdition') AS INT),
             (SELECT CAST(SUM(p.rows) AS BIGINT) FROM sys.partitions AS p WHERE p.object_id = OBJECT_ID(N'[FlowRuns]') AND p.index_id IN (0, 1)),
             (SELECT COUNT(*) FROM (VALUES (N'IX_FlowRuns_IdText'), (N'IX_FlowRuns_StartedAt_Search')) AS wanted(name)
              WHERE NOT EXISTS (SELECT 1 FROM sys.indexes AS i WHERE i.name = wanted.name AND i.object_id = OBJECT_ID(N'[FlowRuns]'))),
             (SELECT CAST(compatibility_level AS INT) FROM sys.databases WHERE database_id = DB_ID()),
-            CAST(SERVERPROPERTY('ProductMajorVersion') AS INT);
+            CAST(SERVERPROPERTY('ProductMajorVersion') AS INT),
+            (SELECT CAST(SUM(p.rows) AS BIGINT) FROM sys.partitions AS p WHERE p.object_id = OBJECT_ID(N'[FlowSteps]') AND p.index_id IN (0, 1)),
+            CASE WHEN EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]')) THEN 0 ELSE 1 END;
         """;
 
     /// <summary>
@@ -358,6 +453,21 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
 
     [LoggerMessage(EventId = 7207, Level = LogLevel.Warning, Message = "FlowRuns has {Rows} rows and this SQL Server edition cannot build indexes online, so the run-search indexes were not built at startup. Run search works but is slower until you run, in a maintenance window: {Ddl}")]
     private partial void LogIndexesSkipped(long rows, string ddl);
+
+    [LoggerMessage(EventId = 7216, Level = LogLevel.Information, Message = "Building the open-step index IX_FlowSteps_RunId_Open online in the background ({Rows} steps); the completion gate's open-row check reads each run's rows until it exists.")]
+    private partial void LogBuildingOpenStepIndexOnline(long rows);
+
+    [LoggerMessage(EventId = 7217, Level = LogLevel.Information, Message = "Open-step index IX_FlowSteps_RunId_Open built.")]
+    private partial void LogOpenStepIndexBuilt();
+
+    [LoggerMessage(EventId = 7218, Level = LogLevel.Warning, Message = "Open-step index build failed; the completion gate stays correct, only slower, and the next start retries.")]
+    private partial void LogOpenStepIndexBuildFailed(Exception exception);
+
+    [LoggerMessage(EventId = 7219, Level = LogLevel.Information, Message = "Another host is building the open-step index; this host leaves the build to it.")]
+    private partial void LogOpenStepIndexBuildInFlightElsewhere();
+
+    [LoggerMessage(EventId = 7220, Level = LogLevel.Warning, Message = "FlowSteps has {Rows} rows and this SQL Server edition cannot build indexes online, so IX_FlowSteps_RunId_Open was not built at startup. The engine stays correct but its completion gate reads each run's rows until you run, in a maintenance window: {Ddl}")]
+    private partial void LogOpenStepIndexSkipped(long rows, string ddl);
 
     [LoggerMessage(EventId = 7208, Level = LogLevel.Warning, Message = "UseRunSearchIndex() needs database compatibility level 130 or later (this database: {CompatibilityLevel}); the token index stays unused and deep search uses LIKE.")]
     private partial void LogTokenIndexNeedsCompatibilityLevel(int compatibilityLevel);
@@ -451,13 +561,6 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
 
             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_StepKey_RunId' AND object_id = OBJECT_ID(N'[FlowSteps]'))
                 CREATE INDEX IX_FlowSteps_StepKey_RunId ON [FlowSteps]([StepKey], [RunId]);
-
-            -- The open rows only (#189 P0-1): HasRunningOrPendingStepAsync, the completion gate's first check,
-            -- runs on every step completion that dispatched nothing. Filtered, so it holds the steps currently
-            -- Running or Pending and its seek costs O(open steps), not O(steps in the run). The query repeats
-            -- this exact literal predicate so the optimizer can match it.
-            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]'))
-                CREATE INDEX IX_FlowSteps_RunId_Open ON [FlowSteps]([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending');
         END
 
         IF EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepAttempts')
