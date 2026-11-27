@@ -267,13 +267,14 @@ providers only:
 - A trigger that stalls for longer than `IdempotencyReservationTimeout` between registering its key and
   dispatching its first step has its run cancelled, and the retry's run takes over. Raise the value if
   your store can stall for that long. Setting zero or a negative value throws `ArgumentOutOfRangeException`.
-- **PostgreSQL:** a takeover holds `SHARE` locks on `flow_step_dispatches` and `flow_steps` for one
-  transaction (two short statements), so no first dispatch of the dead run can slip in before the latch
-  commits. While it waits for and holds them, step writes of every run wait too. It waits at most 1 s
-  (`lock_timeout`); when that runs out, the retry is answered `Duplicate`, and a later retry takes the key
-  over. Only a stale, unstarted reservation takes these locks; a duplicate of a fresh or started run takes
-  none.
-  **SQL Server** takes key-range locks on the dead run's rows only.
+- **PostgreSQL:** a takeover holds a per-run advisory lock on the dead run (class `1179601234`, key
+  `hashtext(run_id::text)`), exclusive, while it checks and swaps. Every write of a ledger or step row
+  (`TryRecordDispatchAsync`, `RecordStepStartAsync`, `RecordSkippedStepAsync`) takes the same lock shared
+  in its existing statement or transaction, so no first dispatch of the dead run can slip in before the
+  latch commits. Only the run being taken over waits; shared with shared never waits, so dispatches of
+  other runs, and of the same run among themselves, are unaffected (measured within noise: about +2 µs
+  per insert on the server, no extra round trip). **SQL Server** takes key-range locks on the dead run's
+  rows only. Neither store takes a lock for a duplicate of a fresh or started run.
 
 ### Fixed — starting a PostgreSQL host beside running ones takes no table locks
 

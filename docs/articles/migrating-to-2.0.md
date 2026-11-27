@@ -472,7 +472,8 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       earlier cancel reason (`IdempotencyKeyStorage.TakenOverCancelReason`). Exactly one of N concurrent
       callers may win. The started-work probe must also exclude a concurrent first insert into the ledger
       or step table until the latch commits. The built-in stores use `HOLDLOCK` key-range locks on SQL
-      Server and `SHARE` table locks on PostgreSQL, both taken only on the stale path. Returning
+      Server. On PostgreSQL they use a per-run advisory lock: the takeover holds it exclusively, and every
+      ledger or step-row write holds it shared. Both block only the run being taken over. Returning
       `staleRunId` unconditionally compiles, but keeps the 1.x behaviour: a delivery whose trigger died
       after registering its key is lost.
 - [ ] **`MarkTimedOutAsync`** returns `false` without writing when the timeout is already latched **or a

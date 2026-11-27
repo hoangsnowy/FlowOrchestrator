@@ -1,4 +1,5 @@
 using Dapper;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
 using Npgsql;
 
@@ -7,7 +8,8 @@ namespace FlowOrchestrator.PostgreSQL.Tests;
 /// <summary>
 /// <see cref="PostgreSqlFlowRunStore.TryTakeOverStaleIdempotencyKeyAsync"/> on a real PostgreSQL: the age is judged on
 /// <c>NOW()</c>, a run with a ledger or step row keeps its key, the stale run is cancel-latched in
-/// the same transaction, and of 16 concurrent takeovers exactly one wins.
+/// the same transaction, of 16 concurrent takeovers exactly one wins, and the per-run advisory gate that
+/// excludes a concurrent first write blocks only the run being taken over.
 /// </summary>
 /// <remarks>
 /// Registrations are aged by moving <c>created_at_utc</c> back relative to the database clock, never by waiting.
@@ -183,32 +185,92 @@ public sealed partial class PostgreSqlFlowRunStoreTests
         }
     }
 
-    [Fact]
-    public async Task TryTakeOverStaleIdempotencyKeyAsync_waits_for_an_uncommitted_first_dispatch_and_then_refuses()
+    [Theory]
+    [InlineData("ledger")]
+    [InlineData("step")]
+    public async Task TryTakeOverStaleIdempotencyKeyAsync_waits_for_an_uncommitted_first_write_and_then_refuses(string firstWrite)
     {
-        // Arrange - the original trigger is only slow: its first ledger row is being written, not yet committed.
+        // Arrange - the original trigger is only slow: its first ledger (or step) row is being written under the
+        // run gate, not yet committed. READ COMMITTED does not block a read on an uncommitted insert, so only the
+        // gate keeps the takeover from deciding on a snapshot without the row.
         var flowId = Guid.NewGuid();
         var slowRunId = Guid.NewGuid();
         await RegisterAgedKeyAsync(flowId, "order-1", slowRunId, TimeSpan.FromMinutes(1));
         await using var writer = new NpgsqlConnection(_connectionString);
         await writer.OpenAsync();
         await using var tx = await writer.BeginTransactionAsync();
-        await writer.ExecuteAsync(
-            "INSERT INTO flow_step_dispatches (run_id, step_key, dispatched_at) VALUES (@RunId, 'a', NOW())",
-            new { RunId = slowRunId },
-            tx);
+        if (firstWrite == "ledger")
+        {
+            await writer.ExecuteAsync(PostgreSqlFlowRunStore.TryRecordDispatchSql, new { RunId = slowRunId, StepKey = "a" }, tx);
+        }
+        else
+        {
+            await writer.ExecuteAsync($"SELECT 1 FROM {PostgreSqlFlowRunStore.RunGateSharedFrom}", new { RunId = slowRunId }, tx);
+            await writer.ExecuteAsync(
+                "INSERT INTO flow_steps (run_id, step_key, step_type, status, started_at) VALUES (@RunId, 'a', 'Echo', 'Running', NOW())",
+                new { RunId = slowRunId },
+                tx);
+        }
 
-        // Act - the takeover must wait on its SHARE table lock instead of deciding on a snapshot without the
-        // row (READ COMMITTED does not block a read on an uncommitted insert). Committed well inside the 1 s
-        // lock_timeout, so the takeover decides after the row is visible.
+        // Act
         var takeover = _store.TryTakeOverStaleIdempotencyKeyAsync(flowId, "webhook", "order-1", slowRunId, Guid.NewGuid(), ReservationTimeout);
         var finishedWhileUncommitted = await Task.WhenAny(takeover, Task.Delay(TimeSpan.FromMilliseconds(250))) == takeover;
         await tx.CommitAsync();
-        var owner = await takeover;
+        var owner = await takeover.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Assert
         Assert.False(finishedWhileUncommitted);
         Assert.Equal(slowRunId, owner);
         Assert.Null(await _store.GetRunControlAsync(slowRunId));
+    }
+
+    [Fact]
+    public async Task A_held_takeover_gate_blocks_only_its_own_run()
+    {
+        // Arrange - a takeover of run A holds A's gate (exclusive) in an open transaction.
+        var runA = Guid.NewGuid();
+        var runB = Guid.NewGuid();
+        await using var takeover = new NpgsqlConnection(_connectionString);
+        await takeover.OpenAsync();
+        await using var tx = await takeover.BeginTransactionAsync();
+        await takeover.ExecuteAsync(PostgreSqlFlowRunStore.RunGateExclusiveSql, new { RunId = runA }, tx);
+
+        // Act
+        var otherRun = await _store.TryRecordDispatchAsync(runB, "a").WaitAsync(TimeSpan.FromSeconds(30));
+        await _store.RecordStepStartAsync(runB, "b", "Echo", null, null).WaitAsync(TimeSpan.FromSeconds(30));
+        var sameRun = _store.TryRecordDispatchAsync(runA, "a");
+        var sameRunFinishedWhileHeld = await Task.WhenAny(sameRun, Task.Delay(TimeSpan.FromMilliseconds(250))) == sameRun;
+        await tx.CommitAsync();
+        var sameRunRecorded = await sameRun.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Assert - run B never waited; run A's first dispatch waited for the takeover, then landed.
+        Assert.True(otherRun);
+        Assert.Equal(StepStatus.Running, (await _store.GetStepStatusesAsync(runB))["b"]);
+        Assert.False(sameRunFinishedWhileHeld);
+        Assert.True(sameRunRecorded);
+    }
+
+    [Fact]
+    public async Task Writers_of_one_run_do_not_wait_on_each_other_through_the_gate()
+    {
+        // Arrange - an open transaction holds run A's gate shared, as a dispatch in flight does.
+        var runA = Guid.NewGuid();
+        await using var writer = new NpgsqlConnection(_connectionString);
+        await writer.OpenAsync();
+        await using var tx = await writer.BeginTransactionAsync();
+        await writer.ExecuteAsync(PostgreSqlFlowRunStore.TryRecordDispatchSql, new { RunId = runA, StepKey = "a" }, tx);
+
+        // Act - other dispatches and a step start of the same run (shared with shared).
+        var second = await _store.TryRecordDispatchAsync(runA, "b").WaitAsync(TimeSpan.FromSeconds(30));
+        await _store.RecordStepStartAsync(runA, "c", "Echo", null, null).WaitAsync(TimeSpan.FromSeconds(30));
+        await _store.RecordSkippedStepAsync(runA, "d", "Echo", "When condition evaluated to false.").WaitAsync(TimeSpan.FromSeconds(30));
+        await tx.CommitAsync();
+
+        // Assert
+        Assert.True(second);
+        var statuses = await _store.GetStepStatusesAsync(runA);
+        Assert.Equal(StepStatus.Running, statuses["c"]);
+        Assert.Equal(StepStatus.Skipped, statuses["d"]);
+        Assert.Equal(["a", "b"], (await _store.GetDispatchedStepKeysAsync(runA)).Order(StringComparer.Ordinal));
     }
 }
