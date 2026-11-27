@@ -60,7 +60,8 @@ tests/
 │   ├── FlowOrchestrator.Core.UnitTests/
 │   ├── FlowOrchestrator.InMemory.UnitTests/
 │   ├── FlowOrchestrator.Hangfire.UnitTests/
-│   └── FlowOrchestrator.SqlServer.UnitTests/
+│   ├── FlowOrchestrator.SqlServer.UnitTests/
+│   └── FlowOrchestrator.PostgreSQL.UnitTests/
 ├── integration/
 │   ├── FlowOrchestrator.Dashboard.IntegrationTests/
 │   ├── FlowOrchestrator.Hangfire.IntegrationTests/

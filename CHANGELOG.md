@@ -6,6 +6,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **PostgreSQL: a host starting beside running hosts no longer locks the hot tables.** The start-up
+  migration ran `CREATE INDEX IF NOT EXISTS` and `ALTER TABLE … ADD COLUMN IF NOT EXISTS` on every start,
+  and PostgreSQL takes the table lock of those statements (SHARE and ACCESS EXCLUSIVE) *before* it checks
+  the name. A host started during a rolling deployment or a restart therefore queued behind any in-flight
+  write, autovacuum or index build on `flow_runs`, `flow_steps`, `flow_events` and the other tables; every
+  later write to that table queued behind the starting host; and a start that waited past the 30 s command
+  timeout failed. Every index and column statement now runs behind a catalog check that takes no table
+  lock, so a start on an up-to-date schema requests none. The resulting schema is identical (same indexes,
+  columns and definitions as 1.34.7); no manual step is needed. Affects `UsePostgreSql()` only.
+
 ## [1.34.7] - 2026-11-24
 
 Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
