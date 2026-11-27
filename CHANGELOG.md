@@ -238,6 +238,29 @@ providers only:
   `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
   [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
 
+### Fixed — Hangfire.PostgreSql: a step whose worker was killed waits for the lock timeout, now flagged at startup
+
+- **On Hangfire.PostgreSql job storage, a step whose worker process is killed during a Hangfire state
+  change runs again only after `DistributedLockTimeout` (10 min by default), not after
+  `InvisibilityTimeout`.** Hangfire.PostgreSql keeps distributed locks as rows in its `lock` table, and
+  nothing releases a row when the process that wrote it dies (upstream
+  [hangfire-postgres/Hangfire.PostgreSql#329](https://github.com/hangfire-postgres/Hangfire.PostgreSql/issues/329)).
+  The worker takes the job's `job:{id}:state-lock` for Enqueued → Processing and for Processing →
+  Succeeded. A kill inside either change leaves the row behind. The job is re-fetched once
+  `InvisibilityTimeout` has passed, and the worker that re-fetches it then waits on the orphaned row. Each
+  re-fetch until the row expires parks one more worker. Until then the step has a dispatch-ledger row,
+  no claim and no status row, which looks like a lost job. The 3-replica crash-recovery stress run
+  (60 s invisibility, 120 s quiet period) reported three runs in that state. Hangfire.SqlServer is not
+  affected: its `sp_getapplock` locks belong to the session and are released when the connection drops.
+- **`UseHangfire()` now logs a startup warning (EventId 3160) when the Hangfire job storage is
+  Hangfire.PostgreSql and `DistributedLockTimeout` is longer than `InvisibilityTimeout`.** The package
+  defaults (30 min / 10 min) do not warn. To keep crash recovery at the invisibility timeout, set
+  `PostgreSqlStorageOptions.DistributedLockTimeout` to at most `InvisibilityTimeout`. See
+  [Production checklist → Hangfire on PostgreSQL](docs/articles/production-checklist.md#hangfire-on-postgresql).
+  The check reads the options by name, because FlowOrchestrator does not reference the community package.
+  Integration tests against real PostgreSQL pin it to Hangfire.PostgreSql 1.21.1, together with the
+  recovery behaviour behind it.
+
 ### Fixed — starting a PostgreSQL host beside running ones takes no table locks
 
 - **The PostgreSQL migrator requested a table lock for every index and column on every start**, even when

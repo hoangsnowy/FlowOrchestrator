@@ -166,7 +166,8 @@ using FlowOrchestrator.PostgreSQL;   // UsePostgreSql()
 var pgConnStr = builder.Configuration.GetConnectionString("FlowOrchestratorPg")!;
 
 builder.Services.AddHangfire(c => c
-    .UsePostgreSqlStorage(pgConnStr));     // Hangfire.PostgreSql package
+    .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(pgConnStr)));   // Hangfire.PostgreSql package
+// Shortening InvisibilityTimeout? Shorten DistributedLockTimeout with it; see the production checklist.
 
 builder.Services.AddHangfireServer();
 

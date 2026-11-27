@@ -22,6 +22,9 @@
     <!-- E2E trace propagation test needs a real (in-memory) Hangfire BackgroundJobServer. -->
     <PackageReference Include="Hangfire.AspNetCore" />
     <PackageReference Include="Hangfire.InMemory" />
+    <!-- Crash recovery on Hangfire.PostgreSql: real PostgreSQL through Testcontainers. -->
+    <PackageReference Include="Hangfire.PostgreSql" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
   </ItemGroup>
 
   <ItemGroup>
