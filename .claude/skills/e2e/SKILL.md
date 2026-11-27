@@ -294,6 +294,11 @@ runId=$(curl -fsS -u admin:admin -X POST "http://localhost:$port/flows/api/flows
 # before the run reaches Succeeded — sampling only the terminal state proves nothing.
 ```
 
+Also assert the step's `attemptCount` on the run detail is **at least 3** — the flow declares
+`pollMinAttempts = 3`. Seeing `Pending` once and a terminal `Succeeded` is not enough: on 1.34.0–1.34.7 a
+Hangfire re-check ran with its inputs destroyed by Newtonsoft.Json, so `pollEnabled` read `false` and the
+step succeeded on attempt **2** — and the old two-condition check passed regardless.
+
 Healthy trace: `check_shipment_status` goes `Running → Pending → Pending → Succeeded`, then
 `log_shipment_confirmed` runs and the run completes `Succeeded` (~15–20 s).
 
