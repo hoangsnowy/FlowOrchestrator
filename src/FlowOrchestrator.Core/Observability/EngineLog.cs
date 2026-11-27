@@ -103,6 +103,12 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 1012, Level = LogLevel.Warning, Message = "Schedule rejected: flow {FlowId} declares no cron trigger '{TriggerKey}' (job {JobId}); no run started. Remove the orphaned recurring job.")]
     public static partial void StaleScheduleRejected(ILogger logger, Guid flowId, string triggerKey, string? jobId);
 
+    [LoggerMessage(EventId = 1013, Level = LogLevel.Warning, Message = "Idempotency key of flow {FlowId} ('{TriggerKey}') pointed at run {StaleRunId}, which never started work and was registered more than IdempotencyReservationTimeout ago; run {RunId} took the key over and the stale run is cancelled.")]
+    public static partial void IdempotencyReservationTakenOver(ILogger logger, Guid flowId, string triggerKey, Guid staleRunId, Guid runId);
+
+    [LoggerMessage(EventId = 1014, Level = LogLevel.Warning, Message = "Could not complete the abandoned run {StaleRunId} as Failed after its idempotency key was taken over; its cancel latch is set, so none of its steps can execute.")]
+    public static partial void StaleReservationRunCompletionFailed(ILogger logger, Exception ex, Guid staleRunId);
+
     [LoggerMessage(EventId = 1010, Level = LogLevel.Warning, Message = "Trigger rejected: flow {FlowId} ('{TriggerKey}') is disabled.")]
     public static partial void TriggerRejectedDisabledFlow(ILogger logger, Guid flowId, string triggerKey);
 }

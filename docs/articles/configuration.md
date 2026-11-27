@@ -162,6 +162,7 @@ options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
 | `DefaultRunTimeout` | `TimeSpan?` | `null` | Global timeout for all runs. Runs exceeding this are marked `TimedOut`. Override per run by including `runTimeoutSeconds` in the trigger payload. `null` = no timeout. |
 | `TimeoutEnforcementInterval` | `TimeSpan?` | 30 seconds | How often the periodic sweep proactively marks runs past `TimeoutAtUtc` as `TimedOut`, so a run whose step threw and left nothing scheduled does not sit `Running` forever. `null` or a non-positive value disables the sweep. |
 | `IdempotencyHeaderName` | `string` | `"Idempotency-Key"` | Header name checked on trigger requests. If present, the value is used as a deduplication key — a second trigger with the same key returns the existing run instead of creating a new one. |
+| `IdempotencyReservationTimeout` | `TimeSpan` | 30 seconds | How old a key registration must be before a retry may take it over when its run never started work (no dispatched and no recorded step) — the trigger that registered it died before creating the run. A younger registration, or one whose run started, is still a duplicate. Must be positive; setting zero or less throws `ArgumentOutOfRangeException`. |
 
 ---
 

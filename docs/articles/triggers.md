@@ -263,6 +263,8 @@ options.RunControl.IdempotencyHeaderName = "Idempotency-Key";  // default
 
 Idempotency keys work for both manual triggers and webhook triggers, but they are scoped per (flow, trigger key): the same key delivered to a flow's manual trigger and to its webhook trigger creates two separate runs.
 
+The key is registered just before the run is created. If the process dies in between, the key points at a run that never started any step. A retry with the same key then takes the key over and starts a new run, but only once the registration is older than `options.RunControl.IdempotencyReservationTimeout` (30 s by default). Until then, the retry is answered with the dead run's id as a duplicate. The dead run is cancelled and completed `Failed`, and its cancel reason names the run that replaced it. If many retries arrive at once, exactly one of them starts the new run, and the others get that run's id as duplicates.
+
 ### Per-run timeout override
 
 Include the reserved `runTimeoutSeconds` key in the trigger JSON body to override `options.RunControl.DefaultRunTimeout` for that run only:

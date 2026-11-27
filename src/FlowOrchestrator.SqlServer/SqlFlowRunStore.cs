@@ -1454,6 +1454,114 @@ public sealed class SqlFlowRunStore :
         }
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// One batch. An unlocked probe (the same predicate, read without locks) answers the common case — a
+    /// duplicate of a fresh reservation, or of a run that started work however old — without a transaction or
+    /// a range lock; webhook providers re-deliver for days, so late duplicates of live runs are routine. Only a
+    /// reservation the probe sees as stale and unstarted enters the transaction, where one <c>UPDATE</c>
+    /// re-checks the whole
+    /// predicate: owner, age on <c>SYSDATETIMEOFFSET()</c> (the clock that stamped <c>CreatedAtUtc</c>), and no
+    /// <c>FlowStepDispatches</c> / <c>FlowSteps</c> row for the stale run.
+    /// </para>
+    /// <para>
+    /// Locks: <c>UPDLOCK, HOLDLOCK</c> on the key row serialises concurrent takeovers (the second re-evaluates
+    /// after the first commits, sees the new owner and matches nothing). <c>HOLDLOCK</c> on the two
+    /// <c>NOT EXISTS</c> probes takes key-range locks on the stale run's prefix of both clustered primary keys
+    /// (<c>RunId, StepKey</c>), so a slow original trigger cannot insert its first ledger or step row between
+    /// the probe and the commit; such an insert waits and lands after the cancel latch, which this transaction
+    /// sets, so the step it dispatches is skipped by the termination gate.
+    /// </para>
+    /// </remarks>
+    public async Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+        Guid flowId,
+        string triggerKey,
+        string idempotencyKey,
+        Guid staleRunId,
+        Guid newRunId,
+        TimeSpan reservationTimeout)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        return await conn.ExecuteScalarAsync<Guid?>(
+            """
+            SET XACT_ABORT ON;
+
+            DECLARE @Owner UNIQUEIDENTIFIER = NULL;
+            DECLARE @Candidate BIT = 0;
+
+            SELECT @Owner = RunId,
+                   @Candidate = CASE
+                       WHEN RunId = @StaleRunId
+                        AND DATEDIFF_BIG(MILLISECOND, CreatedAtUtc, SYSDATETIMEOFFSET()) >= @TimeoutMs
+                        AND NOT EXISTS (SELECT 1 FROM FlowStepDispatches WHERE RunId = @StaleRunId)
+                        AND NOT EXISTS (SELECT 1 FROM FlowSteps WHERE RunId = @StaleRunId)
+                       THEN 1 ELSE 0 END
+            FROM FlowIdempotencyKeys
+            WHERE FlowId = @FlowId
+              AND TriggerKey = @TriggerKey
+              AND IdempotencyKey = @IdempotencyKey;
+
+            IF @Candidate = 1
+            BEGIN
+                BEGIN TRANSACTION;
+
+                UPDATE k
+                SET RunId = @NewRunId,
+                    CreatedAtUtc = SYSDATETIMEOFFSET()
+                FROM FlowIdempotencyKeys AS k WITH (UPDLOCK, HOLDLOCK)
+                WHERE k.FlowId = @FlowId
+                  AND k.TriggerKey = @TriggerKey
+                  AND k.IdempotencyKey = @IdempotencyKey
+                  AND k.RunId = @StaleRunId
+                  AND DATEDIFF_BIG(MILLISECOND, k.CreatedAtUtc, SYSDATETIMEOFFSET()) >= @TimeoutMs
+                  AND NOT EXISTS (SELECT 1 FROM FlowStepDispatches AS d WITH (HOLDLOCK) WHERE d.RunId = @StaleRunId)
+                  AND NOT EXISTS (SELECT 1 FROM FlowSteps AS s WITH (HOLDLOCK) WHERE s.RunId = @StaleRunId);
+
+                IF @@ROWCOUNT > 0
+                BEGIN
+                    MERGE FlowRunControls WITH (HOLDLOCK, UPDLOCK) AS target
+                    USING (SELECT @StaleRunId AS RunId) AS source
+                    ON target.RunId = source.RunId
+                    WHEN MATCHED THEN
+                        UPDATE SET
+                            CancelRequested = 1,
+                            CancelReason = CASE WHEN target.CancelRequested = 1 THEN target.CancelReason ELSE @Reason END,
+                            CancelRequestedAtUtc = COALESCE(target.CancelRequestedAtUtc, SYSDATETIMEOFFSET())
+                    WHEN NOT MATCHED THEN
+                        INSERT (RunId, FlowId, TriggerKey, IdempotencyKey, TimeoutAtUtc, CancelRequested, CancelReason, CancelRequestedAtUtc)
+                        VALUES (@StaleRunId, @FlowId, @ControlTriggerKey, @ControlIdempotencyKey, NULL, 1, @Reason, SYSDATETIMEOFFSET());
+                END
+
+                -- Read the owner under the transaction: ours when the UPDATE matched, otherwise whoever
+                -- committed a takeover first (our UPDATE waited on its lock).
+                SET @Owner = (
+                    SELECT RunId
+                    FROM FlowIdempotencyKeys
+                    WHERE FlowId = @FlowId
+                      AND TriggerKey = @TriggerKey
+                      AND IdempotencyKey = @IdempotencyKey);
+
+                COMMIT TRANSACTION;
+            END
+
+            SELECT @Owner;
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = triggerKey.Trim().ToLowerInvariant(),
+                IdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey),
+                StaleRunId = staleRunId,
+                NewRunId = newRunId,
+                TimeoutMs = (long)reservationTimeout.TotalMilliseconds,
+                Reason = IdempotencyKeyStorage.TakenOverCancelReason(newRunId),
+                // The control record keeps the caller's spelling, like ConfigureRunAsync.
+                ControlTriggerKey = triggerKey,
+                ControlIdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey)
+            }).ConfigureAwait(false);
+    }
+
     public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
         await using var conn = new SqlConnection(_connectionString);

@@ -462,6 +462,20 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       (trim, lower-case, and a `sha256:` digest for keys over 256 characters), and the copy passed to
       `ConfigureRunAsync` through `IdempotencyKeyStorage.ToStorageForm`. That is what the built-in stores
       do, so a key deduplicates the same way whichever backend you move to.
+- [ ] **`IFlowRunControlStore.TryTakeOverStaleIdempotencyKeyAsync`** (new in 2.0, no default
+      implementation) re-points a key from `staleRunId` to `newRunId` and returns the key's owner after
+      the call: `newRunId` when it won, otherwise the current owner, or `null` when no key is registered.
+      It takes over only when, in **one atomic operation**, the key still maps to `staleRunId`, the
+      registration is at least `reservationTimeout` old on the clock that stamped it, and the stale run
+      has **no dispatch-ledger row and no step row**. The same operation re-stamps the registration time
+      and sets the stale run's cancel latch, creating its control record if it has none and keeping an
+      earlier cancel reason (`IdempotencyKeyStorage.TakenOverCancelReason`). Exactly one of N concurrent
+      callers may win. The started-work probe must also exclude a concurrent first insert into the ledger
+      or step table until the latch commits. The built-in stores use `HOLDLOCK` key-range locks on SQL
+      Server. On PostgreSQL they use a per-run advisory lock: the takeover holds it exclusively, and every
+      ledger or step-row write holds it shared. Both block only the run being taken over. Returning
+      `staleRunId` unconditionally compiles, but keeps the 1.x behaviour: a delivery whose trigger died
+      after registering its key is lost.
 - [ ] **`MarkTimedOutAsync`** returns `false` without writing when the timeout is already latched **or a
       cancel was already requested** (a user cancel wins), and keeps an existing `CancelReason` when
       `reason` is `null`. **`ConfigureRunAsync`** is an upsert that keeps the cancel / timeout fields of an

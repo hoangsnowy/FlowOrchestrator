@@ -135,6 +135,39 @@ public sealed class FlowRunControlOptions
     /// existing run are de-duplicated rather than creating a new run.
     /// </summary>
     public string IdempotencyHeaderName { get; set; } = "Idempotency-Key";
+
+    /// <summary>The default for <see cref="IdempotencyReservationTimeout"/>: 30 seconds.</summary>
+    public static readonly TimeSpan DefaultIdempotencyReservationTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How old an idempotency-key registration whose run never started work must be before a duplicate
+    /// trigger may take the key over and start the run itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A trigger registers its idempotency key before it creates the run. A process killed in between
+    /// left the key pointing at a run with no dispatched or recorded step, and every retry of the same
+    /// delivery was answered "duplicate" of that dead run. A duplicate that finds such a registration
+    /// older than this value now takes the key over (atomically, so one of many concurrent retries wins),
+    /// cancels and fails the dead run, and starts a fresh one. A younger registration, or one whose run
+    /// has started work, is answered "duplicate" as before.
+    /// </para>
+    /// <para>
+    /// The age is the only evidence the first trigger is gone. A live trigger normally spends a few store
+    /// round trips between its registration and its first dispatch; one stalled for longer than this has
+    /// its run cancelled in favour of the retry's. Raise the value if your store can stall for longer.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when set to zero or a negative value.</exception>
+    public TimeSpan IdempotencyReservationTimeout
+    {
+        get;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            field = value;
+        }
+    } = DefaultIdempotencyReservationTimeout;
 }
 
 /// <summary>

@@ -261,6 +261,44 @@ on SQL Server + Hangfire, 10 on PostgreSQL + Hangfire, 9 on Service Bus, with 6 
   Integration tests against real PostgreSQL pin it to Hangfire.PostgreSql 1.21.1, together with the
   recovery behaviour behind it.
 
+### Fixed — a trigger killed after registering its idempotency key no longer loses the delivery
+
+- **A retry is no longer absorbed as a duplicate of a run that never started (RFC 2.0 S7).** `TriggerAsync`
+  registers the `Idempotency-Key` before it creates the run. A process killed in between left the key
+  pointing at a run with no dispatched or recorded step, and possibly no run row at all. Every retry of
+  that delivery was then answered `Duplicate` with the dead run's id, so the run was lost silently. The
+  in-process compensation (`AbandonUnstartedRunAsync`) only covers an exception, not a kill. The stress
+  harness lost 1 run of 600 this way in its crash-recovery scenario. A duplicate trigger now takes the key
+  over when the registration is older than the new `FlowRunControlOptions.IdempotencyReservationTimeout`
+  (default **30 s**) and its run has **no dispatch-ledger row and no step row**. The retry starts a fresh
+  run, and the dead run is cancel-latched and completed `Failed`; its cancel reason names the run that
+  replaced it. A younger registration, or one whose run started work, is still answered `Duplicate`. The
+  store decides in one atomic operation, with the age measured on the clock that stamped the registration
+  (`SYSDATETIMEOFFSET()` / `NOW()` / the in-memory store's clock), so of N concurrent retries exactly one
+  starts the run and the rest are duplicates of it. If the first trigger was only slow, the steps it
+  dispatches after the takeover are skipped by the termination gate. A takeover logs EventId 1013
+  (Warning); EventId 1014 means completing the dead run failed, but its cancel latch is already set.
+- **No schema change:** `FlowIdempotencyKeys.CreatedAtUtc` / `flow_idempotency_keys.created_at_utc` already
+  stamp each registration.
+
+#### Read before upgrading
+
+- **Custom stores:** `IFlowRunControlStore` has a new required member, `TryTakeOverStaleIdempotencyKeyAsync`.
+  It has no default implementation, because a silent fallback would hide the lost delivery. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend)
+  for the contract.
+- A trigger that stalls for longer than `IdempotencyReservationTimeout` between registering its key and
+  dispatching its first step has its run cancelled, and the retry's run takes over. Raise the value if
+  your store can stall for that long. Setting zero or a negative value throws `ArgumentOutOfRangeException`.
+- **PostgreSQL:** a takeover holds a per-run advisory lock on the dead run (class `1179601234`, key
+  `hashtext(run_id::text)`), exclusive, while it checks and swaps. Every write of a ledger or step row
+  (`TryRecordDispatchAsync`, `RecordStepStartAsync`, `RecordSkippedStepAsync`) takes the same lock shared
+  in its existing statement or transaction, so no first dispatch of the dead run can slip in before the
+  latch commits. Only the run being taken over waits; shared with shared never waits, so dispatches of
+  other runs, and of the same run among themselves, are unaffected (measured within noise: about +2 µs
+  per insert on the server, no extra round trip). **SQL Server** takes key-range locks on the dead run's
+  rows only. Neither store takes a lock for a duplicate of a fresh or started run.
+
 ### Fixed — starting a PostgreSQL host beside running ones takes no table locks
 
 - **The PostgreSQL migrator requested a table lock for every index and column on every start**, even when

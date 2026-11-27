@@ -129,5 +129,9 @@ public sealed class TimeoutSweepRunIsolationTests
 
         public Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
             => inner.TryRegisterIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey, runId);
+
+        public Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+            Guid flowId, string triggerKey, string idempotencyKey, Guid staleRunId, Guid newRunId, TimeSpan reservationTimeout)
+            => inner.TryTakeOverStaleIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey, staleRunId, newRunId, reservationTimeout);
     }
 }

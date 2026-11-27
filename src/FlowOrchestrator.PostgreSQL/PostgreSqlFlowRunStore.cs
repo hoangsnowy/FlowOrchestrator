@@ -77,9 +77,11 @@ public sealed class PostgreSqlFlowRunStore :
         // Serialise attempt-number allocation for this step across connections (mirrors SQL
         // Server's UPDLOCK/HOLDLOCK). hashtextextended maps the composite key to the bigint the
         // advisory-lock API expects; the lock is transaction-scoped (auto-released on commit/rollback).
+        // The same statement takes the run gate shared (see TryTakeOverStaleIdempotencyKeyAsync): no extra
+        // round trip, and shared never waits on shared.
         await conn.ExecuteAsync(
-            "SELECT pg_advisory_xact_lock(hashtextextended(@LockKey, 0))",
-            new { LockKey = $"{runId:N}:{stepKey}" }, tx);
+            $"SELECT pg_advisory_xact_lock(hashtextextended(@LockKey, 0)) FROM {RunGateSharedFrom}",
+            new { LockKey = $"{runId:N}:{stepKey}", RunId = runId }, tx);
 
         var attemptNo = await conn.ExecuteScalarAsync<int>(
             "SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM flow_step_attempts WHERE run_id = @RunId AND step_key = @StepKey",
@@ -576,15 +578,20 @@ public sealed class PostgreSqlFlowRunStore :
     public async Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
-        var rows = await conn.ExecuteAsync(
-            """
-            INSERT INTO flow_step_dispatches (run_id, step_key)
-            VALUES (@RunId, @StepKey)
-            ON CONFLICT (run_id, step_key) DO NOTHING
-            """,
-            new { RunId = runId, StepKey = stepKey });
+        // The run gate (shared) is held until this statement commits, so a stale-reservation takeover of the
+        // run either sees this row or has latched the run's cancel before it is written. Per dispatch: one
+        // shared advisory lock inside the same statement, no extra round trip; shared never waits on shared.
+        var rows = await conn.ExecuteAsync(TryRecordDispatchSql, new { RunId = runId, StepKey = stepKey });
         return rows > 0;
     }
+
+    /// <summary>The ledger insert of <see cref="TryRecordDispatchAsync"/>, holding the run gate shared.</summary>
+    internal const string TryRecordDispatchSql = $"""
+        INSERT INTO flow_step_dispatches (run_id, step_key)
+        SELECT @RunId, @StepKey
+        FROM {RunGateSharedFrom}
+        ON CONFLICT (run_id, step_key) DO NOTHING
+        """;
 
     public async Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
     {
@@ -1104,9 +1111,10 @@ public sealed class PostgreSqlFlowRunStore :
         await conn.OpenAsync().ConfigureAwait(false);
         await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
 
+        // Step lock and run gate (shared), as in RecordStepStartAsync.
         await conn.ExecuteAsync(
-            "SELECT pg_advisory_xact_lock(hashtextextended(@LockKey, 0))",
-            new { LockKey = $"{runId:N}:{stepKey}" }, tx).ConfigureAwait(false);
+            $"SELECT pg_advisory_xact_lock(hashtextextended(@LockKey, 0)) FROM {RunGateSharedFrom}",
+            new { LockKey = $"{runId:N}:{stepKey}", RunId = runId }, tx).ConfigureAwait(false);
 
         await conn.ExecuteAsync(
             """
@@ -1319,6 +1327,154 @@ public sealed class PostgreSqlFlowRunStore :
 
         return affected > 0;
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// An unlocked probe (the same predicate, read without locks) answers the common case — a duplicate of a
+    /// fresh reservation, or of a run that started work however old — with one <c>SELECT</c> and no
+    /// transaction or lock; webhook providers re-deliver for days, so late duplicates of live runs are routine.
+    /// Only a reservation the probe sees as stale and unstarted enters the transaction, where one statement
+    /// re-checks the whole predicate
+    /// (owner, age on <c>NOW()</c> — the clock that stamped <c>created_at_utc</c> — and no
+    /// <c>flow_step_dispatches</c> / <c>flow_steps</c> row for the stale run) and, in a data-modifying CTE,
+    /// sets the stale run's cancel latch.
+    /// </para>
+    /// <para>
+    /// Locks: the key row's lock serialises concurrent takeovers (the second re-evaluates the updated row,
+    /// sees the new owner and matches nothing). PostgreSQL has no key-range locks under READ COMMITTED, so a
+    /// slow original trigger could otherwise insert its first ledger or step row after the statement's
+    /// snapshot and run that step before the latch commits. The transaction therefore first takes the stale
+    /// run's <b>run gate</b> (<see cref="RunGateExclusiveSql"/>) exclusively. Every writer of a
+    /// <c>flow_step_dispatches</c> or <c>flow_steps</c> row holds the same gate <i>shared</i> until it commits
+    /// (<see cref="TryRecordDispatchAsync"/>, <see cref="RecordStepStartAsync"/>,
+    /// <see cref="RecordSkippedStepAsync(Guid, string, string, string?, string?)"/>). A writer already holding
+    /// it makes the takeover wait until its row is committed, and the check-and-swap then runs as a separate
+    /// statement whose snapshot sees it. A writer arriving later waits until the latch is committed. The gate
+    /// is per run: writers of other runs, and writers of one run among themselves (shared with shared),
+    /// never wait on it.
+    /// </para>
+    /// </remarks>
+    public async Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+        Guid flowId,
+        string triggerKey,
+        string idempotencyKey,
+        Guid staleRunId,
+        Guid newRunId,
+        TimeSpan reservationTimeout)
+    {
+        var args = new
+        {
+            FlowId = flowId,
+            TriggerKey = triggerKey.Trim().ToLowerInvariant(),
+            IdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey),
+            StaleRunId = staleRunId,
+            NewRunId = newRunId,
+            Timeout = reservationTimeout,
+            Reason = IdempotencyKeyStorage.TakenOverCancelReason(newRunId),
+            // The control record keeps the caller's spelling, like ConfigureRunAsync.
+            ControlTriggerKey = triggerKey,
+            ControlIdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey)
+        };
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+
+        var probe = await conn.QuerySingleOrDefaultAsync<IdempotencyOwnerProbe>(
+            """
+            SELECT run_id AS "RunId",
+                   (run_id = @StaleRunId
+                    AND NOW() - created_at_utc >= @Timeout
+                    AND NOT EXISTS (SELECT 1 FROM flow_step_dispatches WHERE run_id = @StaleRunId)
+                    AND NOT EXISTS (SELECT 1 FROM flow_steps WHERE run_id = @StaleRunId)) AS "Candidate"
+            FROM flow_idempotency_keys
+            WHERE flow_id = @FlowId
+              AND trigger_key = @TriggerKey
+              AND idempotency_key = @IdempotencyKey
+            """,
+            args).ConfigureAwait(false);
+
+        if (probe is not { Candidate: true })
+        {
+            return probe?.RunId;
+        }
+
+        await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+
+        // Its own statement, so the check-and-swap below takes its READ COMMITTED snapshot after the wait and
+        // sees every first row committed by a writer that held the gate.
+        await conn.ExecuteAsync(RunGateExclusiveSql, new { RunId = staleRunId }, tx).ConfigureAwait(false);
+
+        await conn.ExecuteAsync(
+            """
+            WITH taken AS (
+                UPDATE flow_idempotency_keys
+                SET run_id = @NewRunId,
+                    created_at_utc = NOW()
+                WHERE flow_id = @FlowId
+                  AND trigger_key = @TriggerKey
+                  AND idempotency_key = @IdempotencyKey
+                  AND run_id = @StaleRunId
+                  AND NOW() - created_at_utc >= @Timeout
+                  AND NOT EXISTS (SELECT 1 FROM flow_step_dispatches WHERE run_id = @StaleRunId)
+                  AND NOT EXISTS (SELECT 1 FROM flow_steps WHERE run_id = @StaleRunId)
+                RETURNING run_id
+            )
+            INSERT INTO flow_run_controls
+                (run_id, flow_id, trigger_key, idempotency_key, timeout_at_utc,
+                 cancel_requested, cancel_reason, cancel_requested_at_utc)
+            SELECT @StaleRunId, @FlowId, @ControlTriggerKey, @ControlIdempotencyKey, NULL, TRUE, @Reason, NOW()
+            FROM taken
+            ON CONFLICT (run_id) DO UPDATE SET
+                cancel_requested = TRUE,
+                cancel_reason = CASE WHEN flow_run_controls.cancel_requested
+                                     THEN flow_run_controls.cancel_reason
+                                     ELSE EXCLUDED.cancel_reason END,
+                cancel_requested_at_utc = COALESCE(flow_run_controls.cancel_requested_at_utc, EXCLUDED.cancel_requested_at_utc);
+            """,
+            args,
+            tx).ConfigureAwait(false);
+
+        // A new snapshot (READ COMMITTED): ours when the UPDATE matched, otherwise whoever committed a
+        // takeover first (it held the run gate, and our UPDATE then re-read the row it had updated).
+        var owner = await conn.ExecuteScalarAsync<Guid?>(FindOwnerSql, args, tx).ConfigureAwait(false);
+        await tx.CommitAsync().ConfigureAwait(false);
+        return owner;
+    }
+
+    /// <summary>
+    /// Advisory-lock class of the per-run gate between a stale-reservation takeover and the writers of a run's
+    /// ledger and step rows (ASCII <c>"FOIR"</c>).
+    /// </summary>
+    /// <remarks>
+    /// The two-key form <c>(class, hashtext(run_id::text))</c> lives in a different advisory-lock key space from
+    /// the single-<c>bigint</c> per-step locks, so the two can never collide. Two runs whose ids hash alike only
+    /// make a takeover wait for an unrelated writer; no decision changes. A string so the SQL below stays a
+    /// compile-time constant (no per-dispatch allocation); <c>0x464F4952</c> in decimal.
+    /// </remarks>
+    internal const string RunGateLockClass = "1179601234";
+
+    /// <summary>Takes the run gate of <c>@RunId</c> exclusively until the transaction ends (takeover side).</summary>
+    internal const string RunGateExclusiveSql = $"SELECT pg_advisory_xact_lock({RunGateLockClass}, hashtext(@RunId::text))";
+
+    /// <summary>
+    /// <c>FROM</c>-clause item taking the run gate of <c>@RunId</c> shared until the statement's transaction
+    /// ends (writer side); evaluated before the row it guards is written.
+    /// </summary>
+    internal const string RunGateSharedFrom = $"(SELECT pg_advisory_xact_lock_shared({RunGateLockClass}, hashtext(@RunId::text))) AS run_gate";
+
+    private const string FindOwnerSql = """
+        SELECT run_id
+        FROM flow_idempotency_keys
+        WHERE flow_id = @FlowId
+          AND trigger_key = @TriggerKey
+          AND idempotency_key = @IdempotencyKey
+        """;
+
+    /// <summary>Row of the unlocked probe in <see cref="TryTakeOverStaleIdempotencyKeyAsync"/>.</summary>
+    /// <param name="RunId">The run the key maps to.</param>
+    /// <param name="Candidate">Whether the row is owned by the stale run and old enough to take over.</param>
+    private sealed record IdempotencyOwnerProbe(Guid RunId, bool Candidate);
 
     public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
