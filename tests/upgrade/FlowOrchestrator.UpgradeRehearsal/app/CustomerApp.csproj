@@ -9,7 +9,7 @@
       -p:CustomerRuntime=hangfire|servicebus
       -p:CustomerStorage=sqlserver|postgresql
 
-    This file is the 1.34.7 starting point. upgrade-to-2.0.patch (next to this folder) is the diff
+    This file is the 1.34.8 starting point. upgrade-to-2.0.patch (next to this folder) is the diff
     a customer makes by following docs/articles/migrating-to-2.0.md; rehearse.ps1 applies it.
   -->
 
@@ -21,7 +21,7 @@
     <AssemblyName>OrderHub</AssemblyName>
     <IsPackable>false</IsPackable>
 
-    <FlowOrchestratorVersion>1.34.7</FlowOrchestratorVersion>
+    <FlowOrchestratorVersion>1.34.8</FlowOrchestratorVersion>
     <CustomerRuntime Condition="'$(CustomerRuntime)' == ''">hangfire</CustomerRuntime>
     <CustomerStorage Condition="'$(CustomerStorage)' == ''">sqlserver</CustomerStorage>
     <DefineConstants>$(DefineConstants);RUNTIME_$(CustomerRuntime.ToUpperInvariant());STORAGE_$(CustomerStorage.ToUpperInvariant())</DefineConstants>

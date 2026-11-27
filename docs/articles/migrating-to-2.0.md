@@ -35,7 +35,7 @@ review**.
 any 1.x  ──►  latest 1.34.x  ──(run it in production for a while)──►  2.0
 ```
 
-1. **Upgrade to the latest 1.34.x first** (1.34.7 when this was written), on your current .NET 8 / 9 / 10
+1. **Upgrade to the latest 1.34.x first** (1.34.8 when this was written), on your current .NET 8 / 9 / 10
    runtime. The 1.34 line carries the security fixes 2.0 also has — from 1.34.2 on, every 1.34.x patch
    is a security or correctness release; see the
    [security advisories](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories) — and the
@@ -48,7 +48,7 @@ any 1.x  ──►  latest 1.34.x  ──(run it in production for a while)─�
 Upgrading straight from an old 1.x to 2.0 works too; do every step below, plus the 1.34.2 items in
 [Step 7](#step-7--review-the-behaviour-changes).
 
-This upgrade — 1.34.7 → 2.0 with live state (parked, polling, queued and scheduled work, cron overrides,
+This upgrade — 1.34.8 → 2.0 with live state (parked, polling, queued and scheduled work, cron overrides,
 webhook nonces, idempotency keys) on Hangfire + SQL Server, Hangfire + PostgreSQL and Service Bus + SQL
 Server, plus the rollback — is rehearsed by `tests/upgrade/FlowOrchestrator.UpgradeRehearsal/rehearse.ps1`
 before every 2.0 release; its README lists what it checks. Where this guide quotes a command, an error
@@ -58,9 +58,9 @@ message or a schema change, it is the one the rehearsal ran or observed.
 
 ## Step 0 — Before you start
 
-- [ ] **Read the release notes** of every 1.34.x after the one you run, and of 2.0. 1.34.5 – 1.34.7 were
-      released from the `release/1.34` branch and are not in `main`'s `CHANGELOG.md`; their notes are on the
-      [GitHub releases](https://github.com/hoangsnowy/FlowOrchestrator/releases) page.
+- [ ] **Read the release notes** of every 1.34.x after the one you run, and of 2.0. 1.34.5 – 1.34.8 were
+      released from the `release/1.34` branch; `main`'s `CHANGELOG.md` carries their sections too, and the
+      [GitHub releases](https://github.com/hoangsnowy/FlowOrchestrator/releases) page has their notes.
 - [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). 2.0 only *adds* to
       an existing database (columns and indexes, listed in [Step 8](#step-8--database)) and never
       rewrites or deletes data, but take the backup anyway; you will want it for [rollback](#rollback).
@@ -137,8 +137,8 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 
 ```xml
 <!-- 1.x -->
-<PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.7" />
-<PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.8" />
+<PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.8" />
 
 <!-- 2.0: keep Hangfire; referencing Core explicitly is optional (Hangfire still depends on it) but
      makes the AddFlowOrchestrator() origin visible -->
@@ -151,9 +151,9 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 
 ```xml
 <!-- 1.x: FlowOrchestrator.Hangfire was required just for AddFlowOrchestrator() -->
-<PackageReference Include="FlowOrchestrator.Hangfire"   Version="1.34.7" />
-<PackageReference Include="FlowOrchestrator.ServiceBus" Version="1.34.7" />
-<PackageReference Include="FlowOrchestrator.SqlServer"  Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.Hangfire"   Version="1.34.8" />
+<PackageReference Include="FlowOrchestrator.ServiceBus" Version="1.34.8" />
+<PackageReference Include="FlowOrchestrator.SqlServer"  Version="1.34.8" />
 
 <!-- 2.0: drop FlowOrchestrator.Hangfire entirely -->
 <PackageReference Include="FlowOrchestrator.Core"       Version="2.0.0" />
@@ -257,18 +257,27 @@ Two facts drive this step:
    storage at the same time.
 
    **Pending re-checks queued by 1.x** — a polling step's next attempt, a `WaitForSignal` deadline check
-   — carry the step's resolved inputs, which Hangfire's Newtonsoft.Json store could not keep (it saved
-   `System.Text.Json.JsonElement` values as their `ValueKind` only). A 2.0 worker rebuilds them from the
-   manifest before running the step, so they run, with one visible difference: **a poll queued by 1.x
-   starts a fresh attempt count and `pollTimeoutSeconds` window** on its first 2.0 attempt (its 1.x poll
-   bookkeeping did not survive the store). A `WaitForSignal` deadline is unaffected: it is read from the
-   database. Alpha builds before this fix left such jobs failing with `Operation is not valid due to the
-   current state of the object` (EventId 2006) and the run `Running` for ever.
+   — carry the step's resolved inputs. How they arrive on a 2.0 worker depends on the 1.x version that
+   queued them:
 
-   > The same loss hits 1.34.x itself on Hangfire: from a poll's **second** attempt on, the handler gets
-   > the destroyed inputs (observed on 1.34.7: an input bound from `@triggerBody()` arrives `null`, a
-   > `ForEach` child poll fails with the exception above). 2.0 jobs carry inputs as System.Text.Json
-   > and are not affected, so polling flows that misbehaved on 1.34 + Hangfire are fixed by the upgrade.
+   - **1.34.8** carries those inputs as one System.Text.Json string (reserved input key
+     `__hangfireJsonInputs`). A 2.0 worker decodes it, so the re-check runs with exactly the inputs and
+     poll bookkeeping (attempt count, `pollTimeoutSeconds` window) it had on 1.34.8.
+   - **1.17 – 1.34.7** stored them through Hangfire's Newtonsoft.Json serializer, which keeps only a
+     `System.Text.Json.JsonElement`'s `ValueKind`. A 2.0 worker rebuilds the inputs from the manifest
+     before running the step, so the re-check runs, with one visible difference: **such a poll starts a
+     fresh attempt count and `pollTimeoutSeconds` window** on its first 2.0 attempt (its bookkeeping did
+     not survive the store).
+
+   A `WaitForSignal` deadline is unaffected either way: it is read from the database. Alpha builds before
+   this fix left 1.34.7 jobs failing with `Operation is not valid due to the current state of the object`
+   (EventId 2006) and the run `Running` for ever.
+
+   > The same loss hit 1.34.7 and earlier themselves on Hangfire: from a poll's **second** attempt on, the
+   > handler got the destroyed inputs (an input bound from `@triggerBody()` arrived `null`, a `ForEach`
+   > child poll failed with the exception above, `pollMinAttempts` was ignored). **1.34.8 fixes it** on
+   > the 1.34 line, which is one more reason to take 1.34.8 before 2.0; 2.0 jobs carry inputs as
+   > System.Text.Json and were never affected.
 
 ### 4.1 Check for ≤ 1.16 jobs
 
@@ -716,7 +725,7 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
 
 The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database they
 only **add** objects — nothing is altered, rewritten or deleted, and no row changes. This is the complete
-list, from a schema diff of a 1.34.7 database before and after the first 2.0 start (the upgrade
+list, from a schema diff of a 1.34.8 database before and after the first 2.0 start (the upgrade
 rehearsal checks it on every run):
 
 | Backend | Added on a 1.34.x database | Why |
@@ -970,7 +979,7 @@ large tables, and how to run it ahead of the deployment.
 ## Rollback
 
 Because 2.0 only adds to an existing database ([Step 8](#step-8--database); 1.34.x ignores every added
-object), rolling back to the **1.34.x** you ran before (1.34.7 in the rehearsal) is a redeploy. The
+object), rolling back to the **1.34.x** you ran before (1.34.8 in the rehearsal) is a redeploy. The
 retarget and package changes are reverted with your code; keep the database as it is.
 
 1. Hold webhook traffic. You do not need to pause cron schedules (and pausing pins their cron as an
@@ -986,7 +995,7 @@ retarget and package changes are reverted with your code; keep the database as i
    1.34 worker runs step messages 2.0 sent (rehearsed).
 3. Stop the 2.0 instances, deploy 1.34.x, start, release traffic.
 
-What carries over (all rehearsed on 1.34.7):
+What carries over (all rehearsed on 1.34.8, on Hangfire + SQL Server, Hangfire + PostgreSQL and Service Bus + SQL Server):
 
 - Runs started on 2.0 and still in progress continue on 1.34.x (same tables): a run parked in
   `WaitForSignal` on 2.0 resumes when signalled, except for the Hangfire jobs covered in step 2.

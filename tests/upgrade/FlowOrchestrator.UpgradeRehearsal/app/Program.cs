@@ -1,4 +1,4 @@
-// OrderHub — the upgrade rehearsal's customer host, as written against FlowOrchestrator 1.34.7.
+// OrderHub — the upgrade rehearsal's customer host, as written against FlowOrchestrator 1.34.8.
 // See ../README.md. Everything below "Rehearsal knobs" exists only so the rehearsal script can
 // leave work queued across the upgrade; the rest is ordinary customer wiring.
 using FlowOrchestrator.Core.Configuration;

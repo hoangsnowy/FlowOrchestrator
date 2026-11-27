@@ -24,7 +24,7 @@ Bus emulator for `servicebus-sqlserver`, which shares that SQL Server), the .NET
 
 | Path | What |
 |---|---|
-| `app/` | "OrderHub", the customer app, **as written for 1.34.7** (`net8.0`, `PackageReference`s to nuget.org). One source tree, several customers: `-p:CustomerRuntime=hangfire\|servicebus`, `-p:CustomerStorage=sqlserver\|postgresql` (the script pins them per work copy with a `Directory.Build.props`). |
+| `app/` | "OrderHub", the customer app, **as written for 1.34.8** (`net8.0`, `PackageReference`s to nuget.org). One source tree, several customers: `-p:CustomerRuntime=hangfire\|servicebus`, `-p:CustomerStorage=sqlserver\|postgresql` (the script pins them per work copy with a `Directory.Build.props`). |
 | `upgrade-to-2.0.patch` | The diff a customer makes by following the guide: Step 1 (retarget to `net10.0`), Step 2 (package references: add `FlowOrchestrator.Core`, keep `FlowOrchestrator.Hangfire` only on Hangfire hosts), Step 3 (`using FlowOrchestrator.Hangfire` only where `UseHangfire()` is called) and Step 6 (delete `EnableEventPersistence`). Nothing else: if the guide misses a required change, the v2 build or a check fails. |
 | `rehearse.ps1` | The driver. |
 | `NuGet.config.template`, `servicebus/Config.template.json` | Feed and emulator configuration written into the work directory. |
@@ -53,10 +53,12 @@ can be left queued but unexecuted across the upgrade; `Rehearsal:ShutdownEndpoin
    override firing); an approval with a 150 s timeout. Then, from a web-only node, a webhook run, an
    approval and a payment whose jobs stay `Enqueued`.
 3. Stops 1.34 and runs the guide's pre-flight: the Step 0 inventory search, the Step 4.1 query verbatim,
-   and a schema / row-count / run-events fingerprint.
+   a check that the queued 1.34.8 re-checks carry `__hangfireJsonInputs` (so the 2.0 side exercises its
+   decode), and a schema / row-count / run-events fingerprint.
 4. Starts 2.0 web-only (migrator only), diffs the schema and the data, then starts 2.0 with workers and
    checks: the queued 1.34 jobs run, the parked run resumes on a signal, the 1.34 timeout fires on 2.0,
-   the poll keeps polling with its attempt counter and completes, the `ForEach` finishes, the override is
+   the poll keeps polling, its attempt counter carries on rising (from 1.34.8; Hangfire ≤ 1.34.7 restarts it),
+   and it completes, the `ForEach` finishes, the override is
    kept and fires once per tick, the paused schedule stays paused, webhooks verify, a 1.34 replay nonce
    is still rejected, a 1.34 idempotency key still deduplicates, the dashboard lists / searches /
    filters the 1.34 history and derives its Events timeline, new runs work, and the Step 9 checklist

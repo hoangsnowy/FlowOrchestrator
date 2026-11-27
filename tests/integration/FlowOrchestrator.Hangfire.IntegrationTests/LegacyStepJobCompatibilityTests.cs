@@ -155,6 +155,54 @@ public sealed class LegacyStepJobCompatibilityTests : IAsyncDisposable
         Assert.Equal("plain value", step.Inputs["kept"]);
     }
 
+    [Fact]
+    public async Task PollRecheck_QueuedBy1348_DecodesTheCarriedInputs_AndHonoursItsPollBookkeeping()
+    {
+        // Arrange — 1.34.8 carries the resolved inputs as one System.Text.Json string; nothing is destroyed.
+        // pollMinAttempts = 3 exists only in the carried inputs (the manifest default is 1), and the
+        // carried attempt counter says this is attempt 2, so a delivered shipment must still poll again.
+        var runId = await TriggerAsync(new LegacyShipmentFlow(), """{"shipmentId":"S8"}""");
+        _calls.Delivered.Add("S8");
+        var carried = $$"""{"shipmentId":"S8","pollEnabled":true,"pollIntervalSeconds":30,"pollTimeoutSeconds":3600,"pollMinAttempts":3,"pollConditionPath":"status","pollConditionEquals":"delivered","__pollStartedAtUtc":"{{DateTimeOffset.UtcNow:O}}","__pollAttempt":1}""";
+        var job = DeserializeLegacyJob(runId, LegacyShipmentFlow.FlowId, "track",
+            "{\"__loopItem\":null,\"" + LegacyStepJobRepair.EncodedInputsKey + "\":" + JsonSerializer.Serialize(carried) + "}");
+
+        // Act
+        await PerformAsync(job);
+
+        // Assert — without the decode the step saw no shipment id and no poll settings, and succeeded at once.
+        Assert.Equal(["S8"], _calls.ShipmentIds);
+        Assert.Equal(StepStatus.Pending, await GetStepStatusAsync(runId, "track"));
+    }
+
+    [Fact]
+    public void Repair_1348EncodedInputs_RestoresTheExactValues_AndRemovesTheReservedKey()
+    {
+        // Arrange
+        var flow = new LegacyShipmentBatchFlow();
+        var step = new StepInstance("track_all.1.track", "CarrierStatus")
+        {
+            Inputs = new Dictionary<string, object?>
+            {
+                ["kept"] = "plain value",
+                [LegacyStepJobRepair.EncodedInputsKey] = """{"__loopItem":{"id":"B2","qty":2},"pollEnabled":true,"__pollAttempt":4}""",
+            },
+        };
+        var ctx = new FlowOrchestrator.Core.Execution.ExecutionContext();
+
+        // Act
+        var repaired = LegacyStepJobRepair.Repair(ctx, step, flow);
+
+        // Assert
+        Assert.Equal(3, repaired);
+        Assert.False(step.Inputs.ContainsKey(LegacyStepJobRepair.EncodedInputsKey));
+        Assert.Equal("plain value", step.Inputs["kept"]);
+        var item = Assert.IsType<JsonElement>(step.Inputs["__loopItem"]);
+        Assert.Equal("B2", item.GetProperty("id").GetString());
+        Assert.True(Assert.IsType<JsonElement>(step.Inputs["pollEnabled"]).GetBoolean());
+        Assert.Equal(4, Assert.IsType<JsonElement>(step.Inputs["__pollAttempt"]).GetInt32());
+    }
+
     private static string DestroyedPollInputs => string.Join(",",
         _destroyed.Select(k => "\"" + k + "\":" + DestroyedElement));
 
