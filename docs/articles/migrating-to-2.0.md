@@ -512,6 +512,26 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       decide whether a step it does not know belongs to a newer version (hand it back) or was removed
       (record it `Skipped`). A store that drops the column (`null`) gets the removed-step answer every time,
       which is the 1.x behaviour.
+- [ ] The **frontier reads** the 2.0 continuation makes on every step completion (#189 P0-1) have **no
+      default implementation** — falling back to the whole-run read would quietly keep the engine O(n²) in a
+      long `ForEach`:
+      - `IFlowRunRuntimeStore.GetStepStatusesAsync(runId, keys)` — the rows of just these keys, absent keys
+        omitted, an ordinal-keyed map; point lookups on `(RunId, StepKey)`, chunked if your provider limits
+        parameters per statement;
+      - `IFlowRunRuntimeStore.HasRunningOrPendingStepAsync(runId)` — whether any row of the run is
+        `Running` or `Pending`; back it with an index holding only those rows, because the completion gate
+        asks it on every completion that dispatched nothing;
+      - `IFlowRunRuntimeStore.CountSettledIterationsAsync(runId, loopKey, iterations, bodyKeys)` — how many
+        iterations `i < iterations` have every `"{loopKey}.{i}.{child}"` row terminal (anything but
+        `Running` / `Pending`), counting only canonical decimal indices and only the listed direct children
+        (not a nested loop's `"{loopKey}.{i}.{child}.{j}.{grandchild}"` rows). Return one number; do not
+        page rows back to the engine.
+
+      All three must observe **every write committed before the call started**: run each as its own
+      statement on the primary, never inside a transaction opened earlier and never on a read replica. That
+      is the write-skew rule the frontier read depends on — two steps that unlock one join concurrently must
+      not both miss it — and `tests/shared/FrontierStoreContract.cs` is the contract the built-in stores
+      pass (link it into your own test project and derive one class, as the built-in stores' tests do).
 - [ ] Optional members with default implementations (`IsStepClaimedAsync`, `IsStepDispatchedAsync`,
       `GetStepAsync`, `SearchRunsAsync`, …) are worth overriding with point queries: the defaults fetch
       whole sets.
@@ -626,6 +646,17 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
 
 ### Smaller changes
 
+- **The continuation reads the frontier, not the whole run** (#189 P0-1). After a step completes, the
+  engine reads and classifies only that step's dependents (and their dependencies); the run's whole status
+  map is read only when nothing is left running or pending, to decide whether to close it. Two visible
+  consequences: a step whose `RunAfter` accepts *any* status of a predecessor (an empty status list) is
+  dispatched when that predecessor completes, no longer earlier by some unrelated step's completion while
+  the predecessor was still `Running` or `Pending`; and a continuation that died between a step's completion
+  write and its dispatches (a crash, or a dispatcher call that failed after the completion was recorded) is
+  repaired by the completion gate once the run has nothing else open, or by startup recovery — no longer by
+  whichever step happens to complete next. Inside a `ForEach` with `ConcurrencyLimit > 1` that means the
+  loop waits for recovery, as a sequential loop always did. The periodic stalled-run sweep that closes
+  this gap is RFC 2.0 §5.2.
 - A step whose start cannot be recorded (the run-control read or the start write throws) is no longer run
   anyway: the engine releases its claim and rethrows, so the runtime retries the job. Startup recovery and
   the timeout sweep release a claim left without a step row by a crashed worker once it is older than
@@ -692,10 +723,12 @@ rehearsal checks it on every run):
 |---|---|---|
 | SQL Server / Azure SQL | columns `FlowRuns.IdText`, `FlowRuns.RunSearchText` (computed, not persisted); indexes `IX_FlowRuns_IdText`, `IX_FlowRuns_StartedAt_Search` | run search — [below](#run-search-columns-and-indexes-sql-server--azure-sql) |
 | | filtered index `IX_FlowStepDispatches_Unsent` on `FlowStepDispatches([DispatchedAt]) WHERE [DispatchJobId] IS NULL` | unsent-dispatch recovery ([Step 7](#smaller-changes)); holds only in-flight rows |
+| | filtered index `IX_FlowSteps_RunId_Open` on `FlowSteps([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending')` | the completion gate's open-row check ([Step 7](#smaller-changes)); holds only running and pending steps; built like the run-search indexes — online in the background, or offline at startup only up to 2 000 000 rows |
 | | nullable column `WebhookReplayNonces.RegistrationId` (`UNIQUEIDENTIFIER`) | lets a rejected delivery release only its own replay nonce; `NULL` on rows written by 1.x, which simply never match a release |
 | | table `FlowStepLeases` with filtered index `IX_FlowStepLeases_Live` | step execution leases ([Step 7](#smaller-changes)); a new table, so `FlowStepClaims` is not altered |
 | PostgreSQL | index `ix_flow_runs_run_search_trgm` (built `CONCURRENTLY` in the background) | run search — [below](#run-search-index-postgresql) |
 | | partial index `ix_flow_step_dispatches_unsent` on `flow_step_dispatches(dispatched_at) WHERE dispatch_job_id IS NULL` | unsent-dispatch recovery |
+| | partial index `ix_flow_steps_run_id_open` on `flow_steps(run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')` (built `CONCURRENTLY` in the background) | the completion gate's open-row check |
 | | nullable column `webhook_replay_nonces.registration_id` (`uuid`) | as for SQL Server |
 | | table `flow_step_leases` with partial index `ix_flow_step_leases_live` | as for SQL Server |
 
@@ -731,6 +764,12 @@ BEGIN
     );
     CREATE INDEX IX_FlowStepLeases_Live ON [FlowStepLeases]([ExpiresAt]) WHERE [ExpiresAt] IS NOT NULL;
 END
+-- Optional: the migrator builds this one itself without blocking (online in the background where the edition
+-- allows it; offline at startup only while FlowSteps has at most 2 000 000 rows; otherwise warning 7220).
+-- On a large table and an edition without online builds, run it here in a maintenance window. Add
+-- WITH (ONLINE = ON) where the edition allows it.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]'))
+    CREATE INDEX IX_FlowSteps_RunId_Open ON [FlowSteps]([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending');
 ```
 
 ```sql
@@ -741,6 +780,9 @@ CREATE TABLE IF NOT EXISTS flow_step_leases (
     run_id uuid NOT NULL, step_key varchar(256) NOT NULL, fence bigint NOT NULL, owner varchar(128) NOT NULL,
     expires_at timestamptz NULL, redelivered_at timestamptz NULL, PRIMARY KEY (run_id, step_key));
 CREATE INDEX IF NOT EXISTS ix_flow_step_leases_live ON flow_step_leases (expires_at) WHERE expires_at IS NOT NULL;
+-- Optional: the migrator builds this one CONCURRENTLY in the background after startup. To have it in place
+-- before the deployment, run it here — outside a transaction, as CONCURRENTLY requires.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps (run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending');
 ```
 
 ### Run-search columns and indexes (SQL Server / Azure SQL)
@@ -966,8 +1008,10 @@ each when it lands:
   in progress during the upgrade).
 - **Store contract redesign.** `IFlowRunStore` / `IFlowRunRuntimeStore` / `IFlowRunControlStore` are
   consolidated into an engine store and a dashboard query store, without default interface methods, and
-  with an incremental status read that removes the remaining per-step full-status fetch. Custom storage
-  backends will need changes; the built-in ones carry them.
+  with per-loop counters maintained in the completion transaction, which make the `ForEach` barrier O(1).
+  (The per-step full-status fetch is already gone: the continuation reads its frontier by key — see the
+  [custom storage checklist](#custom-storage-backend).) Custom storage backends will need changes; the
+  built-in ones carry them.
 - **One input shape for untyped handlers.** Hangfire, InMemory and Service Bus will hand untyped
   handlers the same JSON-shaped values; typed handlers are unaffected.
 

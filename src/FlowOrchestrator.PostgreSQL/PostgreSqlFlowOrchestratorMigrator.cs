@@ -18,6 +18,11 @@ namespace FlowOrchestrator.PostgreSQL;
 /// the next start. Without <c>pg_trgm</c> (not allow-listed on Azure Database for PostgreSQL, or no
 /// privilege) every trigram step is skipped with a warning and search runs the same SQL as a
 /// sequential scan.</para>
+/// <para><b>Open-step index (2.0, #189 P0-1).</b> <c>ix_flow_steps_run_id_open</c>, a partial index on the
+/// Running and Pending rows of <c>flow_steps</c>, is built the same way — <c>CONCURRENTLY</c>, in the background,
+/// before the run-search index, with the same in-flight detection and <c>INVALID</c>-leftover repair. Until it
+/// exists the completion gate's open-row check reads each run's rows through the primary key: correct, only
+/// slower.</para>
 /// <para><b>Starting beside running hosts.</b> Every index and column statement is guarded by a catalog check,
 /// so a migration on an up-to-date schema requests no lock on any table. A second replica (or a restarted
 /// host) can therefore start during a rolling deployment, or while the run-search index is still being built,
@@ -57,8 +62,8 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     }
 
     /// <summary>
-    /// The background (<c>CONCURRENTLY</c>) build of the run-search index started by <see cref="StartAsync"/>, or a
-    /// completed task when none was started. Completes when the build ends; it never faults (a failed build is
+    /// The background (<c>CONCURRENTLY</c>) build of the open-step index and, with <c>pg_trgm</c>, the run-search
+    /// index, started by <see cref="StartAsync"/>, or a completed task when none was started. Completes when the build ends; it never faults (a failed build is
     /// logged and retried on the next start).
     /// </summary>
     /// <remarks>
@@ -83,8 +88,9 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            if (await TryCreateTrigramIndexesAsync(conn, cancellationToken).ConfigureAwait(false))
-                _backgroundIndexBuild = Task.Run(() => BuildRunSearchIndexInBackgroundAsync(_stopping.Token), CancellationToken.None);
+            // The open-step index is always built in the background; the run-search index only with pg_trgm.
+            var trigram = await TryCreateTrigramIndexesAsync(conn, cancellationToken).ConfigureAwait(false);
+            _backgroundIndexBuild = Task.Run(() => BuildIndexesInBackgroundAsync(trigram, _stopping.Token), CancellationToken.None);
             if (_runSearchIndexRequested)
                 LogTokenIndexNotSupported();
 
@@ -146,9 +152,52 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     }
 
     /// <summary>
-    /// Builds <c>ix_flow_runs_run_search_trgm</c> with <c>CREATE INDEX CONCURRENTLY</c>, first dropping an
-    /// <c>INVALID</c> leftover of an interrupted build. Each statement runs as its own command:
-    /// <c>CONCURRENTLY</c> refuses to run inside a (multi-statement, implicit) transaction.
+    /// The background work started by <see cref="StartAsync"/>: the open-step index first (small, and on the
+    /// engine's per-completion path), then the run-search index when <c>pg_trgm</c> is available. One after the
+    /// other, because a <c>CREATE INDEX CONCURRENTLY</c> waits for every older snapshot in the database —
+    /// including another concurrent build's.
+    /// </summary>
+    private async Task BuildIndexesInBackgroundAsync(bool runSearch, CancellationToken cancellationToken)
+    {
+        var openStep = await BuildIndexConcurrentlyAsync(OpenStepIndex, cancellationToken).ConfigureAwait(false);
+        switch (openStep)
+        {
+            case ConcurrentBuildOutcome.Built:
+                LogOpenStepIndexBuilt();
+                break;
+            case ConcurrentBuildOutcome.InFlightElsewhere:
+                LogOpenStepIndexBuildInFlightElsewhere();
+                break;
+            case ConcurrentBuildOutcome.Failed failed:
+                // HasRunningOrPendingStepAsync stays correct without it, only slower; the next start retries.
+                LogOpenStepIndexBuildFailed(failed.Exception);
+                break;
+            case ConcurrentBuildOutcome.Cancelled:
+                return;
+        }
+
+        if (!runSearch)
+            return;
+
+        switch (await BuildIndexConcurrentlyAsync(RunSearchIndex, cancellationToken).ConfigureAwait(false))
+        {
+            case ConcurrentBuildOutcome.Built:
+                LogRunSearchIndexBuilt();
+                break;
+            case ConcurrentBuildOutcome.InFlightElsewhere:
+                LogRunSearchIndexBuildInFlightElsewhere();
+                break;
+            case ConcurrentBuildOutcome.Failed failed:
+                // E.g. another replica building it at the same moment. Search keeps working (sequential scan).
+                LogRunSearchIndexFailed(failed.Exception);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Builds <paramref name="index"/> with <c>CREATE INDEX CONCURRENTLY</c>, first dropping an <c>INVALID</c>
+    /// leftover of an interrupted build. Each statement runs as its own command: <c>CONCURRENTLY</c> refuses to
+    /// run inside a (multi-statement, implicit) transaction.
     /// </summary>
     /// <remarks>
     /// An index that another host is still building is <c>INVALID</c> too, exactly like a leftover. Treating
@@ -158,7 +207,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     /// role's session only to members of <c>pg_read_all_stats</c>; hosts that connect as different roles
     /// without it fall back to drop-and-rebuild, which is still correct.
     /// </remarks>
-    private async Task BuildRunSearchIndexInBackgroundAsync(CancellationToken cancellationToken)
+    private async Task<ConcurrentBuildOutcome> BuildIndexConcurrentlyAsync(ConcurrentIndex index, CancellationToken cancellationToken)
     {
         try
         {
@@ -167,88 +216,165 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
 
             await using (var inFlight = conn.CreateCommand())
             {
-                inFlight.CommandText = RunSearchIndexBuildInFlightSql;
+                inFlight.CommandText = IndexBuildInFlightSql;
+                inFlight.Parameters.AddWithValue("table", index.Table);
+                inFlight.Parameters.AddWithValue("index", index.Name);
                 if (await inFlight.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
-                {
-                    LogRunSearchIndexBuildInFlightElsewhere();
-                    return;
-                }
+                    return ConcurrentBuildOutcome.InFlightElsewhere.Instance;
             }
 
             bool? valid;
             await using (var probe = conn.CreateCommand())
             {
-                probe.CommandText = RunSearchIndexStateSql;
+                probe.CommandText = IndexStateSql;
+                probe.Parameters.AddWithValue("index", index.Name);
                 valid = await probe.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as bool?;
             }
 
             if (valid == true)
-                return;
+                return ConcurrentBuildOutcome.AlreadyValid.Instance;
 
             if (valid == false)
             {
                 await using var drop = conn.CreateCommand();
-                drop.CommandText = "DROP INDEX CONCURRENTLY IF EXISTS ix_flow_runs_run_search_trgm";
+                drop.CommandText = $"DROP INDEX CONCURRENTLY IF EXISTS {index.Name}";
                 drop.CommandTimeout = 0;
                 await drop.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            LogBuildingRunSearchIndex();
+            index.LogBuilding(this);
             await using (var build = conn.CreateCommand())
             {
-                build.CommandText = CreateRunSearchIndexSql;
+                build.CommandText = index.CreateSql;
                 build.CommandTimeout = 0;
                 await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            // An expression index has no statistics until ANALYZE: without them the planner estimates ~20
-            // matches for any term and bitmap-scans + sorts thousands of rows for a common one (measured
-            // 32-40 ms instead of ~1 ms). ANALYZE samples the table and blocks neither reads nor writes.
-            await using (var analyze = conn.CreateCommand())
+            if (index.AnalyzeAfterBuild)
             {
-                analyze.CommandText = "ANALYZE flow_runs";
+                // An expression index has no statistics until ANALYZE: without them the planner estimates ~20
+                // matches for any term and bitmap-scans + sorts thousands of rows for a common one (measured
+                // 32-40 ms instead of ~1 ms). ANALYZE samples the table and blocks neither reads nor writes.
+                await using var analyze = conn.CreateCommand();
+                analyze.CommandText = $"ANALYZE {index.Table}";
                 analyze.CommandTimeout = 0;
                 await analyze.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            LogRunSearchIndexBuilt();
+            return ConcurrentBuildOutcome.Built.Instance;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Host stopping: the index is left INVALID and rebuilt on the next start.
+            return ConcurrentBuildOutcome.Cancelled.Instance;
         }
         catch (NpgsqlException ex)
         {
-            // E.g. another replica building it at the same moment. Search keeps working (sequential scan).
-            LogRunSearchIndexFailed(ex);
+            return new ConcurrentBuildOutcome.Failed(ex);
         }
     }
 
-    /// <summary>No row when the index does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
+    /// <summary>An index built <c>CONCURRENTLY</c> in the background rather than in the migration batch.</summary>
+    /// <param name="Name">Index name.</param>
+    /// <param name="Table">Table it is built on.</param>
+    /// <param name="CreateSql">The <c>CREATE INDEX CONCURRENTLY IF NOT EXISTS</c> statement.</param>
+    /// <param name="AnalyzeAfterBuild">Run <c>ANALYZE</c> on the table afterwards (expression indexes need it).</param>
+    /// <param name="LogBuilding">Logs that the build starts.</param>
+    private sealed record ConcurrentIndex(
+        string Name,
+        string Table,
+        string CreateSql,
+        bool AnalyzeAfterBuild,
+        Action<PostgreSqlFlowOrchestratorMigrator> LogBuilding);
+
+    /// <summary>How one background build ended.</summary>
+    private abstract record ConcurrentBuildOutcome
+    {
+        public sealed record Built : ConcurrentBuildOutcome { public static readonly Built Instance = new(); }
+
+        public sealed record AlreadyValid : ConcurrentBuildOutcome { public static readonly AlreadyValid Instance = new(); }
+
+        public sealed record InFlightElsewhere : ConcurrentBuildOutcome { public static readonly InFlightElsewhere Instance = new(); }
+
+        public sealed record Cancelled : ConcurrentBuildOutcome { public static readonly Cancelled Instance = new(); }
+
+        public sealed record Failed(NpgsqlException Exception) : ConcurrentBuildOutcome;
+    }
+
+    // Properties, not fields: CreateRunSearchIndexSql is a static field declared further down, and a field
+    // initialiser here would read it before it is assigned.
+    private static ConcurrentIndex RunSearchIndex => new(
+        "ix_flow_runs_run_search_trgm", "flow_runs", CreateRunSearchIndexSql, AnalyzeAfterBuild: true,
+        static migrator => migrator.LogBuildingRunSearchIndex());
+
+    private static ConcurrentIndex OpenStepIndex => new(
+        "ix_flow_steps_run_id_open", "flow_steps", CreateOpenStepIndexSql, AnalyzeAfterBuild: false,
+        static migrator => migrator.LogBuildingOpenStepIndex());
+
+    /// <summary>No row when the run-search index does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
     internal const string RunSearchIndexStateSql = """
         SELECT i.indisvalid FROM pg_index AS i
         JOIN pg_class AS c ON c.oid = i.indexrelid
         WHERE c.relname = 'ix_flow_runs_run_search_trgm' AND c.relnamespace = to_regnamespace(current_schema())
         """;
 
+    /// <summary>No row when the open-step index does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
+    internal const string OpenStepIndexStateSql = """
+        SELECT i.indisvalid FROM pg_index AS i
+        JOIN pg_class AS c ON c.oid = i.indexrelid
+        WHERE c.relname = 'ix_flow_steps_run_id_open' AND c.relnamespace = to_regnamespace(current_schema())
+        """;
+
+    /// <summary>No row when index <c>@index</c> does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
+    private const string IndexStateSql = """
+        SELECT i.indisvalid FROM pg_index AS i
+        JOIN pg_class AS c ON c.oid = i.indexrelid
+        WHERE c.relname = @index AND c.relnamespace = to_regnamespace(current_schema())
+        """;
+
     /// <summary>
-    /// <see langword="true"/> while another backend runs <c>CREATE INDEX CONCURRENTLY</c> for the run-search
-    /// index; <c>index_relid = 0</c> covers the instant before that build has created its catalog entry.
+    /// <see langword="true"/> while another backend runs <c>CREATE INDEX CONCURRENTLY</c> for index <c>@index</c>
+    /// on table <c>@table</c>; <c>index_relid = 0</c> covers the instant before that build has created its
+    /// catalog entry.
     /// </summary>
-    internal const string RunSearchIndexBuildInFlightSql = """
+    private const string IndexBuildInFlightSql = """
         SELECT EXISTS (
             SELECT 1 FROM pg_stat_progress_create_index AS p
             WHERE p.datid = (SELECT oid FROM pg_database WHERE datname = current_database())
               AND p.pid <> pg_backend_pid()
               AND p.command = 'CREATE INDEX CONCURRENTLY'
-              AND p.relid = to_regclass('flow_runs')
-              AND (p.index_relid = 0 OR p.index_relid = to_regclass('ix_flow_runs_run_search_trgm')))
+              AND p.relid = to_regclass(@table)
+              AND (p.index_relid = 0 OR p.index_relid = to_regclass(@index)))
         """;
 
     /// <summary>The run-search expression index; the expression must stay identical to the query's.</summary>
     internal static readonly string CreateRunSearchIndexSql =
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_runs_run_search_trgm ON flow_runs USING gin (("
         + PostgreSqlRunSearchCommandBuilder.RunSearchExpression(string.Empty) + ") gin_trgm_ops)";
+
+    /// <summary>
+    /// The open-step partial index behind <see cref="PostgreSqlFlowRunStore.HasRunningOrPendingStepAsync"/>
+    /// (#189 P0-1): only the Running and Pending rows, so the completion gate's open-row check costs O(open steps).
+    /// </summary>
+    /// <remarks>
+    /// Built <c>CONCURRENTLY</c> in the background, never in the migration batch: <c>flow_steps</c> is the hottest
+    /// table, and a plain <c>CREATE INDEX</c> holds SHARE on it — blocking every step write — for the whole build
+    /// of an upgraded 1.x table. The predicate must stay identical to the store's query.
+    /// </remarks>
+    internal const string CreateOpenStepIndexSql =
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps (run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')";
+
+    [LoggerMessage(EventId = 7216, Level = LogLevel.Information, Message = "Building the open-step index ix_flow_steps_run_id_open concurrently in the background; the completion gate's open-row check reads each run's rows until it exists.")]
+    private partial void LogBuildingOpenStepIndex();
+
+    [LoggerMessage(EventId = 7217, Level = LogLevel.Information, Message = "Open-step index ix_flow_steps_run_id_open built.")]
+    private partial void LogOpenStepIndexBuilt();
+
+    [LoggerMessage(EventId = 7218, Level = LogLevel.Warning, Message = "Open-step index build failed; the completion gate stays correct, only slower, and the next start retries.")]
+    private partial void LogOpenStepIndexBuildFailed(Exception exception);
+
+    [LoggerMessage(EventId = 7219, Level = LogLevel.Information, Message = "Another host is building the open-step index; this host leaves the build to it.")]
+    private partial void LogOpenStepIndexBuildInFlightElsewhere();
 
     [LoggerMessage(EventId = 7211, Level = LogLevel.Information, Message = "Building the run-search trigram index concurrently in the background; quick search scans flow_runs until it exists.")]
     private partial void LogBuildingRunSearchIndex();

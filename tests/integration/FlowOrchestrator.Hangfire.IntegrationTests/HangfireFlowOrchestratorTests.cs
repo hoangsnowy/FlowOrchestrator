@@ -64,6 +64,25 @@ public class HangfireFlowOrchestratorTests
     }
 
     /// <summary>
+    /// Answers the frontier reads (#189 P0-1) — keyed status read, open-row check, settled-iteration count —
+    /// from the same status map the full read returns, so the engine sees one consistent run.
+    /// </summary>
+    private static void DeriveKeyedReads(IFlowRunRuntimeStore store, IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        store.GetStepStatusesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyCollection<string>>())
+            .Returns(call => (IReadOnlyDictionary<string, StepStatus>)call.Arg<IReadOnlyCollection<string>>()
+                .Where(statuses.ContainsKey)
+                .Distinct(StringComparer.Ordinal)
+                .ToDictionary(key => key, key => statuses[key], StringComparer.Ordinal));
+        store.HasRunningOrPendingStepAsync(Arg.Any<Guid>())
+            .Returns(statuses.Values.Any(status => status is StepStatus.Running or StepStatus.Pending));
+        store.CountSettledIterationsAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<IReadOnlyCollection<string>>())
+            .Returns(call => Enumerable.Range(0, call.ArgAt<int>(2)).Count(index => call.ArgAt<IReadOnlyCollection<string>>(3).All(child =>
+                statuses.TryGetValue($"{call.ArgAt<string>(1)}.{index}.{child}", out var status)
+                && status is StepStatus.Succeeded or StepStatus.Failed or StepStatus.Skipped)));
+    }
+
+    /// <summary>
     /// A runtime store that lets every step claim and reports the given step statuses
     /// (none by default), for tests that do not exercise the claim guard or the graph.
     /// </summary>
@@ -72,6 +91,7 @@ public class HangfireFlowOrchestratorTests
         var store = Substitute.For<IFlowRunRuntimeStore>();
         store.GetStepStatusesAsync(Arg.Any<Guid>())
             .Returns(statuses ?? new Dictionary<string, StepStatus>());
+        DeriveKeyedReads(store, statuses ?? new Dictionary<string, StepStatus>());
         store.GetClaimedStepKeysAsync(Arg.Any<Guid>())
             .Returns((IReadOnlyCollection<string>)Array.Empty<string>());
         store.TryClaimStepAsync(Arg.Any<Guid>(), Arg.Any<string>()).Returns(true);
@@ -333,6 +353,7 @@ public class HangfireFlowOrchestratorTests
         var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
         runtimeStore.GetStepStatusesAsync(Arg.Any<Guid>())
             .Returns(new Dictionary<string, StepStatus>());
+        DeriveKeyedReads(runtimeStore, new Dictionary<string, StepStatus>());
         runtimeStore.GetClaimedStepKeysAsync(Arg.Any<Guid>())
             .Returns(Array.Empty<string>());
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
@@ -394,6 +415,7 @@ public class HangfireFlowOrchestratorTests
             ["step2"] = StepStatus.Skipped
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
+        DeriveKeyedReads(runtimeStore, statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
         // Downstream-blocking is controlled by the statuses dict above, not by the claim.
@@ -457,6 +479,7 @@ public class HangfireFlowOrchestratorTests
             ["step_d"] = StepStatus.Skipped
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
+        DeriveKeyedReads(runtimeStore, statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
         // Downstream-blocking is controlled by the statuses dict above, not by the claim.
@@ -514,6 +537,7 @@ public class HangfireFlowOrchestratorTests
             ["error_handler"] = StepStatus.Skipped
         };
         runtimeStore.GetStepStatusesAsync(runId).Returns(statuses);
+        DeriveKeyedReads(runtimeStore, statuses);
         runtimeStore.GetClaimedStepKeysAsync(runId).Returns((IReadOnlyCollection<string>)Array.Empty<string>());
         // v1.22+: claim is at execute-time; the current step must claim true to actually execute.
         // Downstream-blocking is controlled by the statuses dict above, not by the claim.

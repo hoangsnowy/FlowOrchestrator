@@ -939,7 +939,9 @@ public sealed partial class FlowOrchestratorEngine
         IReadOnlyDictionary<string, StepStatus> statuses;
         try
         {
-            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+            // Keyed: only the enclosing loops' rows matter. Every step a cancelled run still drains takes this
+            // path, so reading the whole run here was O(steps in the run) per drained step (#189 P0-1).
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId, enclosing).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

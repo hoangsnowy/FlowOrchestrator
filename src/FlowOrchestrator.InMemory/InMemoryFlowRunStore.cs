@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
@@ -80,6 +81,13 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _claimsByRun = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _dispatchesByRun = new();
 
+    // Keys that were written with a Running or Pending status, per run: the index behind
+    // HasRunningOrPendingStepAsync. Pruned lazily by that reader — a key whose row is no longer open is
+    // removed when it is next looked at — so the set tracks the open steps plus the few closed since the last
+    // check, not the run's length. A writer that forgets to add a key can only make the reader answer false
+    // too early, which costs the engine a full status read and nothing else.
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _openStepsByRun = new();
+
     private static readonly Func<Guid, ConcurrentDictionary<string, byte>> _newRunStringSet =
         static _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
@@ -151,6 +159,7 @@ public sealed class InMemoryFlowRunStore :
         // Maintain the per-run secondary index so GetStepStatusesAsync and
         // GetRunDetailAsync can enumerate without scanning _steps globally.
         _stepKeysByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+        NoteOpen(runId, stepKey);
 
         return Task.CompletedTask;
     }
@@ -165,6 +174,10 @@ public sealed class InMemoryFlowRunStore :
             step.OutputJson = outputJson;
             step.ErrorMessage = errorMessage;
             step.CompletedAt = completedAt;
+            if (IsOpenStatus(status))
+            {
+                NoteOpen(runId, stepKey);
+            }
         }
 
         // The latest attempt number is already tracked in _stepAttemptCounters
@@ -627,6 +640,7 @@ public sealed class InMemoryFlowRunStore :
             step.ErrorMessage = null;
             step.CompletedAt = null;
             step.StartedAt = DateTimeOffset.UtcNow;
+            NoteOpen(runId, stepKey);
 
             if (_runs.TryGetValue(runId, out var run))
             {
@@ -821,6 +835,115 @@ public sealed class InMemoryFlowRunStore :
             .Where(pair => pair.record is not null)
             .ToDictionary(pair => pair.stepKey, pair => ParseStepStatus(pair.record!.Status), StringComparer.Ordinal);
         return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>O(keys): one dictionary probe per key, independent of the run's length.</remarks>
+    public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
+        foreach (var stepKey in stepKeys)
+        {
+            if (_steps.TryGetValue((runId, stepKey), out var record))
+            {
+                map[stepKey] = ParseStepStatus(record.Status);
+            }
+        }
+
+        return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(open steps + steps closed since the last call) through the per-run open-step index, which this
+    /// reader prunes as it goes; the answer is decided on each row's current status, never on the index alone.
+    /// </remarks>
+    public Task<bool> HasRunningOrPendingStepAsync(Guid runId)
+    {
+        if (!_openStepsByRun.TryGetValue(runId, out var open))
+        {
+            return FalseTask;
+        }
+
+        foreach (var pair in open)
+        {
+            var stepKey = pair.Key;
+            if (_steps.TryGetValue((runId, stepKey), out var record) && IsOpenStatus(record.Status))
+            {
+                return TrueTask;
+            }
+
+            // Closed (or purged) since it was noted. A writer re-opening the key concurrently may lose its
+            // entry to this removal; that only makes a later call answer false, which the engine treats as
+            // "read the full map", never as "close the run".
+            open.TryRemove(stepKey, out _);
+        }
+
+        return FalseTask;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One pass over the run's step keys through the per-run index, parsed as spans, tallying terminal body
+    /// rows per iteration in a pooled array — no allocation proportional to the run. The in-memory counterpart
+    /// of the SQL backends' range read over the loop's rows, and like it O(rows of the run) in CPU: the
+    /// remaining linear term of the loop barrier until the store keeps per-loop counters (RFC 2.0 §4.7).
+    /// </remarks>
+    public Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
+    {
+        if (iterations <= 0 || bodyStepKeys.Count == 0 || !_stepKeysByRun.TryGetValue(runId, out var stepKeys))
+        {
+            return Task.FromResult(0);
+        }
+
+        var body = new HashSet<string>(bodyStepKeys, StringComparer.Ordinal);
+        var bodyLookup = body.GetAlternateLookup<ReadOnlySpan<char>>();
+        var tally = ArrayPool<int>.Shared.Rent(iterations);
+        try
+        {
+            Array.Clear(tally, 0, iterations);
+
+            // The ConcurrentDictionary enumerator walks the live buckets; .Keys would copy every key first.
+            foreach (var pair in stepKeys)
+            {
+                var stepKey = pair.Key;
+                if (stepKey.Length <= loopStepKey.Length + 1
+                    || stepKey[loopStepKey.Length] != '.'
+                    || !stepKey.StartsWith(loopStepKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var rest = stepKey.AsSpan(loopStepKey.Length + 1);
+                var dot = rest.IndexOf('.');
+                if (dot <= 0
+                    || !TryParseCanonicalIndex(rest[..dot], out var index)
+                    || index >= iterations
+                    || !bodyLookup.Contains(rest[(dot + 1)..])
+                    || !_steps.TryGetValue((runId, stepKey), out var record)
+                    || !IsTerminalStatus(record.Status))
+                {
+                    continue;
+                }
+
+                tally[index]++;
+            }
+
+            var settled = 0;
+            for (var index = 0; index < iterations; index++)
+            {
+                if (tally[index] == body.Count)
+                {
+                    settled++;
+                }
+            }
+
+            return Task.FromResult(settled);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(tally);
+        }
     }
 
     public Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
@@ -1358,6 +1481,7 @@ public sealed class InMemoryFlowRunStore :
             _stepKeysByRun.TryRemove(runId, out _);
             _claimsByRun.TryRemove(runId, out _);
             _dispatchesByRun.TryRemove(runId, out _);
+            _openStepsByRun.TryRemove(runId, out _);
         }
 
         foreach (var key in _steps.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
@@ -1552,6 +1676,39 @@ public sealed class InMemoryFlowRunStore :
         CompletedAt = step.CompletedAt,
         EvaluationTraceJson = step.EvaluationTraceJson
     };
+
+    private void NoteOpen(Guid runId, string stepKey)
+        => _openStepsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+
+    // Both decide on ParseStepStatus, the same parse GetStepStatusesAsync applies, so these readers can never
+    // disagree with the status map the engine classifies from.
+    private static bool IsOpenStatus(string status)
+        => ParseStepStatus(status) is StepStatus.Running or StepStatus.Pending;
+
+    private static bool IsTerminalStatus(string status)
+        => ParseStepStatus(status) is StepStatus.Succeeded or StepStatus.Failed or StepStatus.Skipped;
+
+    /// <summary>Parses a decimal iteration index the way the engine writes it: no sign, no padding, no leading zero.</summary>
+    private static bool TryParseCanonicalIndex(ReadOnlySpan<char> segment, out int index)
+    {
+        index = 0;
+        if (segment.IsEmpty || segment.Length > 9 || (segment[0] == '0' && segment.Length > 1))
+        {
+            return false;
+        }
+
+        foreach (var c in segment)
+        {
+            if (c is < '0' or > '9')
+            {
+                return false;
+            }
+
+            index = (index * 10) + (c - '0');
+        }
+
+        return true;
+    }
 
     private static StepStatus ParseStepStatus(string status)
     {

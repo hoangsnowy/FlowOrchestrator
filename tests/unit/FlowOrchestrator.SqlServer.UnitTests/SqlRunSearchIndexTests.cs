@@ -136,6 +136,25 @@ public sealed class SqlRunSearchIndexTests
         Assert.DoesNotContain("ONLINE", offline);
     }
 
+    [Fact]
+    public void Open_step_index_ddl_is_guarded_filtered_and_online_only_when_asked()
+    {
+        // Arrange - #189 P0-1: built outside the migration batch, on the background path in the same way as the
+        // run-search indexes, because FlowSteps is the hottest table.
+
+        // Act
+        var offline = FlowOrchestratorSqlMigrator.BuildOpenStepIndexSql(online: false);
+        var online = FlowOrchestratorSqlMigrator.BuildOpenStepIndexSql(online: true);
+        var lowPriority = FlowOrchestratorSqlMigrator.BuildOpenStepIndexSql(online: true, lowPriority: true);
+
+        // Assert
+        Assert.Contains("IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_FlowSteps_RunId_Open'", offline);
+        Assert.Contains("WHERE [Status] IN (N'Running', N'Pending');", offline);
+        Assert.DoesNotContain("ONLINE", offline);
+        Assert.Contains("WHERE [Status] IN (N'Running', N'Pending') WITH (ONLINE = ON);", online);
+        Assert.Contains("WAIT_AT_LOW_PRIORITY", lowPriority);
+    }
+
     [Theory]
     [InlineData(3, 15, false)]   // Enterprise / Developer 2019: CREATE INDEX has no WAIT_AT_LOW_PRIORITY
     [InlineData(3, 16, true)]    // Enterprise / Developer 2022

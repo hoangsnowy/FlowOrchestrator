@@ -95,6 +95,28 @@ internal static class LoopAdmission
     }
 
     /// <summary>
+    /// Appends the runtime keys of every direct child of iteration <paramref name="index"/> —
+    /// <c>"{loop}.{index}.{child}"</c> — to <paramref name="keys"/>: the rows
+    /// <see cref="IsIterationSettled"/> reads.
+    /// </summary>
+    /// <param name="scoped">The scope whose body defines the child keys.</param>
+    /// <param name="runtimeLoopKey">Runtime key of the scope step.</param>
+    /// <param name="index">The zero-based iteration index.</param>
+    /// <param name="keys">Receives the keys.</param>
+    /// <remarks>
+    /// O(|body|) per call, one string per child: used to build the engine's keyed status read for one
+    /// iteration, so the cost is independent of how many iterations the loop has.
+    /// </remarks>
+    public static void AddIterationKeys(IScopedStep scoped, string runtimeLoopKey, int index, List<string> keys)
+    {
+        var prefix = $"{runtimeLoopKey}.{index}.";
+        foreach (var childKey in scoped.Steps.Keys)
+        {
+            keys.Add(prefix + childKey);
+        }
+    }
+
+    /// <summary>
     /// Returns the entry-step dispatches for the iterations that may start now, given the loop's
     /// concurrency limit and how many of its iterations are already in flight.
     /// </summary>
@@ -108,9 +130,10 @@ internal static class LoopAdmission
     /// empty when the limit is saturated or every iteration has already started.
     /// </returns>
     /// <remarks>
-    /// For callers that already hold the run's whole ledger (recovery). The engine's
-    /// per-step-completion path uses <see cref="NextAdmissionsAsync"/>, which asks the ledger only
-    /// about the keys it probes.
+    /// For callers that already hold the run's whole ledger and status map (recovery). Since #189
+    /// P0-1 the engine's per-step-completion path holds neither: it reads the settled-iteration count
+    /// from the store and admits the window <c>[settled, settled + limit)</c> by key
+    /// (<c>FlowOrchestratorEngine.AdvanceLoopAsync</c>), which admits exactly what this method would.
     /// </remarks>
     public static IReadOnlyList<LoopAdmissionRequest> NextAdmissions(
         StepMetadata? loopMetadata,
@@ -160,10 +183,12 @@ internal static class LoopAdmission
     /// iterations costs O(log k) lookups.
     /// </para>
     /// <para>
-    /// <b>Complexity per step completion:</b> O(log n) status-map probes and O(log k) ledger point
-    /// lookups to find the boundary, plus the backwards active-count walk shared with
-    /// <see cref="NextAdmissions"/>, which is still O(settled iterations) — see the remarks on
-    /// <see cref="FindFirstPending"/>.
+    /// <b>Complexity per call:</b> O(log n) status-map probes and O(log k) ledger point lookups to find
+    /// the boundary, plus the backwards active-count walk shared with <see cref="NextAdmissions"/>,
+    /// which is still O(settled iterations) — see the remarks on <see cref="FindFirstPending"/>.
+    /// It needs the run's whole status map, so since #189 P0-1 the engine no longer calls it per step
+    /// completion (see <see cref="NextAdmissions"/>); it stays as the ledger-by-lookup form of that
+    /// reference algorithm.
     /// </para>
     /// </remarks>
     public static async ValueTask<IReadOnlyList<LoopAdmissionRequest>> NextAdmissionsAsync(

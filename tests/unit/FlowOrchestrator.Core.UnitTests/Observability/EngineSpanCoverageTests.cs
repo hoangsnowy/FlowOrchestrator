@@ -156,6 +156,8 @@ public sealed class EngineSpanCoverageTests
                 new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Skipped }));
         runtimeStore.GetClaimedStepKeysAsync(Arg.Any<Guid>())
             .Returns(Task.FromResult<IReadOnlyCollection<string>>(new[] { "step1" }));
+        EngineTestStores.DeriveKeyedReads(
+            runtimeStore, () => new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Skipped });
 
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);

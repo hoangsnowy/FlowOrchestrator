@@ -33,4 +33,9 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The engine-over-a-real-store rig shared with the storage integration projects (#189 P0-1). -->
+    <Compile Include="..\..\shared\StoreEngineRig.cs" Link="Shared\StoreEngineRig.cs" />
+  </ItemGroup>
+
 </Project>

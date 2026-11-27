@@ -142,7 +142,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
 
     private static IStepInstance CreateRunLevelStep(Guid runId)
     {
-        return new StepInstance("__run", "Run")
+        return new StepInstance(RunLevelStepKey, "Run")
         {
             RunId = runId,
             ScheduledTime = DateTimeOffset.UtcNow
