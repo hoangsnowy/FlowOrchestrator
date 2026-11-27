@@ -133,4 +133,16 @@ public static class LogEvents
     /// left the run open rather than complete it while steps were still ready or owed a skip row.
     /// </summary>
     public static readonly EventId ContinuationPassLimitReached = new(3015, nameof(ContinuationPassLimitReached));
+
+    /// <summary>
+    /// A delivery took over a step whose execution lease had expired without a terminal status: the worker
+    /// that held it died or lost its store, and the step runs again.
+    /// </summary>
+    public static readonly EventId StepLeaseTakenOver = new(3030, nameof(StepLeaseTakenOver));
+
+    /// <summary>An attempt found that another worker had taken its expired lease over; its outcome was discarded.</summary>
+    public static readonly EventId StepLeaseLost = new(3031, nameof(StepLeaseLost));
+
+    /// <summary>The lease of a loop step parked on its barrier could not be made permanent.</summary>
+    public static readonly EventId StepLeasePinFailed = new(3032, nameof(StepLeasePinFailed));
 }

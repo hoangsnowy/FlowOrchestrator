@@ -67,6 +67,92 @@ public interface IFlowRunRuntimeStore
     Task ReleaseStepClaimAsync(Guid runId, string stepKey) => Task.CompletedTask;
 
     /// <summary>
+    /// Atomically claims a step for execution under a lease that expires after <paramref name="duration"/>
+    /// unless renewed, taking over a lease that already expired while the step had not reached a terminal
+    /// status.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step to claim.</param>
+    /// <param name="ownerId">Identifies the acquiring process, for diagnostics.</param>
+    /// <param name="duration">How long the lease lives without renewal, measured on the store's own clock.</param>
+    /// <returns>
+    /// The acquired lease; <see langword="null"/> when another worker holds an unexpired lease, the claim is
+    /// permanent (a skip claim, a lease pinned by <see cref="PinStepLeaseAsync"/>, or a claim written before
+    /// leases existed), or the step already reached a terminal status.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// No claim row: one is inserted with fence <c>1</c>. A row whose lease expired, for a step with no status
+    /// row or a <see cref="StepStatus.Running"/> / <see cref="StepStatus.Pending"/> one: the fence is raised by
+    /// one and the lease re-stamped — a takeover. Anything else: <see langword="null"/>.
+    /// </para>
+    /// <para>
+    /// The status check must serialise with a concurrent fenced completion
+    /// (<see cref="TryRecordLeasedStepCompleteAsync"/>) of the same step: lock the claim row first, then read
+    /// the status, so a completion that committed first is always seen and a takeover never re-runs a step
+    /// that just finished.
+    /// </para>
+    /// </remarks>
+    Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration);
+
+    /// <summary>
+    /// Extends every lease in <paramref name="leases"/> whose fence still matches by <paramref name="duration"/>
+    /// from now, in one round trip.
+    /// </summary>
+    /// <param name="leases">The leases this process holds for steps that are executing right now.</param>
+    /// <param name="duration">The new remaining lifetime, measured on the store's own clock.</param>
+    /// <returns>The leases that were renewed; a lease missing from the result was taken over or released.</returns>
+    Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration);
+
+    /// <summary>
+    /// Deletes the claim when its fence still matches <paramref name="lease"/>, so the same step can be claimed
+    /// again — the fenced form of <see cref="ReleaseStepClaimAsync"/>, used by the Pending re-poll hand-off.
+    /// </summary>
+    /// <param name="lease">The lease to release.</param>
+    /// <returns><see langword="true"/> when the claim was deleted; <see langword="false"/> when it was taken over.</returns>
+    Task<bool> ReleaseStepLeaseAsync(StepLease lease);
+
+    /// <summary>
+    /// Makes the lease permanent when its fence still matches: it no longer expires and can no longer be taken
+    /// over. Used when a step parks on its loop barrier — its handler has returned, nothing renews the lease any
+    /// more, and re-running it would fan the loop out again.
+    /// </summary>
+    /// <param name="lease">The lease to pin.</param>
+    /// <returns><see langword="true"/> when pinned; <see langword="false"/> when it was taken over.</returns>
+    Task<bool> PinStepLeaseAsync(StepLease lease);
+
+    /// <summary>
+    /// Records a step's completion only while <paramref name="lease"/> is still the step's current lease, in
+    /// the same transaction as the fence check.
+    /// </summary>
+    /// <param name="lease">The lease the completing attempt holds.</param>
+    /// <param name="status">The step status to record.</param>
+    /// <param name="outputJson">Serialised step output, if any.</param>
+    /// <param name="errorMessage">Failure reason, if any.</param>
+    /// <returns>
+    /// <see langword="true"/> when recorded; <see langword="false"/> when another worker took the lease over —
+    /// that worker's attempt owns the step now, and this completion must be discarded, continuation included.
+    /// </returns>
+    /// <remarks>Same writes as <see cref="IFlowRunStore.RecordStepCompleteAsync"/> (step row and latest attempt row).</remarks>
+    Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage);
+
+    /// <summary>
+    /// Selects up to <paramref name="maxCount"/> steps of running runs whose execution lease expired while the
+    /// step had not reached a terminal status, and stamps each so that no other caller selects it again within
+    /// <paramref name="redeliveryBackoff"/>.
+    /// </summary>
+    /// <param name="redeliveryBackoff">Minimum time between two redeliveries of the same expired lease.</param>
+    /// <param name="maxCount">Upper bound on the rows returned.</param>
+    /// <returns>The steps to hand to the runtime again; a redelivery takes the expired lease over.</returns>
+    /// <remarks>
+    /// Covers the owner dying mid-handler, between its claim and its first status write, and between the handler
+    /// returning and the completion committing — every case where the runtime's own redelivery came too early
+    /// (the lease was still live) or never came. Ages are measured on the store's own clock. Concurrent callers
+    /// on other replicas must not select the same row in the same window.
+    /// </remarks>
+    Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount);
+
+    /// <summary>
     /// Atomically deletes every claim of <paramref name="runId"/> that has no step status row and was taken
     /// at least <paramref name="minimumAge"/> ago, together with the same keys' dispatch-ledger rows, and
     /// returns the keys it released.
@@ -88,8 +174,9 @@ public interface IFlowRunRuntimeStore
     /// <para>
     /// The age is the only evidence that the claimer is gone, so a worker that is alive but stalled for
     /// longer than <paramref name="minimumAge"/> between its claim and its first status write can have its
-    /// claim released and the step run twice. The lease redesign in RFC 2.0 (P3) replaces this with an
-    /// owned, renewed claim. There is deliberately no default implementation.
+    /// claim released and the step run twice. A claim taken under a lease
+    /// (<see cref="TryAcquireStepLeaseAsync"/>) is reclaimed by its expiry instead; this release still covers
+    /// claims without one. There is deliberately no default implementation.
     /// </para>
     /// <para>
     /// The check for a status row must serialise with a concurrent first status write for the same key

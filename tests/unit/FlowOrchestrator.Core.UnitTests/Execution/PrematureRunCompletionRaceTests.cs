@@ -153,6 +153,22 @@ public sealed class PrematureRunCompletionRaceTests
 
         public Task ReleaseStepClaimAsync(Guid runId, string stepKey) => inner.ReleaseStepClaimAsync(runId, stepKey);
 
+        public Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration)
+            => inner.TryAcquireStepLeaseAsync(runId, stepKey, ownerId, duration);
+
+        public Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration)
+            => inner.RenewStepLeasesAsync(leases, duration);
+
+        public Task<bool> ReleaseStepLeaseAsync(StepLease lease) => inner.ReleaseStepLeaseAsync(lease);
+
+        public Task<bool> PinStepLeaseAsync(StepLease lease) => inner.PinStepLeaseAsync(lease);
+
+        public Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage)
+            => inner.TryRecordLeasedStepCompleteAsync(lease, status, outputJson, errorMessage);
+
+        public Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount)
+            => inner.LeaseExpiredStepLeasesAsync(redeliveryBackoff, maxCount);
+
         public Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
             => inner.RecordSkippedStepAsync(runId, stepKey, stepType, reason);
 

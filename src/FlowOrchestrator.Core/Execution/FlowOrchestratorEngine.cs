@@ -51,6 +51,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     private readonly WhenClauseEvaluator _whenEvaluator;
     private readonly IFlowEventNotifier _eventNotifier;
     private readonly IFlowSignalStore? _signalStore;
+    private readonly StepLeaseKeeper? _leaseKeeper;
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     /// <remarks>
@@ -63,6 +64,12 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     /// signal waiter after releasing its execution claim and resumes itself if a payload landed while
     /// it held the claim — the delivery whose resume nudge could only lose that claim (#190). Without
     /// it, such a delivery waits for the step's safety-net invocation.
+    /// </para>
+    /// <para>
+    /// <paramref name="leaseKeeper"/> turns on step execution leases (<see cref="FlowRunControlOptions.StepLeaseDuration"/>):
+    /// a step is claimed under a lease the keeper renews while its handler runs, and a lease whose worker died is
+    /// taken over by the next delivery. <c>AddFlowOrchestrator</c> registers it; without it (a hand-built engine),
+    /// claims never expire, as in 1.x.
     /// </para>
     /// </remarks>
     public FlowOrchestratorEngine(
@@ -81,7 +88,8 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         FlowOrchestratorTelemetry telemetry,
         ILogger<FlowOrchestratorEngine> logger,
         IFlowEventNotifier eventNotifier,
-        IFlowSignalStore? signalStore = null)
+        IFlowSignalStore? signalStore = null,
+        StepLeaseKeeper? leaseKeeper = null)
     {
         _dispatcher = dispatcher;
         _graphPlanner = graphPlanner;
@@ -99,6 +107,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _logger = logger;
         _eventNotifier = eventNotifier;
         _signalStore = signalStore;
+        _leaseKeeper = leaseKeeper is { Duration: not null } ? leaseKeeper : null;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
     }
 

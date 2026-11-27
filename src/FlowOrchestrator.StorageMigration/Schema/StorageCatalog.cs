@@ -210,6 +210,19 @@ internal static class StorageCatalog
         [G("RunId", "run_id"), S("StepKey", "step_key", KeyLength), T("ClaimedAt", "claimed_at")],
         ["RunId", "StepKey"]);
 
+    /// <summary>
+    /// <c>FlowStepLeases</c> ↔ <c>flow_step_leases</c> (execution leases). Copied so a step that was executing when
+    /// the source was stopped keeps its fence: its lease has expired by the time the target starts, and the
+    /// target's expired-lease sweep runs the step again.
+    /// </summary>
+    public static readonly StorageTable FlowStepLeases = new(
+        "FlowStepLeases", "flow_step_leases",
+        [
+            G("RunId", "run_id"), S("StepKey", "step_key", KeyLength), L("Fence", "fence"), S("Owner", "owner", 128),
+            T("ExpiresAt", "expires_at"), T("RedeliveredAt", "redelivered_at"),
+        ],
+        ["RunId", "StepKey"]);
+
     /// <summary><c>FlowSignalWaiters</c> ↔ <c>flow_signal_waiters</c>.</summary>
     public static readonly StorageTable FlowSignalWaiters = new(
         "FlowSignalWaiters", "flow_signal_waiters",
@@ -259,7 +272,7 @@ internal static class StorageCatalog
     public static readonly StorageTable[] CoreTables =
     [
         FlowDefinitions, FlowScheduleStates, FlowRuns, FlowRunControls, FlowIdempotencyKeys, FlowSteps, FlowStepAttempts,
-        FlowOutputs, FlowStepDispatches, FlowStepClaims, FlowSignalWaiters, WebhookReplayNonces, WebhookRejections,
+        FlowOutputs, FlowStepDispatches, FlowStepClaims, FlowStepLeases, FlowSignalWaiters, WebhookReplayNonces, WebhookRejections,
     ];
 
     /// <summary>SQL Server tables that belong to FlowOrchestrator but are rebuilt, not copied.</summary>

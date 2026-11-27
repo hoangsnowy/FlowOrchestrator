@@ -188,6 +188,7 @@ public sealed class StorageCatalogTests
             ["FlowOutputs"] = "RunId,Key",
             ["FlowStepDispatches"] = "RunId,StepKey",
             ["FlowStepClaims"] = "RunId,StepKey",
+            ["FlowStepLeases"] = "RunId,StepKey",
             ["FlowSignalWaiters"] = "RunId,StepKey",
             ["WebhookReplayNonces"] = "FlowId,TriggerKey,Nonce",
             ["WebhookRejections"] = "Id",

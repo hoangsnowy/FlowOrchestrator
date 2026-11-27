@@ -480,6 +480,18 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
         rows deleted, or nothing at all;
       - `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` — deletes claims with no step row older than
         the given age (on the clock that stamped them) together with their ledger rows.
+- [ ] Step execution leases (2.0) have **no default implementation**. The engine claims every step through
+      `IFlowRunRuntimeStore.TryAcquireStepLeaseAsync` when leases are on (the default), so a store without them
+      cannot run a step:
+      - `TryAcquireStepLeaseAsync` — inserts the claim with fence 1, or takes over a lease that **expired** on
+        the store's clock while the step had no status row or a `Running` / `Pending` one (fence + 1). It must
+        lock the lease first and read the status after, so a fenced completion that committed first is seen;
+      - `TryRecordLeasedStepCompleteAsync` — the step and attempt writes of `RecordStepCompleteAsync`, only
+        while the stored fence still matches, in the same transaction; a terminal status ends the lease;
+      - `RenewStepLeasesAsync`, `ReleaseStepLeaseAsync` (fenced claim delete), `PinStepLeaseAsync` (the lease
+        never expires again) and `LeaseExpiredStepLeasesAsync` (the sweep's selection, exclusive across callers).
+      - Keep the fence monotonic: a released or completed lease is retired, not deleted, so the next attempt's
+        fence is higher than any earlier one. A claim with no lease (`TryClaimStepAsync`) stays permanent.
 - [ ] `RecordSkippedStepAsync` writes the step row and its attempt row in one transaction.
 - [ ] `IFlowStore.GetByIdAsync` returns the `ManifestJson` that `SaveAsync` stored (byte-identical, or JSON
       that is structurally equal). During a rolling deploy the engine compares it with its own manifest to
@@ -604,6 +616,18 @@ retry call, poll `GET {base}/api/runs/{runId}` instead.
   anyway: the engine releases its claim and rethrows, so the runtime retries the job. Startup recovery and
   the timeout sweep release a claim left without a step row by a crashed worker once it is older than
   `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off).
+- **Step execution leases.** A step is claimed under a lease (`FlowRunControlOptions.StepLeaseDuration`,
+  default 60 s) that the process running it renews every `StepLeaseRenewInterval` (20 s). When the worker
+  dies — killed mid-handler, between its claim and its start write, or between its handler and its
+  completion write — the lease expires: the runtime's redelivery takes the step over, and the new
+  `FlowStepLeaseHostedService` redelivers it when the runtime does not. In 1.x such a claim never expired,
+  every redelivery exited as a duplicate, and the run stayed `Running` until an operator intervened. The
+  step therefore runs again after a crash (at-least-once execution of the interrupted attempt, as in
+  Temporal); a live handler is never taken over however long it runs. Every write of an attempt is fenced
+  by its lease, so a stalled worker that comes back after a takeover cannot overwrite the new owner's
+  outcome. `StepLeaseDuration = null` restores the 1.x claim. Claims written by 1.x have no lease and stay
+  permanent, so a step that was mid-flight when you stopped 1.x is not recovered by the lease (it was not
+  in 1.x either).
 - A step whose dispatch-ledger row was written but whose send never returned (a replica killed mid-send, a
   send hung in the broker client) is re-delivered by the new `FlowUnsentDispatchRecoveryHostedService` once
   the row is older than `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s; `null` turns it off).
@@ -655,9 +679,11 @@ rehearsal checks it on every run):
 | SQL Server / Azure SQL | columns `FlowRuns.IdText`, `FlowRuns.RunSearchText` (computed, not persisted); indexes `IX_FlowRuns_IdText`, `IX_FlowRuns_StartedAt_Search` | run search — [below](#run-search-columns-and-indexes-sql-server--azure-sql) |
 | | filtered index `IX_FlowStepDispatches_Unsent` on `FlowStepDispatches([DispatchedAt]) WHERE [DispatchJobId] IS NULL` | unsent-dispatch recovery ([Step 7](#smaller-changes)); holds only in-flight rows |
 | | nullable column `WebhookReplayNonces.RegistrationId` (`UNIQUEIDENTIFIER`) | lets a rejected delivery release only its own replay nonce; `NULL` on rows written by 1.x, which simply never match a release |
+| | table `FlowStepLeases` with filtered index `IX_FlowStepLeases_Live` | step execution leases ([Step 7](#smaller-changes)); a new table, so `FlowStepClaims` is not altered |
 | PostgreSQL | index `ix_flow_runs_run_search_trgm` (built `CONCURRENTLY` in the background) | run search — [below](#run-search-index-postgresql) |
 | | partial index `ix_flow_step_dispatches_unsent` on `flow_step_dispatches(dispatched_at) WHERE dispatch_job_id IS NULL` | unsent-dispatch recovery |
 | | nullable column `webhook_replay_nonces.registration_id` (`uuid`) | as for SQL Server |
+| | table `flow_step_leases` with partial index `ix_flow_step_leases_live` | as for SQL Server |
 
 1.34.x keeps working against the upgraded database (it ignores every object above), which is what makes
 the [rollback](#rollback) below possible. The run events table is left in place — see
@@ -678,12 +704,29 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowStepDispatches_Uns
     CREATE INDEX IX_FlowStepDispatches_Unsent ON [FlowStepDispatches]([DispatchedAt]) WHERE [DispatchJobId] IS NULL;
 IF COL_LENGTH(N'WebhookReplayNonces', N'RegistrationId') IS NULL
     ALTER TABLE [WebhookReplayNonces] ADD [RegistrationId] UNIQUEIDENTIFIER NULL;
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepLeases')
+BEGIN
+    CREATE TABLE [FlowStepLeases] (
+        [RunId]         UNIQUEIDENTIFIER NOT NULL,
+        [StepKey]       NVARCHAR(256)    NOT NULL,
+        [Fence]         BIGINT           NOT NULL,
+        [Owner]         NVARCHAR(128)    NOT NULL,
+        [ExpiresAt]     DATETIMEOFFSET   NULL,
+        [RedeliveredAt] DATETIMEOFFSET   NULL,
+        CONSTRAINT PK_FlowStepLeases PRIMARY KEY ([RunId], [StepKey])
+    );
+    CREATE INDEX IX_FlowStepLeases_Live ON [FlowStepLeases]([ExpiresAt]) WHERE [ExpiresAt] IS NOT NULL;
+END
 ```
 
 ```sql
 -- PostgreSQL — the trigram index is in "Run-search index (PostgreSQL)" below
 CREATE INDEX IF NOT EXISTS ix_flow_step_dispatches_unsent ON flow_step_dispatches (dispatched_at) WHERE dispatch_job_id IS NULL;
 ALTER TABLE webhook_replay_nonces ADD COLUMN IF NOT EXISTS registration_id uuid NULL;
+CREATE TABLE IF NOT EXISTS flow_step_leases (
+    run_id uuid NOT NULL, step_key varchar(256) NOT NULL, fence bigint NOT NULL, owner varchar(128) NOT NULL,
+    expires_at timestamptz NULL, redelivered_at timestamptz NULL, PRIMARY KEY (run_id, step_key));
+CREATE INDEX IF NOT EXISTS ix_flow_step_leases_live ON flow_step_leases (expires_at) WHERE expires_at IS NOT NULL;
 ```
 
 ### Run-search columns and indexes (SQL Server / Azure SQL)

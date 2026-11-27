@@ -60,8 +60,9 @@ public sealed class FlowRunControlOptions
     /// claim and its first status write can see the step run a second time. A live worker normally spends
     /// two store round trips there. Raise the value if your store can stall for longer. A host restart
     /// faster than this value does not release the claims of the instance it replaced — the next startup
-    /// does (or the sweep, for a terminating run). The lease redesign planned for 2.0 (RFC P3) replaces
-    /// this heuristic with an owned, renewed claim that a periodic sweep reclaims.
+    /// does (or the sweep, for a terminating run). With step leases on (<see cref="StepLeaseDuration"/>), a
+    /// claim taken by the engine is a lease and is reclaimed by its expiry instead; this release still covers
+    /// claims without a lease.
     /// </para>
     /// </remarks>
     public TimeSpan? OrphanedClaimTimeout { get; set; } = DefaultOrphanedClaimTimeout;
@@ -91,6 +92,42 @@ public sealed class FlowRunControlOptions
     /// </para>
     /// </remarks>
     public TimeSpan? UnsentDispatchTimeout { get; set; } = DefaultUnsentDispatchTimeout;
+
+    /// <summary>The default for <see cref="StepLeaseDuration"/>: 60 seconds.</summary>
+    public static readonly TimeSpan DefaultStepLeaseDuration = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a step's execution claim lives without renewal. The process running the step renews it every
+    /// <see cref="StepLeaseRenewInterval"/>; once it stops (the process died, or lost its store), another
+    /// delivery may take the step over after this long. <see langword="null"/> or a non-positive value turns
+    /// leases off: claims never expire, as in 1.x.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without a lease, a worker killed mid-handler left its claim for ever: every redelivery of the step exited
+    /// as a duplicate and the run stayed <c>Running</c> (RFC 2.0 C1). With it, the runtime's own redelivery
+    /// (Hangfire's invisibility timeout, a Service Bus lock expiry) takes the expired lease over, and a periodic
+    /// sweep (<see cref="Hosting.FlowStepLeaseHostedService"/>) redelivers every step whose lease expired, for
+    /// runtimes that redeliver too early or never.
+    /// </para>
+    /// <para>
+    /// A live handler is never taken over however long it runs: its lease is renewed. Only a process that
+    /// cannot reach its store for longer than this value loses its lease; the step then runs again elsewhere,
+    /// and the stalled attempt's completion is rejected by the lease's fence. Lower values recover faster after
+    /// a crash; keep the value at least three times your store's worst round trip.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? StepLeaseDuration { get; set; } = DefaultStepLeaseDuration;
+
+    /// <summary>The default for <see cref="StepLeaseRenewInterval"/>: 20 seconds.</summary>
+    public static readonly TimeSpan DefaultStepLeaseRenewInterval = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// How often a process renews the leases of the steps it is executing; at most a third of
+    /// <see cref="StepLeaseDuration"/> is used whatever the value, so two renewals can fail before a lease
+    /// expires.
+    /// </summary>
+    public TimeSpan StepLeaseRenewInterval { get; set; } = DefaultStepLeaseRenewInterval;
 
     /// <summary>
     /// Name of the HTTP header that carries the caller-supplied idempotency key

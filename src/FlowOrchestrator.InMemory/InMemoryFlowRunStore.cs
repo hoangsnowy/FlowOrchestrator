@@ -41,6 +41,12 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
     // Value: when the claim was taken (UTC), read by ReleaseOrphanedClaimsAsync.
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DateTimeOffset> _stepClaims = new();
+    // Execution leases (2.0, RFC C1), next to the claim they qualify: a claim without an entry is permanent.
+    // Every lease transition (acquire, takeover, renew, release, pin, fenced completion, sweep) runs under
+    // _leaseGate, so a takeover and a fenced completion of one step serialise. ExpiresAt is null once the lease
+    // is no longer live; the entry is kept so the fence keeps rising across attempts.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), LeaseState> _leases = new();
+    private readonly Lock _leaseGate = new();
     // Value: the runtime job id (null until annotated) and when the row was recorded or last leased.
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DispatchEntry> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
@@ -632,6 +638,7 @@ public sealed class InMemoryFlowRunStore :
             // claim was orphaned across retries; the engine now treats the claim as exclusive to
             // a single attempt, so retry must clear it.
             _stepClaims.TryRemove((runId, stepKey), out _);
+            ClearLease((runId, stepKey));
             if (_claimsByRun.TryGetValue(runId, out var set))
             {
                 set.TryRemove(stepKey, out _);
@@ -681,6 +688,7 @@ public sealed class InMemoryFlowRunStore :
             }
 
             _stepClaims.TryRemove((runId, stepKey), out _);
+            ClearLease((runId, stepKey));
             if (_claimsByRun.TryGetValue(runId, out var claimSet))
             {
                 claimSet.TryRemove(stepKey, out _);
@@ -842,11 +850,186 @@ public sealed class InMemoryFlowRunStore :
     public Task ReleaseStepClaimAsync(Guid runId, string stepKey)
     {
         _stepClaims.TryRemove((runId, stepKey), out _);
+        ClearLease((runId, stepKey));
         if (_claimsByRun.TryGetValue(runId, out var set))
         {
             set.TryRemove(stepKey, out _);
         }
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration)
+    {
+        var key = (runId, stepKey);
+        lock (_leaseGate)
+        {
+            var now = Clock.GetUtcNow();
+            if (_stepClaims.TryAdd(key, now))
+            {
+                _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+                var fresh = _leases.GetOrAdd(key, static _ => new LeaseState());
+                return Task.FromResult<StepLease?>(Stamp(fresh, key, ownerId, now + duration));
+            }
+
+            if (!_leases.TryGetValue(key, out var state)
+                || state.ExpiresAt is not { } expiresAt
+                || expiresAt >= now
+                || (_steps.TryGetValue(key, out var step) && IsTerminal(step.Status)))
+            {
+                return Task.FromResult<StepLease?>(null);
+            }
+
+            return Task.FromResult<StepLease?>(Stamp(state, key, ownerId, now + duration));
+        }
+
+        static StepLease Stamp(LeaseState state, (Guid RunId, string StepKey) key, string ownerId, DateTimeOffset expiresAt)
+        {
+            state.Fence++;
+            state.Owner = ownerId;
+            state.ExpiresAt = expiresAt;
+            state.RedeliveredAt = null;
+            return new StepLease(key.RunId, key.StepKey, state.Fence);
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration)
+    {
+        var renewed = new List<StepLease>(leases.Count);
+        lock (_leaseGate)
+        {
+            var expiresAt = Clock.GetUtcNow() + duration;
+            foreach (var lease in leases)
+            {
+                if (_leases.TryGetValue((lease.RunId, lease.StepKey), out var state)
+                    && state.Fence == lease.Fence
+                    && state.ExpiresAt is not null)
+                {
+                    state.ExpiresAt = expiresAt;
+                    renewed.Add(lease);
+                }
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<StepLease>>(renewed);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> ReleaseStepLeaseAsync(StepLease lease)
+    {
+        var key = (lease.RunId, lease.StepKey);
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue(key, out var state) || state.Fence != lease.Fence)
+            {
+                return FalseTask;
+            }
+
+            state.ExpiresAt = null;
+            _stepClaims.TryRemove(key, out _);
+            if (_claimsByRun.TryGetValue(lease.RunId, out var set))
+            {
+                set.TryRemove(lease.StepKey, out _);
+            }
+
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> PinStepLeaseAsync(StepLease lease)
+    {
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue((lease.RunId, lease.StepKey), out var state) || state.Fence != lease.Fence)
+            {
+                return FalseTask;
+            }
+
+            state.ExpiresAt = null;
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage)
+    {
+        var key = (lease.RunId, lease.StepKey);
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue(key, out var state) || state.Fence != lease.Fence || !_stepClaims.ContainsKey(key))
+            {
+                return FalseTask;
+            }
+
+            RecordStepCompleteAsync(lease.RunId, lease.StepKey, status, outputJson, errorMessage);
+            if (IsTerminal(status))
+            {
+                state.ExpiresAt = null;
+            }
+
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>O(leases ever taken in live runs): a scan of the lease map under the gate, at sweep cadence only.</remarks>
+    public Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount)
+    {
+        List<ExpiredStepLease>? expired = null;
+        lock (_leaseGate)
+        {
+            var now = Clock.GetUtcNow();
+            var backoffCutoff = now - (redeliveryBackoff < TimeSpan.Zero ? TimeSpan.Zero : redeliveryBackoff);
+            foreach (var (key, state) in _leases)
+            {
+                if (expired is not null && expired.Count >= maxCount)
+                {
+                    break;
+                }
+
+                if (state.ExpiresAt is not { } expiresAt
+                    || expiresAt >= now
+                    || (state.RedeliveredAt is { } at && at > backoffCutoff)
+                    || !_stepClaims.ContainsKey(key)
+                    || !_runs.TryGetValue(key.RunId, out var run)
+                    || run.Status != "Running"
+                    || (_steps.TryGetValue(key, out var step) && IsTerminal(step.Status)))
+                {
+                    continue;
+                }
+
+                state.RedeliveredAt = now;
+                (expired ??= []).Add(new ExpiredStepLease(key.RunId, run.FlowId, key.StepKey));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<ExpiredStepLease>>(expired ?? []);
+    }
+
+    private void ClearLease((Guid RunId, string StepKey) key)
+    {
+        lock (_leaseGate)
+        {
+            if (_leases.TryGetValue(key, out var state))
+            {
+                state.ExpiresAt = null;
+            }
+        }
+    }
+
+    private static bool IsTerminal(string status)
+        => !string.Equals(status, nameof(StepStatus.Running), StringComparison.Ordinal)
+           && !string.Equals(status, nameof(StepStatus.Pending), StringComparison.Ordinal);
+
+    /// <summary>One step's execution lease; mutated only under <c>_leaseGate</c>.</summary>
+    private sealed class LeaseState
+    {
+        public long Fence;
+        public string Owner = string.Empty;
+        public DateTimeOffset? ExpiresAt;
+        public DateTimeOffset? RedeliveredAt;
     }
 
     /// <inheritdoc/>
@@ -875,6 +1058,7 @@ public sealed class InMemoryFlowRunStore :
             }
 
             claimSet.TryRemove(stepKey, out _);
+            ClearLease(key);
             if (_stepDispatches.TryRemove(key, out _) && _dispatchesByRun.TryGetValue(runId, out var dispatchSet))
             {
                 dispatchSet.TryRemove(stepKey, out _);
@@ -1093,6 +1277,11 @@ public sealed class InMemoryFlowRunStore :
             _steps.TryRemove(key, out _);
             _stepAttemptCounters.TryRemove(key, out _);
             _stepClaims.TryRemove(key, out _);
+        }
+
+        foreach (var key in _leases.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
+        {
+            _leases.TryRemove(key, out _);
         }
 
         // The dispatch ledger is keyed independently of _steps: TryRecordDispatchAsync can record a
