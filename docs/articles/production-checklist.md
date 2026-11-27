@@ -46,6 +46,44 @@ FlowOrchestrator writes to fourteen tables. The auto-migrator
 - Leave autovacuum on. The dispatch ledger is hot under high throughput; bloat shows up as `EXPLAIN` plans falling off index scans.
 - Logical replication or `pg_basebackup` for backups — both work, just have a tested restore drill.
 
+### Hangfire on PostgreSQL
+
+Hangfire.PostgreSql (the community job storage for the Hangfire runtime) keeps its distributed locks as
+rows in its `lock` table. Hangfire.SqlServer uses session-scoped `sp_getapplock` instead. A row survives
+the process that wrote it, and only stops counting once it is older than `DistributedLockTimeout`. Hangfire
+takes a job's `job:{id}:state-lock` for each state change. So when a replica is killed during one, a
+surviving server re-fetches the job after `InvisibilityTimeout` and then waits on the orphaned lock.
+**Crash recovery takes the longer of the two timeouts**, and each re-fetch in between parks another worker.
+While the step waits, it has a dispatch-ledger row, no claim and no status row: it is delayed, not lost.
+
+- Keep `DistributedLockTimeout` **at most** `InvisibilityTimeout`. The package defaults (30 min invisibility,
+  10 min lock timeout) satisfy that. If you shorten `InvisibilityTimeout` to recover faster, shorten the lock
+  timeout with it, or recovery stays at 10 min. `UseHangfire()` logs a warning at startup (EventId 3160) when
+  the lock timeout is the longer one.
+- Do not set the lock timeout below the longest time a lock is legitimately held. Once a lock is older than
+  the timeout, another server takes it over. FlowOrchestrator's step jobs hold no Hangfire locks beyond
+  Hangfire's own (state changes, the schedule poller, the recurring-job scheduler), which are held for
+  milliseconds to seconds. A `[DisableConcurrentExecution]` job of your own holds its lock for the whole
+  job.
+- A replica killed while holding the schedule poller or recurring-job lock delays every scheduled step
+  (`Pending` re-polls, delayed dispatches) or every cron trigger, cluster-wide, for up to
+  `DistributedLockTimeout`.
+
+```csharp
+builder.Services.AddHangfire(c => c.UsePostgreSqlStorage(
+    o => o.UseNpgsqlConnection(pgConnStr),
+    new PostgreSqlStorageOptions
+    {
+        InvisibilityTimeout = TimeSpan.FromMinutes(5),
+        DistributedLockTimeout = TimeSpan.FromMinutes(1),   // <= InvisibilityTimeout
+    }));
+```
+
+Orphaned lock rows can be listed with
+`SELECT resource, acquired FROM hangfire.lock ORDER BY acquired;`. Use your own schema if you set
+`SchemaName`. A `…:job:{id}:state-lock` row more than a few seconds old was almost certainly left by a
+killed process, because state changes take milliseconds.
+
 ### Backup recipe
 
 Full backup + transaction-log / WAL replay covers every table above. Step inputs and outputs are persisted in `FlowOutputs`, so restoring is restoring **state**, not just configuration.
