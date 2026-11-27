@@ -1037,6 +1037,138 @@ public sealed class PostgreSqlFlowRunStore :
         return affected > 0;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// An unlocked probe (the same predicate, read without locks) answers the common case — a duplicate of a
+    /// fresh reservation, or of a run that started work however old — with one <c>SELECT</c> and no
+    /// transaction or lock; webhook providers re-deliver for days, so late duplicates of live runs are routine.
+    /// Only a reservation the probe sees as stale and unstarted enters the transaction, where one statement
+    /// re-checks the whole predicate
+    /// (owner, age on <c>NOW()</c> — the clock that stamped <c>created_at_utc</c> — and no
+    /// <c>flow_step_dispatches</c> / <c>flow_steps</c> row for the stale run) and, in a data-modifying CTE,
+    /// sets the stale run's cancel latch.
+    /// </para>
+    /// <para>
+    /// Locks: the key row's lock serialises concurrent takeovers (the second re-evaluates the updated row,
+    /// sees the new owner and matches nothing). PostgreSQL has no key-range locks under READ COMMITTED, so a
+    /// slow original trigger could otherwise insert its first ledger or step row after the statement's
+    /// snapshot and run that step before the latch commits. The transaction therefore takes
+    /// <c>SHARE</c> locks on <c>flow_step_dispatches</c> and <c>flow_steps</c> first: they wait for in-flight
+    /// writers to commit, so the statement's <c>NOT EXISTS</c> sees their rows, and make new writers wait until
+    /// the latch is committed.
+    /// Taken only on this rare path (a trigger that died between registering its key and creating its run),
+    /// held until the transaction commits two statements later, and bounded by a 1 s <c>lock_timeout</c> — when that trips, the call
+    /// answers the current owner (the caller sees a duplicate, as before this method existed, and a later
+    /// retry takes the key over).
+    /// </para>
+    /// </remarks>
+    public async Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+        Guid flowId,
+        string triggerKey,
+        string idempotencyKey,
+        Guid staleRunId,
+        Guid newRunId,
+        TimeSpan reservationTimeout)
+    {
+        var args = new
+        {
+            FlowId = flowId,
+            TriggerKey = triggerKey.Trim().ToLowerInvariant(),
+            IdempotencyKey = IdempotencyKeyStorage.Normalize(idempotencyKey),
+            StaleRunId = staleRunId,
+            NewRunId = newRunId,
+            Timeout = reservationTimeout,
+            Reason = IdempotencyKeyStorage.TakenOverCancelReason(newRunId),
+            // The control record keeps the caller's spelling, like ConfigureRunAsync.
+            ControlTriggerKey = triggerKey,
+            ControlIdempotencyKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey)
+        };
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+
+        var probe = await conn.QuerySingleOrDefaultAsync<IdempotencyOwnerProbe>(
+            """
+            SELECT run_id AS "RunId",
+                   (run_id = @StaleRunId
+                    AND NOW() - created_at_utc >= @Timeout
+                    AND NOT EXISTS (SELECT 1 FROM flow_step_dispatches WHERE run_id = @StaleRunId)
+                    AND NOT EXISTS (SELECT 1 FROM flow_steps WHERE run_id = @StaleRunId)) AS "Candidate"
+            FROM flow_idempotency_keys
+            WHERE flow_id = @FlowId
+              AND trigger_key = @TriggerKey
+              AND idempotency_key = @IdempotencyKey
+            """,
+            args).ConfigureAwait(false);
+
+        if (probe is not { Candidate: true })
+        {
+            return probe?.RunId;
+        }
+
+        try
+        {
+            await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+            await conn.ExecuteAsync(
+                """
+                SET LOCAL lock_timeout = '1s';
+                LOCK TABLE flow_step_dispatches, flow_steps IN SHARE MODE;
+
+                WITH taken AS (
+                    UPDATE flow_idempotency_keys
+                    SET run_id = @NewRunId,
+                        created_at_utc = NOW()
+                    WHERE flow_id = @FlowId
+                      AND trigger_key = @TriggerKey
+                      AND idempotency_key = @IdempotencyKey
+                      AND run_id = @StaleRunId
+                      AND NOW() - created_at_utc >= @Timeout
+                      AND NOT EXISTS (SELECT 1 FROM flow_step_dispatches WHERE run_id = @StaleRunId)
+                      AND NOT EXISTS (SELECT 1 FROM flow_steps WHERE run_id = @StaleRunId)
+                    RETURNING run_id
+                )
+                INSERT INTO flow_run_controls
+                    (run_id, flow_id, trigger_key, idempotency_key, timeout_at_utc,
+                     cancel_requested, cancel_reason, cancel_requested_at_utc)
+                SELECT @StaleRunId, @FlowId, @ControlTriggerKey, @ControlIdempotencyKey, NULL, TRUE, @Reason, NOW()
+                FROM taken
+                ON CONFLICT (run_id) DO UPDATE SET
+                    cancel_requested = TRUE,
+                    cancel_reason = CASE WHEN flow_run_controls.cancel_requested
+                                         THEN flow_run_controls.cancel_reason
+                                         ELSE EXCLUDED.cancel_reason END,
+                    cancel_requested_at_utc = COALESCE(flow_run_controls.cancel_requested_at_utc, EXCLUDED.cancel_requested_at_utc);
+                """,
+                args,
+                tx).ConfigureAwait(false);
+
+            // A new snapshot (READ COMMITTED): ours when the UPDATE matched, otherwise whoever committed a
+            // takeover first (our UPDATE waited on its row lock).
+            var owner = await conn.ExecuteScalarAsync<Guid?>(FindOwnerSql, args, tx).ConfigureAwait(false);
+            await tx.CommitAsync().ConfigureAwait(false);
+            return owner;
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.LockNotAvailable)
+        {
+            // lock_timeout tripped; the transaction rolled back. Answer the owner as of now.
+            return await conn.ExecuteScalarAsync<Guid?>(FindOwnerSql, args).ConfigureAwait(false);
+        }
+    }
+
+    private const string FindOwnerSql = """
+        SELECT run_id
+        FROM flow_idempotency_keys
+        WHERE flow_id = @FlowId
+          AND trigger_key = @TriggerKey
+          AND idempotency_key = @IdempotencyKey
+        """;
+
+    /// <summary>Row of the unlocked probe in <see cref="TryTakeOverStaleIdempotencyKeyAsync"/>.</summary>
+    /// <param name="RunId">The run the key maps to.</param>
+    /// <param name="Candidate">Whether the row is owned by the stale run and old enough to take over.</param>
+    private sealed record IdempotencyOwnerProbe(Guid RunId, bool Candidate);
+
     public async Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
         await using var conn = new NpgsqlConnection(_connectionString);

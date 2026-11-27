@@ -55,6 +55,15 @@ public static class IdempotencyKeyStorage
             ? idempotencyKey
             : Normalize(idempotencyKey);
 
+    /// <summary>
+    /// Returns the cancel reason a store records on a run whose idempotency reservation was taken over by
+    /// <see cref="IFlowRunControlStore.TryTakeOverStaleIdempotencyKeyAsync"/>.
+    /// </summary>
+    /// <param name="newRunId">The run that took the key over.</param>
+    /// <returns>A reason naming <paramref name="newRunId"/>, so the dashboard links the dead run to its replacement.</returns>
+    public static string TakenOverCancelReason(Guid newRunId)
+        => $"Idempotency key taken over by run {newRunId}: this run's trigger stopped before it started any step.";
+
     private static string Digest(string normalized)
     {
         // Runs only for keys over 256 characters, once per trigger — not a hot path.
