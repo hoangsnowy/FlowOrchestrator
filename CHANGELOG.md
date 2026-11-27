@@ -6,6 +6,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.34.8] - 2026-11-27
+
+Bug-fix release for the 1.34 line (.NET 8 / 9 / 10). PostgreSQL hosts that restart or roll beside running
+ones should upgrade (a starting host no longer locks the hot tables), as should Hangfire hosts with polling
+steps, `ForEach` loops over polling children, or `WaitForSignal` steps (their re-checks no longer run
+with destroyed inputs). No API change and no manual migration step.
+
 ### Fixed
 
 - **PostgreSQL: a host starting beside running hosts no longer locks the hot tables.** The start-up
