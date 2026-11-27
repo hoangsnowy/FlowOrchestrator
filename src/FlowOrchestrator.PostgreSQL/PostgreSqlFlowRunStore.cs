@@ -511,6 +511,10 @@ public sealed class PostgreSqlFlowRunStore :
                 DELETE FROM flow_step_claims
                 WHERE run_id = @RunId AND step_key = @StepKey AND EXISTS (SELECT 1 FROM won)
             ),
+            lease_cleared AS (
+                UPDATE flow_step_leases SET expires_at = NULL
+                WHERE run_id = @RunId AND step_key = @StepKey AND EXISTS (SELECT 1 FROM won)
+            ),
             ledger_cleared AS (
                 DELETE FROM flow_step_dispatches
                 WHERE run_id = @RunId AND step_key = @StepKey AND EXISTS (SELECT 1 FROM won)
@@ -556,6 +560,11 @@ public sealed class PostgreSqlFlowRunStore :
                 DELETE FROM flow_step_claims fsc
                 USING reset r
                 WHERE fsc.run_id = @RunId AND fsc.step_key = r.step_key
+            ),
+            cleared_leases AS (
+                UPDATE flow_step_leases fsl SET expires_at = NULL
+                FROM reset r
+                WHERE fsl.run_id = @RunId AND fsl.step_key = r.step_key
             )
             DELETE FROM flow_step_dispatches fsd
             USING reset r
@@ -729,8 +738,277 @@ public sealed class PostgreSqlFlowRunStore :
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.ExecuteAsync(
-            "DELETE FROM flow_step_claims WHERE run_id = @RunId AND step_key = @StepKey",
+            """
+            DELETE FROM flow_step_claims WHERE run_id = @RunId AND step_key = @StepKey;
+            UPDATE flow_step_leases SET expires_at = NULL WHERE run_id = @RunId AND step_key = @StepKey AND expires_at IS NOT NULL;
+            """,
             new { RunId = runId, StepKey = stepKey });
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One transaction. A fresh claim (<c>ON CONFLICT DO NOTHING</c>) upserts the lease row so its fence keeps
+    /// rising across attempts. A takeover locks the expired lease row (<c>FOR UPDATE</c>) and only then reads the
+    /// step's status in a separate statement — its READ COMMITTED snapshot is taken after the lock, so a fenced
+    /// completion that committed first (it locks the same row) is always seen. Expiry uses
+    /// <c>clock_timestamp()</c>, the database's wall clock.
+    /// </remarks>
+    public async Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+        var args = new { RunId = runId, StepKey = stepKey, Owner = ownerId, LeaseSeconds = Math.Max(0d, duration.TotalSeconds) };
+
+        var inserted = await conn.ExecuteAsync(
+            """
+            INSERT INTO flow_step_claims (run_id, step_key, claimed_at)
+            VALUES (@RunId, @StepKey, NOW())
+            ON CONFLICT (run_id, step_key) DO NOTHING
+            """,
+            args, tx).ConfigureAwait(false);
+
+        long? fence = null;
+        if (inserted > 0)
+        {
+            fence = await conn.ExecuteScalarAsync<long>(
+                """
+                INSERT INTO flow_step_leases (run_id, step_key, fence, owner, expires_at)
+                VALUES (@RunId, @StepKey, 1, @Owner, clock_timestamp() + make_interval(secs => @LeaseSeconds))
+                ON CONFLICT (run_id, step_key) DO UPDATE
+                SET fence = flow_step_leases.fence + 1, owner = EXCLUDED.owner,
+                    expires_at = EXCLUDED.expires_at, redelivered_at = NULL
+                RETURNING fence
+                """,
+                args, tx).ConfigureAwait(false);
+        }
+        else
+        {
+            var current = await conn.ExecuteScalarAsync<long?>(
+                """
+                SELECT fence FROM flow_step_leases
+                WHERE run_id = @RunId AND step_key = @StepKey
+                  AND expires_at IS NOT NULL AND expires_at < clock_timestamp()
+                FOR UPDATE
+                """,
+                args, tx).ConfigureAwait(false);
+
+            if (current is { } c)
+            {
+                var terminal = await conn.ExecuteScalarAsync<int?>(
+                    """
+                    SELECT 1 FROM flow_steps
+                    WHERE run_id = @RunId AND step_key = @StepKey AND status NOT IN ('Running', 'Pending')
+                    """,
+                    args, tx).ConfigureAwait(false);
+
+                if (terminal is null)
+                {
+                    fence = await conn.ExecuteScalarAsync<long>(
+                        """
+                        UPDATE flow_step_leases
+                        SET fence = fence + 1, owner = @Owner,
+                            expires_at = clock_timestamp() + make_interval(secs => @LeaseSeconds), redelivered_at = NULL
+                        WHERE run_id = @RunId AND step_key = @StepKey
+                        RETURNING fence
+                        """,
+                        args, tx).ConfigureAwait(false);
+                }
+            }
+        }
+
+        await tx.CommitAsync().ConfigureAwait(false);
+        return fence is { } f ? new StepLease(runId, stepKey, f) : null;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>One statement: a fenced <c>UPDATE … FROM unnest(…) RETURNING</c> over every lease.</remarks>
+    public async Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration)
+    {
+        if (leases.Count == 0)
+        {
+            return [];
+        }
+
+        var runIds = new Guid[leases.Count];
+        var stepKeys = new string[leases.Count];
+        var fences = new long[leases.Count];
+        for (var i = 0; i < leases.Count; i++)
+        {
+            runIds[i] = leases[i].RunId;
+            stepKeys[i] = leases[i].StepKey;
+            fences[i] = leases[i].Fence;
+        }
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(Guid RunId, string StepKey, long Fence)>(
+            """
+            UPDATE flow_step_leases AS l
+            SET expires_at = clock_timestamp() + make_interval(secs => @LeaseSeconds)
+            FROM unnest(@RunIds, @StepKeys, @Fences) AS j(run_id, step_key, fence)
+            WHERE l.run_id = j.run_id AND l.step_key = j.step_key AND l.fence = j.fence AND l.expires_at IS NOT NULL
+            RETURNING l.run_id, l.step_key, l.fence
+            """,
+            new { RunIds = runIds, StepKeys = stepKeys, Fences = fences, LeaseSeconds = Math.Max(0d, duration.TotalSeconds) }).ConfigureAwait(false);
+
+        var renewed = new List<StepLease>(leases.Count);
+        foreach (var (runId, stepKey, fence) in rows)
+        {
+            renewed.Add(new StepLease(runId, stepKey, fence));
+        }
+
+        return renewed;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One statement: the claim is deleted only while the lease row still carries this fence; the lease row is
+    /// kept (its expiry cleared) so the next attempt's fence is higher.
+    /// </remarks>
+    public async Task<bool> ReleaseStepLeaseAsync(StepLease lease)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var won = await conn.ExecuteScalarAsync<long>(
+            """
+            WITH released AS (
+                UPDATE flow_step_leases SET expires_at = NULL
+                WHERE run_id = @RunId AND step_key = @StepKey AND fence = @Fence
+                RETURNING run_id, step_key
+            ),
+            unclaimed AS (
+                DELETE FROM flow_step_claims c
+                USING released r
+                WHERE c.run_id = r.run_id AND c.step_key = r.step_key
+            )
+            SELECT COUNT(*) FROM released
+            """,
+            new { lease.RunId, lease.StepKey, lease.Fence }).ConfigureAwait(false);
+        return won > 0;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> PinStepLeaseAsync(StepLease lease)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.ExecuteAsync(
+            "UPDATE flow_step_leases SET expires_at = NULL WHERE run_id = @RunId AND step_key = @StepKey AND fence = @Fence",
+            new { lease.RunId, lease.StepKey, lease.Fence }).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One transaction: the lease row is locked first (<c>FOR UPDATE</c>; the takeover in
+    /// <see cref="TryAcquireStepLeaseAsync"/> locks it too, so the two serialise), the fence and the claim are
+    /// checked, then the same writes as <see cref="RecordStepCompleteAsync"/>. A terminal status clears the
+    /// lease's expiry, which makes the claim permanent and drops the row from the live-lease index.
+    /// </remarks>
+    public async Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage)
+    {
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+        var args = new
+        {
+            lease.RunId,
+            lease.StepKey,
+            lease.Fence,
+            Status = status,
+            OutputJson = outputJson,
+            ErrorMessage = errorMessage,
+            Terminal = status is not (nameof(StepStatus.Running) or nameof(StepStatus.Pending)),
+        };
+
+        var held = await conn.ExecuteScalarAsync<int?>(
+            """
+            SELECT 1 FROM flow_step_leases l
+            WHERE l.run_id = @RunId AND l.step_key = @StepKey AND l.fence = @Fence
+              AND EXISTS (SELECT 1 FROM flow_step_claims c WHERE c.run_id = l.run_id AND c.step_key = l.step_key)
+            FOR UPDATE OF l
+            """,
+            args, tx).ConfigureAwait(false);
+
+        if (held is null)
+        {
+            await tx.RollbackAsync().ConfigureAwait(false);
+            return false;
+        }
+
+        await conn.ExecuteAsync(
+            """
+            UPDATE flow_steps
+            SET status = @Status, output_json = @OutputJson, error_message = @ErrorMessage, completed_at = NOW()
+            WHERE run_id = @RunId AND step_key = @StepKey;
+
+            UPDATE flow_step_attempts fsa
+            SET status = @Status, output_json = @OutputJson, error_message = @ErrorMessage, completed_at = NOW()
+            FROM (
+                SELECT attempt_no
+                FROM flow_step_attempts
+                WHERE run_id = @RunId AND step_key = @StepKey
+                ORDER BY attempt_no DESC
+                LIMIT 1
+            ) AS latest
+            WHERE fsa.run_id = @RunId AND fsa.step_key = @StepKey AND fsa.attempt_no = latest.attempt_no;
+
+            UPDATE flow_step_leases SET expires_at = NULL
+            WHERE @Terminal AND run_id = @RunId AND step_key = @StepKey;
+            """,
+            args, tx).ConfigureAwait(false);
+
+        await tx.CommitAsync().ConfigureAwait(false);
+        return true;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One statement: the CTE picks the qualifying rows with <c>FOR UPDATE OF l SKIP LOCKED</c>, so a concurrent
+    /// sweep on another replica skips rows this one holds, and the <c>UPDATE … RETURNING</c> stamps them. The
+    /// candidate scan is served by the partial index <c>ix_flow_step_leases_live</c>.
+    /// </remarks>
+    public async Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount)
+    {
+        if (maxCount <= 0)
+        {
+            return [];
+        }
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        var rows = await conn.QueryAsync<(Guid RunId, Guid FlowId, string StepKey)>(
+            """
+            WITH due AS (
+                SELECT l.run_id, l.step_key, r.flow_id
+                FROM flow_step_leases l
+                JOIN flow_runs r ON r.id = l.run_id
+                WHERE l.expires_at IS NOT NULL
+                  AND l.expires_at < clock_timestamp()
+                  AND (l.redelivered_at IS NULL OR l.redelivered_at <= clock_timestamp() - make_interval(secs => @BackoffSeconds))
+                  AND r.status = 'Running'
+                  AND EXISTS (
+                      SELECT 1 FROM flow_step_claims c
+                      WHERE c.run_id = l.run_id AND c.step_key = l.step_key)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM flow_steps s
+                      WHERE s.run_id = l.run_id AND s.step_key = l.step_key AND s.status NOT IN ('Running', 'Pending'))
+                ORDER BY l.expires_at
+                LIMIT @MaxCount
+                FOR UPDATE OF l SKIP LOCKED
+            )
+            UPDATE flow_step_leases AS l
+            SET redelivered_at = clock_timestamp()
+            FROM due
+            WHERE l.run_id = due.run_id AND l.step_key = due.step_key
+            RETURNING l.run_id, due.flow_id, l.step_key
+            """,
+            new { MaxCount = maxCount, BackoffSeconds = Math.Max(0d, redeliveryBackoff.TotalSeconds) }).ConfigureAwait(false);
+
+        var expired = new List<ExpiredStepLease>();
+        foreach (var (runId, flowId, stepKey) in rows)
+        {
+            expired.Add(new ExpiredStepLease(runId, flowId, stepKey));
+        }
+
+        return expired;
     }
 
     /// <inheritdoc/>
@@ -784,6 +1062,11 @@ public sealed class PostgreSqlFlowRunStore :
                 DELETE FROM flow_step_dispatches d
                 USING released r
                 WHERE d.run_id = @RunId AND d.step_key = r.step_key
+            ),
+            unleased AS (
+                UPDATE flow_step_leases l SET expires_at = NULL
+                FROM released r
+                WHERE l.run_id = @RunId AND l.step_key = r.step_key
             )
             SELECT step_key FROM released
             """,
@@ -1048,6 +1331,12 @@ public sealed class PostgreSqlFlowRunStore :
             DELETE FROM flow_step_claims fsc
             USING flow_runs fr
             WHERE fr.id = fsc.run_id
+              AND fr.completed_at IS NOT NULL
+              AND fr.completed_at < @CutoffUtc;
+
+            DELETE FROM flow_step_leases fsl
+            USING flow_runs fr
+            WHERE fr.id = fsl.run_id
               AND fr.completed_at IS NOT NULL
               AND fr.completed_at < @CutoffUtc;
 

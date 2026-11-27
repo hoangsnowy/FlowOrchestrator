@@ -96,4 +96,21 @@ internal static partial class HostingLog
 
     [LoggerMessage(EventId = 5044, Level = LogLevel.Warning, Message = "Unsent-dispatch sweep failed; will retry on the next tick.")]
     public static partial void UnsentDispatchSweepFailed(ILogger logger, Exception ex);
+
+    // ── Step leases (FlowStepLeaseHostedService): 5050-5059 ───────────────────────────────────────────
+
+    [LoggerMessage(EventId = 5050, Level = LogLevel.Warning, Message = "Redelivered step '{StepKey}' of run {RunId}: its execution lease expired without a terminal status (the worker running it died or lost its store); the redelivery takes the lease over.")]
+    public static partial void ExpiredLeaseRedelivered(ILogger logger, string stepKey, Guid runId);
+
+    [LoggerMessage(EventId = 5051, Level = LogLevel.Error, Message = "Redelivering step '{StepKey}' of run {RunId}, whose lease expired, failed; the sweep retries it after the next lease duration.")]
+    public static partial void ExpiredLeaseRedeliveryFailed(ILogger logger, Exception ex, string stepKey, Guid runId);
+
+    [LoggerMessage(EventId = 5052, Level = LogLevel.Warning, Message = "Step '{StepKey}' of run {RunId}, whose lease expired, references flow {FlowId}, which this host does not register or which no longer declares the step; left for a host that knows it.")]
+    public static partial void ExpiredLeaseUnknownStep(ILogger logger, string stepKey, Guid runId, Guid flowId);
+
+    [LoggerMessage(EventId = 5053, Level = LogLevel.Warning, Message = "Renewing {Count} step lease(s) failed; will retry on the next tick. A lease expires if renewals keep failing for longer than StepLeaseDuration.")]
+    public static partial void StepLeaseRenewalFailed(ILogger logger, Exception ex, int count);
+
+    [LoggerMessage(EventId = 5054, Level = LogLevel.Warning, Message = "Expired-lease sweep failed; will retry on the next tick.")]
+    public static partial void ExpiredLeaseSweepFailed(ILogger logger, Exception ex);
 }

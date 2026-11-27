@@ -88,6 +88,15 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3022, Level = LogLevel.Warning, Message = "Could not read the registered manifest to decide step {StepKey}, which this worker's manifest does not contain; handed it back for redelivery instead of skipping it.")]
     public static partial void UnknownStepManifestCheckFailed(ILogger logger, Exception ex, string stepKey);
 
+    [LoggerMessage(EventId = 3030, Level = LogLevel.Warning, Message = "Took over the expired execution lease of step {StepKey} (fence {Fence}); the worker that held it stopped renewing it, so the step runs again here.")]
+    public static partial void StepLeaseTakenOver(ILogger logger, string stepKey, long fence);
+
+    [LoggerMessage(EventId = 3031, Level = LogLevel.Warning, Message = "Lost the execution lease of step {StepKey} (fence {Fence}) to another worker; this attempt's outcome is discarded, and the step's new owner records it.")]
+    public static partial void StepLeaseLost(ILogger logger, string stepKey, long fence);
+
+    [LoggerMessage(EventId = 3032, Level = LogLevel.Warning, Message = "Could not pin the execution lease of loop step {StepKey} parked on its barrier; if this process stops before the loop settles, the loop step can be run again by another worker.")]
+    public static partial void StepLeasePinFailed(ILogger logger, Exception ex, string stepKey);
+
     [LoggerMessage(EventId = 1011, Level = LogLevel.Error, Message = "A trigger for run {RunId} failed before dispatching any step, and abandoning that run or releasing its idempotency key failed too; a retry with the same key may be answered as a duplicate of the dead run.")]
     public static partial void IdempotencyKeyReleaseFailed(ILogger logger, Exception ex, Guid runId);
 

@@ -484,6 +484,26 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
             );
         END
 
+        -- Execution leases (2.0, RFC C1): the claim row says "taken", this row says by whom, until when, and
+        -- under which fence. A claim without a lease row is permanent (skip claims, claims written before 2.0).
+        -- ExpiresAt is NULL once the lease is no longer live (released, pinned, or its step terminal); the row
+        -- is kept so the fence keeps rising across attempts. A new table, so no existing table is altered.
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepLeases')
+        BEGIN
+            CREATE TABLE [FlowStepLeases] (
+                [RunId]          UNIQUEIDENTIFIER NOT NULL,
+                [StepKey]        NVARCHAR(256)    NOT NULL,
+                [Fence]          BIGINT           NOT NULL,
+                [Owner]          NVARCHAR(128)    NOT NULL,
+                [ExpiresAt]      DATETIMEOFFSET   NULL,
+                [RedeliveredAt]  DATETIMEOFFSET   NULL,
+                CONSTRAINT PK_FlowStepLeases PRIMARY KEY ([RunId], [StepKey])
+            );
+
+            -- Live leases only, for the expired-lease sweep: stays as small as the number of steps executing.
+            CREATE INDEX IX_FlowStepLeases_Live ON [FlowStepLeases]([ExpiresAt]) WHERE [ExpiresAt] IS NOT NULL;
+        END
+
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowRunControls')
         BEGIN
             CREATE TABLE [FlowRunControls] (

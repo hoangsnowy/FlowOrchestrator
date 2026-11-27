@@ -206,6 +206,38 @@ providers only:
   `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
   [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
 
+### Fixed — a worker killed mid-step no longer leaves its run `Running` for ever (step execution leases)
+
+The execution claim that makes a step run once (`FlowStepClaims`) never expired. A worker killed in the middle of
+a handler — or between its claim and its start write, or between its handler and its completion write — left its
+claim behind; every redelivery of the step exited as "claimed by another worker", and the run stayed `Running`
+until an operator stepped in (RFC 2.0 C1). The pre-release stress harness hit it on every backend: 23 of 600 runs
+on SQL Server + Hangfire, 10 on PostgreSQL + Hangfire, 9 on Service Bus, with 6 hard kills.
+
+- A step is now claimed under a **lease** (`FlowRunControlOptions.StepLeaseDuration`, default 60 s). The
+  process running it renews it every `StepLeaseRenewInterval` (default 20 s, at most a third of the lease), so a
+  live handler is never taken over however long it runs.
+- Once the owner stops renewing, the next delivery of the step **takes the expired lease over** (the runtime's own
+  redelivery: Hangfire's invisibility timeout, a Service Bus lock expiry) and runs the step again. A step that
+  reached a terminal status is never taken over, so execution stays once-only for completed work.
+- `FlowStepLeaseHostedService` renews the process's leases and, every half lease (1–30 s), **redelivers** steps
+  whose lease expired without a terminal status, for runtimes whose redelivery came while the lease was still
+  live, or never came. Every replica runs it; the selection is atomic.
+- Every write of an attempt is **fenced** by its lease: a stalled worker that returns after a takeover has its
+  completion rejected (and skips its output write once a renewal told it), so it cannot overwrite the new owner's
+  outcome. A loop step parked on its barrier pins its lease, so it is never re-run.
+
+**Read before upgrading.**
+- An interrupted attempt now runs again after a crash — at-least-once for the attempt the crash cut short, as
+  in Temporal. Make handlers with side effects idempotent, as the at-least-once runtimes already required.
+- `StepLeaseDuration = null` restores the 1.x claim. Claims written by 1.x have no lease and stay permanent.
+- New table `FlowStepLeases` / `flow_step_leases` with a filtered index; `FlowStepClaims` is not altered.
+- Custom storage backends must implement six new `IFlowRunRuntimeStore` members (`TryAcquireStepLeaseAsync`,
+  `RenewStepLeasesAsync`, `ReleaseStepLeaseAsync`, `PinStepLeaseAsync`, `TryRecordLeasedStepCompleteAsync`,
+  `LeaseExpiredStepLeasesAsync`); there is no default implementation. See the migration guide's checklist.
+- `FlowOrchestratorEngine` takes an optional `StepLeaseKeeper`; a hand-built engine without one keeps 1.x claims.
+- Logs: EventIds 3030-3032 (takeover, lease lost, pin failed) and 5050-5054 (sweep, renewal).
+
 ### Fixed — Hangfire.PostgreSql: a step whose worker was killed waits for the lock timeout, now flagged at startup
 
 - **On Hangfire.PostgreSql job storage, a step whose worker process is killed during a Hangfire state
