@@ -29,13 +29,15 @@ public sealed partial class FlowGraphPlanner
     /// minus the status map — a set that stays small however long the run is.
     /// </para>
     /// <para>
-    /// <b>Complexity per step completion: O(n)</b> in the status-map size n, with no sort over n and
+    /// <b>Complexity per call: O(n)</b> in the status-map size n, with no sort over n and
     /// no per-key allocation — the same order as reading the status map itself, which the caller has
     /// already paid. Each runtime key is walked once as spans; each distinct scope instance is
     /// expanded once (deduplicated through <see cref="StepKeySlice"/> views, so the prefix string is
     /// never built); an expanded child is tested against the status map through the
     /// alternate lookup, so its string exists only when it is a candidate. Only the candidates are
-    /// sorted. Sublinear needs a per-run incremental status cache — P0-1 of #189, out of scope here.
+    /// sorted. Since #189 P0-1 the engine no longer calls <see cref="Evaluate"/> per step completion — it
+    /// classifies the changed steps' dependents with <see cref="EvaluateFrontier"/> — so this O(n) is paid
+    /// when a run is about to close and by startup recovery, not once per completion.
     /// </para>
     /// <para>
     /// The span walk assumes every top-level manifest key is a single non-empty segment, which

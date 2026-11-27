@@ -89,63 +89,58 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
 
         foreach (var stepKey in candidates)
         {
-            if (statuses.ContainsKey(stepKey))
+            Classify(flow, stepKey, statuses, ready, blocked, waiting);
+        }
+
+        return new FlowGraphEvaluation
+        {
+            ReadyStepKeys = ready,
+            BlockedStepKeys = blocked,
+            WaitingStepKeys = waiting
+        };
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Classifies exactly the candidates, with the same rule as <see cref="Evaluate"/>: a candidate's verdict
+    /// depends only on its own row and its dependencies' rows, all of which the caller read.
+    /// </para>
+    /// <para>
+    /// <b>Complexity per step completion:</b> O(c log c + Σ fan-in) for c candidates — the dependents of the
+    /// step that changed — and no term in the number of status rows in the run. The sort keeps the dispatch
+    /// order identical to <see cref="Evaluate"/>'s ordinal order.
+    /// </para>
+    /// </remarks>
+    public FlowGraphEvaluation EvaluateFrontier(
+        IFlowDefinition flow,
+        IReadOnlyCollection<string> candidateStepKeys,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        var ready = new List<string>();
+        var blocked = new List<string>();
+        var waiting = new List<string>();
+
+        if (candidateStepKeys.Count > 0)
+        {
+            var ordered = new string[candidateStepKeys.Count];
+            var count = 0;
+            foreach (var key in candidateStepKeys)
             {
-                continue;
+                ordered[count++] = key;
             }
 
-            var metadata = ResolveMetadata(flow, stepKey);
-            if (metadata is null)
+            Array.Sort(ordered, StringComparer.Ordinal);
+            string? previous = null;
+            foreach (var stepKey in ordered)
             {
-                continue;
-            }
-
-            if (metadata.RunAfter.Count == 0)
-            {
-                ready.Add(stepKey);
-                continue;
-            }
-
-            var allSatisfied = true;
-            var hasFinalMismatch = false;
-            foreach (var dependency in metadata.RunAfter)
-            {
-                // Synthetic entry-trigger key — no real predecessor, status gate is vacuously satisfied.
-                if (string.IsNullOrEmpty(dependency.Key))
+                if (string.Equals(stepKey, previous, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                var runtimeDependencyKey = ResolveRuntimeDependencyKey(stepKey, dependency.Key);
-                if (!statuses.TryGetValue(runtimeDependencyKey, out var dependencyStatus))
-                {
-                    allSatisfied = false;
-                    continue;
-                }
-
-                if (dependency.Value.AcceptsStatus(dependencyStatus))
-                {
-                    continue;
-                }
-
-                allSatisfied = false;
-                if (IsFinal(dependencyStatus))
-                {
-                    hasFinalMismatch = true;
-                }
-            }
-
-            if (allSatisfied)
-            {
-                ready.Add(stepKey);
-            }
-            else if (hasFinalMismatch)
-            {
-                blocked.Add(stepKey);
-            }
-            else
-            {
-                waiting.Add(stepKey);
+                previous = stepKey;
+                Classify(flow, stepKey, statuses, ready, blocked, waiting);
             }
         }
 
@@ -155,5 +150,102 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
             BlockedStepKeys = blocked,
             WaitingStepKeys = waiting
         };
+    }
+
+    /// <summary>
+    /// Appends the runtime keys of <paramref name="runtimeStepKey"/>'s dependencies — resolved exactly as
+    /// <see cref="Evaluate"/> resolves them — to <paramref name="dependencyKeys"/>.
+    /// </summary>
+    /// <param name="flow">The flow whose manifest declares the step.</param>
+    /// <param name="runtimeStepKey">A runtime step key, e.g. <c>"loop.3.b"</c>.</param>
+    /// <param name="dependencyKeys">Receives the dependencies' runtime keys; the synthetic entry key is skipped.</param>
+    /// <remarks>O(fan-in of the step) — one key resolution per declared dependency.</remarks>
+    internal static void AddRuntimeDependencyKeys(IFlowDefinition flow, string runtimeStepKey, ICollection<string> dependencyKeys)
+    {
+        var metadata = ResolveMetadata(flow, runtimeStepKey);
+        if (metadata is null)
+        {
+            return;
+        }
+
+        foreach (var dependency in metadata.RunAfter.Keys)
+        {
+            if (!string.IsNullOrEmpty(dependency))
+            {
+                dependencyKeys.Add(ResolveRuntimeDependencyKey(runtimeStepKey, dependency));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Puts <paramref name="stepKey"/> in <paramref name="ready"/>, <paramref name="blocked"/> or
+    /// <paramref name="waiting"/>, or nowhere when it already has a status row or does not resolve to a step.
+    /// </summary>
+    private static void Classify(
+        IFlowDefinition flow,
+        string stepKey,
+        IReadOnlyDictionary<string, StepStatus> statuses,
+        List<string> ready,
+        List<string> blocked,
+        List<string> waiting)
+    {
+        if (statuses.ContainsKey(stepKey))
+        {
+            return;
+        }
+
+        var metadata = ResolveMetadata(flow, stepKey);
+        if (metadata is null)
+        {
+            return;
+        }
+
+        if (metadata.RunAfter.Count == 0)
+        {
+            ready.Add(stepKey);
+            return;
+        }
+
+        var allSatisfied = true;
+        var hasFinalMismatch = false;
+        foreach (var dependency in metadata.RunAfter)
+        {
+            // Synthetic entry-trigger key — no real predecessor, status gate is vacuously satisfied.
+            if (string.IsNullOrEmpty(dependency.Key))
+            {
+                continue;
+            }
+
+            var runtimeDependencyKey = ResolveRuntimeDependencyKey(stepKey, dependency.Key);
+            if (!statuses.TryGetValue(runtimeDependencyKey, out var dependencyStatus))
+            {
+                allSatisfied = false;
+                continue;
+            }
+
+            if (dependency.Value.AcceptsStatus(dependencyStatus))
+            {
+                continue;
+            }
+
+            allSatisfied = false;
+            if (IsFinal(dependencyStatus))
+            {
+                hasFinalMismatch = true;
+            }
+        }
+
+        if (allSatisfied)
+        {
+            ready.Add(stepKey);
+        }
+        else if (hasFinalMismatch)
+        {
+            blocked.Add(stepKey);
+        }
+        else
+        {
+            waiting.Add(stepKey);
+        }
     }
 }

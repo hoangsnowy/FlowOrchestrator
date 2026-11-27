@@ -85,6 +85,7 @@ public sealed partial class FlowOrchestratorEngine
 
             var anyEntryScheduled = false;
             var anyEntrySkipped = false;
+            List<string>? skippedEntryKeys = null;
             try
             {
                 var triggerDataJson = SafeSerialize(triggerContext.Trigger.Data);
@@ -128,6 +129,7 @@ public sealed partial class FlowOrchestratorEngine
                     if (skipped)
                     {
                         anyEntrySkipped = true;
+                        (skippedEntryKeys ??= []).Add(entry.Key);
                         triggerContext.EntryStepsStarted = true;
                         continue;
                     }
@@ -151,15 +153,21 @@ public sealed partial class FlowOrchestratorEngine
                 throw;
             }
 
-            // If every entry step was skipped by a When clause, kick off a single graph
-            // continuation pass so dependents can cascade or the run can terminate cleanly.
-            if (!anyEntryScheduled && anyEntrySkipped)
+            // A When-skipped entry step is a status change no step completion will report: continue the graph
+            // from it, so its dependents are classified now (a dependent that runs after a skip is dispatched,
+            // one that needs Succeeded is cascade-skipped) and a run whose every entry was skipped terminates.
+            // Since the continuation reads only the changed steps' frontier (#189 P0-1), this is also needed
+            // when other entries were scheduled: no later continuation re-reads the whole graph before the run
+            // is about to close. The gate cannot close the run under the scheduled entries — their ledger rows
+            // have no status row yet, which reads as in-flight work.
+            if (skippedEntryKeys is not null)
             {
                 await RunGraphContinuationAsync(
                     triggerContext,
                     triggerContext.Flow,
                     CreateRunLevelStep(triggerContext.RunId),
-                    new StepResult { Key = "__entry_skipped", Status = StepStatus.Skipped }).ConfigureAwait(false);
+                    new StepResult { Key = "__entry_skipped", Status = StepStatus.Skipped },
+                    skippedEntryKeys).ConfigureAwait(false);
             }
 
             if (_observabilityOptions.EnableOpenTelemetry)

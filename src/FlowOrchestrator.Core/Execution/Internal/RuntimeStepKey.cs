@@ -62,6 +62,80 @@ internal static class RuntimeStepKey
     }
 
     /// <summary>
+    /// Returns the innermost scope enclosing <paramref name="runtimeStepKey"/> — the first scope
+    /// <see cref="EnumerateScopes"/> yields — without splitting the key.
+    /// </summary>
+    /// <param name="runtimeStepKey">A runtime step key, possibly carrying iteration indices.</param>
+    /// <param name="scope">The innermost scope, when there is one.</param>
+    /// <returns><see langword="false"/> for a top-level key.</returns>
+    /// <remarks>
+    /// Runs on every step completion (the continuation's loop advance), so a key of the shape the engine
+    /// writes — dot-separated segments, none empty or padded — is walked backwards as a span and only the
+    /// scope key itself is allocated. Any other key falls back to <see cref="EnumerateScopes"/>, whose
+    /// trimming and empty-segment rules it then follows exactly.
+    /// </remarks>
+    public static bool TryGetInnermostScope(string? runtimeStepKey, out RuntimeScope scope)
+    {
+        scope = default;
+        if (string.IsNullOrEmpty(runtimeStepKey))
+        {
+            return false;
+        }
+
+        var span = runtimeStepKey.AsSpan();
+        if (!IsRegular(span))
+        {
+            foreach (var candidate in EnumerateScopes(runtimeStepKey))
+            {
+                scope = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        // Walk segments from the last one back to the second: the first segment that parses as a
+        // non-negative index closes the innermost scope (the same order EnumerateScopes yields in).
+        var end = span.Length;
+        while (true)
+        {
+            var dot = span[..end].LastIndexOf('.');
+            if (dot < 0)
+            {
+                return false;
+            }
+
+            if (int.TryParse(span[(dot + 1)..end], out var index) && index >= 0)
+            {
+                scope = new RuntimeScope(runtimeStepKey[..dot], index);
+                return true;
+            }
+
+            end = dot;
+        }
+
+        static bool IsRegular(ReadOnlySpan<char> key)
+        {
+            while (true)
+            {
+                var dot = key.IndexOf('.');
+                var segment = dot < 0 ? key : key[..dot];
+                if (segment.IsEmpty || char.IsWhiteSpace(segment[0]) || char.IsWhiteSpace(segment[^1]))
+                {
+                    return false;
+                }
+
+                if (dot < 0)
+                {
+                    return true;
+                }
+
+                key = key[(dot + 1)..];
+            }
+        }
+    }
+
+    /// <summary>
     /// Yields the runtime keys of the scopes enclosing <paramref name="runtimeStepKey"/>,
     /// innermost first, discarding the iteration indices.
     /// </summary>

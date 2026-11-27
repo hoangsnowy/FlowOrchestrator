@@ -140,8 +140,19 @@ public sealed partial class FlowOrchestratorEngine
     /// the run. Used to gate run completion and to keep the periodic timeout sweep from latching a run
     /// that is not actually stuck.
     /// </summary>
+    /// <remarks>
+    /// Asks the indexed existence query first: a Running or Pending row answers <see langword="true"/> without
+    /// reading the run, which is the answer every step of a long cancelled ForEach gets while it drains — each
+    /// of them calls <see cref="TryCompleteRunAsync"/> (#189 P0-1). Only a run with no open row pays the full
+    /// status, claim and ledger reads, the same three the snapshot form below decides on.
+    /// </remarks>
     private async Task<bool> HasInFlightWorkAsync(Guid runId)
     {
+        if (await _runtimeStore.HasRunningOrPendingStepAsync(runId).ConfigureAwait(false))
+        {
+            return true;
+        }
+
         var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
         return await HasInFlightWorkAsync(runId, statuses).ConfigureAwait(false);
     }
