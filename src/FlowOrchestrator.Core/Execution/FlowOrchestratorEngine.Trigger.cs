@@ -54,33 +54,15 @@ public sealed partial class FlowOrchestratorEngine
             var registeredIdempotencyKey = false;
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
-                var existingRunId = await _runControlStore
-                    .FindRunIdByIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey)
-                    .ConfigureAwait(false);
-                if (existingRunId.HasValue)
+                var (registered, duplicateOf) = await ReserveIdempotencyKeyAsync(triggerContext, idempotencyKey).ConfigureAwait(false);
+                if (duplicateOf is { } existingRunId)
                 {
-                    triggerContext.RunId = existingRunId.Value;
+                    triggerContext.RunId = existingRunId;
                     activity?.SetTag("duplicate", true);
-                    return new FlowTriggerResult(existingRunId.Value, Duplicate: true);
+                    return new FlowTriggerResult(existingRunId, Duplicate: true);
                 }
 
-                var registered = await _runControlStore
-                    .TryRegisterIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey, triggerContext.RunId)
-                    .ConfigureAwait(false);
                 registeredIdempotencyKey = registered;
-                if (!registered)
-                {
-                    existingRunId = await _runControlStore
-                        .FindRunIdByIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey)
-                        .ConfigureAwait(false);
-
-                    if (existingRunId.HasValue)
-                    {
-                        triggerContext.RunId = existingRunId.Value;
-                        activity?.SetTag("duplicate", true);
-                        return new FlowTriggerResult(existingRunId.Value, Duplicate: true);
-                    }
-                }
             }
 
             var anyEntryScheduled = false;
@@ -190,6 +172,101 @@ public sealed partial class FlowOrchestratorEngine
         finally
         {
             _contextAccessor.CurrentContext = null;
+        }
+    }
+
+    /// <summary>
+    /// Reserves <paramref name="idempotencyKey"/> for the trigger's run, taking over a stale reservation whose
+    /// run never started work, and reports whether the trigger is a duplicate.
+    /// </summary>
+    /// <param name="triggerContext">The trigger; its run id is the one the key is reserved for.</param>
+    /// <param name="idempotencyKey">The caller-supplied key, as read from the trigger headers.</param>
+    /// <returns>
+    /// <c>Registered</c>: the key now maps to this trigger's run. <c>DuplicateOf</c>: the run this trigger is a
+    /// duplicate of, or <see langword="null"/> when it must start its run (with <c>Registered</c>
+    /// <see langword="false"/> only when the key vanished between a lost registration and the re-read, the
+    /// pre-existing behaviour of starting the run without a reservation).
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The key is registered before the run is created, so a trigger killed in between left it pointing at a
+    /// run that never started work, and every retry of the delivery was answered "duplicate" of that dead run
+    /// (RFC 2.0 S7). A trigger that finds the key taken therefore asks the store to take it over;
+    /// the store decides staleness (age on its own clock, no dispatch-ledger and no step row) atomically with
+    /// the re-point and returns the key's owner, so of N concurrent retries one wins and the rest are
+    /// answered as duplicates of the winner.
+    /// </para>
+    /// <para>
+    /// A trigger that loses the <i>registration</i> race does not try a takeover: the winner registered just
+    /// now, so its reservation cannot be stale. Store round trips: two on a fresh key (read, register) and two on
+    /// a taken one (read, takeover; one more than before). The built-in stores answer a duplicate of a fresh
+    /// reservation or of a run that started work with one unlocked read of primary-key point lookups.
+    /// </para>
+    /// </remarks>
+    private async Task<(bool Registered, Guid? DuplicateOf)> ReserveIdempotencyKeyAsync(ITriggerContext triggerContext, string idempotencyKey)
+    {
+        var flowId = triggerContext.Flow.Id;
+        var triggerKey = triggerContext.Trigger.Key;
+        var existingRunId = await _runControlStore
+            .FindRunIdByIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey)
+            .ConfigureAwait(false);
+
+        if (existingRunId is not { } staleCandidate)
+        {
+            if (await _runControlStore
+                    .TryRegisterIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey, triggerContext.RunId)
+                    .ConfigureAwait(false))
+            {
+                return (true, null);
+            }
+
+            var winner = await _runControlStore
+                .FindRunIdByIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey)
+                .ConfigureAwait(false);
+            return (false, winner);
+        }
+
+        var owner = await _runControlStore
+            .TryTakeOverStaleIdempotencyKeyAsync(
+                flowId,
+                triggerKey,
+                idempotencyKey,
+                staleCandidate,
+                triggerContext.RunId,
+                _runControlOptions.IdempotencyReservationTimeout)
+            .ConfigureAwait(false);
+
+        if (owner != triggerContext.RunId)
+        {
+            // A live owner, a concurrent retry that won the takeover, or (null) a key its own trigger's
+            // compensation released since the read above: a duplicate, exactly as before the takeover existed.
+            return (false, owner ?? staleCandidate);
+        }
+
+        EngineLog.IdempotencyReservationTakenOver(_logger, flowId, triggerKey, staleCandidate, triggerContext.RunId);
+        await CompleteAbandonedReservationRunAsync(staleCandidate).ConfigureAwait(false);
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Completes the run of a taken-over idempotency reservation as <c>Failed</c>, so startup recovery and the
+    /// dashboard do not keep a run that will never start counted as <c>Running</c>.
+    /// </summary>
+    /// <param name="staleRunId">The run the key pointed at before the takeover.</param>
+    /// <remarks>
+    /// Best-effort and logged: the store already set the stale run's cancel latch atomically with the takeover,
+    /// so even when this write fails no step of the stale run can execute. A no-op when the run row was never
+    /// written. No cancellation token: a caller that disconnects must not interrupt it.
+    /// </remarks>
+    private async Task CompleteAbandonedReservationRunAsync(Guid staleRunId)
+    {
+        try
+        {
+            await _runStore.CompleteRunIfActiveAsync(staleRunId, StepStatus.Failed.ToString()).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.StaleReservationRunCompletionFailed(_logger, ex, staleRunId);
         }
     }
 
