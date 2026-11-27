@@ -39,3 +39,6 @@
 
 - name: Bounded step_key metric tag (2026-11-24)
   href: metric-step-key-2026-11-24.md
+
+- name: "#189 P0-1 — frontier reads instead of the whole-run status map (2026-11-27)"
+  href: issue-189-p0-1-frontier-reads-2026-11-27.md

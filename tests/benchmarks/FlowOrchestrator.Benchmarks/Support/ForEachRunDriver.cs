@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
@@ -17,13 +18,18 @@ namespace FlowOrchestrator.Benchmarks.Support;
 /// <param name="StatusReads">Calls of any <c>GetStepStatusesAsync</c> overload.</param>
 /// <param name="StatusRows">Rows those calls returned in total.</param>
 /// <param name="KeySetRows">Rows the full-set claim and dispatch-ledger reads returned in total.</param>
+/// <param name="SettledCountMilliseconds">
+/// Time spent inside <c>CountSettledIterationsAsync</c> over the run — the in-memory store's linear scan,
+/// the one store call whose cost still grows with the loop (see docs/benchmarks).
+/// </param>
 public readonly record struct ForEachRunCounts(
     int Items,
     int StepExecutions,
     long StoreCalls,
     long StatusReads,
     long StatusRows,
-    long KeySetRows)
+    long KeySetRows,
+    double SettledCountMilliseconds)
 {
     /// <summary>Status rows read per step completion: flat in <see cref="Items"/> is the pass condition.</summary>
     public double StatusRowsPerCompletion => (double)StatusRows / StepExecutions;
@@ -109,8 +115,15 @@ public sealed class ForEachRunDriver
             throw new InvalidOperationException($"Run finished '{status}' after {executions} step executions.");
         }
 
+        var countTicks = _counter.TicksByMethod.GetValueOrDefault("CountSettledIterationsAsync");
         return new ForEachRunCounts(
-            _items, executions, _counter.Calls, _counter.StatusReads, _counter.StatusRows, _counter.KeySetRows);
+            _items,
+            executions,
+            _counter.Calls,
+            _counter.StatusReads,
+            _counter.StatusRows,
+            _counter.KeySetRows,
+            countTicks * 1000d / Stopwatch.Frequency);
     }
 
     private static FlowManifest BuildManifest(int items, int concurrencyLimit) => new()

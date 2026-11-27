@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using FlowOrchestrator.Core.Abstractions;
@@ -19,6 +21,7 @@ public sealed class StoreReadCounter
     private long _statusRows;
     private long _keySetRows;
     private long _statusReads;
+    private readonly ConcurrentDictionary<string, long> _ticks = new(StringComparer.Ordinal);
 
     /// <summary>Store calls of every kind, reads and writes.</summary>
     public long Calls => Interlocked.Read(ref _calls);
@@ -31,6 +34,15 @@ public sealed class StoreReadCounter
 
     /// <summary>Rows returned by the full-set claim and dispatch-ledger reads.</summary>
     public long KeySetRows => Interlocked.Read(ref _keySetRows);
+
+    /// <summary>Stopwatch ticks spent inside the store, per interface member name.</summary>
+    public IReadOnlyDictionary<string, long> TicksByMethod => _ticks;
+
+    /// <summary>Adds the time one call of <paramref name="method"/> spent inside the store.</summary>
+    internal void RecordTime(MethodInfo method, long ticks)
+    {
+        _ticks.AddOrUpdate(method.Name, ticks, (_, total) => total + ticks);
+    }
 
     /// <summary>Records one store call and, when its result is a completed collection, the rows it returned.</summary>
     /// <param name="method">The interface member that was invoked.</param>
@@ -88,6 +100,7 @@ public class CountingStoreProxy<T> : DispatchProxy
     {
         ArgumentNullException.ThrowIfNull(targetMethod);
         object? result;
+        var started = Stopwatch.GetTimestamp();
         try
         {
             result = targetMethod.Invoke(_target, args);
@@ -98,6 +111,7 @@ public class CountingStoreProxy<T> : DispatchProxy
             throw;
         }
 
+        _counter.RecordTime(targetMethod, Stopwatch.GetTimestamp() - started);
         _counter.Record(targetMethod, result);
         return result;
     }

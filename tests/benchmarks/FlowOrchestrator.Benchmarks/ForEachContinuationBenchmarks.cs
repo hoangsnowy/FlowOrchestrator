@@ -52,8 +52,8 @@ public static class StoreReadReport
     /// <returns>A task that completes when every run has finished.</returns>
     public static async Task WriteAsync(TextWriter output)
     {
-        await output.WriteLineAsync("| Items | Limit | Step executions | Store calls / completion | Status reads | Status rows / completion | Claim + ledger rows / completion |").ConfigureAwait(false);
-        await output.WriteLineAsync("|---:|---:|---:|---:|---:|---:|---:|").ConfigureAwait(false);
+        await output.WriteLineAsync("| Items | Limit | Step executions | Store calls / completion | Status reads | Status rows / completion | Claim + ledger rows / completion | Settled-count ms / run |").ConfigureAwait(false);
+        await output.WriteLineAsync("|---:|---:|---:|---:|---:|---:|---:|---:|").ConfigureAwait(false);
         foreach (var limit in new[] { 1, 16 })
         {
             foreach (var items in new[] { 100, 250, 500, 1000 })
@@ -61,7 +61,7 @@ public static class StoreReadReport
                 var counts = await new ForEachRunDriver(items, limit).RunAsync().ConfigureAwait(false);
                 await output.WriteLineAsync(
                     $"| {items} | {limit} | {counts.StepExecutions} | {counts.CallsPerCompletion:F1} | {counts.StatusReads} | " +
-                    $"{counts.StatusRowsPerCompletion:F1} | {counts.KeySetRowsPerCompletion:F1} |").ConfigureAwait(false);
+                    $"{counts.StatusRowsPerCompletion:F1} | {counts.KeySetRowsPerCompletion:F1} | {counts.SettledCountMilliseconds:F1} |").ConfigureAwait(false);
             }
         }
     }

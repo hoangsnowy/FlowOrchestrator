@@ -10,6 +10,55 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Changed — the continuation reads the frontier, not the whole run (#189 P0-1)
+
+The engine runs its continuation on every step completion, and that continuation used to read every status
+row of the run one to three times — a `ForEach` of n iterations read O(n²) rows (the stress harness: 4 013
+status rows per iteration at 1 000 items on SQL Server). Now (RFC 2.0 §3.5,
+`docs/benchmarks/issue-189-p0-1-frontier-reads-2026-11-27.md`):
+
+- **Frontier read.** When a step reaches a status, the engine reads by key only its dependents in its scope
+  instance and their dependencies (`FlowTopology`, the reverse `RunAfter` graph built once per flow), and
+  classifies only those (`IFlowGraphPlanner.EvaluateFrontier`). Blocked and `When` skips and loop settles
+  are walked wave by wave the same way. Status rows read per step completion: **2 003.5 → 4.0** at 1 000
+  iterations, flat in n; whole in-memory run **850 ms / 647 MB → 62 ms / 18 MB**.
+- **Write-skew rule.** Every frontier read is its own statement issued after the completing step's write
+  committed, so of two steps that unlock one join concurrently the last committer always sees both; the
+  dispatch ledger absorbs the case where both dispatch it. Pinned on SQL Server, PostgreSQL and InMemory by
+  a concurrent-join test that must dispatch the join exactly once, never zero.
+- **Completion gate.** A continuation that dispatched nothing first asks the new
+  `HasRunningOrPendingStepAsync` (an index on the open rows only); a parked `ForEach` or any running step
+  ends the check there. Only when nothing is open does it read the whole run, claims and ledger — the same
+  single-snapshot check as before, which is also what dispatches a step another worker made ready but has
+  not dispatched yet, so a run still cannot close under unfinished work.
+- **ForEach barrier and admission.** Only the innermost loop of a changed step is advanced, and only when
+  that step's iteration just settled. Admission reads the loop's settled-iteration count from the store
+  (`CountSettledIterationsAsync`, one row) and dispatches the window `[settled, settled + ConcurrencyLimit)`
+  — exactly what the full-map scan admitted, still exact under concurrent workers. The count is a range read
+  of the loop's rows on the server once per iteration settle; the per-loop counters of RFC §4.7 that would
+  make it O(1) are not part of this change (see the benchmark document).
+
+#### Read before upgrading
+
+- **Custom `IFlowRunRuntimeStore` implementations must add three members**, with no default implementation
+  on purpose (a silent fallback to the whole-run read would keep the engine O(n²)):
+  `GetStepStatusesAsync(runId, keys)`, `HasRunningOrPendingStepAsync(runId)` and
+  `CountSettledIterationsAsync(runId, loopKey, iterations, bodyKeys)`. Each must see every write committed
+  before it started — its own statement against the primary, never a replica or an older transaction. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
+- **New index on the step table**, created by the migrators on start: `IX_FlowSteps_RunId_Open` on SQL Server
+  (filtered on `Status IN ('Running', 'Pending')`) and `ix_flow_steps_run_id_open` on PostgreSQL (partial,
+  through the `EnsureIndex` guard). It holds only the open rows. On a large existing `FlowSteps` table the
+  first start builds it; pre-create it in a maintenance window if that matters (DDL in the migration guide).
+- **Custom `IFlowGraphPlanner` implementations** get `EvaluateFrontier` as a default interface member (a
+  filtered `Evaluate`, same answer); override it to keep the per-completion cost independent of the run.
+- **Behaviour:** a step whose `RunAfter` accepts any status of a predecessor (an empty status list) is now
+  dispatched by that predecessor's own continuation — when it completes — rather than opportunistically by
+  an unrelated step's completion while the predecessor is still `Running` or `Pending`. And a continuation
+  that died between a step's completion write and its dispatches is now repaired by the completion gate's
+  full read when the run has nothing else open, or by startup recovery — no longer by whichever unrelated
+  step happens to complete next (see the migration guide).
+
 ### Added — `flow-orchestrator storage copy`: move a database between SQL Server and PostgreSQL
 
 - **New .NET tool `FlowOrchestrator.Cli`** (command `flow-orchestrator`) and **library
