@@ -842,6 +842,7 @@ public sealed class InMemoryFlowRunStore :
     public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
     {
         var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
+        // foreach on purpose (CLAUDE.md hot-path rule): per step completion, no closure; CodeQL cs/linq/missed-where dismissed.
         foreach (var stepKey in stepKeys)
         {
             if (_steps.TryGetValue((runId, stepKey), out var record))
@@ -865,6 +866,8 @@ public sealed class InMemoryFlowRunStore :
             return FalseTask;
         }
 
+        // foreach on purpose (CLAUDE.md hot-path rule): per step completion, and the scan prunes closed keys as it
+        // goes; a Select would allocate a closure and hide the pruning. CodeQL cs/linq/missed-select dismissed.
         foreach (var pair in open)
         {
             var stepKey = pair.Key;
@@ -903,7 +906,8 @@ public sealed class InMemoryFlowRunStore :
         {
             Array.Clear(tally, 0, iterations);
 
-            // The ConcurrentDictionary enumerator walks the live buckets; .Keys would copy every key first.
+            // The ConcurrentDictionary enumerator walks the live buckets; .Keys would copy every key first, and a
+            // Select would add a closure on a per-iteration path. CodeQL cs/linq/missed-select dismissed.
             foreach (var pair in stepKeys)
             {
                 var stepKey = pair.Key;

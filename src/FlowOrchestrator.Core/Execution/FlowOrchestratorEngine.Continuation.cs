@@ -269,6 +269,8 @@ public sealed partial class FlowOrchestratorEngine
             var topology = FlowTopology.For(flow);
             var dependents = new HashSet<string>(StringComparer.Ordinal);
             var enumerable = true;
+            // foreach on purpose (CLAUDE.md hot-path rule): per step completion, TryAddDependents mutates the set;
+            // an All() would hide that side effect and allocate a closure. CodeQL cs/linq/missed-all dismissed.
             foreach (var changedKey in changed)
             {
                 if (!topology.TryAddDependents(flow.Manifest.Steps, changedKey, dependents))
@@ -404,6 +406,7 @@ public sealed partial class FlowOrchestratorEngine
         // Loop key → the iterations of it that a changed key belongs to; null means "consider the loop as a
         // whole" (the completed step is the loop itself).
         Dictionary<string, HashSet<int>?>? loops = null;
+        // foreach on purpose (CLAUDE.md hot-path rule): per step completion, no closure; CodeQL cs/linq/missed-where dismissed.
         foreach (var changedKey in changed)
         {
             if (RuntimeStepKey.TryGetInnermostScope(changedKey, out var scope))
@@ -506,6 +509,7 @@ public sealed partial class FlowOrchestratorEngine
         var keys = new List<string> { loopKey };
         if (touchedIterations is not null)
         {
+            // foreach on purpose (CLAUDE.md hot-path rule): per step completion, no closure; CodeQL cs/linq/missed-where dismissed.
             foreach (var index in touchedIterations)
             {
                 if (index < iterations && index != last)

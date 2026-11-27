@@ -228,9 +228,16 @@ public abstract class FrontierStoreContract
                 {
                     inFlight[index] = 0;
                     var count = inFlight.Count;
-                    int seen;
-                    while ((seen = Volatile.Read(ref peak)) < count && Interlocked.CompareExchange(ref peak, count, seen) != seen)
+                    var seen = Volatile.Read(ref peak);
+                    while (seen < count)
                     {
+                        var prior = Interlocked.CompareExchange(ref peak, count, seen);
+                        if (prior == seen)
+                        {
+                            break;
+                        }
+
+                        seen = prior;
                     }
                 }
 

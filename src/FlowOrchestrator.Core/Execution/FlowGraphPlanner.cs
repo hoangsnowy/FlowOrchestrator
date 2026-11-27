@@ -168,6 +168,7 @@ public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
             return;
         }
 
+        // foreach on purpose (CLAUDE.md hot-path rule): per step completion, no closure; CodeQL cs/linq/missed-where dismissed.
         foreach (var dependency in metadata.RunAfter.Keys)
         {
             if (!string.IsNullOrEmpty(dependency))

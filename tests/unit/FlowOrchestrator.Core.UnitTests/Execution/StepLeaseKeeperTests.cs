@@ -57,17 +57,22 @@ public sealed class StepLeaseKeeperTests
             .Returns(call => Task.FromResult<IReadOnlyList<StepLease>>(call.Arg<IReadOnlyList<StepLease>>().ToList()));
         var keeper = new StepLeaseKeeper(new FlowRunControlOptions());
         var lease = new StepLease(Guid.NewGuid(), "work", 3);
-        var handle = keeper.Track(lease);
 
         // Act
-        var whileTracked = await keeper.RenewAsync(store);
-        handle.Dispose();
+        int whileTracked;
+        bool lostWhileTracked;
+        using (var handle = keeper.Track(lease))
+        {
+            whileTracked = await keeper.RenewAsync(store);
+            lostWhileTracked = handle.IsLost;
+        }
+
         var afterDispose = await keeper.RenewAsync(store);
 
         // Assert
         Assert.Equal(1, whileTracked);
         Assert.Equal(0, afterDispose);
-        Assert.False(handle.IsLost);
+        Assert.False(lostWhileTracked);
         await store.Received(1).RenewStepLeasesAsync(
             Arg.Is<IReadOnlyList<StepLease>>(l => l.Count == 1 && l[0] == lease), FlowRunControlOptions.DefaultStepLeaseDuration);
     }

@@ -59,14 +59,10 @@ internal static class EngineTestStores
             .Returns(call =>
             {
                 var all = statuses() ?? new Dictionary<string, StepStatus>();
-                var keyed = new Dictionary<string, StepStatus>(StringComparer.Ordinal);
-                foreach (var key in call.Arg<IReadOnlyCollection<string>>())
-                {
-                    if (all.TryGetValue(key, out var status))
-                    {
-                        keyed[key] = status;
-                    }
-                }
+                var keyed = call.Arg<IReadOnlyCollection<string>>()
+                    .Where(all.ContainsKey)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToDictionary(key => key, key => all[key], StringComparer.Ordinal);
 
                 return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(keyed);
             });
