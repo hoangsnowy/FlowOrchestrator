@@ -147,6 +147,8 @@ public abstract class FrontierStoreContract
         await RowAsync("myXloop.1.b", "Succeeded");
         await RowAsync("my_loop2.3.a", "Succeeded");  // a sibling loop with a longer key
         await RowAsync("my_loop2.3.b", "Succeeded");
+        await RowAsync("my_loop..a", "Succeeded");    // an empty iteration segment is not iteration 0
+        await RowAsync("my_loop.+3.b", "Succeeded");  // nor is a signed one iteration 3
 
         // Act
         var settled = await stores.Runtime.CountSettledIterationsAsync(runId, "my_loop", 4, ["a", "b"]);

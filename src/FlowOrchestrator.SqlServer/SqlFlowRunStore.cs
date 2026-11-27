@@ -841,22 +841,23 @@ public sealed class SqlFlowRunStore :
         return await conn.ExecuteScalarAsync<int>(
             """
             SELECT COUNT(*) FROM (
-                SELECT p.Iteration
-                FROM FlowSteps AS s
-                CROSS APPLY (SELECT SUBSTRING(s.StepKey, @PrefixLength + 1, 256) AS Rest) AS r
-                CROSS APPLY (SELECT CHARINDEX(N'.', r.Rest) AS Dot) AS d
-                CROSS APPLY (SELECT
-                    LEFT(r.Rest, CASE WHEN d.Dot > 0 THEN d.Dot - 1 ELSE 0 END) AS Iteration,
-                    CASE WHEN d.Dot > 0 THEN SUBSTRING(r.Rest, d.Dot + 1, 256) ELSE N'' END AS Child) AS p
-                WHERE s.RunId = @RunId
-                  AND s.StepKey LIKE @Pattern ESCAPE N'\'
-                  AND s.[Status] NOT IN (N'Running', N'Pending')
-                  AND d.Dot BETWEEN 2 AND 10
-                  AND p.Iteration NOT LIKE N'%[^0-9]%'
-                  AND (p.Iteration = N'0' OR p.Iteration NOT LIKE N'0%')
-                  AND TRY_CAST(p.Iteration AS INT) < @Iterations
-                  AND p.Child IN @Body
-                GROUP BY p.Iteration
+                SELECT x.Iteration FROM (
+                    SELECT TRY_CAST(g.Segment AS INT) AS Iteration,
+                           g.Segment,
+                           SUBSTRING(s.StepKey, d.Dot + 1, 256) COLLATE Latin1_General_100_BIN2 AS Child
+                    FROM FlowSteps AS s
+                    CROSS APPLY (SELECT CHARINDEX(N'.', s.StepKey, @PrefixLength + 1) AS Dot) AS d
+                    CROSS APPLY (SELECT SUBSTRING(s.StepKey, @PrefixLength + 1,
+                        CASE WHEN d.Dot > @PrefixLength + 1 THEN d.Dot - @PrefixLength - 1 ELSE 0 END) AS Segment) AS g
+                    WHERE s.RunId = @RunId
+                      AND s.StepKey LIKE @Pattern ESCAPE N'\'
+                      AND s.[Status] NOT IN (N'Running', N'Pending')) AS x
+                WHERE x.Iteration < @Iterations
+                  AND x.Child IN @Body
+                  AND LEN(x.Segment) BETWEEN 1 AND 9
+                  AND (LEFT(x.Segment, 1) <> N'0' OR LEN(x.Segment) = 1)
+                  AND x.Segment NOT LIKE N'%[^0-9]%'
+                GROUP BY x.Iteration
                 HAVING COUNT(*) = @BodyCount) AS settled
             """,
             new
