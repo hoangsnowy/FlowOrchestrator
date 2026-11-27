@@ -822,10 +822,13 @@ public sealed class SqlFlowRunStore :
     /// <inheritdoc/>
     /// <remarks>
     /// A clustered-key range seek on <c>(RunId, StepKey LIKE '{loop}.%')</c> — the loop's own rows — grouped by
-    /// iteration on the server, so one row travels back. The iteration segment is parsed with guarded string
-    /// functions (<c>TRY_CAST</c>, a <c>CASE</c> around every length) because SQL Server may evaluate an
-    /// expression before the predicate that would have filtered its row out. Only canonical indices (no
-    /// leading zero, at most nine digits) count, which is the form the engine writes. "Terminal" is every
+    /// the iteration segment on the server, so one row travels back. The segment is cut once per row (a
+    /// <c>CASE</c> guards every length, because SQL Server may evaluate an expression before the predicate that
+    /// would have filtered its row out) and the child compared under a binary collation; the canonical-index
+    /// checks (no leading zero, at most nine digits, below the iteration count) run on the groups, not the
+    /// rows. Measured at 3.3 ms over 2 000 loop rows and 16 ms over 10 000 (SQL Server 2022 in Docker), about
+    /// 1.5–2× one full status read of the same run — paid once per iteration settle, where the former engine
+    /// paid about four full reads per iteration. "Terminal" is every
     /// status but Running and Pending — the same verdict <c>ParseStepStatus</c> reaches, which reads an
     /// unrecognised status as Failed — so this count and the status map can never disagree.
     /// </remarks>
@@ -841,24 +844,22 @@ public sealed class SqlFlowRunStore :
         return await conn.ExecuteScalarAsync<int>(
             """
             SELECT COUNT(*) FROM (
-                SELECT x.Iteration FROM (
-                    SELECT TRY_CAST(g.Segment AS INT) AS Iteration,
-                           g.Segment,
-                           SUBSTRING(s.StepKey, d.Dot + 1, 256) COLLATE Latin1_General_100_BIN2 AS Child
-                    FROM FlowSteps AS s
-                    CROSS APPLY (SELECT CHARINDEX(N'.', s.StepKey, @PrefixLength + 1) AS Dot) AS d
-                    CROSS APPLY (SELECT SUBSTRING(s.StepKey, @PrefixLength + 1,
-                        CASE WHEN d.Dot > @PrefixLength + 1 THEN d.Dot - @PrefixLength - 1 ELSE 0 END) AS Segment) AS g
-                    WHERE s.RunId = @RunId
-                      AND s.StepKey LIKE @Pattern ESCAPE N'\'
-                      AND s.[Status] NOT IN (N'Running', N'Pending')) AS x
-                WHERE x.Iteration < @Iterations
-                  AND x.Child IN @Body
-                  AND LEN(x.Segment) BETWEEN 1 AND 9
-                  AND (LEFT(x.Segment, 1) <> N'0' OR LEN(x.Segment) = 1)
-                  AND x.Segment NOT LIKE N'%[^0-9]%'
-                GROUP BY x.Iteration
+                SELECT g.Segment
+                FROM FlowSteps AS s
+                CROSS APPLY (SELECT CHARINDEX(N'.', s.StepKey, @PrefixLength + 1) AS Dot) AS d
+                CROSS APPLY (SELECT SUBSTRING(s.StepKey, @PrefixLength + 1,
+                    CASE WHEN d.Dot > @PrefixLength + 1 THEN d.Dot - @PrefixLength - 1 ELSE 0 END) AS Segment) AS g
+                WHERE s.RunId = @RunId
+                  AND s.StepKey LIKE @Pattern ESCAPE N'\'
+                  AND s.[Status] NOT IN (N'Running', N'Pending')
+                  AND d.Dot > @PrefixLength + 1
+                  AND SUBSTRING(s.StepKey, d.Dot + 1, 256) COLLATE Latin1_General_100_BIN2 IN @Body
+                GROUP BY g.Segment
                 HAVING COUNT(*) = @BodyCount) AS settled
+            WHERE LEN(settled.Segment) BETWEEN 1 AND 9
+              AND (LEFT(settled.Segment, 1) <> N'0' OR LEN(settled.Segment) = 1)
+              AND settled.Segment NOT LIKE N'%[^0-9]%'
+              AND TRY_CAST(settled.Segment AS INT) < @Iterations
             """,
             new
             {

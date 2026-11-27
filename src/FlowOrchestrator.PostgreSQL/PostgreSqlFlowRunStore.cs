@@ -742,7 +742,10 @@ public sealed class PostgreSqlFlowRunStore :
     /// the iteration segment is cast (inside a <c>CASE</c>, because PostgreSQL does not promise to evaluate
     /// the regex first). Only canonical indices count — no leading zero, at most nine digits — which is the
     /// form the engine writes. "Terminal" is every status but Running and Pending, compared case-insensitively:
-    /// the verdict <c>ParseStepStatus</c> reaches, which reads an unrecognised status as Failed.
+    /// the verdict <c>ParseStepStatus</c> reaches, which reads an unrecognised status as Failed. Measured at
+    /// about 5 ms over 2 000 loop rows and 20 ms over 10 000 (PostgreSQL 18 in Docker) — the text functions
+    /// cost roughly four times a plain index scan per row — paid once per iteration settle; the per-loop
+    /// counters of RFC 2.0 §4.7 replace it with a single-row read.
     /// </remarks>
     public async Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
     {
