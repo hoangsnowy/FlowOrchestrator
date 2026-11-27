@@ -10,6 +10,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Changed — `FlowOrchestrator.SqlServer` depends on Microsoft.Data.SqlClient 8.0
+
+- **Microsoft.Data.SqlClient 7.1.2 → 8.0.0.** 8.0 ships a `net10.0` build, so the transitive
+  `System.Security.Cryptography.Pkcs` pin that lifted 7.1.2's `net9.0` dependency group out of the
+  vulnerable 9.0.x line is gone (it now resolves the patched 10.0.x line; `dotnet list package --vulnerable`
+  is clean).
+- **Read before upgrading — SqlClient 8.0 changes two connection defaults** for every SQL Server connection
+  your host makes, FlowOrchestrator's included:
+  - an omitted `MultiSubnetFailover` now means `true` for eligible TCP connections;
+  - waiting for a pooled connection now spends the same `Connect Timeout` budget as the login, so
+    `Open` can time out sooner under pool exhaustion. `Switch.Microsoft.Data.SqlClient.UseOverallConnectTimeoutForPoolWait = false`
+    restores the separate budgets.
+
+  Set either explicitly in the connection string or through the AppContext switch to keep 7.x behaviour. See the
+  [SqlClient 8.0 release notes](https://github.com/dotnet/SqlClient/releases/tag/v8.0.0).
+
 ### Changed — migrator background index build is awaitable
 
 - `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
