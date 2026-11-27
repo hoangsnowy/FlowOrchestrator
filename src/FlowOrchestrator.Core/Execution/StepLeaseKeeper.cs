@@ -96,12 +96,12 @@ public sealed class StepLeaseKeeper
         var renewed = await store.RenewStepLeasesAsync(snapshot, duration).ConfigureAwait(false);
         var kept = new HashSet<StepLease>(renewed);
         // Renewal cadence, not a step-completion path: the Where reads clearer here.
-        foreach (var lease in snapshot.Where(l => !kept.Contains(l)))
+        foreach (var handle in snapshot
+            .Where(l => !kept.Contains(l))
+            .Select(l => _held.GetValueOrDefault(l))
+            .OfType<Handle>())
         {
-            if (_held.TryGetValue(lease, out var handle))
-            {
-                handle.MarkLost();
-            }
+            handle.MarkLost();
         }
 
         return kept.Count;
