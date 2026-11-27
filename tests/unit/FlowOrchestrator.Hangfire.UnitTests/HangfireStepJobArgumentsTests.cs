@@ -38,19 +38,16 @@ public sealed class HangfireStepJobArgumentsTests
     }
 
     [Fact]
-    public void PrepareForEnqueue_JsonElementInputs_CopiesTheStepWithClrValuesAndLeavesTheOriginalAlone()
+    public void PrepareForEnqueue_JsonElementInputs_CarriesThemAsOneJsonStringAndLeavesTheOriginalAlone()
     {
         // Arrange
         var original = new Dictionary<string, object?>
         {
             ["shipmentId"] = Json("\"S1\""),
             ["count"] = Json("3"),
-            ["ratio"] = Json("1.5"),
-            ["enabled"] = Json("true"),
-            ["none"] = Json("null"),
             ["address"] = Json("""{"city":"Hanoi","lines":["a",2]}"""),
             ["plain"] = "kept",
-            ["mixed"] = new object?[] { Json("\"x\""), "y" },
+            ["attempt"] = 2,
         };
         var step = new StepInstance("track", "CarrierStatus")
         {
@@ -63,7 +60,7 @@ public sealed class HangfireStepJobArgumentsTests
         // Act
         var prepared = HangfireStepJobArguments.PrepareForEnqueue(step);
 
-        // Assert
+        // Assert — the job argument holds only strings and primitives.
         Assert.NotSame(step, prepared);
         Assert.Same(original, step.Inputs);
         Assert.IsType<JsonElement>(step.Inputs["shipmentId"]);
@@ -72,20 +69,43 @@ public sealed class HangfireStepJobArgumentsTests
         Assert.Equal("CarrierStatus", prepared.Type);
         Assert.Equal(2, prepared.Index);
         Assert.Equal(DateTimeOffset.UnixEpoch, prepared.ScheduledTime);
-        Assert.Equal("S1", prepared.Inputs["shipmentId"]);
-        Assert.Equal(3L, prepared.Inputs["count"]);
-        Assert.Equal(1.5, prepared.Inputs["ratio"]);
-        Assert.Equal(true, prepared.Inputs["enabled"]);
-        Assert.Null(prepared.Inputs["none"]);
-        var address = Assert.IsType<Dictionary<string, object?>>(prepared.Inputs["address"]);
-        Assert.Equal("Hanoi", address["city"]);
-        Assert.Equal(["a", 2L], Assert.IsType<List<object?>>(address["lines"]));
+        Assert.Equal(["plain", "attempt", HangfireStepJobArguments.EncodedInputsKey], prepared.Inputs.Keys);
         Assert.Equal("kept", prepared.Inputs["plain"]);
-        Assert.Equal(["x", "y"], Assert.IsType<object?[]>(prepared.Inputs["mixed"]));
+        Assert.Equal(2, prepared.Inputs["attempt"]);
+        var encoded = Assert.IsType<string>(prepared.Inputs[HangfireStepJobArguments.EncodedInputsKey]);
+        Assert.Equal("""{"shipmentId":"S1","count":3,"address":{"city":"Hanoi","lines":["a",2]}}""", encoded);
     }
 
     [Fact]
-    public async Task ScheduleStepAsync_PendingStepWithJsonElementInputs_HandsHangfireClrInputs()
+    public void RestoreOnWorker_EncodedInputs_GetBackTheExactJsonElementValues()
+    {
+        // Arrange — a date-like string, a big decimal and a nested object, all of which must come back verbatim.
+        var step = new StepInstance("track", "CarrierStatus")
+        {
+            Inputs = new Dictionary<string, object?>
+            {
+                ["__pollStartedAtUtc"] = Json("\"2026-11-27T10:00:00.1234567+00:00\""),
+                ["amount"] = Json("12345678901234567890.123"),
+                ["address"] = Json("""{"city":"Hanoi"}"""),
+                ["__pollAttempt"] = 1,
+            },
+        };
+        var job = HangfireStepJobArguments.PrepareForEnqueue(step);
+
+        // Act
+        var restored = HangfireStepJobArguments.RestoreOnWorker(new FlowOrchestrator.Core.Execution.ExecutionContext(), job, Flow());
+
+        // Assert
+        Assert.Equal(3, restored);
+        Assert.False(job.Inputs.ContainsKey(HangfireStepJobArguments.EncodedInputsKey));
+        Assert.Equal("2026-11-27T10:00:00.1234567+00:00", Assert.IsType<JsonElement>(job.Inputs["__pollStartedAtUtc"]).GetString());
+        Assert.Equal("12345678901234567890.123", Assert.IsType<JsonElement>(job.Inputs["amount"]).GetRawText());
+        Assert.Equal("""{"city":"Hanoi"}""", Assert.IsType<JsonElement>(job.Inputs["address"]).GetRawText());
+        Assert.Equal(1, job.Inputs["__pollAttempt"]);
+    }
+
+    [Fact]
+    public async Task ScheduleStepAsync_PendingStepWithJsonElementInputs_HandsHangfireThemAsAJsonString()
     {
         // Arrange
         var client = Substitute.For<IBackgroundJobClient>();
@@ -102,7 +122,8 @@ public sealed class HangfireStepJobArgumentsTests
         // Assert
         Assert.NotNull(captured);
         var jobStep = Assert.IsAssignableFrom<IStepInstance>(captured.Args[2]);
-        Assert.Equal("S1", jobStep.Inputs["shipmentId"]);
+        Assert.False(jobStep.Inputs.ContainsKey("shipmentId"));
+        Assert.Equal("""{"shipmentId":"S1"}""", jobStep.Inputs[HangfireStepJobArguments.EncodedInputsKey]);
         Assert.IsType<JsonElement>(step.Inputs["shipmentId"]);
     }
 
@@ -155,33 +176,6 @@ public sealed class HangfireStepJobArgumentsTests
         Assert.Equal(0, repaired);
         Assert.Same(inputs, step.Inputs);
         Assert.Equal(triggerData, step.TriggerData);
-    }
-
-    [Theory]
-    [InlineData(DateTimeKind.Utc)]
-    [InlineData(DateTimeKind.Local)]
-    [InlineData(DateTimeKind.Unspecified)]
-    public void RestoreOnWorker_PollStartTimeReadBackAsDateTime_IsTurnedBackIntoTheRoundTripUtcString(DateTimeKind kind)
-    {
-        // Arrange — Newtonsoft reads the ISO-8601 string PollableStepHandler wrote into a DateTime.
-        var startedAt = new DateTimeOffset(2026, 11, 27, 10, 0, 0, TimeSpan.Zero).AddTicks(1234567);
-        var value = kind switch
-        {
-            DateTimeKind.Utc => startedAt.UtcDateTime,
-            DateTimeKind.Local => startedAt.LocalDateTime,
-            _ => DateTime.SpecifyKind(startedAt.UtcDateTime, DateTimeKind.Unspecified),
-        };
-        var step = new StepInstance("track", "CarrierStatus")
-        {
-            Inputs = new Dictionary<string, object?> { ["__pollStartedAtUtc"] = value, ["__pollAttempt"] = 1L },
-        };
-
-        // Act
-        HangfireStepJobArguments.RestoreOnWorker(new FlowOrchestrator.Core.Execution.ExecutionContext(), step, Flow());
-
-        // Assert
-        Assert.Equal("2026-11-27T10:00:00.1234567+00:00", step.Inputs["__pollStartedAtUtc"]);
-        Assert.Equal(1L, step.Inputs["__pollAttempt"]);
     }
 
     [Fact]
