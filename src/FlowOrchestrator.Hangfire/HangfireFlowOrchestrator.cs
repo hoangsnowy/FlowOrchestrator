@@ -73,6 +73,9 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
         var flow = flows.FindById(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} is not registered. Cannot dispatch step '{step.Key}'.");
+        // Decode the JsonElement inputs PrepareForEnqueue carried as a JSON string, and repair a job enqueued by
+        // 1.34.7 or earlier, whose Pending re-check carries default(JsonElement) inputs, from the manifest.
+        HangfireStepJobArguments.RestoreOnWorker(ctx, step, flow);
         return await _engine.RunStepAsync(ctx, flow, step).ConfigureAwait(false);
     }
 

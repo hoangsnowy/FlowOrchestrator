@@ -42,12 +42,14 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         // full IFlowDefinition via IFlowRepository — this avoids serialising the manifest
         // (and types like RunAfterCondition) through Hangfire's Newtonsoft.Json serializer.
         var flowId = flow.Id;
+        // Resolved inputs are JsonElement values, which Hangfire's argument store destroys; carry them as a JSON string.
+        var jobStep = HangfireStepJobArguments.PrepareForEnqueue(step);
         var start = Stopwatch.GetTimestamp();
         var ok = false;
         try
         {
             var id = _client.Enqueue<IHangfireStepRunner>(
-                r => r.RunStepAsync(context, flowId, step, null));
+                r => r.RunStepAsync(context, flowId, jobStep, null));
             ok = true;
             return new(id);
         }
@@ -66,12 +68,14 @@ internal sealed class HangfireStepDispatcher : IStepDispatcher
         CancellationToken ct)
     {
         var flowId = flow.Id;
+        // The Pending re-check path: the step carries the inputs its attempt resolved (JsonElement values).
+        var jobStep = HangfireStepJobArguments.PrepareForEnqueue(step);
         var start = Stopwatch.GetTimestamp();
         var ok = false;
         try
         {
             var id = _client.Schedule<IHangfireStepRunner>(
-                r => r.RunStepAsync(context, flowId, step, null),
+                r => r.RunStepAsync(context, flowId, jobStep, null),
                 delay);
             ok = true;
             return new(id);
