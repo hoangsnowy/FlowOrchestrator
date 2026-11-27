@@ -203,6 +203,19 @@ LogEvents.DispatchEnqueued           = 3000
 LogEvents.PendingRescheduleLedgerTaken       = 3007   // Pending reschedule found its ledger row taken; dispatched anyway (v1.33+)
 LogEvents.ResumedSignalDeliveredWhileClaimed = 3008   // signal found by the post-release re-check; resume enqueued (v1.33+)
 LogEvents.SignalRecheckFailed                = 3009   // post-release waiter re-check failed; step falls back to its safety net (v1.33+)
+LogEvents.StepLeaseTakenOver                 = 3030   // a delivery took over a step whose worker stopped renewing its lease (2.0) — warning
+LogEvents.StepLeaseLost                      = 3031   // an attempt found its lease taken over; its outcome was discarded (2.0) — warning
+LogEvents.StepLeasePinFailed                 = 3032   // a loop step parked on its barrier could not make its lease permanent (2.0) — warning
+// 1013 = IdempotencyReservationTakenOver — a retry took over the key of a trigger that died before its run started (2.0).
+// 1014 = StaleReservationRunCompletionFailed — the abandoned run of that key could not be completed Failed (2.0).
+// 5050–5054 = step-lease sweep and renewal (FlowStepLeaseHostedService, 2.0): 5050 an expired lease's step was
+//        redelivered (warning — a worker died holding it), 5051 that redelivery failed, 5052 the step is unknown to
+//        this host, 5053 a renewal failed (leases expire if renewals keep failing), 5054 the sweep pass failed.
+// 3160 = Hangfire.PostgreSql DistributedLockTimeout is longer than InvisibilityTimeout (startup warning, 2.0).
+// 7216–7220 = background build of the open-step index (IX_FlowSteps_RunId_Open / ix_flow_steps_run_id_open, 2.0):
+//        building, built, failed (the completion gate stays correct, only slower), left to another host, and
+//        7220 (SQL Server, warning) a large FlowSteps table on an edition without online builds — build it by hand.
+//        These are emitted by internal source-generated loggers; filter on EventId.Id.
 
 // Webhook hardening pipeline EventIds (4000–4099 reserved, v1.25+). These are emitted by the internal
 // FlowOrchestrator.Dashboard.Webhooks.Logging.WebhookLog — there is no public constant class, so filter
@@ -405,7 +418,7 @@ When enabled, `FlowRetentionHostedService` runs on the configured interval and c
 
 **Nothing cascades.** The per-run tables carry no foreign key to `FlowRuns`, so `CleanupAsync` deletes each one explicitly, inside one transaction, for every run whose `CompletedAt` is older than the cutoff:
 
-`FlowStepClaims` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
+`FlowStepClaims` · `FlowStepLeases` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
 (PostgreSQL: the `flow_*` snake_case equivalents.) A `FlowEvents` table left over from 1.x is not touched; see [Migrating to 2.0](migrating-to-2.0.md#step-8--database).
 
 > [!WARNING]

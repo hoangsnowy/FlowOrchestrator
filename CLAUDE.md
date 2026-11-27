@@ -222,7 +222,7 @@ Libraries target `net10.0` and `net11.0` (set in `Directory.Build.props`). Sampl
 
 FlowOrchestrator is a .NET library for orchestrating workflows from **declarative code manifests**, executed by a **pluggable runtime** (Hangfire or in-memory), persisted in **SQL Server / PostgreSQL / in-memory**, and monitored via a **built-in dashboard**.
 
-The v2.0 core invariant is **"Dispatch many, Execute once"**: idempotent dispatch via `TryRecordDispatchAsync` (dispatch ledger) + exclusive execution via `TryClaimStepAsync` (claim guard). The engine is runtime-agnostic — Hangfire is just one adapter.
+The v2.0 core invariant is **"Dispatch many, Execute once"**: idempotent dispatch via `TryRecordDispatchAsync` (dispatch ledger) + exclusive execution via `TryAcquireStepLeaseAsync` (claim guard: a fenced lease, renewed by `StepLeaseKeeper` while the handler runs and taken over once it expires — `FlowStepLeaseHostedService` sweeps expired ones). The engine is runtime-agnostic — Hangfire is just one adapter.
 
 ### Core Concepts
 
@@ -295,7 +295,7 @@ FlowOrchestrator.SqlServer     Dapper-based SQL Server persistence (no EF Core)
   SqlFlowStore / SqlFlowRunStore / SqlOutputsRepository
   FlowOrchestratorSqlMigrator  Auto-creates tables on startup (FlowDefinitions, FlowRuns,
                                FlowSteps, FlowStepAttempts, FlowOutputs, FlowStepDispatches,
-                               FlowStepClaims, FlowRunControls, FlowIdempotencyKeys…)
+                               FlowStepClaims, FlowStepLeases, FlowRunControls, FlowIdempotencyKeys…)
 
 FlowOrchestrator.Dashboard     REST API + built-in HTML/JS SPA at /flows
   No Hangfire reference — uses IFlowOrchestrator, IRecurringTriggerDispatcher/Inspector
@@ -306,7 +306,7 @@ FlowOrchestrator.Dashboard     REST API + built-in HTML/JS SPA at /flows
 
 1. `FlowOrchestratorEngine.TriggerAsync` — **checks `IFlowStore.GetByIdAsync(flowId).IsEnabled`** (silent skip when disabled, returns `{ runId: null, disabled: true }`); checks idempotency key, generates RunId, saves trigger data, dispatches DAG entry steps via `IStepDispatcher`.
 2. Runtime adapter (Hangfire job, InMemory channel consumer, or Service Bus message processor) calls `FlowOrchestratorEngine.RunStepAsync`.
-3. Engine calls `TryClaimStepAsync` (claim guard) — if another worker owns the step, exits silently.
+3. Engine calls `TryAcquireStepLeaseAsync` (claim guard) — if another worker holds a live lease or the step is terminal, exits silently; an expired lease is taken over (fence + 1) and every write of the old attempt is rejected by the fence.
 4. `DefaultStepExecutor` resolves `@triggerBody()` / `@triggerHeaders()` expressions, calls `IStepHandler.ExecuteAsync`, persists output.
 5. `FlowGraphPlanner.Evaluate` returns ready steps → each dispatched via `TryRecordDispatchAsync` + `IStepDispatcher` (idempotent).
 6. On `Pending`: `ReleaseDispatchAsync` then `IStepDispatcher.ScheduleStepAsync(delay)` — same step re-polled after interval.

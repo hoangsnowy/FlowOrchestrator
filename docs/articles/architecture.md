@@ -84,6 +84,8 @@ The sequence from trigger to completion:
 
 `FlowUnsentDispatchRecoveryHostedService` covers what startup recovery cannot see. The engine writes a step's dispatch-ledger row *before* it calls the runtime and annotates it with the runtime's job/message id afterwards, and recovery skips every ledgered key. A row still without an id after `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s) means the send never returned — the process died mid-send, or the send hung — so the sweep leases the row (`IFlowRunStore.LeaseUnsentDispatchesAsync`, atomic across replicas) and enqueues the step again. It runs at startup and then every half of the timeout. A duplicate delivery is absorbed by the execution claim.
 
+`FlowStepLeaseHostedService` covers a worker that dies while it **holds** a step. Every step is claimed under a lease (`FlowRunControlOptions.StepLeaseDuration`, default 60 s) that the process running it renews every `StepLeaseRenewInterval` (20 s). When the worker is killed — mid-handler, between its claim and its start write, or between its handler and its completion write — nobody renews the lease and it expires. The runtime's own redelivery (Hangfire's invisibility timeout, a Service Bus lock expiry) then takes the expired lease over and runs the step again; and because that redelivery can come while the lease is still live and then never again, the service also sweeps, every half lease, for steps whose lease expired without a terminal status and hands them to the runtime (`IFlowRunRuntimeStore.LeaseExpiredStepLeasesAsync`, atomic across replicas). In 1.x such a claim never expired and the run stayed `Running` until an operator intervened.
+
 This means the database always reflects the code — no manual migration step required when you add or rename a flow.
 
 ## Dispatch Many, Execute Once
@@ -91,9 +93,11 @@ This means the database always reflects the code — no manual migration step re
 This is the core concurrency invariant:
 
 - **`TryRecordDispatchAsync`** — an idempotent dispatch ledger (INSERT once per `RunId + StepKey`). Multiple workers may attempt to enqueue the same step (e.g., when two predecessors complete nearly simultaneously), but only the first INSERT succeeds.
-- **`TryClaimStepAsync`** — claim exclusion within a run. When `RunStepAsync` is called, the engine acquires a claim. If another worker already claimed the step, the call exits without executing the handler.
+- **`TryAcquireStepLeaseAsync`** — claim exclusion within a run. When `RunStepAsync` is called, the engine acquires the step under a **lease**. If another worker holds a live lease, or the step already reached a terminal status, the call exits without executing the handler. A lease whose worker stopped renewing it is taken over by the next delivery, with a higher **fence**; every write of the older attempt (its completion, its Pending hand-off, its output once a renewal reported the loss) is rejected by that fence, so a stalled worker that comes back cannot overwrite the new owner's outcome. (`TryClaimStepAsync` is the lease-less claim used for skips, and by hand-built engines without a `StepLeaseKeeper`.)
 
-These two guards together ensure a step's handler is called exactly once even under concurrent dispatch.
+These two guards together ensure a step's handler runs once for every step that completes, even under concurrent dispatch. An attempt cut short by a crash runs again — at-least-once for the interrupted attempt, as in Temporal — so handlers with external side effects should be idempotent.
+
+**Continuation cost.** After a step completes, the engine reads only the statuses of that step's dependents and their dependencies (`GetStepStatusesAsync(runId, keys)`), checks for open work with one indexed existence query (`HasRunningOrPendingStepAsync`), and counts a ForEach loop's settled iterations on the server (`CountSettledIterationsAsync`). The whole status map is read only when a run is about to close. Store rows read per completion are therefore flat in the size of the run (4 per completion at 1 000 ForEach iterations, against 2 003 before 2.0; #189).
 
 ## Storage Separation
 

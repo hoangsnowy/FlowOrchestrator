@@ -155,12 +155,17 @@ options.Scheduler.PersistOverrides = true;
 ```csharp
 options.RunControl.DefaultRunTimeout = TimeSpan.FromMinutes(10);
 options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
+options.RunControl.StepLeaseDuration = TimeSpan.FromSeconds(60);   // the default
 ```
 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `DefaultRunTimeout` | `TimeSpan?` | `null` | Global timeout for all runs. Runs exceeding this are marked `TimedOut`. Override per run by including `runTimeoutSeconds` in the trigger payload. `null` = no timeout. |
 | `TimeoutEnforcementInterval` | `TimeSpan?` | 30 seconds | How often the periodic sweep proactively marks runs past `TimeoutAtUtc` as `TimedOut`, so a run whose step threw and left nothing scheduled does not sit `Running` forever. `null` or a non-positive value disables the sweep. |
+| `StepLeaseDuration` | `TimeSpan?` | 60 seconds | How long a step's execution claim lives without renewal. The process running the step renews it, so a live handler is never taken over however long it runs; once its worker dies the lease expires, the next delivery of the step takes it over, and `FlowStepLeaseHostedService` redelivers it if the runtime does not. Keep it at least three times your store's worst round trip. `null` or non-positive turns leases off (1.x claims that never expire). |
+| `StepLeaseRenewInterval` | `TimeSpan` | 20 seconds | How often a process renews the leases of the steps it is executing; capped at a third of `StepLeaseDuration`. |
+| `OrphanedClaimTimeout` | `TimeSpan?` | 60 seconds | Age past which a claim with no step status row (a worker died between its claim and its start write) is released by startup recovery and the timeout sweep. Covers claims taken without a lease. `null` turns it off. |
+| `UnsentDispatchTimeout` | `TimeSpan?` | 60 seconds | Age past which a dispatch-ledger row with no runtime job id (the send never returned) is re-delivered by `FlowUnsentDispatchRecoveryHostedService`. `null` turns it off. |
 | `IdempotencyHeaderName` | `string` | `"Idempotency-Key"` | Header name checked on trigger requests. If present, the value is used as a deduplication key — a second trigger with the same key returns the existing run instead of creating a new one. |
 | `IdempotencyReservationTimeout` | `TimeSpan` | 30 seconds | How old a key registration must be before a retry may take it over when its run never started work (no dispatched and no recorded step) — the trigger that registered it died before creating the run. A younger registration, or one whose run started, is still a duplicate. Must be positive; setting zero or less throws `ArgumentOutOfRangeException`. |
 

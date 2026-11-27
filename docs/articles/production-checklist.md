@@ -21,6 +21,7 @@ FlowOrchestrator writes to fourteen tables. The auto-migrator
 | `FlowOutputs` | Step outputs keyed by `(RunId, StepKey)`. |
 | `FlowStepDispatches` | Idempotent dispatch ledger — supports the *Dispatch many, Execute once* invariant. |
 | `FlowStepClaims` | Exclusive execution claim per step (the "Execute once" half). |
+| `FlowStepLeases` | Owner, fence and expiry of each claim taken under a lease, so a crashed worker's step is taken over (2.0). |
 | `FlowRunControls` | Cancellation, idempotency key, run timeout. |
 | `FlowIdempotencyKeys` | Idempotency dedupe at trigger time. |
 | `FlowSignalWaiters` | Parked `WaitForSignal` steps. |
@@ -96,7 +97,7 @@ FlowOrchestrator's core invariant — **Dispatch many, Execute once** — is wha
 horizontal scale safe.
 
 - `IFlowRunStore.TryRecordDispatchAsync` is an idempotent INSERT into `FlowStepDispatches`. Multiple workers may try; only one row lands. Backed by `SqlFlowRunStore` ([source](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/src/FlowOrchestrator.SqlServer/SqlFlowRunStore.cs)).
-- `TryClaimStepAsync` (the claim guard) ensures only one runtime instance executes a given step attempt; the others exit silently.
+- `TryAcquireStepLeaseAsync` (the claim guard) ensures only one runtime instance executes a given step attempt; the others exit silently. The claim is a **lease** (`RunControl.StepLeaseDuration`, default 60 s) renewed by the instance running the step: if that instance is killed or loses its database, the lease expires and another instance takes the step over (the runtime's redelivery, or `FlowStepLeaseHostedService`'s sweep every half lease). A step interrupted by a crash therefore runs again — make handlers with external side effects idempotent. Recovery after a kill takes roughly the lease duration plus up to half of it; lower the lease to recover faster, but keep it at least three times your database's worst round trip, or a stalled-but-alive instance loses its step to another one (its late result is then rejected by the lease's fence).
 - **Cron triggers** under the Hangfire runtime use `IRecurringJobManager`, which fires each schedule on exactly one server. The ServiceBus runtime fires cron via self-perpetuating scheduled messages on a queue — Service Bus's exactly-once-per-tick delivery handles cross-replica coordination without leader election. No extra coordination needed in either case.
 
 > [!WARNING]
@@ -123,7 +124,7 @@ horizontal scale safe.
 3. Cut over traffic to the new version.
 4. Resume cron triggers.
 
-The dispatch ledger means an interrupted run will be re-driven by `FlowRunRecoveryHostedService` on the new instance — no manual replay step required.
+The dispatch ledger means an interrupted run will be re-driven by `FlowRunRecoveryHostedService` on the new instance — no manual replay step required. A step that was executing on an instance you stopped hard is taken over once its lease expires (see above).
 
 ---
 
@@ -168,6 +169,7 @@ The full instrument list lives in [Observability — What is emitted](observabil
 - **Failed-run rate.** `rate(flow_runs_completed{status="failed"}[5m]) > 1` — tune to your volume.
 - **Cron lag.** `now() - last_recurring_fire > 2 × schedule_interval` — Hangfire server unhealthy or paused inadvertently.
 - **Queue depth.** Hangfire's own `enqueued` counter; FlowOrchestrator inherits it.
+- **Crashed workers.** EventId 5050 (a step whose lease expired was redelivered) and 3030 (a delivery took over an expired lease) mean an instance died or lost its database while running steps. A few around a deploy or a node loss are expected; a steady rate is not. EventId 3031 (an attempt lost its lease) means an instance was alive but could not renew for longer than `StepLeaseDuration` — a database or network stall.
 
 ### Health-check endpoint
 
@@ -238,6 +240,7 @@ A single run typically writes:
 - *N* rows in `FlowOutputs` (one per step that produced output)
 - *N* rows in `FlowStepDispatches` (one per dispatched step — the idempotent dispatch ledger)
 - *N* rows in `FlowStepClaims` (one per executed step; deliberately **not** released on terminal status, since the row is what makes execution exactly-once)
+- *N* rows in `FlowStepLeases` (one per leased step; retired, not deleted, when the step ends, so its fence keeps rising; only live leases are in its filtered index)
 - *M* rows in `FlowStepAttempts` (one per attempt — usually 1, more with retries)
 - 1 row in `FlowSignalWaiters` per `WaitForSignal` step
 - 1 row in `FlowIdempotencyKeys` per trigger carrying an idempotency key

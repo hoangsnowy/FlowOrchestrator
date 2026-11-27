@@ -41,6 +41,7 @@ builder.Services.AddFlowOrchestrator(options =>
 | `FlowOutputs` | Step inputs and outputs serialized as JSON |
 | `FlowStepDispatches` | Idempotent dispatch ledger — supports the *Dispatch many, Execute once* invariant |
 | `FlowStepClaims` | Exclusive execution claim per step (the *Execute once* half) |
+| `FlowStepLeases` | Owner, fence and expiry of each claim taken under a lease; a worker that dies stops renewing, and the step is taken over (2.0) |
 | `FlowRunControls` | Cancellation, timeout, and idempotency key records |
 | `FlowIdempotencyKeys` | Trigger-time idempotency dedupe |
 | `FlowSignalWaiters` | Parked `WaitForSignal` step state (see [WaitForSignal](wait-for-signal.md)) |
