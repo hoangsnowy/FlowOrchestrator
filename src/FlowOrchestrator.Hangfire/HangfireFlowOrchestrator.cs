@@ -73,6 +73,9 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
         var flows = await _flowRepository.GetAllFlowsAsync().ConfigureAwait(false);
         var flow = flows.FindById(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} is not registered. Cannot dispatch step '{step.Key}'.");
+        // Newtonsoft destroys JsonElement values: a job enqueued by 1.34.7 or earlier carries default(JsonElement)
+        // inputs on every Pending re-check. Restore them from the manifest before the engine sees the step.
+        HangfireStepJobArguments.RestoreOnWorker(ctx, step, flow);
         return await _engine.RunStepAsync(ctx, flow, step).ConfigureAwait(false);
     }
 
