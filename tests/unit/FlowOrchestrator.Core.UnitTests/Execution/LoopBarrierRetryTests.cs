@@ -98,7 +98,7 @@ public sealed class LoopBarrierRetryTests
         new StepResult { Key = stepKey, Status = StepStatus.Succeeded, Result = new { ok = true } };
 
     [Fact]
-    public async Task RetryingTheLoopStep_afterItSettled_reSettlesWithoutReDispatchingIterations()
+    public async Task RetryingTheLoopStep_afterItSettled_isRejected_andLeavesTheRunAlone()
     {
         // Arrange - a complete run: the loop settled, the downstream step ran.
         var flow = MakeLoopFlow();
@@ -112,12 +112,13 @@ public sealed class LoopBarrierRetryTests
         await harness.DrainAsync();
         Assert.Equal("Succeeded", await harness.RunStatusAsync(runId));
 
-        // Act - re-run the loop step. The retry clears the dispatch ledger for "loop" only, so
-        // the re-armed barrier has to settle off the iterations' existing terminal rows.
-        await harness.Engine.RetryStepAsync(flow.Id, runId, "loop");
+        // Act - re-run the Succeeded loop step. Since 2.0 only a Failed step can be retried.
+        var result = await harness.Engine.RetryStepAsync(flow.Id, runId, "loop");
         await harness.DrainAsync();
 
         // Assert
+        Assert.Equal(StepRetryOutcome.NotFailed, Assert.IsType<StepRetryResult>(result).Outcome);
+        Assert.Equal(1, harness.Enqueued.Count(k => k == "loop"));
         Assert.Equal(1, harness.Enqueued.Count(k => k == "loop.0.work"));
         Assert.Equal(1, harness.Enqueued.Count(k => k == "loop.1.work"));
         Assert.Equal(StepStatus.Succeeded.ToString(), await harness.StepStatusAsync(runId, "loop"));

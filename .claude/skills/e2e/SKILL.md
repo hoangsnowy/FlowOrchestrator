@@ -32,6 +32,7 @@ Stable IDs from `FlowOrchestrator.AppHost/Program.cs:SampleFlowIds`.
 | `…0011` | `FinalStepSkipDemoFlow`       | Leaf skip + run completes Skipped. |
 | `…0012` | `AmountThresholdFlow`         | `When` against `@triggerBody().amount`. |
 | `…0125` | `WebhookEnterpriseSampleFlow` | v1.25 webhook hardening (HMAC + replay). |
+| `d1f8a000-…-0201…0209` | `ProviderWebhookFlows.cs` (GitHub, Stripe, Slack, Twilio, Teams, Standard Webhooks, shared secret, rate-limited, IP allow-list) | Webhook provider matrix (5.6W). |
 
 ## Run protocol
 
@@ -93,8 +94,9 @@ Per ready instance, run every check below. Skip checks marked **(SQL only)** for
 > `admin` / `admin`). Every `/flows/**` call therefore needs `-u admin:admin`; without it
 > curl gets a bare `401` and every check fails for a reason that has nothing to do with the
 > code under test. Webhook receive endpoints are the exception in both directions: Basic Auth
-> does **not** open them, and they instead require `X-Webhook-Key: <the trigger's
-> webhookSecret>` (or `Authorization: Bearer <same>`). See 5.6.
+> does **not** open them; they authenticate the way the provider does (signature header for a
+> signature scheme, `X-Webhook-Key` / `Authorization: Bearer` only for plain shared-secret
+> triggers). See 5.6 and 5.6W.
 
 #### 5.1 Dashboard surface
 
@@ -179,35 +181,67 @@ Assert the two skipped step keys differ and that `evaluationTraceJson` is non-nu
 
 #### 5.6 Webhook + HMAC (WebhookEnterpriseSampleFlow)
 
-`WebhookEnterpriseSampleFlow.cs` configures the **GitHub** partner scheme, so the signature
-header is `X-Hub-Signature-256`, the nonce header is `X-GitHub-Delivery`, and the timestamp
-header is `X-Webhook-Timestamp`. The HMAC covers the **raw body only** — there is no
-`timestamp.body` prefix. The route is `/flows/api/webhook/{slug}` (singular) and the slug is
-`github-sample-flow`. The secret is `mySharedSecret`, set as both `webhookSecret` and
-`webhookHmacKey` on the trigger.
+`WebhookEnterpriseSampleFlow.cs` configures the **GitHub** partner scheme: the signature header is
+`X-Hub-Signature-256` and the HMAC covers the **raw body only**. The route is
+`/flows/api/webhook/{slug}` (singular), the slug is `github-sample-flow`, and the secret is
+`mySharedSecret` (set as both `webhookSecret` and `webhookHmacKey`). A success is **200**.
 
-Basic Auth does not open this endpoint — pass `X-Webhook-Key` with the trigger's
-`webhookSecret` instead. A success is **200**, not 202.
+Send **exactly what GitHub sends** — GitHub never sends `X-Webhook-Key` or `X-Webhook-Timestamp`,
+so neither appears below. (Until 2.0-P-1 this check sent both, which hid two real bugs: the legacy
+`webhookSecret` field forced an `X-Webhook-Key` check that no GitHub delivery can pass, and the
+trigger's replay window demanded a timestamp header GitHub does not have. Against `548bb7f` this
+check therefore **fails with 401**; it passes once those fixes are in.)
 
 ```bash
-body='{"hello":"world"}'
+body="{\"hello\":\"world\",\"n\":$RANDOM}"
 SECRET='mySharedSecret'
 sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.*= //')
-code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-       "http://localhost:$port/flows/api/webhook/github-sample-flow" \
-       -H 'Content-Type: application/json' \
-       -H "X-Webhook-Key: $SECRET" \
-       -H "X-Hub-Signature-256: sha256=$sig" \
-       -H "X-GitHub-Delivery: $(uuidgen)" \
-       -H "X-Webhook-Timestamp: $(date +%s)" \
-       -d "$body")
+code=$(curl -s -o /dev/null -w "%{http_code}" -X POST        "http://localhost:$port/flows/api/webhook/github-sample-flow"        -H 'Content-Type: application/json' -H 'Accept:'        -H 'User-Agent: GitHub-Hookshot/044aadd'        -H 'X-GitHub-Event: ping'        -H "X-GitHub-Delivery: $(uuidgen)"        -H "X-Hub-Signature-256: sha256=$sig"        --data-binary "$body")
 [ "$code" = "200" ] || { echo "  webhook rejected $code"; exit 1; }
 ```
 
-Do **not** assert that a reused `X-GitHub-Delivery` is rejected. The sample registers the replay
-stores but never calls `UseWebhookSecurity(...)`, so `WebhookSecurity.EnforcementMode` stays at its
-`Off` default and both HMAC and replay are evaluated by nothing — a replayed delivery returns `200`.
-Replay rejection (`409`) is covered by the Dashboard integration tests, not by this smoke run.
+The AppHost sets `Webhooks__EnforcementMode=Enforce` on every instance (the sample's standalone
+default stays `Audit`), so rejections are real 4xx answers. Replay, signature-mismatch, body cap,
+rate limit, IP allow-list and idempotency are covered by the webhook matrix below.
+
+#### 5.6W Webhook provider matrix (`e2e-webhooks.sh`)
+
+Run `bash .claude/skills/e2e/e2e-webhooks.sh [port …]` against the running AppHost (default: all four
+ports). It needs `curl`, `jq` and `python`, signs every request with the provider's documented
+algorithm (independent of the library), and sends each provider's own header set and `Content-Type` —
+nothing extra. The flows it drives live in `samples/FlowOrchestrator.SampleApp/Flows/ProviderWebhookFlows.cs`
+(ids `d1f8a000-…-0000000002NN`, also listed in the AppHost's `SampleFlowIds` for the Service Bus
+subscriptions).
+
+| Check | Flow / slug | Sent | Expect |
+|---|---|---|---|
+| W.1 | `e2e-github` | GitHub ping: `X-GitHub-Event`, `X-GitHub-Delivery`, `X-Hub-Signature-256`, hook-id headers | 200, run Succeeded, `X-GitHub-Event` in run `triggerHeaders` |
+| W.1b | `github-sample-flow` | same, for the shipped sample flow (the corrected 5.6) | 200 |
+| W.2 | `e2e-github` | the W.1 delivery again, byte-identical | 409 (accepted once) |
+| W.3 | `e2e-github` | signature made with the wrong secret | 401 **and** a rejected (`isAccepted=false`, 401) row in `/flows/api/webhooks/recent?rejectedOnly=true` |
+| W.4 | `e2e-stripe` | `Stripe-Signature: t=<now>,v1=…`, then the same delivery again | 200, then 409 |
+| W.5 | `e2e-slack` | slash command, `application/x-www-form-urlencoded`, `X-Slack-Request-Timestamp` + `X-Slack-Signature` | 200 |
+| W.6 | `e2e-twilio` | form POST, `X-Twilio-Signature` = base64 HMAC-SHA1 over URL + sorted fields, `I-Twilio-Idempotency-Token` | 200 |
+| W.7 | `e2e-teams` | `Authorization: HMAC <base64>` (key = base64-decoded security token) | 200, no `Authorization` in run `triggerHeaders` |
+| W.8 | `e2e-standard-webhooks` | `webhook-id` / `webhook-timestamp` / `webhook-signature: v1,…` (built-in `StandardWebhooks` scheme, key `whsec_…`); then a forged signature | 200, then 401 |
+| W.9 | `e2e-shared-secret` | `X-Webhook-Key` right / wrong (this IS the shared-secret protocol) | 200 / 401 |
+| W.10 | `e2e-shared-secret` | two deliveries with the same `Idempotency-Key` | same `runId`, second `duplicate=true`, exactly one new run |
+| W.11 | `e2e-shared-secret` | 1.2 MB body with `Content-Length`, then chunked | 413 both |
+| W.12 | `e2e-rate-limited` | 6 back-to-back deliveries (trigger: 1/s, burst 2) | first 200, a 429 among them |
+| W.13 | `e2e-ip-allowlist` | allow-list `198.51.100.0/24`; direct call, then `X-Forwarded-For: 198.51.100.7, 203.0.113.9` | 403 both — with one trusted proxy hop the client is the **rightmost** entry (what the proxy appended); the forged prefix must not open the list |
+| W.14 | `e2e-shared-secret` | raw socket: `Content-Length: 100000`, 1 000 bytes, close | no new run, `/health` 200; check the AppHost log for "unhandled exception" on that request |
+| W.15 | `e2e-github` run (5102 only) | Keycloak `viewer` / `viewer-demo-pass` reads run detail | `X-Hub-Signature-256` = `***redacted***` for the viewer, in clear for `admin` |
+
+Expected failures on `548bb7f` (baseline, before the 2.0-P-1 webhook fixes): W.1b (legacy
+`webhookSecret` forces `X-Webhook-Key`), W.2 / W.1 under host replay (`missing_timestamp` 409 on the first
+delivery), W.5 / W.6 (form bodies rejected as invalid JSON), W.7 (Teams signature header stripped,
+key not base64-decoded), W.14 (unhandled `BadHttpRequestException`), W.8 (no `StandardWebhooks`
+scheme — an unknown scheme name silently disabled verification, so the forged delivery got 200; the
+built-in `StandardWebhooks` scheme now verifies it: genuine → 200, forged → 401). Still expected to fail
+after those fixes, until fixed: **W.13** (X-Forwarded-For trusts the entry left of the one the proxy
+appended).
+
+Report the matrix as a separate block per instance and add its `RESULT: N/N` line to the summary.
 
 #### 5.7 WaitForSignal resume (ApprovalWorkflowFlow)
 
@@ -259,6 +293,11 @@ runId=$(curl -fsS -u admin:admin -X POST "http://localhost:$port/flows/api/flows
 # Poll ~1 s apart. You must OBSERVE check_shipment_status in Pending at least once
 # before the run reaches Succeeded — sampling only the terminal state proves nothing.
 ```
+
+Also assert the step's `attemptCount` on the run detail is **at least 3** — the flow declares
+`pollMinAttempts = 3`. Seeing `Pending` once and a terminal `Succeeded` is not enough: on 1.34.0–1.34.7 a
+Hangfire re-check ran with its inputs destroyed by Newtonsoft.Json, so `pollEnabled` read `false` and the
+step succeeded on attempt **2** — and the old two-condition check passed regardless.
 
 Healthy trace: `check_shipment_status` goes `Running → Pending → Pending → Succeeded`, then
 `log_shipment_confirmed` runs and the run completes `Succeeded` (~15–20 s).
@@ -317,7 +356,7 @@ If any instance failed Phase 4 readiness:
 - **First-run cost**: pulling SQL Server, Postgres, and Service Bus emulator images for the first time on a fresh machine takes ~5 min. Tell the user before running so they don't kill it thinking it's stuck.
 - **Container leftovers**: Aspire keeps containers warm. If a previous run wedged one, `docker ps -a --filter label=com.docker.compose.project=flow-orchestrator-apphost` shows the lineage; `docker rm -f <id>` clears it. Do NOT prune unrelated containers.
 - **Port conflicts**: 5101–5104 and 7101–7104 are pinned. If any taken, abort and tell the user — do not silently re-route.
-- **Webhook secrets**: read from `WebhookEnterpriseSampleFlow.cs` rather than guessing. Plain-secret default is documented in the file's XML header.
+- **Webhook secrets**: read from `WebhookEnterpriseSampleFlow.cs` / `ProviderWebhookFlows.cs` rather than guessing. They are demo values committed on purpose so the e2e can sign like the real provider.
 
 ## When to invoke
 

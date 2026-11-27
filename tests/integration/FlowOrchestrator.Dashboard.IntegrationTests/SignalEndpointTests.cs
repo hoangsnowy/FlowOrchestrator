@@ -6,15 +6,37 @@ namespace FlowOrchestrator.Dashboard.Tests;
 
 /// <summary>
 /// Integration coverage for <c>POST /flows/api/runs/{runId}/signals/{signalName}</c>:
-/// status code matrix (404 missing run, 404 no waiter, 409 already delivered, 400 bad JSON, 200 delivered)
+/// status code matrix (404 missing run, 404 no waiter, 409 already delivered, 410 expired waiter, 400 bad JSON, 200 delivered)
 /// plus the run-status precondition.
 /// </summary>
 public sealed class SignalEndpointTests : IDisposable
 {
+    private static readonly Guid ApprovalFlowId = new("5a5a5a5a-0000-0000-0000-0000000000a1");
     private readonly DashboardTestServer _server = new();
     private readonly HttpClient _client;
 
-    public SignalEndpointTests() => _client = _server.CreateClient();
+    /// <summary>
+    /// Registers the runs' flow with one unrestricted <c>WaitForSignal</c> step: the endpoint refuses signals
+    /// for flows this host does not register (<c>UnregisteredFlowSignals = Deny</c>).
+    /// </summary>
+    public SignalEndpointTests()
+    {
+        _client = _server.CreateClient();
+        var flow = Substitute.For<FlowOrchestrator.Core.Abstractions.IFlowDefinition>();
+        flow.Id.Returns(ApprovalFlowId);
+        flow.Manifest.Returns(new FlowOrchestrator.Core.Abstractions.FlowManifest
+        {
+            Steps = new FlowOrchestrator.Core.Abstractions.StepCollection
+            {
+                ["wait_for_approval"] = new FlowOrchestrator.Core.Abstractions.StepMetadata
+                {
+                    Type = "WaitForSignal",
+                    Inputs = new Dictionary<string, object?> { ["signalName"] = "approval" },
+                },
+            },
+        });
+        _server.Flows = new FlowOrchestrator.Core.Abstractions.FlowRegistry([flow]);
+    }
 
     public void Dispose() => _server.Dispose();
 
@@ -40,7 +62,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Succeeded" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Succeeded" });
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         // Act
@@ -58,7 +80,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         using var content = new StringContent("{not-json", Encoding.UTF8, "application/json");
 
         // Act
@@ -76,7 +98,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         _server.SignalDispatcher
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
@@ -98,7 +120,7 @@ public sealed class SignalEndpointTests : IDisposable
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         _server.SignalDispatcher
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<SignalDeliveryResult>(
@@ -115,12 +137,38 @@ public sealed class SignalEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task POST_signal_returns_410_when_the_waiter_has_expired()
+    {
+        // Arrange — the store refused the signal because the step's timeoutSeconds deadline passed.
+        var runId = Guid.NewGuid();
+        _server.FlowRunStore.GetRunDetailAsync(runId)
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
+        _server.SignalDispatcher
+            .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<SignalDeliveryResult>(
+                new SignalDeliveryResult(SignalDeliveryStatus.Expired, "wait_for_approval", null)));
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+        // Act
+        using var response = await _client.PostAsync(
+            $"/flows/api/runs/{runId}/signals/approval",
+            content);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Assert — 410 Gone (final: no retry can resume a timed-out step), never 404 or 200.
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        Assert.Contains("timed out", body, StringComparison.Ordinal);
+        Assert.Contains("wait_for_approval", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"delivered\"", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task POST_signal_returns_200_with_step_key_when_delivered()
     {
         // Arrange
         var runId = Guid.NewGuid();
         _server.FlowRunStore.GetRunDetailAsync(runId)
-            .Returns(new FlowRunRecord { Id = runId, FlowId = Guid.NewGuid(), Status = "Running" });
+            .Returns(new FlowRunRecord { Id = runId, FlowId = ApprovalFlowId, Status = "Running" });
         var deliveredAt = DateTimeOffset.UtcNow;
         _server.SignalDispatcher
             .DispatchAsync(runId, "approval", Arg.Any<string>(), Arg.Any<CancellationToken>())

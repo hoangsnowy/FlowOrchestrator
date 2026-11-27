@@ -10,11 +10,24 @@ using Microsoft.Extensions.DependencyInjection;
 namespace FlowOrchestrator.Dashboard.Security;
 
 /// <summary>Who is using the dashboard and what they may do, resolved once per request.</summary>
-/// <param name="Method"><c>"none"</c> (no protection configured), <c>"basic"</c> or <c>"oidc"</c>.</param>
+/// <param name="Method">
+/// <c>"none"</c> (no protection configured), <c>"basic"</c>, <c>"oidc"</c> for an identity signed in through
+/// <see cref="FlowDashboardAuthorizationOptions.AuthenticationScheme"/> (the cookie session), or <c>"bearer"</c> for one
+/// signed in through an <see cref="FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes"/> scheme (an
+/// access token; nothing to sign out of).
+/// </param>
 /// <param name="UserName">Display name of the signed-in user; <see langword="null"/> when there is none.</param>
 /// <param name="CanOperate"><see langword="true"/> when the caller may use state-changing endpoints.</param>
-internal sealed record DashboardAccess(string Method, string? UserName, bool CanOperate)
+/// <param name="CanView">
+/// <see langword="true"/> when the caller may read runs. Only an identity with neither a viewer nor an operator
+/// role is <see langword="false"/>; such a caller reaches nothing but <c>/api/me</c>, <c>/signout</c> and the
+/// signal endpoint, where a per-signal restriction may still let it in.
+/// </param>
+internal sealed record DashboardAccess(string Method, string? UserName, bool CanOperate, bool CanView = true)
 {
+    /// <summary><see langword="true"/> when the caller is an identity signed in through <see cref="FlowDashboardAuthorizationOptions"/>.</summary>
+    public bool IsIdentity => Method is "oidc" or "bearer";
+
     /// <summary><see cref="HttpContext.Items"/> key the filter stores the resolved access under.</summary>
     public const string ItemKey = "FlowOrchestrator.Dashboard.Access";
 
@@ -57,7 +70,13 @@ internal sealed record DashboardAccess(string Method, string? UserName, bool Can
 /// <para>State-changing endpoints are identified by HTTP method: every dashboard <c>POST</c> / <c>PUT</c> /
 /// <c>PATCH</c> / <c>DELETE</c> route mutates (trigger, rerun, retry, cancel, signal, schedule changes), every
 /// <c>GET</c> reads. Webhook receive endpoints are mapped outside the dashboard group and never reach this
-/// filter.</para>
+/// filter. The one exception to "mutating needs operator" is an endpoint marked with
+/// <see cref="PerSignalAuthorizationMetadata"/> (the signal endpoint): a signed-in identity reaches it whatever
+/// its role, and the endpoint applies the signal's own restriction or, for an unrestricted signal, the operator
+/// rule.</para>
+/// <para>Identities come from <see cref="FlowDashboardAuthorizationOptions.AuthenticationScheme"/> and then each
+/// of <see cref="FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes"/>. A request with a non-Basic
+/// <c>Authorization</c> header that none of them accepts gets <c>401</c>, never the identity-provider redirect.</para>
 /// <para>With neither configured, anonymous callers get the access resolved at startup by
 /// <see cref="DashboardAccess.ForAnonymous"/>: full access in Development (or with
 /// <see cref="FlowDashboardOptions.AllowAnonymousOperators"/>), read-only with secrets masked everywhere
@@ -76,8 +95,9 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
         "The flow dashboard has no authentication configured, so it is read-only outside the Development environment. "
         + "Configure FlowDashboard:BasicAuth or FlowDashboard:Authorization, or set FlowDashboard:AllowAnonymousOperators to true.";
 
-    private static readonly string[] RoleClaimTypes = [ClaimTypes.Role, "role", "roles"];
     private readonly DashboardAccess _anonymousAccess = anonymousAccess ?? DashboardAccess.UnprotectedReadOnly;
+    // Read once: the option getter allocates, and this filter runs on every dashboard request.
+    private readonly IReadOnlyList<string> _additionalSchemes = options.Authorization.EffectiveAdditionalSchemes;
     private readonly string _apiPrefix = basePath.TrimEnd('/') + "/api/";
     private readonly string _mePath = basePath.TrimEnd('/') + "/api/me";
     private readonly string _signOutPath = basePath.TrimEnd('/') + "/signout";
@@ -131,18 +151,19 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
         var basic = options.BasicAuth;
         var identity = options.Authorization;
 
-        var result = await http.AuthenticateAsync(identity.AuthenticationScheme);
-        if (result.Succeeded && result.Principal is { } principal)
+        var (principal, viaAdditionalScheme) = await AuthenticateAsync(http, identity.AuthenticationScheme!);
+        if (principal is not null)
         {
             http.User = principal;
             var canOperate = await HasAccessAsync(http, principal, identity.OperatePolicy, identity.EffectiveOperatorRoles);
             var canView = canOperate || await HasAccessAsync(http, principal, identity.ViewPolicy, identity.EffectiveViewerRoles);
-            http.Items[DashboardAccess.ItemKey] = new DashboardAccess("oidc", DisplayName(principal), canOperate);
+            http.Items[DashboardAccess.ItemKey] = new DashboardAccess(viaAdditionalScheme ? "bearer" : "oidc", DisplayName(principal), canOperate, canView);
 
             var needsOperate = IsMutating(http.Request.Method);
             // /api/me and /signout stay reachable for any signed-in user, so one without a dashboard role
-            // can still see why and switch accounts.
-            if (needsOperate ? canOperate : (canView || IsAccountEndpoint(http)))
+            // can still see why and switch accounts. The signal endpoint authorizes per signal: a restricted
+            // signal admits its approvers whatever their dashboard role, so it is the endpoint's call, not ours.
+            if (needsOperate ? canOperate || IsPerSignalAuthorized(http) : (canView || IsAccountEndpoint(http)))
                 return await next(context);
 
             return await ErrorAsync(http, StatusCodes.Status403Forbidden, needsOperate
@@ -150,7 +171,19 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
                 : "Your account has no access to the flow dashboard.");
         }
 
-        if (IsPageNavigation(http))
+        // A caller that presented its own credential (a bearer token, …) and was not accepted is a client, not
+        // a browser that lost its session: answer 401 instead of redirecting it to the identity provider.
+        var authorizationHeader = http.Request.Headers.Authorization.ToString();
+        var presentedToken = authorizationHeader.Length > 0 && !authorizationHeader.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase);
+        if (presentedToken && _additionalSchemes.Count > 0)
+        {
+            // Each scheme writes its own challenge (a JWT bearer handler: 401 + WWW-Authenticate with the reason).
+            foreach (var scheme in _additionalSchemes)
+                await http.ChallengeAsync(scheme);
+            return Results.Empty;
+        }
+
+        if (!presentedToken && IsPageNavigation(http))
         {
             await http.ChallengeAsync(identity.EffectiveChallengeScheme);
             return Results.Empty;
@@ -163,6 +196,37 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
 
         return await ErrorAsync(http, StatusCodes.Status401Unauthorized, "Sign in to the flow dashboard.");
     }
+
+    /// <summary>
+    /// Authenticates with <paramref name="primaryScheme"/>, then each additional scheme in order, and returns the
+    /// first principal any of them produces (and whether an additional scheme produced it), or <see langword="null"/>.
+    /// </summary>
+    /// <remarks>
+    /// The common case — a browser with a cookie — succeeds on the first scheme and never touches the others;
+    /// additional schemes cost one handler call each only for requests the cookie scheme did not accept.
+    /// </remarks>
+    private async ValueTask<(ClaimsPrincipal? Principal, bool ViaAdditionalScheme)> AuthenticateAsync(HttpContext http, string primaryScheme)
+    {
+        var result = await http.AuthenticateAsync(primaryScheme);
+        if (result.Succeeded && result.Principal is { } principal)
+            return (principal, false);
+
+        foreach (var scheme in _additionalSchemes)
+        {
+            result = await http.AuthenticateAsync(scheme);
+            if (result.Succeeded && result.Principal is { } additional)
+                return (additional, true);
+        }
+
+        return (null, false);
+    }
+
+    /// <summary>
+    /// <see langword="true"/> for an endpoint that authorizes each request itself (the signal endpoint), marked
+    /// with <see cref="PerSignalAuthorizationMetadata"/>.
+    /// </summary>
+    private static bool IsPerSignalAuthorized(HttpContext http)
+        => http.GetEndpoint()?.Metadata.GetMetadata<PerSignalAuthorizationMetadata>() is not null;
 
     // Written as bytes rather than Results.Json: the System.Text.Json PipeWriter path throws on hosts whose
     // response PipeWriter lacks UnflushedBytes (TestServer, some proxies). Same reason as WriteJsonAsync.
@@ -237,36 +301,15 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
             return authorization is not null && (await authorization.AuthorizeAsync(principal, policy)).Succeeded;
         }
 
-        if (roles.Count == 0)
-            return true;
-
-        foreach (var role in roles)
-        {
-            if (principal.IsInRole(role))
-                return true;
-        }
-
-        // OIDC handlers keep a JSON "roles" array as claims of type "roles", which IsInRole does not read.
-        foreach (var claim in principal.Claims)
-        {
-            if (Array.IndexOf(RoleClaimTypes, claim.Type) >= 0 && Contains(roles, claim.Value))
-                return true;
-        }
-
-        return false;
+        return roles.Count == 0 || DashboardRoles.HasAnyRole(principal, roles);
     }
 
-    private static bool Contains(IReadOnlyList<string> roles, string value)
-    {
-        foreach (var role in roles)
-        {
-            if (string.Equals(role, value, StringComparison.Ordinal))
-                return true;
-        }
-        return false;
-    }
-
-    private static string? DisplayName(ClaimsPrincipal principal)
+    /// <summary>Name the dashboard shows for, and audits, a signed-in user.</summary>
+    /// <param name="principal">The signed-in user.</param>
+    /// <returns>The first of <c>preferred_username</c>, the identity name, <c>name</c>, e-mail and subject; or <see langword="null"/>.</returns>
+    /// <remarks>A Keycloak client-credentials token names the service account in <c>preferred_username</c>
+    /// (<c>service-account-&lt;client&gt;</c>), so machine callers are audited by client too.</remarks>
+    internal static string? DisplayName(ClaimsPrincipal principal)
         => principal.FindFirst("preferred_username")?.Value
            ?? principal.Identity?.Name
            ?? principal.FindFirst("name")?.Value
@@ -327,4 +370,23 @@ internal sealed class DashboardAccessFilter(FlowDashboardOptions options, string
 
     private static bool SecureEquals(string left, string right)
         => CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(left), Encoding.UTF8.GetBytes(right));
+}
+
+/// <summary>
+/// Endpoint metadata telling <see cref="DashboardAccessFilter"/> that the endpoint authorizes each request
+/// itself, so a signed-in caller without the operator role is passed through to it instead of refused.
+/// </summary>
+/// <remarks>
+/// Only the signal endpoint carries it: a restricted signal admits the identities its step names, whatever
+/// their dashboard role, and an unrestricted one still demands the operator role, which the endpoint checks.
+/// Authentication, the CSRF check and the Basic / anonymous rules still run in the filter first.
+/// </remarks>
+internal sealed class PerSignalAuthorizationMetadata
+{
+    /// <summary>The shared instance; the marker carries no state.</summary>
+    public static readonly PerSignalAuthorizationMetadata Instance = new();
+
+    private PerSignalAuthorizationMetadata()
+    {
+    }
 }

@@ -39,6 +39,13 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
     /// </summary>
     public const string DedupProbeQueueName = "dedup-probe";
 
+    /// <summary>
+    /// A cron queue WITH duplicate detection, as production creates <c>flow-cron-triggers</c>
+    /// (<c>ServiceBusTopologyManager</c>). <c>flow-cron-triggers</c> above keeps it off; tests that depend on
+    /// how cron message ids interact with duplicate detection point <c>CronQueueName</c> here.
+    /// </summary>
+    public const string DedupCronQueueName = "flow-cron-triggers-dedup";
+
     private const string SqlPassword = "Local-Dev-Pwd-2026!";
 
     private INetwork? _network;
@@ -117,7 +124,8 @@ public sealed class ServiceBusEmulatorFixture : IAsyncLifetime
         ""Name"": ""sbemulator"",
         ""Queues"": [
           {{ ""Name"": ""flow-cron-triggers"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": false, ""RequiresSession"": false }} }},
-          {{ ""Name"": ""{DedupProbeQueueName}"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": true, ""DuplicateDetectionHistoryTimeWindow"": ""PT5M"", ""RequiresSession"": false }} }}
+          {{ ""Name"": ""{DedupProbeQueueName}"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": true, ""DuplicateDetectionHistoryTimeWindow"": ""PT5M"", ""RequiresSession"": false }} }},
+          {{ ""Name"": ""{DedupCronQueueName}"", ""Properties"": {{ ""MaxDeliveryCount"": 10, ""RequiresDuplicateDetection"": true, ""DuplicateDetectionHistoryTimeWindow"": ""PT5M"", ""RequiresSession"": false }} }}
         ],
         ""Topics"": [
           {{

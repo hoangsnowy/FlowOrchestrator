@@ -32,43 +32,55 @@ review**.
 ## Recommended upgrade path
 
 ```text
-any 1.x  ──►  1.34.3  ──(run it in production for a while)──►  2.0
+any 1.x  ──►  latest 1.34.x  ──(run it in production for a while)──►  2.0
 ```
 
-1. **Upgrade to 1.34.3 first**, on your current .NET 8 / 9 / 10 runtime. 1.34.3 is the last 1.x release
-   and carries every fix that 2.0 has, including three security fixes
-   ([GHSA-g5jp-pqw5-wrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-g5jp-pqw5-wrmj),
-   [GHSA-358q-p9gq-3m6p](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-358q-p9gq-3m6p),
-   [GHSA-8248-pg9c-cp7c](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-8248-pg9c-cp7c))
-   and the SQL Server execute-once / concurrency fixes. Its two behaviour changes — the read-only
+1. **Upgrade to the latest 1.34.x first** (1.34.7 when this was written), on your current .NET 8 / 9 / 10
+   runtime. The 1.34 line carries the security fixes 2.0 also has — from 1.34.2 on, every 1.34.x patch
+   is a security or correctness release; see the
+   [security advisories](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories) — and the
+   SQL Server execute-once / concurrency fixes. Its two behaviour changes (1.34.2) — the read-only
    unauthenticated dashboard and single-pass input resolution — then surface **separately** from the
    2.0 changes, which makes any problem much easier to attribute.
-2. **Then move to 2.0** with this guide. Coming from 1.34.3, the remaining work is the .NET retarget,
+2. **Then move to 2.0** with this guide. Coming from 1.34.x, the remaining work is the .NET retarget,
    package references, the Hangfire queue rollout and the new startup checks.
 
 Upgrading straight from an old 1.x to 2.0 works too; do every step below, plus the 1.34.2 items in
 [Step 7](#step-7--review-the-behaviour-changes).
 
+This upgrade — 1.34.7 → 2.0 with live state (parked, polling, queued and scheduled work, cron overrides,
+webhook nonces, idempotency keys) on Hangfire + SQL Server, Hangfire + PostgreSQL and Service Bus + SQL
+Server, plus the rollback — is rehearsed by `tests/upgrade/FlowOrchestrator.UpgradeRehearsal/rehearse.ps1`
+before every 2.0 release; its README lists what it checks. Where this guide quotes a command, an error
+message or a schema change, it is the one the rehearsal ran or observed.
+
 ---
 
 ## Step 0 — Before you start
 
-- [ ] **Read the release notes** for 1.34.2, 1.34.3 and 2.0 (`CHANGELOG.md`).
-- [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). So far 2.0 changes
-      nothing in an existing database (see [Step 8](#step-8--database)), but take the backup anyway; you
-      will want it for [rollback](#rollback).
-- [ ] **Inventory your extension points.** Search your solution for these; each one has a section below:
+- [ ] **Read the release notes** of every 1.34.x after the one you run, and of 2.0. 1.34.5 – 1.34.7 were
+      released from the `release/1.34` branch and are not in `main`'s `CHANGELOG.md`; their notes are on the
+      [GitHub releases](https://github.com/hoangsnowy/FlowOrchestrator/releases) page.
+- [ ] **Back up the FlowOrchestrator database** (SQL Server / Azure SQL / PostgreSQL). 2.0 only *adds* to
+      an existing database (columns and indexes, listed in [Step 8](#step-8--database)) and never
+      rewrites or deletes data, but take the backup anyway; you will want it for [rollback](#rollback).
+- [ ] **Inventory your extension points.** Run this from the solution root; each hit has a section below:
 
-  ```text
-  IFlowRepository  FlowRepositoryExtensions  IFlowExecutor  FlowExecutor  new FlowOrchestratorEngine(
-  IFlowRunStore  IFlowRunRuntimeStore  IFlowRunControlStore  IOutputsRepository  IStepInstance
-  IRecurringTriggerSync  SyncTriggers(  FlowOrchestratorOptions  AddFlowOrchestratorSqlServer
-  AddFlowOrchestratorPostgreSql  ScopeMoveNext  EndScopeAsync  AllKnownStepKeys  FindParentStep
-  FindNextStep  ShouldExecute  HangfireEnabled  FlowSignalDispatcher(  EnableEventPersistence
-  IFlowEventReader  RecordEventAsync  GetRunEventsAsync  FlowEvent  FlowEvents  flow_events
+  ```bash
+  grep -rnE --include='*.cs' 'IFlowRepository|FlowRepositoryExtensions|IFlowExecutor|FlowExecutor\b|new FlowOrchestratorEngine\(|IFlowRunStore|IFlowRunRuntimeStore|IFlowRunControlStore|IOutputsRepository|IStepInstance([^<]|$)|IRecurringTriggerSync|SyncTriggers\(|FlowOrchestratorOptions|AddFlowOrchestratorSqlServer|AddFlowOrchestratorPostgreSql|ScopeMoveNext|EndScopeAsync|AllKnownStepKeys|FindParentStep|FindNextStep|ShouldExecute|HangfireEnabled|FlowSignalDispatcher\(|EnableEventPersistence|IFlowEventReader|RecordEventAsync|GetRunEventsAsync|FlowEvent\b|FlowEvents|flow_events' .
+  ```
+
+  ```powershell
+  # PowerShell: the same pattern
+  Get-ChildItem -Recurse -Filter *.cs | Select-String -Pattern '<the pattern above>'
   ```
 
   No hits means you use only the built-ins and can skip [Step 6](#step-6--update-custom-extensions).
+  The pattern skips `IStepInstance<TInput>`: every typed handler's `ExecuteAsync` signature has one, and
+  typed handlers need no change. A bare `IStepInstance` hit is either an **untyped handler** (check
+  [4.3](#43-inputs-of-untyped-handlers) if it runs on Hangfire) or a class implementing `IStepInstance`
+  ([Step 6](#removed-and-changed-api)). `EnableEventPersistence = true` — set by most 1.x hosts, it was in
+  the 1.x samples — is a hit too: delete the line (it no longer compiles).
 - [ ] **Check your flow manifests** for top-level step keys that contain `.` or are empty
       ([Step 5](#step-5--fix-what-the-new-startup-checks-report)).
 - [ ] **Know which runtime you run**: Hangfire, InMemory or Azure Service Bus. The package and rollout
@@ -125,8 +137,8 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 
 ```xml
 <!-- 1.x -->
-<PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.3" />
-<PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.3" />
+<PackageReference Include="FlowOrchestrator.Hangfire"  Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.SqlServer" Version="1.34.7" />
 
 <!-- 2.0: keep Hangfire; referencing Core explicitly is optional (Hangfire still depends on it) but
      makes the AddFlowOrchestrator() origin visible -->
@@ -139,9 +151,9 @@ longer depends on `Newtonsoft.Json`. Reference only what your runtime needs:
 
 ```xml
 <!-- 1.x: FlowOrchestrator.Hangfire was required just for AddFlowOrchestrator() -->
-<PackageReference Include="FlowOrchestrator.Hangfire"   Version="1.34.3" />
-<PackageReference Include="FlowOrchestrator.ServiceBus" Version="1.34.3" />
-<PackageReference Include="FlowOrchestrator.SqlServer"  Version="1.34.3" />
+<PackageReference Include="FlowOrchestrator.Hangfire"   Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.ServiceBus" Version="1.34.7" />
+<PackageReference Include="FlowOrchestrator.SqlServer"  Version="1.34.7" />
 
 <!-- 2.0: drop FlowOrchestrator.Hangfire entirely -->
 <PackageReference Include="FlowOrchestrator.Core"       Version="2.0.0" />
@@ -238,15 +250,29 @@ Two facts drive this step:
    | Job enqueued by | Runs on a 2.0 worker? | Runs on a 1.x worker? |
    |---|---|---|
    | FlowOrchestrator **≤ 1.16** | **No** — the target method is removed | Yes |
-   | FlowOrchestrator **1.17 – 1.34.x** | **Yes** — the overload is kept, `[Obsolete]`, for one major | Yes |
-   | FlowOrchestrator **2.0** | Yes | **No** — a 1.x worker cannot run a 2.0 job |
+   | FlowOrchestrator **1.17 – 1.34.x** | **Yes** — the overload is kept, `[Obsolete]`, for one major. Enqueued and Scheduled jobs both run, see below | Yes |
+   | FlowOrchestrator **2.0** | Yes | **No** — a 1.x worker cannot run a 2.0 job: Hangfire fails it with `TypeLoadException: Could not load type 'FlowOrchestrator.Hangfire.HangfireStepEnvelope'` and retries it, and the run stays `Running` |
 
    So: drain anything enqueued by ≤ 1.16, and never let 1.x and 2.0 workers process the same Hangfire
    storage at the same time.
 
+   **Pending re-checks queued by 1.x** — a polling step's next attempt, a `WaitForSignal` deadline check
+   — carry the step's resolved inputs, which Hangfire's Newtonsoft.Json store could not keep (it saved
+   `System.Text.Json.JsonElement` values as their `ValueKind` only). A 2.0 worker rebuilds them from the
+   manifest before running the step, so they run, with one visible difference: **a poll queued by 1.x
+   starts a fresh attempt count and `pollTimeoutSeconds` window** on its first 2.0 attempt (its 1.x poll
+   bookkeeping did not survive the store). A `WaitForSignal` deadline is unaffected: it is read from the
+   database. Alpha builds before this fix left such jobs failing with `Operation is not valid due to the
+   current state of the object` (EventId 2006) and the run `Running` for ever.
+
+   > The same loss hits 1.34.x itself on Hangfire: from a poll's **second** attempt on, the handler gets
+   > the destroyed inputs (observed on 1.34.7: an input bound from `@triggerBody()` arrives `null`, a
+   > `ForEach` child poll fails with the exception above). 2.0 jobs carry inputs as System.Text.Json
+   > and are not affected, so polling flows that misbehaved on 1.34 + Hangfire are fixed by the upgrade.
+
 ### 4.1 Check for ≤ 1.16 jobs
 
-If you upgraded to 1.34.3 first and it has run for a while, every job created since is 1.17+ already.
+If you upgraded to 1.34.x first and it has run for a while, every job created since is 1.17+ already.
 Still, check the queue before the cut-over. With the default `HangFire` schema on SQL Server:
 
 ```sql
@@ -257,9 +283,19 @@ WHERE j.StateName IN ('Enqueued', 'Scheduled', 'Processing', 'Awaiting')
   AND j.InvocationData LIKE '%IFlowDefinition%';
 ```
 
-On PostgreSQL storage for Hangfire (`Hangfire.PostgreSql`), run the same filter against its job table —
-by default `hangfire.job` with columns `invocationdata` and `statename`; check your configured schema
-name. **Zero rows** means nothing blocks the upgrade. Any rows: let them
+On PostgreSQL storage for Hangfire (`Hangfire.PostgreSql`, default schema `hangfire`; use yours if you
+configured `SchemaName`). `invocationdata` is `jsonb` there, so cast it — the SQL Server text as-is fails
+with `operator does not exist: jsonb ~~ unknown`:
+
+```sql
+SELECT j.id, j.statename, j.createdat
+FROM hangfire.job AS j
+WHERE j.statename IN ('Enqueued', 'Scheduled', 'Processing', 'Awaiting')
+  AND j.invocationdata::text LIKE '%IFlowDefinition%';
+```
+
+**Zero rows** means nothing blocks the upgrade (1.17 – 1.34.x jobs name `System.Guid` where ≤ 1.16 jobs
+named `IFlowDefinition`, so they do not match). Any rows: let them
 finish on a 1.x worker first (they are usually long-scheduled polling steps or `WaitForSignal`
 re-checks), or re-trigger those runs after the upgrade.
 
@@ -267,14 +303,23 @@ re-checks), or re-trigger those runs after the upgrade.
 
 **A — Short maintenance window (simplest, recommended):**
 
-1. Stop accepting new triggers: pause cron triggers from the dashboard, and hold webhook traffic at your
-   gateway (or accept that callers retry).
-2. Wait until the Hangfire dashboard shows **0 Enqueued and 0 Processing** for the FlowOrchestrator
-   queues. Scheduled jobs (polling re-checks, delays) may remain: they are 1.17+ jobs and a 2.0 worker
-   runs them (verify with the query in 4.1 that none is ≤ 1.16).
-3. **Stop every 1.x instance.**
+1. Run the query in [4.1](#41-check-for--116-jobs); it must return zero rows.
+2. Hold webhook traffic at your gateway, or accept that callers retry. A retry of a delivery 1.x already
+   accepted is answered `409` (`nonce_seen`) by 2.0 when the trigger uses replay protection: the nonces
+   are in the shared database.
+3. **Stop every 1.x instance** (a normal shutdown, so Hangfire servers deregister). You do not have to
+   wait for the queue to drain: jobs left **Enqueued** or **Scheduled** by 1.17+ stay in Hangfire
+   storage and the 2.0 workers run them — entry steps, continuations, poll re-checks and `WaitForSignal`
+   deadline checks alike (rehearsed). A job that was **Processing** when its server stopped is requeued by
+   Hangfire and also runs on 2.0.
 4. Deploy 2.0 to every instance and start them.
-5. Resume cron triggers and webhook traffic.
+5. Release webhook traffic. Cron schedules need no action: a stopped deployment fires nothing, and 2.0
+   re-registers every schedule — with its dashboard override, and paused ones stay paused — at startup.
+
+> **Pausing schedules first?** Not needed, and it has a side effect: pausing from the dashboard stores the
+> schedule's current cron expression as its *override* (1.x and 2.0 alike), and resuming keeps it. A
+> schedule you never overrode is then pinned to that expression: a later manifest change of its cron
+> does not apply, because the stored override wins (with `Scheduler.PersistOverrides`, across restarts).
 
 **B — Blue/green with separate Hangfire storage:** stand 2.0 up against a *new* Hangfire storage (a new
 schema, `HangFire2`, or a separate database for Hangfire only — the FlowOrchestrator tables stay shared),
@@ -337,6 +382,9 @@ way a misconfigured deployment fails at startup instead of misbehaving later. Me
 | `FlowOrchestratorEngine requires an IFlowRunControlStore registration, …` | Same, for the run-control store (cancel, timeout, idempotency) | Register it as `IFlowRunControlStore` |
 | `Step key '…' contains '.', which is reserved as the runtime scope separator.` | A top-level step key contains `.`; runtime keys are `.`-joined scope paths (`loop.3.child`), so such a key was ambiguous | Rename the step (e.g. `send.email` → `send_email`), and update every `runAfter` / `@steps('…')` that references it. **Run history keeps the old key**: runs started before the rename show it under the old name |
 | `Flow has a step with an empty key.` | A step registered under `""` | Give it a key |
+| `Step keys '…' and '…' differ only by case; step keys must be unique ignoring case within a scope, because SQL Server compares them case-insensitively.` | Two steps in the same scope (top level, or the children of one `ForEach`) whose keys differ only by case. On SQL Server they shared one claim / dispatch / status row and the run never finished; the check applies to every provider so a flow behaves the same everywhere | Rename one of them, and update every `runAfter` / `@steps('…')` that references it. Run history keeps the old key |
+| `Step key '…' contains ':', which is reserved as the outputs-key separator ("{stepKey}:input").` | A step key (at any level) contains `:`. Resolved inputs are stored under `"{stepKey}:input"` and trigger data under `"__trigger:data"`, so such a key could overwrite another step's inputs | Rename the step (e.g. `crm:sync` → `crm_sync`) and its references |
+| `Step key '…' is N characters long; the maximum is 250 (the stores persist "{stepKey}:input" in a 256-character key column).` | A step key's flattened path (`loop.child`) exceeds `FlowGraphPlanner.MaxStepKeyLength`. SQL Server / PostgreSQL failed the first write of such a step with a truncation error | Shorten the key. Keys inside a `ForEach` also carry the iteration index at runtime (`loop.12.child`), so keep them well below the limit |
 | `Flows '…' and '…' are both registered with id '…'. Flow ids must be unique: …` | Two **different** flow types share an `Id` (usually a copy-pasted `Guid`). In 1.x one silently shadowed the other | Give each flow its own stable `Id`. Registering the *same* type twice stays harmless |
 
 > Changing a flow's `Id` makes it a new flow to the store: its run history, schedule overrides and
@@ -375,6 +423,8 @@ Skip this step if the [Step 0 inventory](#step-0--before-you-start) found nothin
 | `IFlowEventReader.GetRunEventsAsync` | removed; **`FlowRunTimeline.Build(run)`** (`FlowOrchestrator.Core.Storage`) derives the same `FlowEventRecord` list from `IFlowRunStore.GetRunDetailAsync(runId)` | Call it instead; delete your reader implementation and its registration |
 | `LogEvents.EventPersistenceFailed` (EventId 3002) | removed; 3002 is retired | Drop alert rules on 3002 |
 | direct queries on `FlowEvents` / `flow_events` | the table is no longer written | Read `GET {base}/api/runs/{runId}/events`, `FlowStepAttempts`, or OpenTelemetry spans |
+| `IFlowOrchestrator.RetryStepAsync` returned the step's result after running it inline | returns a **`StepRetryResult`** (`Accepted` / `NotFailed` / `Conflict`) once the new attempt is dispatched | Do not read a step output from the return value; wait for the run (see [Step 7](#manual-retry-is-dispatched-and-accepts-only-a-failed-step)) |
+| `IFlowRunStore.RetryStepAsync` → `Task` | `Task<bool>`: resets only a `Failed` step, atomically | Custom stores: see the checklist below |
 
 ### Custom storage backend
 
@@ -406,7 +456,82 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
       for the loser — never throw a duplicate-key error. On SQL Server use
       `WITH (UPDLOCK, HOLDLOCK)`; on PostgreSQL `INSERT … ON CONFLICT DO NOTHING`.
 - [ ] Trigger headers read back from storage use a case-insensitive dictionary
-      (`StringComparer.OrdinalIgnoreCase`).
+      (`StringComparer.OrdinalIgnoreCase`), and are a snapshot taken at save time, not the caller's
+      dictionary.
+- [ ] **Idempotency keys** go through `IdempotencyKeyStorage.Normalize` before they are stored or looked up
+      (trim, lower-case, and a `sha256:` digest for keys over 256 characters), and the copy passed to
+      `ConfigureRunAsync` through `IdempotencyKeyStorage.ToStorageForm`. That is what the built-in stores
+      do, so a key deduplicates the same way whichever backend you move to.
+- [ ] **`IFlowRunControlStore.TryTakeOverStaleIdempotencyKeyAsync`** (new in 2.0, no default
+      implementation) re-points a key from `staleRunId` to `newRunId` and returns the key's owner after
+      the call: `newRunId` when it won, otherwise the current owner, or `null` when no key is registered.
+      It takes over only when, in **one atomic operation**, the key still maps to `staleRunId`, the
+      registration is at least `reservationTimeout` old on the clock that stamped it, and the stale run
+      has **no dispatch-ledger row and no step row**. The same operation re-stamps the registration time
+      and sets the stale run's cancel latch, creating its control record if it has none and keeping an
+      earlier cancel reason (`IdempotencyKeyStorage.TakenOverCancelReason`). Exactly one of N concurrent
+      callers may win. The started-work probe must also exclude a concurrent first insert into the ledger
+      or step table until the latch commits. The built-in stores use `HOLDLOCK` key-range locks on SQL
+      Server. On PostgreSQL they use a per-run advisory lock: the takeover holds it exclusively, and every
+      ledger or step-row write holds it shared. Both block only the run being taken over. Returning
+      `staleRunId` unconditionally compiles, but keeps the 1.x behaviour: a delivery whose trigger died
+      after registering its key is lost.
+- [ ] **`MarkTimedOutAsync`** returns `false` without writing when the timeout is already latched **or a
+      cancel was already requested** (a user cancel wins), and keeps an existing `CancelReason` when
+      `reason` is `null`. **`ConfigureRunAsync`** is an upsert that keeps the cancel / timeout fields of an
+      existing record.
+- [ ] **`IFlowSignalStore.DeliverSignalAsync`** delivers only to a waiter that is undelivered **and live**
+      (`ExpiresAt` null or later than the store's clock, judged in the same atomic write that stamps
+      `DeliveredAt`), oldest first, and returns `SignalDeliveryStatus.Expired` — writing nothing — when the
+      only undelivered waiters are expired. An expired waiter must not block a live one sharing its name.
+- [ ] Signal names and run-status filters compare case-insensitively (`RunStatusNames.Canonicalize` maps a
+      status filter onto the persisted spelling without giving up an index).
+- [ ] The conditional transitions added in 2.0 have **no default implementation**, and each must be one
+      atomic step (a conditional `UPDATE` and its row count, inside one transaction):
+      - `IFlowRunStore.TryCompleteRunningStepAsync` — completes a step only while it is `Running`
+        (the `ForEach` settle);
+      - `IFlowRunStore.RetryStepAsync` — `Failed` → `Running`, run back to `Running`, claim and ledger
+        rows deleted, or nothing at all;
+      - `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` — deletes claims with no step row older than
+        the given age (on the clock that stamped them) together with their ledger rows.
+- [ ] Step execution leases (2.0) have **no default implementation**. The engine claims every step through
+      `IFlowRunRuntimeStore.TryAcquireStepLeaseAsync` when leases are on (the default), so a store without them
+      cannot run a step:
+      - `TryAcquireStepLeaseAsync` — inserts the claim with fence 1, or takes over a lease that **expired** on
+        the store's clock while the step had no status row or a `Running` / `Pending` one (fence + 1). It must
+        lock the lease first and read the status after, so a fenced completion that committed first is seen;
+      - `TryRecordLeasedStepCompleteAsync` — the step and attempt writes of `RecordStepCompleteAsync`, only
+        while the stored fence still matches, in the same transaction; a terminal status ends the lease;
+      - `RenewStepLeasesAsync`, `ReleaseStepLeaseAsync` (fenced claim delete), `PinStepLeaseAsync` (the lease
+        never expires again) and `LeaseExpiredStepLeasesAsync` (the sweep's selection, exclusive across callers).
+      - Keep the fence monotonic: a released or completed lease is retired, not deleted, so the next attempt's
+        fence is higher than any earlier one. A claim with no lease (`TryClaimStepAsync`) stays permanent.
+- [ ] `RecordSkippedStepAsync` writes the step row and its attempt row in one transaction.
+- [ ] `IFlowStore.GetByIdAsync` returns the `ManifestJson` that `SaveAsync` stored (byte-identical, or JSON
+      that is structurally equal). During a rolling deploy the engine compares it with its own manifest to
+      decide whether a step it does not know belongs to a newer version (hand it back) or was removed
+      (record it `Skipped`). A store that drops the column (`null`) gets the removed-step answer every time,
+      which is the 1.x behaviour.
+- [ ] The **frontier reads** the 2.0 continuation makes on every step completion (#189 P0-1) have **no
+      default implementation** — falling back to the whole-run read would quietly keep the engine O(n²) in a
+      long `ForEach`:
+      - `IFlowRunRuntimeStore.GetStepStatusesAsync(runId, keys)` — the rows of just these keys, absent keys
+        omitted, an ordinal-keyed map; point lookups on `(RunId, StepKey)`, chunked if your provider limits
+        parameters per statement;
+      - `IFlowRunRuntimeStore.HasRunningOrPendingStepAsync(runId)` — whether any row of the run is
+        `Running` or `Pending`; back it with an index holding only those rows, because the completion gate
+        asks it on every completion that dispatched nothing;
+      - `IFlowRunRuntimeStore.CountSettledIterationsAsync(runId, loopKey, iterations, bodyKeys)` — how many
+        iterations `i < iterations` have every `"{loopKey}.{i}.{child}"` row terminal (anything but
+        `Running` / `Pending`), counting only canonical decimal indices and only the listed direct children
+        (not a nested loop's `"{loopKey}.{i}.{child}.{j}.{grandchild}"` rows). Return one number; do not
+        page rows back to the engine.
+
+      All three must observe **every write committed before the call started**: run each as its own
+      statement on the primary, never inside a transaction opened earlier and never on a read replica. That
+      is the write-skew rule the frontier read depends on — two steps that unlock one join concurrently must
+      not both miss it — and `tests/shared/FrontierStoreContract.cs` is the contract the built-in stores
+      pass (link it into your own test project and derive one class, as the built-in stores' tests do).
 - [ ] Optional members with default implementations (`IsStepClaimedAsync`, `IsStepDispatchedAsync`,
       `GetStepAsync`, `SearchRunsAsync`, …) are worth overriding with point queries: the defaults fetch
       whole sets.
@@ -452,6 +577,30 @@ visible:
 
 `Development` hosts are unchanged (EventId 4105, Warning).
 
+### Signal endpoint: per-signal authorization and bearer tokens
+
+New and opt-in: a `WaitForSignal` step can restrict who may deliver its signal (`allowedRoles` /
+`authorizationPolicy`), and `FlowDashboard:Authorization:AdditionalAuthenticationSchemes` lets API clients
+sign in with a bearer token — see [WaitForSignal → Security](wait-for-signal.md#security). Existing flows and
+configuration behave as before, except:
+
+- **a signal for a run whose flow the dashboard host does not register is refused with `403` for every
+  caller** (EventId `4108`), because the dashboard cannot read the step's restriction without the manifest.
+  Hosts that register every flow with `AddFlow` are unaffected. In a split deployment whose dashboard host
+  has no flows, register the same flows there, or restore the 1.x operator rule explicitly (startup then logs
+  EventId `4109`, Warning):
+
+  ```json
+  { "FlowDashboard": { "Authorization": { "UnregisteredFlowSignals": "OperatorRule" } } }
+  ```
+
+- `GET …/api/me` reports a caller signed in through an additional (bearer) scheme as `method: "bearer"`,
+  `canSignOut: false`;
+- a request with an `Authorization` header other than Basic that no scheme accepts answers **`401`** instead
+  of redirecting to the identity provider, page requests included;
+- `POST …/signals/{name}` checks the run before the body: a missing run answers `404` to operators and `403`
+  to everyone else even when the body is not valid JSON (it used to be `400`).
+
 ### Step inputs are resolved in a single pass (since 1.34.2)
 
 Each manifest input is classified once from the manifest's own text. A value substituted from the
@@ -478,10 +627,82 @@ builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhook
     sec.UseEnforcementMode(WebhookEnforcementMode.Audit)));   // or .Off
 ```
 
+### Manual retry is dispatched, and accepts only a failed step
+
+The dashboard Retry button (`POST {base}/api/runs/{runId}/steps/{stepKey}/retry`) and
+`IFlowOrchestrator.RetryStepAsync` used to run the step's handler inline, inside the HTTP request, while
+the response said "retry enqueued". Two concurrent retries could also run the handler twice at once. Now:
+
+- the retry resets the step with a compare-and-swap on `Failed` and **dispatches** the new attempt through
+  the runtime; the call returns as soon as it is queued, and the result arrives through the run like any
+  other attempt;
+- **only a `Failed` step can be retried.** A `Succeeded`, `Skipped` (including one skipped because the run
+  was cancelled or timed out) or still-running step is refused: the endpoint answers `400`, the engine
+  returns `StepRetryOutcome.NotFailed`, and nothing changes. 1.x allowed the engine call on any step;
+- of two concurrent retries, one is accepted and the other gets **`409`** (`StepRetryOutcome.Conflict`).
+
+The response body for an accepted retry is unchanged. If a script read the step's outcome right after the
+retry call, poll `GET {base}/api/runs/{runId}` instead.
+
 ### Smaller changes
 
+- **The continuation reads the frontier, not the whole run** (#189 P0-1). After a step completes, the
+  engine reads and classifies only that step's dependents (and their dependencies); the run's whole status
+  map is read only when nothing is left running or pending, to decide whether to close it. Two visible
+  consequences: a step whose `RunAfter` accepts *any* status of a predecessor (an empty status list) is
+  dispatched when that predecessor completes, no longer earlier by some unrelated step's completion while
+  the predecessor was still `Running` or `Pending`; and a continuation that died between a step's completion
+  write and its dispatches (a crash, or a dispatcher call that failed after the completion was recorded) is
+  repaired by the completion gate once the run has nothing else open, or by startup recovery — no longer by
+  whichever step happens to complete next. Inside a `ForEach` with `ConcurrencyLimit > 1` that means the
+  loop waits for recovery, as a sequential loop always did. The periodic stalled-run sweep that closes
+  this gap is RFC 2.0 §5.2.
+- A step whose start cannot be recorded (the run-control read or the start write throws) is no longer run
+  anyway: the engine releases its claim and rethrows, so the runtime retries the job. Startup recovery and
+  the timeout sweep release a claim left without a step row by a crashed worker once it is older than
+  `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off).
+- **Step execution leases.** A step is claimed under a lease (`FlowRunControlOptions.StepLeaseDuration`,
+  default 60 s) that the process running it renews every `StepLeaseRenewInterval` (20 s). When the worker
+  dies — killed mid-handler, between its claim and its start write, or between its handler and its
+  completion write — the lease expires: the runtime's redelivery takes the step over, and the new
+  `FlowStepLeaseHostedService` redelivers it when the runtime does not. In 1.x such a claim never expired,
+  every redelivery exited as a duplicate, and the run stayed `Running` until an operator intervened. The
+  step therefore runs again after a crash (at-least-once execution of the interrupted attempt, as in
+  Temporal); a live handler is never taken over however long it runs. Every write of an attempt is fenced
+  by its lease, so a stalled worker that comes back after a takeover cannot overwrite the new owner's
+  outcome. `StepLeaseDuration = null` restores the 1.x claim. Claims written by 1.x have no lease and stay
+  permanent, so a step that was mid-flight when you stopped 1.x is not recovered by the lease (it was not
+  in 1.x either).
+- A step whose dispatch-ledger row was written but whose send never returned (a replica killed mid-send, a
+  send hung in the broker client) is re-delivered by the new `FlowUnsentDispatchRecoveryHostedService` once
+  the row is older than `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s; `null` turns it off).
+  The SQL Server / PostgreSQL migrator adds one filtered index on the dispatch ledger for it. A custom
+  `IFlowRunStore` must implement `LeaseUnsentDispatchesAsync` (no default implementation; returning an empty list
+  keeps steps whose hand-off never returned stranded).
 - `@triggerHeaders()['name']` is case-insensitive in every step on SQL Server / PostgreSQL storage
-  (1.34.3); it used to be case-sensitive after the entry step.
+  (1.34.3); it used to be case-sensitive after the entry step. InMemory storage now does the same even
+  when the trigger was raised with an ordinal dictionary.
+- **PostgreSQL:** signal names (`POST {base}/api/runs/{runId}/signals/{name}`) and the run-list status
+  filter (`?status=failed`) are case-insensitive, as they already were on SQL Server and InMemory. A
+  duplicate signal delivery that races the first one now gets `409` (already delivered) instead of `404`.
+- A signal sent after its `WaitForSignal` step's `timeoutSeconds` deadline is refused on every store:
+  `SignalDeliveryStatus.Expired`, HTTP **`410`**, nothing written. 1.x recorded it, and a signal landing
+  before the step's safety-net invocation resumed the step past its timeout. A `switch` over
+  `SignalDeliveryStatus` needs the new `Expired` case.
+- An idempotency key longer than 256 characters is accepted on SQL Server / PostgreSQL (it returned `500`)
+  and stored as a `sha256:` digest; shorter keys are stored exactly as before.
+- **In-flight runs and manifest changes.** A run is not pinned to the manifest it started under: every
+  decision uses the manifest of the worker taking it, on every runtime — so a step added to a deployed flow
+  runs in in-flight runs whose prerequisites it finds satisfied, including a new entry step. What changed in
+  2.0 is the rolling-deploy window: a replica that has not restarted yet and is handed a step of the new
+  version no longer records it `Skipped` (which cascade-skipped its dependents and could end the run
+  `Skipped`); it hands the step back for a replica that knows it (EventId 3020). A step queued before a
+  deploy that removed it is recorded `Skipped` (EventId 3021), and the in-memory runtime's startup recovery
+  now redelivers such a step instead of leaving the run open for ever. See
+  [Versioning Flows](versioning.md#the-rule--in-flight-runs-follow-the-latest-manifest), rewritten for 2.0 —
+  the 1.x page claimed in-flight runs kept the graph they started with, which was never the case.
+- A run the user cancelled stays `Cancelled` even when its deadline passes while the cancel is being
+  recorded; it used to be relabelled `TimedOut`, and a later retry could then clear the cancel.
 - The Hangfire package no longer brings the OpenTelemetry SDK or `Microsoft.Extensions.Logging`
   transitively. Hosts on the generic host are unaffected; a bare `new ServiceCollection().AddLogging()`
   needs a direct `Microsoft.Extensions.Logging` reference.
@@ -493,9 +714,76 @@ builder.Services.AddFlowDashboard(builder.Configuration, opts => opts.UseWebhook
 
 ## Step 8 — Database
 
-The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database both
-only **add** the run-search indexes (and, on SQL Server, two computed columns) described below; 1.34.3 keeps working against the upgraded database, which is what makes the
-[rollback](#rollback) below possible.
+The SQL Server and PostgreSQL migrators still run automatically at startup. On a 1.34.x database they
+only **add** objects — nothing is altered, rewritten or deleted, and no row changes. This is the complete
+list, from a schema diff of a 1.34.7 database before and after the first 2.0 start (the upgrade
+rehearsal checks it on every run):
+
+| Backend | Added on a 1.34.x database | Why |
+|---|---|---|
+| SQL Server / Azure SQL | columns `FlowRuns.IdText`, `FlowRuns.RunSearchText` (computed, not persisted); indexes `IX_FlowRuns_IdText`, `IX_FlowRuns_StartedAt_Search` | run search — [below](#run-search-columns-and-indexes-sql-server--azure-sql) |
+| | filtered index `IX_FlowStepDispatches_Unsent` on `FlowStepDispatches([DispatchedAt]) WHERE [DispatchJobId] IS NULL` | unsent-dispatch recovery ([Step 7](#smaller-changes)); holds only in-flight rows |
+| | filtered index `IX_FlowSteps_RunId_Open` on `FlowSteps([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending')` | the completion gate's open-row check ([Step 7](#smaller-changes)); holds only running and pending steps; built like the run-search indexes — online in the background, or offline at startup only up to 2 000 000 rows |
+| | nullable column `WebhookReplayNonces.RegistrationId` (`UNIQUEIDENTIFIER`) | lets a rejected delivery release only its own replay nonce; `NULL` on rows written by 1.x, which simply never match a release |
+| | table `FlowStepLeases` with filtered index `IX_FlowStepLeases_Live` | step execution leases ([Step 7](#smaller-changes)); a new table, so `FlowStepClaims` is not altered |
+| PostgreSQL | index `ix_flow_runs_run_search_trgm` (built `CONCURRENTLY` in the background) | run search — [below](#run-search-index-postgresql) |
+| | partial index `ix_flow_step_dispatches_unsent` on `flow_step_dispatches(dispatched_at) WHERE dispatch_job_id IS NULL` | unsent-dispatch recovery |
+| | partial index `ix_flow_steps_run_id_open` on `flow_steps(run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')` (built `CONCURRENTLY` in the background) | the completion gate's open-row check |
+| | nullable column `webhook_replay_nonces.registration_id` (`uuid`) | as for SQL Server |
+| | table `flow_step_leases` with partial index `ix_flow_step_leases_live` | as for SQL Server |
+
+1.34.x keeps working against the upgraded database (it ignores every object above), which is what makes
+the [rollback](#rollback) below possible. The run events table is left in place — see
+[below](#the-run-events-table-is-no-longer-used).
+
+To run all of it ahead of the deployment instead of at the first start, apply the statements in this
+section with `sqlcmd -I` (SQL Server) or `psql` (PostgreSQL); the migrators skip whatever exists:
+
+```sql
+-- SQL Server / Azure SQL — the two indexes on FlowRuns are in the next section
+IF COL_LENGTH(N'FlowRuns', N'IdText') IS NULL
+    ALTER TABLE [FlowRuns] ADD [IdText] AS CONVERT(CHAR(36), [Id]);
+IF COL_LENGTH(N'FlowRuns', N'RunSearchText') IS NULL
+    ALTER TABLE [FlowRuns] ADD [RunSearchText] AS
+        CAST(LOWER(CONCAT(CONVERT(CHAR(36), [Id]), N'|', [FlowName], N'|', [TriggerKey], N'|', [Status], N'|', [BackgroundJobId])) AS NVARCHAR(800))
+        COLLATE Latin1_General_100_BIN2;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowStepDispatches_Unsent' AND object_id = OBJECT_ID(N'[FlowStepDispatches]'))
+    CREATE INDEX IX_FlowStepDispatches_Unsent ON [FlowStepDispatches]([DispatchedAt]) WHERE [DispatchJobId] IS NULL;
+IF COL_LENGTH(N'WebhookReplayNonces', N'RegistrationId') IS NULL
+    ALTER TABLE [WebhookReplayNonces] ADD [RegistrationId] UNIQUEIDENTIFIER NULL;
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowStepLeases')
+BEGIN
+    CREATE TABLE [FlowStepLeases] (
+        [RunId]         UNIQUEIDENTIFIER NOT NULL,
+        [StepKey]       NVARCHAR(256)    NOT NULL,
+        [Fence]         BIGINT           NOT NULL,
+        [Owner]         NVARCHAR(128)    NOT NULL,
+        [ExpiresAt]     DATETIMEOFFSET   NULL,
+        [RedeliveredAt] DATETIMEOFFSET   NULL,
+        CONSTRAINT PK_FlowStepLeases PRIMARY KEY ([RunId], [StepKey])
+    );
+    CREATE INDEX IX_FlowStepLeases_Live ON [FlowStepLeases]([ExpiresAt]) WHERE [ExpiresAt] IS NOT NULL;
+END
+-- Optional: the migrator builds this one itself without blocking (online in the background where the edition
+-- allows it; offline at startup only while FlowSteps has at most 2 000 000 rows; otherwise warning 7220).
+-- On a large table and an edition without online builds, run it here in a maintenance window. Add
+-- WITH (ONLINE = ON) where the edition allows it.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowSteps_RunId_Open' AND object_id = OBJECT_ID(N'[FlowSteps]'))
+    CREATE INDEX IX_FlowSteps_RunId_Open ON [FlowSteps]([RunId]) INCLUDE ([StepKey]) WHERE [Status] IN (N'Running', N'Pending');
+```
+
+```sql
+-- PostgreSQL — the trigram index is in "Run-search index (PostgreSQL)" below
+CREATE INDEX IF NOT EXISTS ix_flow_step_dispatches_unsent ON flow_step_dispatches (dispatched_at) WHERE dispatch_job_id IS NULL;
+ALTER TABLE webhook_replay_nonces ADD COLUMN IF NOT EXISTS registration_id uuid NULL;
+CREATE TABLE IF NOT EXISTS flow_step_leases (
+    run_id uuid NOT NULL, step_key varchar(256) NOT NULL, fence bigint NOT NULL, owner varchar(128) NOT NULL,
+    expires_at timestamptz NULL, redelivered_at timestamptz NULL, PRIMARY KEY (run_id, step_key));
+CREATE INDEX IF NOT EXISTS ix_flow_step_leases_live ON flow_step_leases (expires_at) WHERE expires_at IS NOT NULL;
+-- Optional: the migrator builds this one CONCURRENTLY in the background after startup. To have it in place
+-- before the deployment, run it here — outside a transaction, as CONCURRENTLY requires.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps (run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending');
+```
 
 ### Run-search columns and indexes (SQL Server / Azure SQL)
 
@@ -510,9 +798,14 @@ The two columns are added synchronously at startup. The two indexes (measured 0.
 runs) are built:
 
 - **Azure SQL Database, Managed Instance, Enterprise / Developer:** online (`ONLINE = ON`) in the
-  background after startup — no startup delay, writers are not blocked. Log events 7204 / 7205 mark
-  start and end; 7206 a failure (retried on the next start).
-- **Standard / Express / Web:** offline at startup while `FlowRuns` has at most 2,000,000 rows (seconds).
+  background after startup — no startup delay. On Azure and SQL Server 2022+ the build waits for its two
+  brief table locks with `WAIT_AT_LOW_PRIORITY`, so writers never queue behind it (it gives up after 5
+  minutes and retries on the next start). On Enterprise / Developer 2016-2019 `CREATE INDEX` has no
+  low-priority wait: a write transaction left open on `FlowRuns` while the build starts or finishes makes
+  later writers queue behind the build until that transaction ends. Log events 7204 / 7205 mark start and end; 7206
+  a failure (retried on the next start); 7209 on a host that found another one building.
+- **Standard / Express / Web:** offline at startup while `FlowRuns` has at most 2,000,000 rows (seconds);
+  a host starting at the same time as another waits for that host's build instead of racing it.
   Above that the migrator skips them and logs warning 7207 with the statements; run them in a maintenance
   window:
 
@@ -551,9 +844,11 @@ ALTER TABLE [FlowRuns] DROP COLUMN [RunSearchText], [IdText];`
 |---|---|---|
 | `ix_flow_runs_run_search_trgm` | trigram GIN index on `lower(id::text \|\| '\|' \|\| flow_name \|\| … \|\| background_job_id)` — every quick search and the run-id prefix | ~47 MB per 200k runs |
 
-No column is added and `flow_runs` is not rewritten: the index is an expression index, built with
+No column is added to `flow_runs` and it is not rewritten: the index is an expression index, built with
 `CREATE INDEX CONCURRENTLY` in the background after startup (log events 7211 / 7212; 7213 on failure,
-retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt.
+retried on the next start). An index left `INVALID` by an interrupted build is dropped and rebuilt; one
+that another host is still building is left to it (7215). Hosts started during the build, as in a rolling
+deployment, neither wait for it nor block writers.
 Until it exists, quick search runs the same SQL as a sequential scan.
 
 Like the trigram indexes 1.x already created, it needs the `pg_trgm` extension. On **Azure Database for
@@ -650,30 +945,56 @@ large tables, and how to run it ahead of the deployment.
 - [ ] A webhook flow accepts a signed delivery; a replay is rejected if you enforce replay protection.
 - [ ] A `WaitForSignal` flow resumes when signalled.
 - [ ] A polling step re-polls and completes.
-- [ ] Hangfire hosts: the Hangfire dashboard shows no failed jobs with `method not found` /
-      `JobLoadException`; no 1.x instance is still consuming the queue.
+- [ ] Runs that were in flight at the cut-over — parked in `WaitForSignal`, polling, or queued — move on:
+      `GET {base}/api/runs/active` shrinks as they finish, and a parked run resumes when signalled.
+- [ ] Hangfire hosts: the Hangfire dashboard shows no job on the **Failed** *or* **Retries** page with
+      `JobLoadException`, `method not found`, `TypeLoadException` or `Operation is not valid due to the
+      current state of the object`. A failing step job is retried (it shows as *Scheduled*) for a long
+      time before it reaches *Failed*, so look at both. With SQL Server storage:
+
+      ```sql
+      SELECT s.JobId, j.StateName, s.CreatedAt, LEFT(CAST(s.Data AS nvarchar(max)), 300) AS Error
+      FROM HangFire.State AS s JOIN HangFire.Job AS j ON j.Id = s.JobId
+      WHERE s.Name = 'Failed' AND s.CreatedAt > DATEADD(hour, -1, GETUTCDATE());
+      ```
+
+      (PostgreSQL: the same over `hangfire.state` / `hangfire.job`, `s.data::text`, `now() - interval '1 hour'`.)
+      Also check that no 1.x instance is still consuming the queue.
 - [ ] Non-Hangfire hosts: `dotnet list package --include-transitive` shows no Hangfire.
-- [ ] Logs: no new error-level events (in particular 4103 / 4104 if you rely on the dashboard).
+- [ ] Logs: no new error-level events (in particular 4103 / 4104 if you rely on the dashboard), and no
+      EventId **2006** ("Failed to track step start") warnings. Warning 4100 (Basic Auth in a non-Development
+      environment) is logged by 1.34 as well and is not new.
 
 ---
 
 ## Rollback
 
-Because 2.0 only adds to an existing database (the run-search columns and indexes, which 1.34.3
-ignores), rolling back to **1.34.3** is a redeploy:
+Because 2.0 only adds to an existing database ([Step 8](#step-8--database); 1.34.x ignores every added
+object), rolling back to the **1.34.x** you ran before (1.34.7 in the rehearsal) is a redeploy. The
+retarget and package changes are reverted with your code; keep the database as it is.
 
-1. Pause cron triggers and hold webhook traffic.
-2. **Hangfire hosts:** wait until no 2.0 step job is Enqueued or Processing — a 1.x worker cannot run
-   them. Scheduled 2.0 jobs left in the queue would fail on 1.x; either let them run first or re-trigger
-   the affected runs after the rollback.
-3. Stop the 2.0 instances, deploy 1.34.3, start, resume traffic.
+1. Hold webhook traffic. You do not need to pause cron schedules (and pausing pins their cron as an
+   override — see the note in [4.2](#42-cut-over-pick-one)): a stopped deployment fires nothing.
+2. **Hangfire hosts:** a 1.x worker cannot run a 2.0 step job — Hangfire fails it with
+   `TypeLoadException: Could not load type 'FlowOrchestrator.Hangfire.HangfireStepEnvelope'`, keeps
+   retrying it, and the run stays `Running`. So before you stop 2.0, let **Enqueued** step jobs drain
+   (the Hangfire dashboard's Enqueued count for the FlowOrchestrator queue reaches 0). **Scheduled** 2.0
+   jobs — poll re-checks and `WaitForSignal` deadline checks of runs that are still in progress — cannot
+   drain quickly; after the rollback those runs stop polling and their `WaitForSignal` timeout does not
+   fire. Re-run them from the dashboard after the rollback, or cancel them.
+   **Service Bus hosts:** nothing to drain. The step message did not change between 1.34 and 2.0, so a
+   1.34 worker runs step messages 2.0 sent (rehearsed).
+3. Stop the 2.0 instances, deploy 1.34.x, start, release traffic.
 
-Runs started on 2.0 that are still in progress continue on 1.34.3 (same tables), except for the Hangfire
-jobs covered in step 2.
+What carries over (all rehearsed on 1.34.7):
 
-1.34.3 reads run events from `FlowEvents` again, which 2.0 did not write: runs executed under 2.0 show an
-empty Events drawer on 1.34.3 (their steps, attempts and outputs are all there). If you already dropped
-the table, 1.34.3's migrator recreates it empty at startup.
+- Runs started on 2.0 and still in progress continue on 1.34.x (same tables): a run parked in
+  `WaitForSignal` on 2.0 resumes when signalled, except for the Hangfire jobs covered in step 2.
+- The 1.34 dashboard lists and opens runs 2.0 wrote; idempotency keys 2.0 stored still deduplicate; cron
+  overrides and paused schedules are kept.
+- 1.34.x reads run events from `FlowEvents` again, which 2.0 did not write: runs executed under 2.0 show an
+  **empty Events drawer** on 1.34.x (their steps, attempts and outputs are all there). If you already
+  dropped the table, the 1.34.x migrator recreates it empty at startup.
 
 ---
 
@@ -687,8 +1008,10 @@ each when it lands:
   in progress during the upgrade).
 - **Store contract redesign.** `IFlowRunStore` / `IFlowRunRuntimeStore` / `IFlowRunControlStore` are
   consolidated into an engine store and a dashboard query store, without default interface methods, and
-  with an incremental status read that removes the remaining per-step full-status fetch. Custom storage
-  backends will need changes; the built-in ones carry them.
+  with per-loop counters maintained in the completion transaction, which make the `ForEach` barrier O(1).
+  (The per-step full-status fetch is already gone: the continuation reads its frontier by key — see the
+  [custom storage checklist](#custom-storage-backend).) Custom storage backends will need changes; the
+  built-in ones carry them.
 - **One input shape for untyped handlers.** Hangfire, InMemory and Service Bus will hand untyped
   handlers the same JSON-shaped values; typed handlers are unaffected.
 
@@ -703,7 +1026,10 @@ No. Hangfire is a permanent, first-class runtime. 2.0 only stops forcing it on h
 Against the same FlowOrchestrator database, yes, as long as they do not share a **Hangfire storage**
 and only one side fires cron schedules
 ([Step 4](#step-4--move-the-hangfire-queue-across-hangfire-hosts-only)). With InMemory there is nothing
-to share; with Service Bus, drain the step topic subscriptions before switching versions to be safe.
+to share. With Service Bus the step message format is the same in 1.34 and 2.0, and the rehearsal runs
+messages queued by 1.34 on 2.0 and messages sent by 2.0 on 1.34; still, let only one version consume a
+subscription at a time, because a 1.x consumer does not know the 2.0 rolling-deploy hand-back
+(a step of a manifest it does not know is recorded `Skipped`).
 
 **We are on .NET 8 and cannot move yet.**
 Stay on 1.34.x. The proposed support policy (roadmap #262, to be confirmed with 2.0 GA) is security and

@@ -30,6 +30,40 @@ public interface IFlowGraphPlanner
     FlowGraphEvaluation Evaluate(IFlowDefinition flow, IReadOnlyDictionary<string, StepStatus> statuses);
 
     /// <summary>
+    /// Classifies only <paramref name="candidateStepKeys"/> — the steps whose dependencies just changed — as
+    /// <c>Ready</c>, <c>Blocked</c> or <c>Waiting</c>, from a status map that holds just those steps and their
+    /// dependencies.
+    /// </summary>
+    /// <param name="flow">The flow definition to evaluate.</param>
+    /// <param name="candidateStepKeys">Runtime keys to classify; may contain duplicates.</param>
+    /// <param name="statuses">
+    /// Status rows of the candidates and of every dependency of every candidate; a key absent from the map has
+    /// no row. Rows of unrelated steps may be missing.
+    /// </param>
+    /// <returns>The candidates grouped by readiness; keys outside the candidate set never appear.</returns>
+    /// <remarks>
+    /// The engine's per-step-completion evaluation (#189 P0-1): a step's classification depends only on its own
+    /// row and its dependencies' rows, so after step <c>X</c> changes only <c>X</c>'s dependents need
+    /// classifying. The default implementation runs <see cref="Evaluate"/> on the partial map and keeps the
+    /// candidates, which gives the same answer for them; override it with a direct classification of the
+    /// candidates, as <see cref="FlowGraphPlanner"/> does, so the cost does not grow with the run.
+    /// </remarks>
+    FlowGraphEvaluation EvaluateFrontier(
+        IFlowDefinition flow,
+        IReadOnlyCollection<string> candidateStepKeys,
+        IReadOnlyDictionary<string, StepStatus> statuses)
+    {
+        var full = Evaluate(flow, statuses);
+        var wanted = new HashSet<string>(candidateStepKeys, StringComparer.Ordinal);
+        return new FlowGraphEvaluation
+        {
+            ReadyStepKeys = full.ReadyStepKeys.Where(wanted.Contains).ToList(),
+            BlockedStepKeys = full.BlockedStepKeys.Where(wanted.Contains).ToList(),
+            WaitingStepKeys = full.WaitingStepKeys.Where(wanted.Contains).ToList()
+        };
+    }
+
+    /// <summary>
     /// Validates the structural correctness of the flow manifest's step graph at startup.
     /// Checks for missing entry steps, unresolvable dependencies, and dependency cycles.
     /// </summary>

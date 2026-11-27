@@ -71,7 +71,8 @@ internal static class PostgreSqlRunSearchCommandBuilder
 
         var nonWindow = new List<string>(2);
         if (query.FlowId.HasValue) { nonWindow.Add("fr.flow_id = @FlowId"); p.Add("FlowId", query.FlowId); }
-        if (!string.IsNullOrWhiteSpace(query.Status)) { nonWindow.Add("fr.status = @Status"); p.Add("Status", query.Status); }
+        // Canonical casing (RunStatusNames) keeps the case-insensitive filter index-friendly: see its remarks.
+        if (!string.IsNullOrWhiteSpace(query.Status)) { nonWindow.Add("fr.status = @Status"); p.Add("Status", RunStatusNames.Canonicalize(query.Status)); }
         var window = new List<string>(2);
         // UTC: Npgsql rejects a non-zero offset for timestamptz.
         if (query.StartedFrom.HasValue) { window.Add("fr.started_at >= @StartedFrom"); p.Add("StartedFrom", query.StartedFrom.Value.ToUniversalTime()); }

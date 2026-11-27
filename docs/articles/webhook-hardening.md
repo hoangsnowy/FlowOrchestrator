@@ -92,7 +92,9 @@ keep working as aliases.
 | `webhookSecretPrevious` | `webhookHmacKeyPrevious`  | Same precedence rule as above.                                                                                                                 |
 
 Existing v1.24 manifests using only `webhookSecret` continue to work
-unchanged. Removal of the legacy names is planned for v2.0; no
+unchanged. When such a trigger also sets `webhookSignatureScheme`, a delivery
+whose signature verifies with the `webhookSecret` key is accepted without an
+`X-Webhook-Key` header; without a scheme, `X-Webhook-Key` is still required. Removal of the legacy names is planned for v2.0; no
 `[Obsolete]` attribute is applied yet.
 
 ## Per-publisher cookbook
@@ -101,6 +103,38 @@ Each example shows the manifest inputs needed for the named publisher. The
 HMAC verifier is generic — set `webhookSignatureScheme` and the wire
 format is resolved through `PartnerSchemeRegistry`. Use `Custom` for any
 publisher not on the built-in list.
+
+| `webhookSignatureScheme` | Signature header | Signed content | Key bytes |
+| --- | --- | --- | --- |
+| `GitHub` | `X-Hub-Signature-256: sha256=<hex>` | raw body | UTF-8 |
+| `GitHubLegacy` | `X-Hub-Signature: sha1=<hex>` (needs `AllowLegacySha1`) | raw body | UTF-8 |
+| `Bitbucket`, `Atlassian` | `X-Hub-Signature: sha256=<hex>` | raw body | UTF-8 |
+| `Stripe` | `Stripe-Signature: t=<ts>,v1=<hex>,…` | `{t}.{body}` | UTF-8 |
+| `Calendly` | `Calendly-Webhook-Signature: t=<ts>,v1=<hex>` | `{t}.{body}` | UTF-8 |
+| `Slack` | `X-Slack-Signature: v0=<hex>` + `X-Slack-Request-Timestamp` | `v0:{ts}:{body}` | UTF-8 |
+| `Zoom` | `X-Zm-Signature: v0=<hex>` + `X-Zm-Request-Timestamp` | `v0:{ts}:{body}` | UTF-8 |
+| `Shopify` | `X-Shopify-Hmac-SHA256: <base64>` | raw body | UTF-8 |
+| `Twilio` | `X-Twilio-Signature: <base64>` (HMAC-SHA1, needs `AllowLegacySha1`) | `{url}{sorted form fields}` | UTF-8 |
+| `Square` | `X-Square-HmacSha256-Signature: <base64>` | `{url}{body}` | UTF-8 |
+| `Linear` | `Linear-Signature: <hex>` | raw body | UTF-8 |
+| `Dropbox` | `X-Dropbox-Signature: <hex>` | raw body | UTF-8 |
+| `Mailgun` | in the JSON body (`signature.signature`) | `{timestamp}{token}` | UTF-8 |
+| `MicrosoftTeams` | `Authorization: HMAC <base64>` | raw body | base64-decoded token |
+| `StandardWebhooks` | `webhook-signature: v1,<base64> …` + `webhook-id` + `webhook-timestamp` | `{webhook-id}.{webhook-timestamp}.{body}` | base64-decoded part after `whsec_` |
+| `Generic` | `X-Signature: sha256=<hex>` | raw body | UTF-8 |
+| `Custom` | from the [manifest fields](#custom-scheme-reference) | | |
+
+All of them use HMAC-SHA256 unless noted, and compare every candidate signature
+against the current and previous key in constant time.
+
+A `webhookSignatureScheme` value that nothing can verify — not a built-in
+name, not registered with `RegisterScheme` or `AddWebhookSignatureVerifier`,
+or `Custom` with a signed-payload strategy that was never registered with
+`AddCustomSignatureStrategy` — is a configuration error, not "unsigned":
+`MapFlowDashboard` throws for a registered flow that names one (in `Enforce`
+and `Audit`), and a delivery to such a trigger is rejected with `401` /
+`signature_scheme_unknown` (`Audit` records it and lets it through; EventId
+4012). Leave the input out, or set it to `None`, for an unsigned trigger.
 
 ### GitHub (`X-Hub-Signature-256`)
 
@@ -167,6 +201,18 @@ SHA-1 base64 over `{absoluteUrl}{sortedFormParams}`. Twilio sends
 proxy preserves the form body verbatim. Twilio and `GitHubLegacy` are the two
 built-in schemes that require `AllowLegacySha1 = true` (both sign with HMAC-SHA1).
 
+The webhook endpoint accepts form-encoded bodies for every webhook trigger. The
+decoded fields are handed to the verifier, and the run's trigger body is a JSON
+object with one string per field (a field that repeats becomes an array of its
+values), so `@triggerBody()?.Body` and `@triggerBody()?.From` work as they would
+for a JSON delivery. A form over the ASP.NET Core form limits (1,024 fields)
+is answered `400 Invalid form payload.`; the `MaxBodyBytes` cap applies as for JSON.
+Twilio signs a repeated parameter value by value — the verifier sees a repeated
+field joined with `,`, so a Twilio request that repeats a parameter does not verify.
+The absolute URL the verifier signs is the one the request arrived on; behind a
+proxy that rewrites scheme or host, configure forwarded headers so it matches the
+URL configured in Twilio.
+
 ```csharp
 Inputs = new Dictionary<string, object?>
 {
@@ -180,9 +226,73 @@ Inputs = new Dictionary<string, object?>
 
 Same shape — set `webhookSignatureScheme` to the exact enum name
 (`"MicrosoftTeams"`, no space). Names are matched case-insensitively but must
-otherwise be exact: an unrecognised name resolves to no spec and the signature
-gate is skipped silently, with no error. See `PartnerSchemeRegistry` for the
-exact spec each one resolves to.
+otherwise be exact: an unrecognised name is rejected as described above
+(`signature_scheme_unknown`). See `PartnerSchemeRegistry` for the exact spec
+each one resolves to.
+
+### Microsoft Teams (`Authorization: HMAC …`)
+
+Teams signs the raw body with HMAC-SHA256 and sends the base64 digest in the
+`Authorization` header. Paste the **security token Teams shows when you create
+the outgoing webhook** into `webhookHmacKey` exactly as shown: it is base64, and
+the verifier keys the HMAC with its decoded bytes, as
+[Microsoft documents](https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-outgoing-webhook).
+A key that is not valid base64 is rejected as `KeyNotConfigured`. The
+`Authorization` header is handed to the verifier only — it is still never
+captured as a trigger header or written to the delivery log.
+
+```csharp
+Inputs = new Dictionary<string, object?>
+{
+    ["webhookSlug"] = "teams-bot",
+    ["webhookHmacKey"] = "<security token from the Teams outgoing-webhook dialog>",
+    ["webhookSignatureScheme"] = "MicrosoftTeams",
+}
+```
+
+### Standard Webhooks (Svix, Clerk, Resend, Lemon Squeezy, …)
+
+[Standard Webhooks](https://www.standardwebhooks.com) is the open signing
+scheme behind Svix and the providers that deliver through it. Per the
+[specification](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md),
+each delivery carries `webhook-id`, `webhook-timestamp` (Unix seconds) and
+`webhook-signature`, a space-delimited list of `v1,<base64 HMAC-SHA256>`
+entries over `{webhook-id}.{webhook-timestamp}.{body}`. Paste the signing
+secret into `webhookHmacKey` exactly as the provider shows it — `whsec_…`; the
+verifier keys the HMAC with the base64-decoded part after the prefix (a secret
+without the prefix works too). A secret that is not valid base64 is rejected as
+`KeyNotConfigured`.
+
+The delivery is accepted when **any** `v1` entry matches. Entries of other
+versions (`v1a`, the asymmetric `v2a`) and malformed entries are ignored, so a
+publisher rolling its secret can send one signature per secret — and a digest
+under any label other than `v1` never verifies. A missing `webhook-signature` or
+`webhook-id` is `MissingHeader`; a missing `webhook-timestamp` is
+`MissingTimestamp`.
+
+```csharp
+Inputs = new Dictionary<string, object?>
+{
+    ["webhookSlug"] = "clerk-events",
+    ["webhookHmacKey"] = "<whsec_… signing secret from the provider dashboard>",
+    ["webhookSignatureScheme"] = "StandardWebhooks",
+}
+```
+
+The spec asks receivers to check the timestamp against a tolerance (its
+reference libraries use 5 minutes) and to use `webhook-id` as an idempotency key.
+Both come from [replay protection](#replay-protection): turn it on with
+`UseReplayProtection(toleranceSeconds: 300)` (or
+`webhookReplayToleranceSeconds = 300` on the trigger). The skew window then
+applies to the signed `webhook-timestamp`, and the signed `webhook-id` is the
+replay key — once a message has been processed, a resend of the same message id
+within the window is `409`, even though the publisher re-timestamps and re-signs
+every retry. A first attempt that failed before its run started (a `5xx` from the
+trigger, for example) does not count: its key is released, so the publisher's
+retry is processed — see [Failed deliveries release their key](#failed-deliveries-release-their-key).
+
+There is no `Svix` alias: use `StandardWebhooks` for every provider that signs
+this way. (`Svix` stays an unknown scheme name and is rejected like any other.)
 
 ### Mailgun (body-resident signature)
 
@@ -251,7 +361,26 @@ Two complementary defences:
   `(flowId, triggerKey, nonce)` row in `IWebhookReplayStore`; a duplicate
   is a replay and gets `409 Conflict`. The nonce is either the explicit
   `webhookNonceHeader` (e.g. `X-GitHub-Delivery`) or
-  `SHA-256(timestamp || body)` when no header is supplied.
+  `SHA-256(timestamp || body)` when no header is supplied. A nonce longer
+  than 256 characters is registered as `sha256:` + its hex digest
+  (`WebhookReplayNonceStorage`), so it still dedupes on every backend.
+
+Once a signature scheme has verified the request, only signed material counts,
+because a replayer chooses every unsigned header:
+
+- **Signed timestamp** (Stripe, Slack, Zoom, Calendly, Mailgun, StandardWebhooks):
+  the skew window applies to the signed timestamp and the replay key is derived
+  from it — or is the signed token (Mailgun `token`, Standard Webhooks
+  `webhook-id`). Unsigned timestamp / nonce headers are ignored.
+- **Body-only signature** (GitHub, Shopify, Linear, Dropbox, Bitbucket,
+  Atlassian, Teams, …): no timestamp header is required — these publishers send
+  none — and any unsigned one is ignored. The replay key is `SHA-256(body)`, held
+  for `2 × webhookReplayToleranceSeconds` from the server clock: a byte-identical
+  delivery inside that window is rejected `409`, and after it no replay protection
+  is possible without a signed timestamp. Note that a publisher's own "redeliver"
+  of the same payload inside the window is rejected too.
+- **No signature**: a timestamp header is required (`409 missing_timestamp`
+  otherwise) and the explicit `webhookNonceHeader`, when configured, is the key.
 
 The `WebhookReplayJanitor` background service purges expired entries
 every minute. For multi-replica deployments use the SQL Server or
@@ -259,11 +388,43 @@ PostgreSQL backend (see [Storage](storage.md#webhook-hardening-backends-v125))
 — the in-memory store is single-process and would let a replay through
 on a second replica.
 
+### Failed deliveries release their key
+
+The replay key is recorded when the request passes the gate, before the run is
+started. If the request then fails without starting a run — the legacy
+`X-Webhook-Key` check refuses it (`401`), the trigger throws (`5xx`), or the client
+disconnects before the run is written — the endpoint releases the key again
+(EventId 4014), so the publisher's retry is processed instead of being answered
+`409`. Without this, a store outage during one delivery turned every retry inside
+the window into a lost delivery, and a caller without the shared secret could
+burn any `webhookNonceHeader` value it chose.
+
+The release cannot open a replay window:
+
+- Each registration carries a random owner token (`registrationId`) that never
+  leaves the process; the store removes the entry only when the token matches. A
+  replayer's own registration fails (the entry already exists), so it never holds
+  the token of the entry that blocks it.
+- It runs only on failure. A delivery whose trigger returned — run started,
+  `Idempotency-Key` duplicate, or disabled flow (`202`) — keeps its key.
+- It does not run once the engine has dispatched or skipped an entry step
+  (`ITriggerContext.EntryStepsStarted`): that run is alive and recovery finishes
+  it, so a retry would start a second one.
+- It runs with `CancellationToken.None` and is best effort: if the store cannot
+  be reached the original failure is still returned, EventId 4013 is logged, and
+  the key expires as it always did.
+
+Entries are owner-tagged in a nullable `RegistrationId` / `registration_id`
+column that the SQL Server and PostgreSQL migrators add on startup; rows written
+before the upgrade have no owner and simply expire.
+
 ## Rate limiting
 > Enforced only when `EnforcementMode` is `Enforce`. Under `Audit` violations are counted and logged but the request is still accepted; under `Off` nothing below takes effect at all. `Enforce` is the default since 2.0.
 
 Token-bucket limiter built on `System.Threading.RateLimiting`, keyed
-per-flow or per `flowId|clientIp` when `webhookRateLimitPerIp = true`.
+per webhook trigger (`flowId|triggerKey`) or per `flowId|triggerKey|clientIp`
+when `webhookRateLimitPerIp = true`. Two webhook triggers of one flow have
+independent budgets, each sized by its own `webhookRateLimit*` inputs.
 
 ```csharp
 Inputs["webhookRateLimitPermitsPerSecond"] = 10;
@@ -367,20 +528,31 @@ the well-known partner ranges.
 
 ### Reverse-proxy / `X-Forwarded-For`
 
-`WebhookSecurityOptions.ForwardedHeaderDepth` controls how deep into the
-XFF chain the dashboard trusts:
+`WebhookSecurityOptions.ForwardedHeaderDepth` is the **number of trusted
+reverse proxies in front of the app** (load balancer, ingress, CDN …). It
+decides which address the IP allow / deny lists and per-IP rate limits see:
 
 ```csharp
 opts.UseWebhookSecurity(sec => sec.UseForwardedHeaders(depth: 1));
 ```
 
-- `0` (default) — use `HttpContext.Connection.RemoteIpAddress` directly. Only
-  trusts the immediate socket peer.
-- `1` — trust 1 reverse-proxy hop; read the second-from-last entry in
-  `X-Forwarded-For` as the client.
-- `N` — trust N hops. Never set this higher than the actual number of
-  proxies you control: every extra hop is an attacker-controlled IP if the
-  client itself can spoof the header.
+Every proxy **appends the address it received the request from** to
+`X-Forwarded-For` (never its own). Behind N proxies the last N entries were
+written by your proxies, and the leftmost of those — the entry N positions
+from the right — is the caller. Anything further left came in the caller's
+own header and is ignored. This is the same rule as ASP.NET Core's
+`ForwardedHeadersMiddleware` with `ForwardLimit = N`.
+
+- `0` (default) — ignore the header; use `HttpContext.Connection.RemoteIpAddress`.
+- `1` — one proxy (e.g. nginx with `$proxy_add_x_forwarded_for`): the **last**
+  entry is the caller. `X-Forwarded-For: 192.30.252.10, 203.0.113.50` resolves
+  to `203.0.113.50`; the first entry was sent by the caller.
+- `2` — e.g. CDN → ingress → app: the second entry from the right.
+- If the header has fewer than N entries, the socket address is used.
+
+Set it to exactly the number of proxies you operate. One too many lets a
+caller choose its own address (allow-list bypass, rate-limit evasion); one too
+few reports a proxy's address for every caller.
 
 ## Body size cap
 
@@ -412,8 +584,8 @@ Counters and histograms (see [Observability](observability.md#what-is-emitted)):
 - `webhook_body_bytes`
 - `webhook_processing_ms{flow,result}`
 
-EventIds 4000–4099 reserved; 4000–4011 allocated today (4000, 4004, 4006 and
-4009 are reserved but not currently emitted). Full list in
+EventIds 4000–4099 reserved; 4000–4012 allocated today (4000, 4004 and 4009
+are reserved but not currently emitted). Full list in
 [Observability — EventIds](observability.md#logger-scopes-and-eventids).
 
 The existing `flow.webhook.receive` activity gains tags
@@ -442,7 +614,10 @@ these — pick a built-in scheme first.
 | `webhookHeaderValuePrefix`             | Prefix on the whole header line, stripped before parsing (Microsoft Teams `HMAC `).                    |
 | `webhookAcceptMultipleSignatures`      | When `true`, every matching segment is treated as a candidate.                                         |
 | `webhookAcceptedVersions`              | Allowlist of segment keys (`["v0", "v1"]`); other segments ignored.                                    |
-| `webhookSignedPayloadStrategy`         | `RawBody` (default), `TimestampDotBody`, `ColonDelimited`, `UrlPlusSortedForm`, `UrlPlusBody`, `TimestampPlusToken`, `Custom`. |
+| `webhookSignedPayloadStrategy`         | `RawBody` (default), `TimestampDotBody`, `ColonDelimited`, `UrlPlusSortedForm`, `UrlPlusBody`, `TimestampPlusToken`, `MessageIdTimestampBody`, `Custom`. |
+| `webhookHmacKeyEncoding`               | `Utf8` (default) keys the HMAC with the key string's UTF-8 bytes; `Base64` with its decoded bytes (an optional `whsec_` prefix is stripped first). |
+| `webhookMessageIdHeader`               | Header carrying the message id signed by `MessageIdTimestampBody` (Standard Webhooks `webhook-id`); it becomes the replay key. |
+| `webhookIgnoreMalformedSignatureEntries` | When `true`, a multi-value entry without the key/value separator is skipped instead of failing the header as `MalformedHeader`. |
 | `webhookSignedPayloadDelimiter`        | Delimiter between timestamp and body for delimited strategies.                                         |
 | `webhookSignedPayloadVersion`          | Version literal injected for `ColonDelimited` (e.g. Slack `v0`).                                       |
 | `webhookCustomStrategyName`            | Name of a strategy registered through `AddCustomSignatureStrategy(...)`; required when strategy = `Custom`. |
@@ -459,7 +634,7 @@ these — pick a built-in scheme first.
 
 | Field                              | Meaning                                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `webhookReplayToleranceSeconds`    | Maximum allowed clock skew. `0` (default) disables replay protection.                                         |
+| `webhookReplayToleranceSeconds`    | Maximum allowed clock skew. `0` (default) disables replay protection. Must be `0 … 2147483647`; a value outside that range fails `MapFlowDashboard` at startup. |
 | `webhookNonceHeader`               | Header used for the nonce ledger (e.g. `X-GitHub-Delivery`); falls back to SHA-256 of `timestamp \|\| body`. |
 
 ### Rate-limit fields
@@ -468,7 +643,7 @@ these — pick a built-in scheme first.
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | `webhookRateLimitPermitsPerSecond`     | Steady-state token-bucket rate.                                        |
 | `webhookRateLimitBurstSize`            | Maximum token burst.                                                   |
-| `webhookRateLimitPerIp`                | When `true`, the bucket key is `flowId\|clientIp` instead of `flowId`. |
+| `webhookRateLimitPerIp`                | When `true`, the bucket key is `flowId\|triggerKey\|clientIp` instead of `flowId\|triggerKey`. |
 
 ### IP allow / deny fields
 

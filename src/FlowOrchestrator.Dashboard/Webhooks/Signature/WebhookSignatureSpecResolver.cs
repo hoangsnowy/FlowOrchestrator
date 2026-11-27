@@ -52,12 +52,14 @@ public static class WebhookSignatureSpecResolver
             HeaderName = GetString(inputs, "webhookSignatureHeader") ?? string.Empty,
             Algorithm = ParseEnum(GetString(inputs, "webhookSignatureAlgorithm"), HmacAlgorithm.Sha256),
             Encoding = ParseEnum(GetString(inputs, "webhookSignatureEncoding"), SignatureEncoding.HexLower),
+            KeyEncoding = ParseEnum(GetString(inputs, "webhookHmacKeyEncoding"), HmacKeyEncoding.Utf8),
             Prefix = GetString(inputs, "webhookSignaturePrefix"),
             MultiValueDelimiter = GetString(inputs, "webhookSignatureMultiValueDelimiter"),
             KeyValueSeparator = GetString(inputs, "webhookSignatureKeyValueSeparator"),
             SignatureValueKey = GetString(inputs, "webhookSignatureValueKey"),
             TimestampValueKey = GetString(inputs, "webhookTimestampValueKey"),
             TimestampHeaderName = GetString(inputs, "webhookTimestampHeader"),
+            MessageIdHeaderName = GetString(inputs, "webhookMessageIdHeader"),
             AcceptedVersions = GetStringList(inputs, "webhookAcceptedVersions"),
             SignedPayloadStrategy = ParseEnum(GetString(inputs, "webhookSignedPayloadStrategy"), SignedPayloadStrategy.RawBody),
             SignedPayloadDelimiter = GetString(inputs, "webhookSignedPayloadDelimiter"),
@@ -66,6 +68,7 @@ public static class WebhookSignatureSpecResolver
             CustomStrategyName = GetString(inputs, "webhookCustomStrategyName"),
             RequireTimestamp = GetBool(inputs, "webhookRequireTimestamp"),
             AcceptMultipleSignatures = GetBool(inputs, "webhookAcceptMultipleSignatures"),
+            IgnoreMalformedEntries = GetBool(inputs, "webhookIgnoreMalformedSignatureEntries"),
         };
     }
 

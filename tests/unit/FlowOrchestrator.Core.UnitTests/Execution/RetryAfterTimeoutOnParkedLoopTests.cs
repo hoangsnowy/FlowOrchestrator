@@ -7,9 +7,9 @@ using NSubstitute;
 namespace FlowOrchestrator.Core.Tests.Execution;
 
 /// <summary>
-/// Coverage for <c>RetryStepAsync</c>'s deadline refresh on a run that timed out while a ForEach was
-/// parked on its completion barrier: the retried step must actually execute, which requires the
-/// refreshed window to be visible to the termination gate before the step is re-entered.
+/// Coverage for <c>RetryStepAsync</c> on a ForEach run that timed out: a <c>Failed</c> iteration retried
+/// afterwards must actually execute on a refreshed window, while the steps the termination gate skipped
+/// are not retryable at all (2.0: only a <c>Failed</c> step can be retried).
 /// </summary>
 /// <remarks>
 /// The refresh is ordered ahead of the store-level retry write so nothing — neither the gate nor the
@@ -72,7 +72,7 @@ public sealed class RetryAfterTimeoutOnParkedLoopTests
     }
 
     [Fact]
-    public async Task RetryOfALoopChild_afterTheRunTimedOutOnAParkedBarrier_reExecutesOnAFreshWindow()
+    public async Task RetryOfALoopChildSkippedByTheTimeout_isRejected_becauseOnlyAFailedStepCanBeRetried()
     {
         // Arrange - the loop fans out and parks, the deadline then lapses, and the queued iteration
         // is skipped by the termination gate (which also abandons the parked loop).
@@ -84,33 +84,23 @@ public sealed class RetryAfterTimeoutOnParkedLoopTests
 
         Assert.Equal("TimedOut", await harness.RunStatusAsync(runId));
         Assert.Equal(StepStatus.Skipped.ToString(), await harness.StepStatusAsync(runId, "loop.0.work"));
-        // The gate skips a step before the executor is reached, so the handler never ran at all.
-        Assert.Equal(0, attempts.GetValueOrDefault("loop.0.work"));
 
         // Act
-        await harness.Engine.RetryStepAsync(flow.Id, runId, "loop.0.work");
+        var result = await harness.Engine.RetryStepAsync(flow.Id, runId, "loop.0.work");
         await harness.DrainAsync();
 
-        // Assert - the handler actually ran, so the refreshed window was in force by the time the
-        // termination gate was consulted on the retried attempt.
-        Assert.Equal(1, attempts.GetValueOrDefault("loop.0.work"));
-        Assert.Equal(StepStatus.Succeeded.ToString(), await harness.StepStatusAsync(runId, "loop.0.work"));
-
-        var control = await harness.Store.GetRunControlAsync(runId);
-        Assert.NotNull(control);
-        Assert.Null(control!.TimedOutAtUtc);
-        Assert.False(control.CancelRequested);
-        Assert.NotNull(control.TimeoutAtUtc);
-        Assert.True(control.TimeoutAtUtc > DateTimeOffset.UtcNow, "the retry must grant a deadline in the future");
-        Assert.NotEqual("TimedOut", await harness.RunStatusAsync(runId));
+        // Assert - 2.0 (RFC P-1(c)): the retry is refused before any side effect, so the run keeps its
+        // TimedOut verdict and no fresh window is granted. Before 2.0 a Skipped step could be retried.
+        Assert.Equal(StepRetryOutcome.NotFailed, Assert.IsType<StepRetryResult>(result).Outcome);
+        Assert.Equal(0, attempts.GetValueOrDefault("loop.0.work"));
+        Assert.Equal("TimedOut", await harness.RunStatusAsync(runId));
+        Assert.NotNull((await harness.Store.GetRunControlAsync(runId))!.TimedOutAtUtc);
     }
 
     [Fact]
-    public async Task RetryOfTheLoopStep_afterTheRunTimedOut_reArmsTheBarrierAndSettlesIt()
+    public async Task RetryOfTheLoopStepAbandonedByTheTimeout_isRejected()
     {
-        // Arrange - same timed-out run, but the operator retries the ForEach itself. The retry clears
-        // the dispatch ledger for "loop" only, so the re-executed handler re-arms the barrier while
-        // its iteration is suppressed as already-dispatched.
+        // Arrange - same timed-out run; the operator targets the ForEach itself, which the gate abandoned.
         var (harness, flow, attempts) = Build();
         var runId = await harness.TriggerAsync();
         await harness.RunKeyAsync("loop");
@@ -119,37 +109,64 @@ public sealed class RetryAfterTimeoutOnParkedLoopTests
         Assert.Equal(StepStatus.Skipped.ToString(), await harness.StepStatusAsync(runId, "loop"));
 
         // Act
-        await harness.Engine.RetryStepAsync(flow.Id, runId, "loop");
-        await harness.DrainAsync();
-
-        // Assert - the loop re-executed on the fresh window, its already-terminal iteration settled
-        // the re-armed barrier, and the run left its TimedOut state.
-        Assert.Equal(2, attempts["loop"]);
-        Assert.Equal(StepStatus.Succeeded.ToString(), await harness.StepStatusAsync(runId, "loop"));
-        Assert.Equal(1, harness.Enqueued.Count(k => k == "loop.0.work"));
-        Assert.NotEqual("TimedOut", await harness.RunStatusAsync(runId));
-    }
-
-    [Fact]
-    public async Task RetryAfterATimeout_doesNotResurrectTheRunForThePeriodicSweep()
-    {
-        // Arrange - a sweep ticking right after a retry must not re-close the run on the stale
-        // verdict: ExtendDeadlineAsync clears TimedOutAtUtc and the cancel latch it set.
-        var (harness, flow, _) = Build();
-        var runId = await harness.TriggerAsync();
-        await harness.RunKeyAsync("loop");
-        await harness.Store.ExtendDeadlineAsync(runId, DateTimeOffset.UtcNow.AddMinutes(-1));
-        await harness.DrainAsync();
-        Assert.Equal("TimedOut", await harness.RunStatusAsync(runId));
-
-        // Act
-        await harness.Engine.RetryStepAsync(flow.Id, runId, "loop.0.work");
-        await harness.Engine.EnforceDueTimeoutsAsync();
+        var result = await harness.Engine.RetryStepAsync(flow.Id, runId, "loop");
         await harness.DrainAsync();
 
         // Assert
+        Assert.Equal(StepRetryOutcome.NotFailed, Assert.IsType<StepRetryResult>(result).Outcome);
+        Assert.Equal(1, attempts["loop"]);
+        Assert.Equal(StepStatus.Skipped.ToString(), await harness.StepStatusAsync(runId, "loop"));
+        Assert.Equal("TimedOut", await harness.RunStatusAsync(runId));
+    }
+
+    [Fact]
+    public async Task RetryOfAFailedLoopChild_afterTheRunTimedOut_reExecutesOnAFreshWindow_andTheSweepDoesNotResurrectTheVerdict()
+    {
+        // Arrange - the iteration fails, the loop settles, the run finishes Failed; the deadline then lapses
+        // and the run is latched TimedOut while it sits there.
+        var flow = MakeLoopFlow();
+        var attempts = new ConcurrentDictionary<string, int>();
+        var harness = new LoopBarrierEngineHarness(
+            flow,
+            stepKey =>
+            {
+                var attempt = attempts.AddOrUpdate(stepKey, 1, static (_, current) => current + 1);
+                if (stepKey == "loop")
+                {
+                    return new StepResult
+                    {
+                        Key = "loop",
+                        Status = StepStatus.Running,
+                        Result = new { iterations = 1 },
+                        DispatchHint = new StepDispatchHint(
+                            [new StepDispatchRequest("loop.0.work", "Echo", new Dictionary<string, object?>())])
+                    };
+                }
+
+                return stepKey == "loop.0.work" && attempt == 1
+                    ? new StepResult { Key = stepKey, Status = StepStatus.Failed, FailedReason = "transient" }
+                    : new StepResult { Key = stepKey, Status = StepStatus.Succeeded, Result = new { ok = true } };
+            },
+            new FlowRunControlOptions { DefaultRunTimeout = TimeSpan.FromHours(1) });
+        var runId = await harness.TriggerAsync();
+        await harness.DrainAsync();
+        Assert.Equal("Failed", await harness.RunStatusAsync(runId));
+        await harness.Store.MarkTimedOutAsync(runId, "Deadline exceeded");
+
+        // Act - retry, then a sweep tick lands before the dispatched attempt runs.
+        var result = await harness.Engine.RetryStepAsync(flow.Id, runId, "loop.0.work");
+        await harness.Engine.EnforceDueTimeoutsAsync();
+        await harness.DrainAsync();
+
+        // Assert - the handler ran on a fresh window, and the sweep did not re-close the run on the stale
+        // verdict: ExtendDeadlineAsync cleared TimedOutAtUtc and the cancel latch it set.
+        Assert.Equal(StepRetryOutcome.Accepted, Assert.IsType<StepRetryResult>(result).Outcome);
+        Assert.Equal(2, attempts["loop.0.work"]);
+        Assert.Equal(StepStatus.Succeeded.ToString(), await harness.StepStatusAsync(runId, "loop.0.work"));
         var control = await harness.Store.GetRunControlAsync(runId);
         Assert.Null(control!.TimedOutAtUtc);
+        Assert.False(control.CancelRequested);
+        Assert.True(control.TimeoutAtUtc > DateTimeOffset.UtcNow, "the retry must grant a deadline in the future");
         Assert.NotEqual("TimedOut", await harness.RunStatusAsync(runId));
     }
 }

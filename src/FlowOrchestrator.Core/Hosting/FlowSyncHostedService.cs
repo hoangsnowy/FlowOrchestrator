@@ -1,6 +1,6 @@
-using System.Text.Json;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Execution;
+using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Hosting;
@@ -20,8 +20,6 @@ namespace FlowOrchestrator.Core.Hosting;
 /// </remarks>
 internal sealed class FlowSyncHostedService : IHostedService
 {
-    private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonSerializerDefaults.Web);
-
     private readonly FlowRegistry _flows;
     private readonly IFlowStore _store;
     private readonly IRecurringTriggerSync _triggerSync;
@@ -57,7 +55,9 @@ internal sealed class FlowSyncHostedService : IHostedService
                         $"Flow '{flow.GetType().Name}' ({flow.Id}) is invalid: {string.Join("; ", validation.Errors)}");
                 }
 
-                var manifestJson = JsonSerializer.Serialize(flow.Manifest, ManifestJsonOptions);
+                // The same serialization the engine compares against when a worker meets a step its manifest
+                // does not contain (RegisteredManifest.Matches) — one writer, one reader.
+                var manifestJson = RegisteredManifest.Serialize(flow);
                 var existing = await _store.GetByIdAsync(flow.Id).ConfigureAwait(false);
                 var record = existing ?? new FlowDefinitionRecord { Id = flow.Id };
                 record.Name = flow.GetType().Name;

@@ -41,6 +41,33 @@ internal static class SignedPayloadBuilder
         return output;
     }
 
+    /// <summary>
+    /// Builds <c>{messageId}{delim}{timestamp}{delim}{body}</c> (Standard Webhooks <c>msg_id.timestamp.payload</c>).
+    /// </summary>
+    /// <param name="messageId">Message id from the <c>webhook-id</c> header (or the spec's configured id header).</param>
+    /// <param name="timestamp">Unix-seconds timestamp string from <c>webhook-timestamp</c>.</param>
+    /// <param name="body">Raw HTTP body bytes, signed byte for byte (no UTF-8 round trip).</param>
+    /// <param name="delimiter">Delimiter between fields, default <c>"."</c>.</param>
+    /// <remarks>
+    /// Encodes the three parts straight into one output buffer: a single allocation per verification, no
+    /// intermediate concatenated prefix string.
+    /// </remarks>
+    public static byte[] MessageIdTimestampBody(string messageId, string timestamp, ReadOnlyMemory<byte> body, string delimiter = ".")
+    {
+        var utf8 = Encoding.UTF8;
+        var idLength = utf8.GetByteCount(messageId);
+        var tsLength = utf8.GetByteCount(timestamp);
+        var delimLength = utf8.GetByteCount(delimiter);
+        var output = new byte[idLength + delimLength + tsLength + delimLength + body.Length];
+        var span = output.AsSpan();
+        var written = utf8.GetBytes(messageId, span);
+        written += utf8.GetBytes(delimiter, span[written..]);
+        written += utf8.GetBytes(timestamp, span[written..]);
+        written += utf8.GetBytes(delimiter, span[written..]);
+        body.Span.CopyTo(span[written..]);
+        return output;
+    }
+
     /// <summary>Builds <c>{absoluteUrl}{sortedFormFieldConcatenation}</c> (Twilio).</summary>
     /// <param name="absoluteUrl">Absolute request URL including scheme + host + path.</param>
     /// <param name="formFields">Form-encoded fields parsed from the body. Sorted by key, ordinal.</param>

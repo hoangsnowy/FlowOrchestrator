@@ -75,6 +75,13 @@ builder.Services.AddFlowOrchestrator(options =>
 
 > [!TIP]
 > Storage and runtime are independent. `UseInMemoryRuntime()` works equally with `UseSqlServer()` or `UsePostgreSql()` if you want in-process step execution but durable run state.
+>
+> Steps queued on the in-memory runtime live in the process (its channel and timers), so they stop with it;
+> the run state does not. On the next start, recovery re-enqueues every step that was dispatched but had not
+> started — including a `Pending` poll or a parked `WaitForSignal` whose delayed re-attempt was lost — and
+> the execution claim still runs each step once. Run **one** replica with this combination: a second replica
+> starting while the first is alive re-enqueues the first one's queued steps too. The claim keeps that safe
+> for ordinary steps, but a `Pending` poll then ends up polled by both replicas.
 
 **Azure Service Bus runtime** (v1.22+ — cloud-native, multi-replica, multi-region):
 
@@ -116,7 +123,7 @@ deploy identity has only Send / Listen rights.
 | `SubscriptionPrefix` | `string` | `"flow-"` | Prefix for per-flow subscription names — the subscription becomes `flow-{flowId}`. |
 | `MaxConcurrentCallsPerSubscription` | `int` | `8` | Messages a single per-flow subscription processor handles concurrently. |
 | `AutoCreateTopology` | `bool` | `true` | Create topic / queue / subscriptions at startup via `ServiceBusAdministrationClient`. Requires Manage rights. |
-| `DuplicateDetectionWindow` | `TimeSpan` | 10 minutes | Duplicate-detection history window applied to the topic and cron queue when `AutoCreateTopology` is enabled. On the step topic every dispatch carries a unique `MessageId` (`{runId}:{stepKey}:{nonce}`), so the window only absorbs the SDK re-sending one message after a transient failure; on the cron queue the id is deterministic per fire time, so it also collapses the same firing scheduled by several replicas. |
+| `DuplicateDetectionWindow` | `TimeSpan` | 10 minutes | Duplicate-detection history window applied to the topic and cron queue when `AutoCreateTopology` is enabled. On the step topic every dispatch carries a unique `MessageId` (`{runId}:{stepKey}:{nonce}`), so the window only absorbs the SDK re-sending one message after a transient failure; on the cron queue the id is deterministic per fire time and chain (`{flowId}:{triggerKey}:{fireAt}:{chainEpoch}`), so it also collapses the same firing of the same schedule scheduled by several replicas, while a replacement schedule's first tick at the same instant is kept. |
 | `MaxDeliveryCount` | `int` | `10` | Delivery attempts before a message is dead-lettered. |
 
 For local development, the included Aspire AppHost wires the official Microsoft Service Bus
@@ -148,13 +155,19 @@ options.Scheduler.PersistOverrides = true;
 ```csharp
 options.RunControl.DefaultRunTimeout = TimeSpan.FromMinutes(10);
 options.RunControl.IdempotencyHeaderName = "Idempotency-Key";
+options.RunControl.StepLeaseDuration = TimeSpan.FromSeconds(60);   // the default
 ```
 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `DefaultRunTimeout` | `TimeSpan?` | `null` | Global timeout for all runs. Runs exceeding this are marked `TimedOut`. Override per run by including `runTimeoutSeconds` in the trigger payload. `null` = no timeout. |
 | `TimeoutEnforcementInterval` | `TimeSpan?` | 30 seconds | How often the periodic sweep proactively marks runs past `TimeoutAtUtc` as `TimedOut`, so a run whose step threw and left nothing scheduled does not sit `Running` forever. `null` or a non-positive value disables the sweep. |
+| `StepLeaseDuration` | `TimeSpan?` | 60 seconds | How long a step's execution claim lives without renewal. The process running the step renews it, so a live handler is never taken over however long it runs; once its worker dies the lease expires, the next delivery of the step takes it over, and `FlowStepLeaseHostedService` redelivers it if the runtime does not. Keep it at least three times your store's worst round trip. `null` or non-positive turns leases off (1.x claims that never expire). |
+| `StepLeaseRenewInterval` | `TimeSpan` | 20 seconds | How often a process renews the leases of the steps it is executing; capped at a third of `StepLeaseDuration`. |
+| `OrphanedClaimTimeout` | `TimeSpan?` | 60 seconds | Age past which a claim with no step status row (a worker died between its claim and its start write) is released by startup recovery and the timeout sweep. Covers claims taken without a lease. `null` turns it off. |
+| `UnsentDispatchTimeout` | `TimeSpan?` | 60 seconds | Age past which a dispatch-ledger row with no runtime job id (the send never returned) is re-delivered by `FlowUnsentDispatchRecoveryHostedService`. `null` turns it off. |
 | `IdempotencyHeaderName` | `string` | `"Idempotency-Key"` | Header name checked on trigger requests. If present, the value is used as a deduplication key — a second trigger with the same key returns the existing run instead of creating a new one. |
+| `IdempotencyReservationTimeout` | `TimeSpan` | 30 seconds | How old a key registration must be before a retry may take it over when its run never started work (no dispatched and no recorded step) — the trigger that registered it died before creating the run. A younger registration, or one whose run started, is still a duplicate. Must be positive; setting zero or less throws `ArgumentOutOfRangeException`. |
 
 ---
 
@@ -277,7 +290,7 @@ builder.Services.AddFlowOrchestrator(options =>
 | `RateLimit.PermitsPerSecond` | `double` | `0` | Sustained throughput. `0` disables rate limiting. |
 | `RateLimit.BurstSize` | `int?` | — | Optional burst capacity; defaults to `PermitsPerSecond`. |
 | `RateLimit.PerIp` | `bool` | `false` | Key the limiter on `flowId\|clientIp` instead of `flowId`. |
-| `ForwardedHeaderDepth` | `int` | `0` | Trusted reverse-proxy depth for `X-Forwarded-For`. `0` uses `RemoteIpAddress` directly. |
+| `ForwardedHeaderDepth` | `int` | `0` | Number of trusted reverse proxies in front of the app; the client is the `X-Forwarded-For` entry that many positions from the right. `0` uses `RemoteIpAddress` directly. |
 
 **Manifest-level overrides** are documented in [Triggers — Enterprise hardening (v1.25)](triggers.md#enterprise-hardening-v125).
 

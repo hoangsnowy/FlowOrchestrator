@@ -78,7 +78,12 @@ public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireSt
     public ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null)
     {
         ctx.JobId = performContext?.BackgroundJob?.Id;
-        return _engine.RunStepAsync(ctx, ResolveFlow(flowId, step.Key), step);
+        var flow = ResolveFlow(flowId, step.Key);
+        // 1.x stored JsonElement inputs / trigger data through Newtonsoft, which destroys them; a
+        // re-dispatched Pending step (poll re-check, WaitForSignal deadline check) would throw on its
+        // first read. Restore them from the manifest before the engine sees the step.
+        LegacyStepJobRepair.Repair(ctx, step, flow);
+        return _engine.RunStepAsync(ctx, flow, step);
     }
 
     /// <inheritdoc/>

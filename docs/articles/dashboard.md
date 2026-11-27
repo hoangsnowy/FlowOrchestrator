@@ -233,7 +233,7 @@ and replace the dashboard's broadcaster registration. The default
 | `POST` | `/flows/api/schedules/{jobId}/trigger` | Trigger a recurring job immediately |
 | `POST` | `/flows/api/schedules/{jobId}/pause` | Pause a recurring job |
 | `POST` | `/flows/api/schedules/{jobId}/resume` | Resume a paused recurring job |
-| `PUT` | `/flows/api/schedules/{jobId}/cron` | Update the cron expression |
+| `PUT` | `/flows/api/schedules/{jobId}/cron` | Update the cron expression (`400` when it does not parse) |
 
 ---
 
@@ -245,7 +245,7 @@ From the dashboard, open a failed run and click **Retry** on the failed step. Th
 POST /flows/api/runs/{runId}/steps/{stepKey}/retry
 ```
 
-FlowOrchestrator resets the step to `Pending`, preserves all prior step outputs, and re-dispatches the step via the runtime adapter from the failure point. Steps that already succeeded are not re-executed.
+FlowOrchestrator resets the step (only a `Failed` step: anything else answers `400`), preserves all prior step outputs, and re-dispatches the step via the runtime adapter from the failure point. The response returns once the attempt is queued; the step runs on the runtime, not inside the request. Of two concurrent retries of the same step one is accepted and the other answers `409`. Steps that already succeeded are not re-executed.
 
 ## Cancel a Running Flow
 

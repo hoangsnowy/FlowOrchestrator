@@ -15,6 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Validates dashboard cron overrides with the parser every built-in runtime schedules with. -->
+    <PackageReference Include="Cronos" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\\FlowOrchestrator.Core\\FlowOrchestrator.Core.csproj" />
   </ItemGroup>
 
@@ -25,6 +30,9 @@
     </AssemblyAttribute>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>FlowOrchestrator.Dashboard.UnitTests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>FlowOrchestrator.Benchmarks</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 

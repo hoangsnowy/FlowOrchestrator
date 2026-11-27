@@ -88,6 +88,12 @@ public sealed class FlowTestHostBuilder<TFlow> where TFlow : class, IFlowDefinit
     /// so polling steps re-execute almost immediately instead of waiting their manifest-declared interval.
     /// Default cap: 100ms.
     /// </summary>
+    /// <remarks>
+    /// Only the reschedule delay changes; the runtime store is the production InMemory store, so the
+    /// execute-time claim guard ("dispatch many, execute once") and every other store behaviour — the
+    /// When-clause evaluation trace of a skipped step included — are exactly what production runs. The
+    /// engine releases a step's claim on the Pending path, so a polling step re-claims each attempt.
+    /// </remarks>
     /// <param name="maxDelay">Maximum delay allowed; <see langword="null"/> selects the default 100ms.</param>
     public FlowTestHostBuilder<TFlow> WithFastPolling(TimeSpan? maxDelay = null)
     {
@@ -168,36 +174,6 @@ public sealed class FlowTestHostBuilder<TFlow> where TFlow : class, IFlowDefinit
                                 "WithFastPolling: existing IStepDispatcher descriptor has no implementation to wrap.");
                         }
                         return new FastPollingStepDispatcher(inner, cap);
-                    });
-
-                    // The v2 runtime claim guard never releases after a Pending result, so polling
-                    // reschedules cannot re-dispatch the same step. Single-worker test runs do not need
-                    // claim exclusion, so swap in a permissive wrapper that always grants the claim.
-                    var runtimeStoreDescriptor = services.LastOrDefault(d => d.ServiceType == typeof(IFlowRunRuntimeStore))
-                        ?? throw new InvalidOperationException(
-                            "WithFastPolling: no IFlowRunRuntimeStore registered. Did UseInMemory() get suppressed?");
-                    services.Remove(runtimeStoreDescriptor);
-                    services.AddSingleton<IFlowRunRuntimeStore>(sp =>
-                    {
-                        IFlowRunRuntimeStore inner;
-                        if (runtimeStoreDescriptor.ImplementationFactory is { } factory)
-                        {
-                            inner = (IFlowRunRuntimeStore)factory(sp);
-                        }
-                        else if (runtimeStoreDescriptor.ImplementationInstance is IFlowRunRuntimeStore instance)
-                        {
-                            inner = instance;
-                        }
-                        else if (runtimeStoreDescriptor.ImplementationType is { } implType)
-                        {
-                            inner = (IFlowRunRuntimeStore)ActivatorUtilities.CreateInstance(sp, implType);
-                        }
-                        else
-                        {
-                            throw new InvalidOperationException(
-                                "WithFastPolling: existing IFlowRunRuntimeStore descriptor has no implementation to wrap.");
-                        }
-                        return new PermissiveRuntimeStore(inner);
                     });
                 }
             });

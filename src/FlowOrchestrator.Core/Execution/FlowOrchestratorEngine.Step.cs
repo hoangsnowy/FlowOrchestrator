@@ -46,11 +46,26 @@ public sealed partial class FlowOrchestratorEngine
             _telemetry.QueueDelayMs.Record(
                 queueDelayMs,
                 new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                new KeyValuePair<string, object?>("step_key", step.Key));
+                new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)));
         }
 
         try
         {
+            // Mixed-version window (rolling deploy): a step dispatched by a replica running a newer
+            // manifest can be delivered to a replica that has not restarted yet. Its manifest does not
+            // contain the step, and before 2.0 the executor recorded it Skipped ("Step metadata not
+            // found.") — a terminal row no later version could undo, which then cascade-skipped every
+            // dependent and could close the run Skipped. Decide BEFORE the claim, so a hand-back leaves
+            // nothing behind. Cost per step execution, independent of the run's size: one allocation-free
+            // FindStep — a dictionary hit for a top-level key, O(key length) for a loop child — the same
+            // lookup the executor repeats. The flow-store read happens only on the miss.
+            if (flow.Manifest.Steps.FindStep(step.Key) is null
+                && await TryHandBackStepUnknownToManifestAsync(ctx, flow, step).ConfigureAwait(false))
+            {
+                activity?.SetTag("flow.step.handed_back", true);
+                return null;
+            }
+
             // Execute-time claim guard (v1.22+). Atomic INSERT into FlowStepClaims; only the first
             // worker to call this for (runId, stepKey) wins, the rest exit silently. Critical for
             // at-least-once delivery models where one enqueued message can reach multiple
@@ -58,7 +73,24 @@ public sealed partial class FlowOrchestratorEngine
             // Pre-1.22 the claim was at schedule time which assumed 1:1 enqueue→execute — broken
             // under broadcast. Released by RetryStepAsync and the Pending re-schedule path so the
             // SAME step can claim again on a fresh attempt.
-            var claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+            //
+            // 2.0 (RFC C1): with the lease keeper the claim is a lease that expires unless renewed, and a lease
+            // whose worker died is taken over here — before, a worker killed mid-handler left a claim that made
+            // every redelivery exit, and the run stayed Running for ever. Every write this attempt makes from
+            // now on is fenced by the lease, so an attempt that lost it cannot overwrite its successor's work.
+            // O(1) per step execution: one claim statement, one keeper insert.
+            StepLease? lease = null;
+            bool claimed;
+            if (_leaseKeeper is { Duration: { } leaseDuration } keeper)
+            {
+                lease = await _runtimeStore.TryAcquireStepLeaseAsync(ctx.RunId, step.Key, keeper.OwnerId, leaseDuration).ConfigureAwait(false);
+                claimed = lease is not null;
+            }
+            else
+            {
+                claimed = await _runtimeStore.TryClaimStepAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+            }
+
             if (!claimed)
             {
                 activity?.SetTag("flow.step.claim_lost", true);
@@ -67,13 +99,37 @@ public sealed partial class FlowOrchestratorEngine
                     _telemetry.StepClaimLostCounter.Add(
                         1,
                         new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                        new KeyValuePair<string, object?>("step_key", step.Key));
+                        new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)));
                 }
 
                 return null;
             }
 
-            var controlStatus = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
+            // Renewed until this attempt is over — the handler, its completion write and the continuation.
+            using var leaseHandle = lease is null ? null : _leaseKeeper!.Track(lease);
+            if (lease is { Fence: > 1 })
+            {
+                activity?.SetTag("flow.step.lease_taken_over", true);
+                EngineLog.StepLeaseTakenOver(_logger, step.Key, lease.Fence);
+            }
+
+            // From here until the start write succeeds the step is claimed with no status row. A failure
+            // in that window must not leave it so: every later attempt would lose the claim and exit, and
+            // the completion gate would count the key as in-flight work for ever (RFC 2.0 S1b). Release
+            // the claim and the ledger row, then rethrow so the runtime retries the job — the step is back
+            // to "ready, never dispatched", which recovery re-dispatches if the runtime gives up.
+            string? controlStatus;
+            try
+            {
+                controlStatus = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Catch-all-and-rethrow: never swallowed, cancellation included.
+                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
+                throw;
+            }
+
             if (controlStatus is not null)
             {
                 await RecordSkippedCurrentStepAsync(ctx, flow, step, controlStatus).ConfigureAwait(false);
@@ -86,16 +142,21 @@ public sealed partial class FlowOrchestratorEngine
             // "{key}:input" row after resolving expressions, so this write only ever persisted the
             // unresolved inputs to be overwritten a moment later — one wasted MERGE and serialisation
             // per step (#189). The unresolved form is still recorded, on FlowSteps.InputJson below.
-            string? inputJson = null;
+            //
+            // Before 2.0 a failed start write was only logged and the handler ran anyway: the completion
+            // UPDATE then matched no row, and the claim with no status row stranded the run (S1b).
             try
             {
-                inputJson = SafeSerialize(step.Inputs);
+                var inputJson = SafeSerialize(step.Inputs);
                 await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId)
                     .ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // Catch-all-and-rethrow, as above: logged, released, never swallowed.
                 EngineLog.StepStartTrackingFailed(_logger, ex);
+                await ReleaseAfterFailedStartAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
+                throw;
             }
 
             var stepExecutionStart = Stopwatch.GetTimestamp();
@@ -104,6 +165,17 @@ public sealed partial class FlowOrchestratorEngine
             try
             {
                 result = await _stepExecutor.ExecuteAsync(ctx, flow, step).ConfigureAwait(false);
+
+                // A renewal already found the lease taken over: the step's new owner writes its output. The
+                // fenced completion below rejects this attempt in any case; skipping the output write keeps
+                // it from overwriting the new owner's output in the window before that.
+                if (leaseHandle is { IsLost: true })
+                {
+                    EngineLog.StepLeaseLost(_logger, step.Key, lease!.Fence);
+                    activity?.SetTag("flow.step.lease_lost", true);
+                    return null;
+                }
+
                 await _outputsRepository.SaveStepOutputAsync(ctx, flow, step, result).ConfigureAwait(false);
             }
             // Handler boundary: any exception (including OperationCanceledException) is captured
@@ -144,15 +216,55 @@ public sealed partial class FlowOrchestratorEngine
             var isBarrierParked = result.Status == StepStatus.Running;
             if (!isBarrierParked)
             {
+                var recorded = true;
                 try
                 {
                     var outputJson = SafeSerialize(result.Result);
-                    await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
-                        .ConfigureAwait(false);
+                    if (lease is not null)
+                    {
+                        recorded = await _runtimeStore.TryRecordLeasedStepCompleteAsync(lease, result.Status.ToString(), outputJson, result.FailedReason)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await _runStore.RecordStepCompleteAsync(ctx.RunId, step.Key, result.Status.ToString(), outputJson, result.FailedReason)
+                            .ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // The completion is not durable. With a lease, the step stays Running under a lease that
+                    // stops being renewed once this attempt is over, so the expired-lease sweep runs it again
+                    // (RFC 2.0 S3) instead of the run waiting on it for ever.
                     EngineLog.StepCompletionTrackingFailed(_logger, ex);
+                }
+
+                if (!recorded)
+                {
+                    // Another worker took the expired lease over and owns the step now: its attempt records the
+                    // outcome and runs the continuation. Doing either here would race it.
+                    EngineLog.StepLeaseLost(_logger, step.Key, lease!.Fence);
+                    activity?.SetTag("flow.step.lease_lost", true);
+                    return null;
+                }
+            }
+            else if (lease is not null)
+            {
+                // Parked on its loop barrier: the handler has returned and nothing renews the lease any more, yet
+                // the step must not be run again (that would fan the loop out a second time). Make it permanent;
+                // the barrier settle records the step's terminal status.
+                try
+                {
+                    if (!await _runtimeStore.PinStepLeaseAsync(lease).ConfigureAwait(false))
+                    {
+                        EngineLog.StepLeaseLost(_logger, step.Key, lease.Fence);
+                        activity?.SetTag("flow.step.lease_lost", true);
+                        return null;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    EngineLog.StepLeasePinFailed(_logger, ex, step.Key);
                 }
             }
 
@@ -162,7 +274,7 @@ public sealed partial class FlowOrchestratorEngine
                 _telemetry.StepDurationMs.Record(
                     stepExecutionMs,
                     new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                    new KeyValuePair<string, object?>("step_key", step.Key),
+                    new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)),
                     new KeyValuePair<string, object?>("status", result.Status.ToString()));
 
                 _telemetry.StepCompletedCounter.Add(
@@ -192,7 +304,7 @@ public sealed partial class FlowOrchestratorEngine
                     _telemetry.StepPollAttemptsCounter.Add(
                         1,
                         new KeyValuePair<string, object?>("flow_id", flow.Id.ToString()),
-                        new KeyValuePair<string, object?>("step_key", step.Key));
+                        new KeyValuePair<string, object?>("step_key", MetricStepKey.For(step.Key)));
                 }
 
                 var controlAfterPending = await ResolveTerminationStatusAsync(ctx.RunId).ConfigureAwait(false);
@@ -209,12 +321,23 @@ public sealed partial class FlowOrchestratorEngine
                     // this is a completion write rather than a start+complete pair.
                     try
                     {
-                        await _runStore.RecordStepCompleteAsync(
-                            ctx.RunId,
-                            step.Key,
-                            StepStatus.Skipped.ToString(),
-                            null,
-                            $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                        if (lease is not null)
+                        {
+                            await _runtimeStore.TryRecordLeasedStepCompleteAsync(
+                                lease,
+                                StepStatus.Skipped.ToString(),
+                                null,
+                                $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await _runStore.RecordStepCompleteAsync(
+                                ctx.RunId,
+                                step.Key,
+                                StepStatus.Skipped.ToString(),
+                                null,
+                                $"Run is {controlAfterPending}.").ConfigureAwait(false);
+                        }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -254,7 +377,7 @@ public sealed partial class FlowOrchestratorEngine
                 catch (Exception)
                 {
                     // Catch-all-and-rethrow, as on the dispatch failure below: never swallowed.
-                    await ReleaseClaimAfterFailedHandOffAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                    await ReleaseClaimAfterFailedHandOffAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
                     await ReassertDispatchAfterFailedRescheduleAsync(ctx.RunId, step.Key).ConfigureAwait(false);
                     throw;
                 }
@@ -269,7 +392,7 @@ public sealed partial class FlowOrchestratorEngine
                     EngineLog.PendingRescheduleLedgerTaken(_logger, step.Key);
                 }
 
-                await _runtimeStore.ReleaseStepClaimAsync(ctx.RunId, step.Key).ConfigureAwait(false);
+                await ReleaseClaimAsync(ctx.RunId, step.Key, lease).ConfigureAwait(false);
 
                 // Reschedule the poll. If the dispatcher throws (transient queue/broker error)
                 // after the claim was released, the step must not be left status Pending, unclaimed
@@ -389,19 +512,24 @@ public sealed partial class FlowOrchestratorEngine
         activity?.SetTag("run.id", runId.ToString());
         activity?.SetTag("step.key", stepKey);
 
-        if (_observabilityOptions.EnableOpenTelemetry)
-        {
-            _telemetry.StepRetriesCounter.Add(
-                1,
-                new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
-                new KeyValuePair<string, object?>("step_key", stepKey));
-        }
-
         var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
 
         var stepMeta = flow.Manifest.Steps.FindStep(stepKey)
             ?? throw new InvalidOperationException($"Step '{stepKey}' not found in flow manifest.");
+
+        // Only a Failed step can be retried (RFC 2.0 S4). This read is a cheap early answer so a retry of a
+        // step that is not Failed has no side effect at all (no deadline refresh, no event); it is stale by
+        // nature, and the store's conditional reset below is what actually decides.
+        var current = await _runStore.GetStepAsync(runId, stepKey).ConfigureAwait(false);
+        if (!string.Equals(current?.Status, nameof(StepStatus.Failed), StringComparison.Ordinal))
+        {
+            activity?.SetTag("flow.step.retry.outcome", nameof(StepRetryOutcome.NotFailed));
+            return new StepRetryResult(runId, stepKey, StepRetryOutcome.NotFailed);
+        }
+
+        // Cancellation is honoured up to the durable reset and never after it.
+        ct.ThrowIfCancellationRequested();
 
         var ctx = new ExecutionContext { RunId = runId };
         ctx.TriggerData = await _outputsRepository.GetTriggerDataAsync(runId).ConfigureAwait(false);
@@ -417,7 +545,26 @@ public sealed partial class FlowOrchestratorEngine
         var refreshedDeadline = ResolveTimeoutAtUtc(ctx.TriggerData);
         await _runControlStore.ExtendDeadlineAsync(runId, refreshedDeadline).ConfigureAwait(false);
 
-        await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false);
+        // The compare-and-swap: Failed → Running, claim and ledger cleared, in one transaction. Of two
+        // concurrent retries that both passed the read above, exactly one gets true here; the other
+        // changes nothing. Before 2.0 the reset was unconditional, so the second retry deleted the first
+        // one's claim and the handler ran twice at once.
+        if (!await _runStore.RetryStepAsync(runId, stepKey).ConfigureAwait(false))
+        {
+            activity?.SetTag("flow.step.retry.outcome", nameof(StepRetryOutcome.Conflict));
+            return new StepRetryResult(runId, stepKey, StepRetryOutcome.Conflict);
+        }
+
+        // Durable from here on: nothing below takes the caller's token, so a caller that goes away (an HTTP
+        // request whose client disconnected) cannot leave the step reset but never dispatched.
+        activity?.SetTag("flow.step.retry.outcome", nameof(StepRetryOutcome.Accepted));
+        if (_observabilityOptions.EnableOpenTelemetry)
+        {
+            _telemetry.StepRetriesCounter.Add(
+                1,
+                new KeyValuePair<string, object?>("flow_id", flowId.ToString()),
+                new KeyValuePair<string, object?>("step_key", MetricStepKey.For(stepKey)));
+        }
 
         // When the original failure of this step caused the DAG continuation to eagerly
         // mark downstream blocked steps as Skipped (with reason
@@ -434,16 +581,105 @@ public sealed partial class FlowOrchestratorEngine
         {
             RunId = runId,
             StepKey = stepKey
-        }, ct).ConfigureAwait(false);
+        }, CancellationToken.None).ConfigureAwait(false);
 
         var step = new StepInstance(stepKey, stepMeta.Type)
         {
             RunId = runId,
+            TriggerData = ctx.TriggerData,
+            TriggerHeaders = ctx.TriggerHeaders,
             ScheduledTime = DateTimeOffset.UtcNow,
             Inputs = new Dictionary<string, object?>(stepMeta.Inputs)
         };
 
-        return await RunStepAsync(ctx, flow, step, ct).ConfigureAwait(false);
+        // Dispatched through the runtime like every other attempt, never executed on the caller's thread:
+        // before 2.0 the dashboard ran the handler inside the HTTP request while answering "retry enqueued".
+        // The reset cleared the ledger row, so the reservation normally succeeds; if another party recorded
+        // it in between, dispatch anyway — a duplicate attempt is absorbed by the claim, a missing one would
+        // strand the step.
+        try
+        {
+            await DisarmUndeliveredSignalWaiterAsync(runId, stepKey).ConfigureAwait(false);
+            await _runStore.TryRecordDispatchAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+            await DispatchReservedStepAsync(ctx, flow, step, delay: null).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Catch-all-and-rethrow: put the step back to Failed so the operator can retry it again, rather
+            // than leave it Running with nothing queued. Never swallowed.
+            await RestoreFailedAfterUndispatchedRetryAsync(flow, runId, stepKey, current!).ConfigureAwait(false);
+            throw;
+        }
+
+        return new StepRetryResult(runId, stepKey, StepRetryOutcome.Accepted);
+    }
+
+    /// <summary>
+    /// Removes the signal waiter of a step being retried when no signal was ever delivered to it, so the
+    /// retried <c>WaitForSignal</c> attempt registers a fresh wait instead of re-reading the expired one.
+    /// </summary>
+    /// <param name="runId">The run owning the retried step.</param>
+    /// <param name="stepKey">Runtime key of the retried step.</param>
+    /// <remarks>
+    /// <para>
+    /// <see cref="WaitForSignalHandler"/> leaves an expired waiter in place as a tombstone so a stale
+    /// re-invocation fails again instead of re-parking. That is right for a stray delivery, but a manual
+    /// retry IS a request to wait again: without this, the retried attempt hit the tombstone on its first
+    /// invocation and failed with the same "not received within Ns", so a timed-out wait could never be
+    /// retried. Only a step can be retried that is <see cref="StepStatus.Failed"/>, so its wait is over
+    /// either way; a waiter that did receive its payload is kept, so a retry of a step that failed after
+    /// delivery succeeds with that payload.
+    /// </para>
+    /// <para>
+    /// Runs after the durable reset with <see cref="CancellationToken.None"/>. One point read (and at most
+    /// one delete) per manual retry, for every step type: cheaper and more robust than recognising which
+    /// handlers park on a signal. A no-op when no <see cref="IFlowSignalStore"/> is registered.
+    /// </para>
+    /// </remarks>
+    private async Task DisarmUndeliveredSignalWaiterAsync(Guid runId, string stepKey)
+    {
+        if (_signalStore is null)
+        {
+            return;
+        }
+
+        var waiter = await _signalStore.GetWaiterAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+        if (waiter is { DeliveredAt: null })
+        {
+            await _signalStore.RemoveWaiterAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort undo of an accepted retry whose dispatch threw: moves the step back from
+    /// <see cref="StepStatus.Running"/> to <see cref="StepStatus.Failed"/> with its previous output and error,
+    /// then closes the run again if nothing else is in flight.
+    /// </summary>
+    /// <param name="flow">The flow owning the run.</param>
+    /// <param name="runId">The run whose retry could not be dispatched.</param>
+    /// <param name="stepKey">The retried step.</param>
+    /// <param name="previous">The step row as read before the reset.</param>
+    /// <remarks>
+    /// Runs on the failure path only and swallows its own failure (logged): the caller rethrows the dispatch
+    /// exception. The conditional write means a step that a duplicate delivery already started is left alone.
+    /// </remarks>
+    private async Task RestoreFailedAfterUndispatchedRetryAsync(IFlowDefinition flow, Guid runId, string stepKey, FlowStepRecord previous)
+    {
+        try
+        {
+            if (!await _runStore.TryCompleteRunningStepAsync(
+                    runId, stepKey, nameof(StepStatus.Failed), previous.OutputJson, previous.ErrorMessage).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
+            await TryCompleteRunAsync(runId, RunTerminationClassifier.ComputeTerminalStatus(flow, statuses)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.RetryRestoreFailed(_logger, ex, stepKey);
+        }
     }
 
     /// <summary>
@@ -519,20 +755,67 @@ public sealed partial class FlowOrchestratorEngine
     /// </summary>
     /// <param name="runId">The run owning the step.</param>
     /// <param name="stepKey">The step whose hand-off failed.</param>
+    /// <param name="lease">The attempt's lease; <see langword="null"/> when leases are off.</param>
     /// <remarks>
     /// Swallows its own failure (logged): it runs on the failure path and must never mask the
     /// original exception, which the caller rethrows. If the store is down hard enough that this fails
     /// too, the claim stays held and the run is closed by the timeout sweep — no worse than before.
     /// </remarks>
-    private async Task ReleaseClaimAfterFailedHandOffAsync(Guid runId, string stepKey)
+    private async Task ReleaseClaimAfterFailedHandOffAsync(Guid runId, string stepKey, StepLease? lease)
     {
         try
         {
-            await _runtimeStore.ReleaseStepClaimAsync(runId, stepKey).ConfigureAwait(false);
+            await ReleaseClaimAsync(runId, stepKey, lease).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             EngineLog.ClaimReleaseAfterFailedHandOffFailed(_logger, ex, stepKey);
+        }
+    }
+
+    /// <summary>
+    /// Releases this attempt's execution claim: fenced when it holds a lease (a lease another worker took over
+    /// is left alone), unconditional otherwise.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The claimed step.</param>
+    /// <param name="lease">The attempt's lease; <see langword="null"/> when leases are off.</param>
+    /// <returns>A task that completes once the release is durable.</returns>
+    private Task ReleaseClaimAsync(Guid runId, string stepKey, StepLease? lease)
+        => lease is null ? _runtimeStore.ReleaseStepClaimAsync(runId, stepKey) : _runtimeStore.ReleaseStepLeaseAsync(lease);
+
+    /// <summary>
+    /// Best-effort release of the execution claim and the dispatch-ledger row of a step whose start
+    /// (run-control read or start write) threw after the claim was won, so the step is neither claimed
+    /// nor reserved while it has no status row. O(1): two point deletes, on the failure path only.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step whose start failed.</param>
+    /// <param name="lease">The attempt's lease; <see langword="null"/> when leases are off.</param>
+    /// <remarks>
+    /// <para>
+    /// The claim goes first. The runtime's retry of the job then claims the step again and runs it; the
+    /// released ledger row only means "no attempt is queued", which is true when the runtime gives up, and
+    /// lets startup recovery dispatch the ready step in that case. A duplicate dispatch, while the
+    /// runtime's own retry is still pending, is absorbed by the claim.
+    /// </para>
+    /// <para>
+    /// Swallows its own failure (logged): it must never mask the original exception, which the caller
+    /// rethrows. If the store is down hard enough that the claim release fails too, the claim is orphaned
+    /// and <see cref="IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync"/> releases it once it is older than
+    /// <c>FlowRunControlOptions.OrphanedClaimTimeout</c>.
+    /// </para>
+    /// </remarks>
+    private async Task ReleaseAfterFailedStartAsync(Guid runId, string stepKey, StepLease? lease)
+    {
+        try
+        {
+            await ReleaseClaimAsync(runId, stepKey, lease).ConfigureAwait(false);
+            await _runStore.ReleaseDispatchAsync(runId, stepKey, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.ReleaseAfterFailedStartFailed(_logger, ex, stepKey);
         }
     }
 
@@ -656,7 +939,9 @@ public sealed partial class FlowOrchestratorEngine
         IReadOnlyDictionary<string, StepStatus> statuses;
         try
         {
-            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId).ConfigureAwait(false);
+            // Keyed: only the enclosing loops' rows matter. Every step a cancelled run still drains takes this
+            // path, so reading the whole run here was O(steps in the run) per drained step (#189 P0-1).
+            statuses = await _runtimeStore.GetStepStatusesAsync(ctx.RunId, enclosing).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -675,7 +960,9 @@ public sealed partial class FlowOrchestratorEngine
 
             try
             {
-                await _runStore.RecordStepCompleteAsync(
+                // Conditional on Running, like the barrier settle: a loop a concurrent continuation
+                // settled a moment ago keeps its Succeeded row instead of being overwritten.
+                await _runStore.TryCompleteRunningStepAsync(
                     ctx.RunId,
                     loopKey,
                     StepStatus.Skipped.ToString(),
@@ -687,6 +974,72 @@ public sealed partial class FlowOrchestratorEngine
                 EngineLog.StepSkipTrackingFailed(_logger, ex, loopKey);
             }
         }
+    }
+
+    /// <summary>
+    /// Delay before a step handed back by a worker whose manifest does not contain it is redelivered.
+    /// </summary>
+    /// <remarks>
+    /// Long enough that a rolling deploy is not flooded by redeliveries bouncing between stale replicas,
+    /// short enough that the step is not noticeably late once a current replica picks it up.
+    /// </remarks>
+    internal static readonly TimeSpan UnknownStepRedeliveryDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Handles a step whose key the executing worker's manifest does not contain: hands it back to the
+    /// runtime when another manifest version is registered for the flow, so a worker that knows the step
+    /// runs it; otherwise lets the caller record it as removed.
+    /// </summary>
+    /// <param name="ctx">Execution context of the run.</param>
+    /// <param name="flow">The flow definition this worker holds.</param>
+    /// <param name="step">The step this worker was handed.</param>
+    /// <returns>
+    /// <see langword="true"/> when the step was redelivered and the caller must exit without claiming it;
+    /// <see langword="false"/> when this worker holds the registered manifest (the step was removed from the
+    /// flow) or no manifest is registered, and the step is recorded <see cref="StepStatus.Skipped"/> by the
+    /// ordinary path.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The worker cannot tell from its own manifest whether the step was added in a version it has not
+    /// loaded yet, or removed in the version it has. The flow store can: every host syncs its manifest there
+    /// at startup (<c>FlowSyncHostedService</c>), so a stored manifest that differs from this worker's means
+    /// another version is live. Only a worker that holds the registered manifest takes the terminal decision.
+    /// When the deploy converges — every replica restarted, or rolled back — the stored manifest matches
+    /// every worker again and the step is decided on its next delivery, so a hand-back cannot loop for ever.
+    /// </para>
+    /// <para>
+    /// The dispatch-ledger row this delivery was queued under is kept, so the run never reads as finished
+    /// while the step is in transit; the redelivery reuses it. A store read that fails hands the step back
+    /// too: a Skipped row cannot be undone, a redelivery can be repeated.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> TryHandBackStepUnknownToManifestAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step)
+    {
+        bool anotherVersionRegistered;
+        try
+        {
+            var record = await _flowStore.GetByIdAsync(flow.Id).ConfigureAwait(false);
+            anotherVersionRegistered = record?.ManifestJson is { } stored && !RegisteredManifest.Matches(stored, flow);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.UnknownStepManifestCheckFailed(_logger, ex, step.Key);
+            anotherVersionRegistered = true;
+        }
+
+        if (!anotherVersionRegistered)
+        {
+            EngineLog.UnknownStepRemovedFromManifest(_logger, step.Key, flow.Id);
+            return false;
+        }
+
+        EngineLog.UnknownStepHandedBack(_logger, step.Key, flow.Id, UnknownStepRedeliveryDelay.TotalSeconds);
+
+        // The ledger row is held; DispatchReservedStepAsync releases it if the runtime rejects the message,
+        // and the throw makes the runtime retry this delivery.
+        await DispatchReservedStepAsync(ctx, flow, step, UnknownStepRedeliveryDelay).ConfigureAwait(false);
+        return true;
     }
 
     private async Task RecordSkippedCurrentStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, string terminalStatus)

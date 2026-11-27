@@ -40,12 +40,134 @@ public sealed class FlowRunControlOptions
     /// </remarks>
     public TimeSpan? TimeoutEnforcementInterval { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>The default for <see cref="OrphanedClaimTimeout"/>: 60 seconds.</summary>
+    public static readonly TimeSpan DefaultOrphanedClaimTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How old an execution claim with no step status row must be before it is treated as orphaned — the
+    /// worker that took it died (or its storage failed) before it recorded the step's start.
+    /// <see langword="null"/> or a non-positive value turns the release off.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An orphaned claim makes every later attempt of the step exit as a duplicate and keeps the run
+    /// counted as in flight for ever. Startup recovery releases such claims (and their dispatch-ledger
+    /// rows) and re-dispatches the step; the periodic timeout sweep releases them on a cancelled or
+    /// timed-out run so the run can close.
+    /// </para>
+    /// <para>
+    /// The age is the only evidence the claimer is gone: a worker stalled for longer than this between its
+    /// claim and its first status write can see the step run a second time. A live worker normally spends
+    /// two store round trips there. Raise the value if your store can stall for longer. A host restart
+    /// faster than this value does not release the claims of the instance it replaced — the next startup
+    /// does (or the sweep, for a terminating run). With step leases on (<see cref="StepLeaseDuration"/>), a
+    /// claim taken by the engine is a lease and is reclaimed by its expiry instead; this release still covers
+    /// claims without a lease.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? OrphanedClaimTimeout { get; set; } = DefaultOrphanedClaimTimeout;
+
+    /// <summary>The default for <see cref="UnsentDispatchTimeout"/>: 60 seconds.</summary>
+    public static readonly TimeSpan DefaultUnsentDispatchTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a dispatch-ledger row may go without a runtime job/message id before it is treated as never
+    /// handed to the runtime and the step is re-delivered. <see langword="null"/> or a non-positive value
+    /// turns the re-delivery off.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The engine records the ledger row before it calls the runtime and annotates it with the returned id
+    /// afterwards. A process that dies while the send is in flight — or a send that hangs inside the
+    /// broker client's retry loop — leaves the row without an id, and startup recovery skips ledgered keys,
+    /// so the step would never run and the run would stay <c>Running</c> for ever. A background sweep
+    /// (<see cref="Hosting.FlowUnsentDispatchRecoveryHostedService"/>) re-delivers such rows on every
+    /// replica, once at startup and then every half of this value (at most every 30 s).
+    /// </para>
+    /// <para>
+    /// The age is the only evidence the sender is gone. A send still legitimately in flight for longer than
+    /// this — the Azure Service Bus client's default retry policy allows about four minutes — is delivered
+    /// twice; the execution claim lets only one delivery run the step. Lower values recover faster and
+    /// duplicate more often.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? UnsentDispatchTimeout { get; set; } = DefaultUnsentDispatchTimeout;
+
+    /// <summary>The default for <see cref="StepLeaseDuration"/>: 60 seconds.</summary>
+    public static readonly TimeSpan DefaultStepLeaseDuration = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a step's execution claim lives without renewal. The process running the step renews it every
+    /// <see cref="StepLeaseRenewInterval"/>; once it stops (the process died, or lost its store), another
+    /// delivery may take the step over after this long. <see langword="null"/> or a non-positive value turns
+    /// leases off: claims never expire, as in 1.x.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without a lease, a worker killed mid-handler left its claim for ever: every redelivery of the step exited
+    /// as a duplicate and the run stayed <c>Running</c> (RFC 2.0 C1). With it, the runtime's own redelivery
+    /// (Hangfire's invisibility timeout, a Service Bus lock expiry) takes the expired lease over, and a periodic
+    /// sweep (<see cref="Hosting.FlowStepLeaseHostedService"/>) redelivers every step whose lease expired, for
+    /// runtimes that redeliver too early or never.
+    /// </para>
+    /// <para>
+    /// A live handler is never taken over however long it runs: its lease is renewed. Only a process that
+    /// cannot reach its store for longer than this value loses its lease; the step then runs again elsewhere,
+    /// and the stalled attempt's completion is rejected by the lease's fence. Lower values recover faster after
+    /// a crash; keep the value at least three times your store's worst round trip.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? StepLeaseDuration { get; set; } = DefaultStepLeaseDuration;
+
+    /// <summary>The default for <see cref="StepLeaseRenewInterval"/>: 20 seconds.</summary>
+    public static readonly TimeSpan DefaultStepLeaseRenewInterval = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// How often a process renews the leases of the steps it is executing; at most a third of
+    /// <see cref="StepLeaseDuration"/> is used whatever the value, so two renewals can fail before a lease
+    /// expires.
+    /// </summary>
+    public TimeSpan StepLeaseRenewInterval { get; set; } = DefaultStepLeaseRenewInterval;
+
     /// <summary>
     /// Name of the HTTP header that carries the caller-supplied idempotency key
     /// (e.g. <c>"Idempotency-Key"</c>). Requests carrying a key that matches an
     /// existing run are de-duplicated rather than creating a new run.
     /// </summary>
     public string IdempotencyHeaderName { get; set; } = "Idempotency-Key";
+
+    /// <summary>The default for <see cref="IdempotencyReservationTimeout"/>: 30 seconds.</summary>
+    public static readonly TimeSpan DefaultIdempotencyReservationTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How old an idempotency-key registration whose run never started work must be before a duplicate
+    /// trigger may take the key over and start the run itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A trigger registers its idempotency key before it creates the run. A process killed in between
+    /// left the key pointing at a run with no dispatched or recorded step, and every retry of the same
+    /// delivery was answered "duplicate" of that dead run. A duplicate that finds such a registration
+    /// older than this value now takes the key over (atomically, so one of many concurrent retries wins),
+    /// cancels and fails the dead run, and starts a fresh one. A younger registration, or one whose run
+    /// has started work, is answered "duplicate" as before.
+    /// </para>
+    /// <para>
+    /// The age is the only evidence the first trigger is gone. A live trigger normally spends a few store
+    /// round trips between its registration and its first dispatch; one stalled for longer than this has
+    /// its run cancelled in favour of the retry's. Raise the value if your store can stall for longer.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when set to zero or a negative value.</exception>
+    public TimeSpan IdempotencyReservationTimeout
+    {
+        get;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            field = value;
+        }
+    } = DefaultIdempotencyReservationTimeout;
 }
 
 /// <summary>

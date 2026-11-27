@@ -23,6 +23,12 @@ public sealed record WebhookSignatureSpec
     /// <summary>Wire-format encoding of the digest.</summary>
     public SignatureEncoding Encoding { get; init; } = SignatureEncoding.HexLower;
 
+    /// <summary>
+    /// How the configured key string becomes the HMAC key bytes. <see cref="HmacKeyEncoding.Utf8"/> for every
+    /// built-in scheme except Microsoft Teams, which keys with the base64-decoded security token.
+    /// </summary>
+    public HmacKeyEncoding KeyEncoding { get; init; } = HmacKeyEncoding.Utf8;
+
     /// <summary>Optional prefix stripped from each candidate value before decoding (e.g. <c>"sha256="</c>).</summary>
     public string? Prefix { get; init; }
 
@@ -45,6 +51,17 @@ public sealed record WebhookSignatureSpec
     /// <summary>Header that carries the timestamp when it lives outside the signature header (Slack, Zoom).</summary>
     public string? TimestampHeaderName { get; init; }
 
+    /// <summary>
+    /// Header that carries the per-delivery message id signed by <see cref="SignedPayloadStrategy.MessageIdTimestampBody"/>
+    /// (Standard Webhooks <c>webhook-id</c>). A request without it fails with
+    /// <see cref="WebhookSignatureFailureReason.MissingHeader"/>.
+    /// </summary>
+    /// <remarks>
+    /// The id is covered by the digest, so a verified delivery reports it as
+    /// <see cref="WebhookSignatureResult.AuthenticatedNonce"/> and replay protection uses it as the replay key.
+    /// </remarks>
+    public string? MessageIdHeaderName { get; init; }
+
     /// <summary>Versions accepted from a multi-value header (Stripe defaults to <c>["v1"]</c>).</summary>
     public IReadOnlyList<string>? AcceptedVersions { get; init; }
 
@@ -62,6 +79,18 @@ public sealed record WebhookSignatureSpec
 
     /// <summary>Allow processing more than one signature value from the header (Stripe).</summary>
     public bool AcceptMultipleSignatures { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, a multi-value header entry without a <see cref="KeyValueSeparator"/> (or with an
+    /// empty key) is skipped instead of failing the whole header with
+    /// <see cref="WebhookSignatureFailureReason.MalformedHeader"/>.
+    /// </summary>
+    /// <remarks>
+    /// Standard Webhooks reference libraries accept a header such as <c>",,, v1 v1,&lt;valid&gt;"</c>: the
+    /// signature list is a set of candidates and one valid <c>v1</c> entry is enough. Skipping a malformed entry
+    /// cannot help a forger — it only removes a candidate that could never have matched.
+    /// </remarks>
+    public bool IgnoreMalformedEntries { get; init; }
 
     /// <summary>Strip this prefix from the entire header value before parsing (e.g. <c>"HMAC "</c> for Microsoft Teams).</summary>
     public string? HeaderValuePrefix { get; init; }

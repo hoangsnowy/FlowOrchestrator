@@ -18,6 +18,7 @@ FlowOrchestrator is a runtime-agnostic workflow engine. The core execution logic
 │  FlowGraphPlanner       — DAG evaluation                 │
 │  FlowTimeoutEnforcementHostedService — timeout sweep     │
 │  FlowRunRecoveryHostedService — re-dispatch on startup   │
+│  FlowUnsentDispatchRecoveryHostedService — resend lost   │
 │  FlowSyncHostedService  — flow upsert + cron sync        │
 │  RecurringTriggerSync   — effective cron, every runtime  │
 │  FlowRegistry           — O(1) flow lookup by id         │
@@ -70,7 +71,7 @@ The sequence from trigger to completion:
 
 6. **Advance** — `FlowGraphPlanner.Evaluate` evaluates `runAfter` conditions. If one or more steps are now unblocked, they are dispatched via `IStepDispatcher`. If a step returned `StepStatus.Pending`, the engine calls `ReleaseDispatchAsync` then `IStepDispatcher.ScheduleStepAsync(delay)` to reschedule. If all steps are complete, the run is marked `Succeeded` or `Failed`.
 
-7. **On failure** — The dashboard exposes a **Retry** button that calls `FlowOrchestratorEngine.RetryStepAsync()`, which resets the step to `Pending` and re-dispatches it from the failure point. Preceding outputs are preserved.
+7. **On failure** — The dashboard exposes a **Retry** button that calls `FlowOrchestratorEngine.RetryStepAsync()`. Only a `Failed` step can be retried: the store resets it with a compare-and-swap (so of two concurrent retries one wins and the other gets `409`), and the engine re-dispatches it through `IStepDispatcher` from the failure point; the handler runs on the runtime, not in the request. Preceding outputs are preserved.
 
 ## Startup Sequence
 
@@ -79,7 +80,11 @@ The sequence from trigger to completion:
 1. Validates each registered `IFlowDefinition` via `IFlowGraphPlanner.Validate` — an invalid manifest throws `InvalidOperationException` and fails startup — then calls `IFlowStore.SaveAsync` to upsert the flow record in the database.
 2. Synchronises cron triggers through `IRecurringTriggerSync.SyncTriggersAsync(flowId, isEnabled)`. Core's single `RecurringTriggerSync` resolves the effective cron — removed for disabled flows and dashboard-paused schedules, the persisted override from `IFlowScheduleStateStore` when `Scheduler.PersistOverrides = true`, else the manifest cron — and hands it to the runtime's `IRecurringTriggerDispatcher` (Hangfire `IRecurringJobManager`, the in-process `PeriodicTimer` registry, or Service Bus scheduled messages). Job ids come from `RecurringTriggerJobId` (`flow-{flowId}-{triggerKey}`).
 
-`FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart.
+`FlowRunRecoveryHostedService` also runs on startup. It re-dispatches any steps that were in a ready state when the previous process terminated — preventing stuck runs after a restart. Recovery is a scheduling path, so it applies the same rules as the graph continuation before dispatching: a ready step whose `When` clause is false is recorded `Skipped` (with its evaluation trace) instead of running, a step whose prerequisites finished in an unaccepted status is skipped, and a dispatch that throws is logged without abandoning the run's other steps.
+
+`FlowUnsentDispatchRecoveryHostedService` covers what startup recovery cannot see. The engine writes a step's dispatch-ledger row *before* it calls the runtime and annotates it with the runtime's job/message id afterwards, and recovery skips every ledgered key. A row still without an id after `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s) means the send never returned — the process died mid-send, or the send hung — so the sweep leases the row (`IFlowRunStore.LeaseUnsentDispatchesAsync`, atomic across replicas) and enqueues the step again. It runs at startup and then every half of the timeout. A duplicate delivery is absorbed by the execution claim.
+
+`FlowStepLeaseHostedService` covers a worker that dies while it **holds** a step. Every step is claimed under a lease (`FlowRunControlOptions.StepLeaseDuration`, default 60 s) that the process running it renews every `StepLeaseRenewInterval` (20 s). When the worker is killed — mid-handler, between its claim and its start write, or between its handler and its completion write — nobody renews the lease and it expires. The runtime's own redelivery (Hangfire's invisibility timeout, a Service Bus lock expiry) then takes the expired lease over and runs the step again; and because that redelivery can come while the lease is still live and then never again, the service also sweeps, every half lease, for steps whose lease expired without a terminal status and hands them to the runtime (`IFlowRunRuntimeStore.LeaseExpiredStepLeasesAsync`, atomic across replicas). In 1.x such a claim never expired and the run stayed `Running` until an operator intervened.
 
 This means the database always reflects the code — no manual migration step required when you add or rename a flow.
 
@@ -88,9 +93,11 @@ This means the database always reflects the code — no manual migration step re
 This is the core concurrency invariant:
 
 - **`TryRecordDispatchAsync`** — an idempotent dispatch ledger (INSERT once per `RunId + StepKey`). Multiple workers may attempt to enqueue the same step (e.g., when two predecessors complete nearly simultaneously), but only the first INSERT succeeds.
-- **`TryClaimStepAsync`** — claim exclusion within a run. When `RunStepAsync` is called, the engine acquires a claim. If another worker already claimed the step, the call exits without executing the handler.
+- **`TryAcquireStepLeaseAsync`** — claim exclusion within a run. When `RunStepAsync` is called, the engine acquires the step under a **lease**. If another worker holds a live lease, or the step already reached a terminal status, the call exits without executing the handler. A lease whose worker stopped renewing it is taken over by the next delivery, with a higher **fence**; every write of the older attempt (its completion, its Pending hand-off, its output once a renewal reported the loss) is rejected by that fence, so a stalled worker that comes back cannot overwrite the new owner's outcome. (`TryClaimStepAsync` is the lease-less claim used for skips, and by hand-built engines without a `StepLeaseKeeper`.)
 
-These two guards together ensure a step's handler is called exactly once even under concurrent dispatch.
+These two guards together ensure a step's handler runs once for every step that completes, even under concurrent dispatch. An attempt cut short by a crash runs again — at-least-once for the interrupted attempt, as in Temporal — so handlers with external side effects should be idempotent.
+
+**Continuation cost.** After a step completes, the engine reads only the statuses of that step's dependents and their dependencies (`GetStepStatusesAsync(runId, keys)`), checks for open work with one indexed existence query (`HasRunningOrPendingStepAsync`), and counts a ForEach loop's settled iterations on the server (`CountSettledIterationsAsync`). The whole status map is read only when a run is about to close. Store rows read per completion are therefore flat in the size of the run (4 per completion at 1 000 ForEach iterations, against 2 003 before 2.0; #189).
 
 ## Storage Separation
 
@@ -110,7 +117,7 @@ Swapping in a custom backend (Redis, DynamoDB, CosmosDB, etc.) requires five con
 
 ## Key Design Decisions
 
-**Runtime-agnostic engine** — `FlowOrchestratorEngine` in `FlowOrchestrator.Core` owns all orchestration logic. The `IStepDispatcher` abstraction decouples it from any specific background-job framework. Adding a new runtime adapter requires only an `IStepDispatcher` implementation.
+**Runtime-agnostic engine** — `FlowOrchestratorEngine` in `FlowOrchestrator.Core` owns all orchestration logic. The `IStepDispatcher` abstraction decouples it from any specific background-job framework. Adding a new runtime adapter requires only an `IStepDispatcher` implementation. A runtime whose queue does not survive a process restart (the in-memory channel) reports `IStepDispatcher.LosesQueuedStepsOnRestart = true`; startup recovery then re-enqueues ledgered steps that never started instead of trusting the ledger row to mean "still queued". The default (`false`) suits any runtime backed by durable storage; a dispatcher decorator must forward it.
 
 **Dapper, not EF Core** — all SQL is explicit. No ORM magic, no shadow queries. Queries live in the `SqlServer` / `PostgreSQL` projects and are readable as raw SQL.
 

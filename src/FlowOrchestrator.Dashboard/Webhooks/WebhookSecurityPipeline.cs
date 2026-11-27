@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
+using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Observability;
 using FlowOrchestrator.Core.Storage;
 using FlowOrchestrator.Dashboard.Webhooks.Logging;
@@ -98,7 +99,54 @@ public sealed class WebhookSecurityPipeline
     }
 
     /// <summary>Verdict including the HTTP status code and a precise reason chip.</summary>
-    public readonly record struct PipelineResult(Decision Decision, int StatusCode, string Reason, bool UsedRotationKey);
+    public readonly record struct PipelineResult(Decision Decision, int StatusCode, string Reason, bool UsedRotationKey)
+    {
+        /// <summary>
+        /// <see langword="true"/> when a signature scheme configured on the trigger verified this request
+        /// (built-in or DI-registered custom verifier). The endpoint skips the legacy <c>X-Webhook-Key</c>
+        /// shared-secret check in that case: the signature already authenticated the sender, and a
+        /// <c>webhookSecret</c> used as the HMAC key is never sent back as a header by the publisher.
+        /// </summary>
+        public bool SignatureVerified { get; init; }
+
+        /// <summary>
+        /// The replay-protection entry this request recorded, or <see langword="null"/> when replay protection
+        /// did not register one. A caller whose request then fails before the run is started passes the result
+        /// to <see cref="ReleaseReplayRegistrationAsync"/>, so the publisher's retry is not answered as a replay.
+        /// </summary>
+        public WebhookReplayRegistration? ReplayRegistration { get; init; }
+    }
+
+    /// <summary>
+    /// Compensates a delivery that passed the gate chain and then failed before its run was started (a refused
+    /// legacy key, a trigger that threw, a client disconnect before the trigger write): releases the replay entry
+    /// the request recorded, so the publisher's retry is processed instead of rejected with <c>409</c>.
+    /// </summary>
+    /// <param name="flowId">Flow the delivery targeted (logging).</param>
+    /// <param name="triggerKey">Trigger the delivery targeted (logging).</param>
+    /// <param name="registration">The <see cref="PipelineResult.ReplayRegistration"/> of the failed request.</param>
+    /// <remarks>
+    /// Runs with <see cref="CancellationToken.None"/>: it executes on a failure path that may have been caused by
+    /// the caller disconnecting, and the release must still happen. Best effort — a store failure is logged
+    /// (EventId 4013) and never masks the original failure; the entry then simply expires as before.
+    /// Only the owner token in <paramref name="registration"/> can release the entry, so this cannot open a
+    /// replay window for anybody else.
+    /// </remarks>
+    internal async ValueTask ReleaseReplayRegistrationAsync(Guid flowId, string triggerKey, WebhookReplayRegistration registration)
+    {
+        if (_replayGate is null)
+            return;
+        try
+        {
+            var released = await _replayGate.ReleaseAsync(registration, CancellationToken.None).ConfigureAwait(false);
+            if (released && _logger is not null)
+                WebhookLog.ReplayKeyReleased(_logger, flowId, triggerKey);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (_logger is not null) WebhookLog.ReplayKeyReleaseFailed(_logger, ex, flowId, triggerKey);
+        }
+    }
 
     /// <summary>
     /// Runs the active gate chain (signature → replay). Caller passes the
@@ -111,13 +159,74 @@ public sealed class WebhookSecurityPipeline
     /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
     /// <param name="headers">Inbound request headers (case-insensitive).</param>
     /// <param name="ct">Cancellation token.</param>
-    public async ValueTask<PipelineResult> EvaluateAsync(
+    public ValueTask<PipelineResult> EvaluateAsync(
         HttpContext http,
         Guid flowId,
         string triggerKey,
         IReadOnlyDictionary<string, object?> triggerInputs,
         ReadOnlyMemory<byte> bodyBytes,
         IReadOnlyDictionary<string, string> headers,
+        CancellationToken ct = default)
+        => EvaluateAsync(http, flowId, triggerKey, triggerInputs, bodyBytes, headers, formFields: null, ct);
+
+    /// <summary>
+    /// Runs the active gate chain for a request whose body may be form-encoded. Caller passes the
+    /// resolved flow / trigger info, the buffered body bytes and — for an
+    /// <c>application/x-www-form-urlencoded</c> body — its decoded fields.
+    /// </summary>
+    /// <param name="http">HTTP context (used for client IP, absolute URL, activity tags).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key (manifest key).</param>
+    /// <param name="triggerInputs">Manifest inputs for the matching webhook trigger.</param>
+    /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
+    /// <param name="headers">Inbound request headers (case-insensitive).</param>
+    /// <param name="formFields">
+    /// Decoded form fields (<see cref="WebhookRequestBuffer.BufferedBody.FormFields"/>), handed to the
+    /// verifier for schemes that sign them (Twilio's <see cref="SignedPayloadStrategy.UrlPlusSortedForm"/>);
+    /// <see langword="null"/> for a JSON body.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// An accepted request is recorded in the delivery log (and counted as received) before this returns. A
+    /// caller that may still refuse the request after the pipeline — the webhook endpoint's legacy
+    /// <c>X-Webhook-Key</c> check — uses <see cref="EvaluateDeferringAcceptanceAsync"/> instead, so the log
+    /// never shows a refused delivery as accepted.
+    /// </remarks>
+    public ValueTask<PipelineResult> EvaluateAsync(
+        HttpContext http,
+        Guid flowId,
+        string triggerKey,
+        IReadOnlyDictionary<string, object?> triggerInputs,
+        ReadOnlyMemory<byte> bodyBytes,
+        IReadOnlyDictionary<string, string> headers,
+        IReadOnlyDictionary<string, string>? formFields,
+        CancellationToken ct = default)
+        => EvaluateDeferringAcceptanceAsync(http, flowId, triggerKey, triggerInputs, bodyBytes, headers, formFields, deferredAcceptance: null, ct);
+
+    /// <summary>
+    /// Runs the gate chain like <c>EvaluateAsync</c>, but when <paramref name="deferredAcceptance"/> is
+    /// given, an accepted request is NOT yet recorded: the caller finishes its own checks and then calls
+    /// <see cref="CommitAcceptance"/> or <see cref="RecordRejectionAfterPipelineAsync"/>.
+    /// </summary>
+    /// <param name="http">HTTP context (used for client IP, absolute URL, activity tags).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key (manifest key).</param>
+    /// <param name="triggerInputs">Manifest inputs for the matching webhook trigger.</param>
+    /// <param name="bodyBytes">Raw body bytes (already capped to MaxBodyBytes).</param>
+    /// <param name="headers">Inbound request headers (case-insensitive).</param>
+    /// <param name="formFields">Decoded form fields for a form-encoded body; <see langword="null"/> for JSON.</param>
+    /// <param name="deferredAcceptance">Receives the accepted-delivery bookkeeping; <see langword="null"/> records it at once.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The pipeline verdict. Rejections are recorded before this returns, deferred or not.</returns>
+    internal async ValueTask<PipelineResult> EvaluateDeferringAcceptanceAsync(
+        HttpContext http,
+        Guid flowId,
+        string triggerKey,
+        IReadOnlyDictionary<string, object?> triggerInputs,
+        ReadOnlyMemory<byte> bodyBytes,
+        IReadOnlyDictionary<string, string> headers,
+        IReadOnlyDictionary<string, string>? formFields,
+        DeferredAcceptance? deferredAcceptance,
         CancellationToken ct = default)
     {
         var stopwatch = ValueStopwatch.StartNew();
@@ -131,7 +240,7 @@ public sealed class WebhookSecurityPipeline
 
         if (_options.EnforcementMode == WebhookEnforcementMode.Off)
         {
-            EmitAccept(flowId, triggerKey, "off", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, scheme: null);
+            Accept(deferredAcceptance, flowId, triggerKey, "off", clientIp, bodyBytes.Length, headers, stopwatch, scheme: null);
             return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", false);
         }
 
@@ -140,15 +249,17 @@ public sealed class WebhookSecurityPipeline
         if (ipVerdict is { } reason)
             return await PersistRejectIpAsync(flowId, triggerKey, clientIp, reason, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
 
-        // ── Rate-limit gate (per flow [+ IP]) ──
+        // ── Rate-limit gate (per flow + trigger [+ IP]) ──
         if (_rateLimiter is not null)
         {
             var rateOpts = ResolveRateLimit(triggerInputs);
             if (rateOpts.IsEnabled)
             {
+                // Keyed per trigger, not per flow: two webhook triggers of one flow may declare different
+                // webhookRateLimit* inputs, and a shared bucket would hold both to whichever was hit first.
                 var key = rateOpts.PerIp && clientIp is not null
-                    ? $"{flowId}|{clientIp}"
-                    : flowId.ToString();
+                    ? $"{flowId}|{triggerKey}|{clientIp}"
+                    : $"{flowId}|{triggerKey}";
                 var rl = _rateLimiter.TryAcquire(key, rateOpts);
                 if (!rl.Allowed)
                     return await PersistRejectRateLimitAsync(flowId, triggerKey, key, rl.RetryAfter, clientIp, bodyBytes, headers, stopwatch, ct).ConfigureAwait(false);
@@ -173,6 +284,16 @@ public sealed class WebhookSecurityPipeline
             spec = WebhookSignatureSpecResolver.Resolve(triggerInputs, customSchemesRo);
         }
 
+        // A scheme the trigger names but nothing can verify (a typo, an unsupported provider, Custom with an
+        // unregistered strategy) must not silently skip the signature gate: that would accept unsigned
+        // deliveries on an endpoint the operator believes is signed. Rejected in Enforce; recorded (and let
+        // through) in Audit like every other violation.
+        if (!customDispatch && DescribeUnverifiableScheme(schemeName, spec, _options, _verifier is HmacSignatureVerifier) is { } schemeProblem)
+        {
+            if (_logger is not null) WebhookLog.SignatureSchemeUnknown(_logger, flowId, triggerKey, schemeProblem);
+            return await PersistRejectAsync(flowId, triggerKey, UnknownSchemeReason, StatusCodes.Status401Unauthorized, clientIp, bodyBytes, headers, spec: null, stopwatch, ct).ConfigureAwait(false);
+        }
+
         // ── Signature gate ──
         var usedRotation = false;
         var signatureVerified = false;
@@ -195,9 +316,9 @@ public sealed class WebhookSecurityPipeline
             var sigCtx = new WebhookSignatureContext
             {
                 Body = bodyBytes,
-                Headers = headers,
+                Headers = WithSignatureHeader(http, headers, spec),
                 AbsoluteUrl = BuildAbsoluteUrl(http),
-                FormFields = null,
+                FormFields = formFields,
                 Spec = spec,
                 HmacKey = key ?? string.Empty,
                 HmacKeyPrevious = previous,
@@ -228,6 +349,7 @@ public sealed class WebhookSecurityPipeline
         }
 
         // ── Replay-protection gate ──
+        WebhookReplayRegistration? replayRegistration = null;
         if (_replayGate is not null)
         {
             var tolerance = TryGetInt(triggerInputs, "webhookReplayToleranceSeconds")
@@ -253,12 +375,112 @@ public sealed class WebhookSecurityPipeline
                     case ReplayProtectionGate.Decision.TimestampMissing:
                         return await PersistRejectReplayAsync(flowId, triggerKey, verdict.Reason ?? verdict.Decision.ToString(), clientIp, bodyBytes, headers, spec, stopwatch, ct).ConfigureAwait(false);
                 }
+                replayRegistration = verdict.Registration;
             }
         }
 
         Activity.Current?.SetTag("flow.webhook.result", "accepted");
-        EmitAccept(flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch.Elapsed.TotalMilliseconds, spec?.HeaderName);
-        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation);
+        Accept(deferredAcceptance, flowId, triggerKey, "accepted", clientIp, bodyBytes.Length, headers, stopwatch, spec?.HeaderName);
+        return new PipelineResult(Decision.Accept, StatusCodes.Status200OK, "ok", usedRotation)
+        {
+            SignatureVerified = signatureVerified,
+            ReplayRegistration = replayRegistration,
+        };
+    }
+
+    /// <summary>
+    /// Accepted-delivery bookkeeping (log row + received counter) for a request the gate chain let through,
+    /// held back by <see cref="EvaluateDeferringAcceptanceAsync"/> until the caller has made its final decision.
+    /// </summary>
+    /// <remarks>Single use: the first <see cref="CommitAcceptance"/> or <see cref="RecordRejectionAfterPipelineAsync"/> consumes it.</remarks>
+    internal sealed class DeferredAcceptance
+    {
+        /// <summary><see langword="true"/> between the pipeline accepting the request and the caller's decision.</summary>
+        internal bool IsPending { get; private set; }
+
+        internal Guid FlowId { get; private set; }
+
+        internal string TriggerKey { get; private set; } = string.Empty;
+
+        internal string Result { get; private set; } = string.Empty;
+
+        internal IPAddress? ClientIp { get; private set; }
+
+        internal long Bytes { get; private set; }
+
+        internal IReadOnlyDictionary<string, string>? Headers { get; private set; }
+
+        internal string? Scheme { get; private set; }
+
+        internal long StartTimestamp { get; private set; }
+
+        internal void Hold(Guid flowId, string triggerKey, string result, IPAddress? ip, long bytes, IReadOnlyDictionary<string, string> headers, string? scheme, long startTimestamp)
+        {
+            FlowId = flowId;
+            TriggerKey = triggerKey;
+            Result = result;
+            ClientIp = ip;
+            Bytes = bytes;
+            Headers = headers;
+            Scheme = scheme;
+            StartTimestamp = startTimestamp;
+            IsPending = true;
+        }
+
+        internal bool TryConsume()
+        {
+            if (!IsPending)
+                return false;
+            IsPending = false;
+            return true;
+        }
+    }
+
+    /// <summary>Records a request held by <see cref="EvaluateDeferringAcceptanceAsync"/> as accepted.</summary>
+    /// <param name="acceptance">The held bookkeeping; a no-op when nothing is pending.</param>
+    internal void CommitAcceptance(DeferredAcceptance acceptance)
+    {
+        if (!acceptance.TryConsume())
+            return;
+        EmitAccept(acceptance.FlowId, acceptance.TriggerKey, acceptance.Result, acceptance.ClientIp, acceptance.Bytes,
+            acceptance.Headers!, Stopwatch.GetElapsedTime(acceptance.StartTimestamp).TotalMilliseconds, acceptance.Scheme);
+    }
+
+    /// <summary>
+    /// Records a delivery the caller refused after the gate chain (e.g. a wrong legacy <c>X-Webhook-Key</c>) as
+    /// rejected with its real status code and reason, and drops any acceptance still held for it.
+    /// </summary>
+    /// <param name="http">HTTP context (client IP).</param>
+    /// <param name="flowId">Resolved flow identifier.</param>
+    /// <param name="triggerKey">Resolved trigger key.</param>
+    /// <param name="reason">Reason chip shown in the delivery log.</param>
+    /// <param name="statusCode">The status code the caller answers with.</param>
+    /// <param name="bodyBytes">Raw body bytes (an excerpt is kept, as for every rejection).</param>
+    /// <param name="headers">Inbound request headers.</param>
+    /// <param name="acceptance">Bookkeeping held for this request, if any; discarded.</param>
+    /// <returns>A task that completes once the rejection is recorded.</returns>
+    /// <remarks>
+    /// The write uses <see cref="CancellationToken.None"/>: the decision is final, and a client that hangs up
+    /// right after a refused attempt must not be able to keep it out of the log.
+    /// </remarks>
+    internal async ValueTask RecordRejectionAfterPipelineAsync(
+        HttpContext http, Guid flowId, string triggerKey, string reason, int statusCode,
+        ReadOnlyMemory<byte> bodyBytes, IReadOnlyDictionary<string, string> headers, DeferredAcceptance? acceptance)
+    {
+        var held = acceptance is not null && acceptance.TryConsume();
+        var timing = held ? ValueStopwatch.FromTimestamp(acceptance!.StartTimestamp) : ValueStopwatch.StartNew();
+        var clientIp = held ? acceptance!.ClientIp : ResolveClientIp(http, _options.ForwardedHeaderDepth);
+        await RecordRejectedAsync(flowId, triggerKey, reason, statusCode, clientIp, bodyBytes, headers, spec: null, timing, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private void Accept(
+        DeferredAcceptance? deferred, Guid flowId, string triggerKey, string result, IPAddress? ip, long bytes,
+        IReadOnlyDictionary<string, string> headers, ValueStopwatch stopwatch, string? scheme)
+    {
+        if (deferred is not null)
+            deferred.Hold(flowId, triggerKey, result, ip, bytes, headers, scheme, stopwatch.StartTimestamp);
+        else
+            EmitAccept(flowId, triggerKey, result, ip, bytes, headers, stopwatch.Elapsed.TotalMilliseconds, scheme);
     }
 
     private async ValueTask<PipelineResult> PersistRejectSignatureAsync(
@@ -303,6 +525,21 @@ public sealed class WebhookSecurityPipeline
         ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
         WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
     {
+        await RecordRejectedAsync(flowId, triggerKey, reason, statusCode, ip, body, headers, spec, sw, ct).ConfigureAwait(false);
+
+        return _options.EnforcementMode switch
+        {
+            WebhookEnforcementMode.Audit => new PipelineResult(Decision.AuditFail, statusCode, reason, false),
+            WebhookEnforcementMode.Enforce => new PipelineResult(Decision.Reject, statusCode, reason, false),
+            _ => new PipelineResult(Decision.Accept, StatusCodes.Status200OK, reason, false),
+        };
+    }
+
+    private async ValueTask RecordRejectedAsync(
+        Guid flowId, string triggerKey, string reason, int statusCode, IPAddress? ip,
+        ReadOnlyMemory<byte> body, IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec, ValueStopwatch sw, CancellationToken ct)
+    {
         Activity.Current?.SetTag("flow.webhook.result", "rejected");
         Activity.Current?.SetTag("flow.webhook.reject_reason", reason);
 
@@ -326,13 +563,6 @@ public sealed class WebhookSecurityPipeline
                 WebhookLog.RejectionStoreFailed(_logger, ex, flowId, triggerKey);
             }
         }
-
-        return _options.EnforcementMode switch
-        {
-            WebhookEnforcementMode.Audit => new PipelineResult(Decision.AuditFail, statusCode, reason, false),
-            WebhookEnforcementMode.Enforce => new PipelineResult(Decision.Reject, statusCode, reason, false),
-            _ => new PipelineResult(Decision.Accept, StatusCodes.Status200OK, reason, false),
-        };
     }
 
     private void EmitAccept(
@@ -390,6 +620,64 @@ public sealed class WebhookSecurityPipeline
         };
     }
 
+    /// <summary>
+    /// Returns the header map the signature verifier sees: <paramref name="headers"/> plus the spec's
+    /// signature header read straight from the request when the endpoint stripped it from the captured
+    /// headers (Microsoft Teams signs in <c>Authorization</c>, which is never captured).
+    /// </summary>
+    /// <remarks>
+    /// The re-added value reaches the verifier only — the trigger headers, the delivery log and the log
+    /// lines keep using <paramref name="headers"/>, so a credential header is still never persisted.
+    /// Allocates a copy only for the schemes that need it; every other request returns the same instance.
+    /// </remarks>
+    private static IReadOnlyDictionary<string, string> WithSignatureHeader(
+        HttpContext http,
+        IReadOnlyDictionary<string, string> headers,
+        WebhookSignatureSpec? spec)
+    {
+        var name = spec?.HeaderName;
+        if (string.IsNullOrEmpty(name) || headers.ContainsKey(name))
+            return headers;
+        if (!http.Request.Headers.TryGetValue(name, out var raw) || Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(raw))
+            return headers;
+
+        return new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase) { [name] = raw.ToString() };
+    }
+
+    /// <summary>Reason recorded for a delivery whose trigger names a signature scheme nothing can verify.</summary>
+    internal const string UnknownSchemeReason = "signature_scheme_unknown";
+
+    /// <summary>
+    /// Describes why a trigger's <c>webhookSignatureScheme</c> cannot be verified, or returns
+    /// <see langword="null"/> when it can — or when the trigger names no scheme.
+    /// </summary>
+    /// <param name="schemeName">The trigger's <c>webhookSignatureScheme</c> value.</param>
+    /// <param name="spec">What <see cref="WebhookSignatureSpecResolver.Resolve"/> made of it.</param>
+    /// <param name="options">Host webhook options (registered custom payload strategies).</param>
+    /// <param name="checkStrategies">
+    /// <see langword="true"/> when the built-in <see cref="HmacSignatureVerifier"/> is in use, whose custom
+    /// payload strategies come from <paramref name="options"/>; a replacement verifier resolves its own.
+    /// </param>
+    /// <returns>A sentence fragment naming the problem, or <see langword="null"/>.</returns>
+    /// <remarks>
+    /// Callers check DI-registered custom verifiers (<see cref="WebhookCustomVerifierRegistry"/>) first: a name
+    /// one of them handles is verifiable. <c>None</c> is the documented way to say "no signature" and stays valid.
+    /// </remarks>
+    internal static string? DescribeUnverifiableScheme(
+        string? schemeName, WebhookSignatureSpec? spec, WebhookSecurityOptions options, bool checkStrategies)
+    {
+        if (string.IsNullOrWhiteSpace(schemeName)
+            || string.Equals(schemeName.Trim(), nameof(WebhookSignatureScheme.None), StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (spec is null)
+            return $"'{schemeName}', which is neither a built-in scheme, a scheme registered with RegisterScheme, nor a verifier registered with AddWebhookSignatureVerifier";
+        if (checkStrategies
+            && spec.SignedPayloadStrategy == SignedPayloadStrategy.Custom
+            && (string.IsNullOrEmpty(spec.CustomStrategyName) || !options.CustomSignatureStrategies.ContainsKey(spec.CustomStrategyName)))
+            return $"'{schemeName}' with signed-payload strategy Custom, but the strategy '{spec.CustomStrategyName}' is not registered with AddCustomSignatureStrategy";
+        return null;
+    }
+
     private static string? TryGetString(IReadOnlyDictionary<string, object?> map, string key) =>
         map.TryGetValue(key, out var v) && v is not null ? v as string ?? v.ToString() : null;
 
@@ -418,10 +706,52 @@ public sealed class WebhookSecurityPipeline
         return value switch
         {
             int i => i,
-            long l => (int)l,
+            // Clamp, never truncate: (int)4294967296L is 0, which silently disabled replay protection.
+            // ValidateTriggerInputs rejects such a value at startup; this guards flows it never saw.
+            long l => (int)Math.Clamp(l, int.MinValue, int.MaxValue),
             string s when int.TryParse(s, out var p) => p,
             _ => null,
         };
+    }
+
+    /// <summary>Integer-valued webhook trigger inputs that the pipeline reads as <see cref="int"/>.</summary>
+    private static readonly string[] IntegerInputs = ["webhookReplayToleranceSeconds"];
+
+    /// <summary>
+    /// Fails fast when a registered webhook trigger declares an integer input outside the
+    /// <see cref="int"/> range, instead of letting it be misread on every request.
+    /// </summary>
+    /// <param name="registry">The flows registered on the dashboard host.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a webhook trigger's <c>webhookReplayToleranceSeconds</c> is an integer (or integer string)
+    /// outside <c>0 … 2147483647</c>.
+    /// </exception>
+    /// <remarks>Startup-only: one pass over the registered triggers.</remarks>
+    internal static void ValidateTriggerInputs(FlowRegistry registry)
+    {
+        foreach (var flow in registry.Flows)
+        {
+            foreach (var (triggerKey, trigger) in flow.Manifest.Triggers.Where(t => t.Value.Type == TriggerType.Webhook))
+            {
+                foreach (var input in IntegerInputs)
+                {
+                    if (!trigger.Inputs.TryGetValue(input, out var raw) || raw is null)
+                        continue;
+                    long? value = raw switch
+                    {
+                        int i => i,
+                        long l => l,
+                        string s when long.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+                        _ => null,
+                    };
+                    if (value is { } v && (v < 0 || v > int.MaxValue))
+                    {
+                        throw new InvalidOperationException(
+                            $"Flow '{flow.Id}' webhook trigger '{triggerKey}' sets {input} = {v}, outside 0 … {int.MaxValue}. Use 0 to disable replay protection or a positive number of seconds.");
+                    }
+                }
+            }
+        }
     }
 
     private static string BuildAbsoluteUrl(HttpContext http)
@@ -432,22 +762,25 @@ public sealed class WebhookSecurityPipeline
 
     /// <summary>
     /// Resolves the effective client IP used for the allowlist/denylist gate and the rate-limit key,
-    /// honouring <see cref="WebhookSecurityOptions.ForwardedHeaderDepth"/> trusted-proxy hops.
+    /// honouring <see cref="WebhookSecurityOptions.ForwardedHeaderDepth"/> trusted proxies.
     /// </summary>
     /// <param name="http">The current request context.</param>
-    /// <param name="forwardedDepth">Number of trusted reverse-proxies in front of the host; <c>0</c> ignores <c>X-Forwarded-For</c>.</param>
+    /// <param name="forwardedDepth">Number of trusted reverse proxies in front of the host; <c>0</c> ignores <c>X-Forwarded-For</c>.</param>
     /// <returns>
-    /// The trusted client address: the <c>X-Forwarded-For</c> hop just before the trusted proxies when the
-    /// header genuinely contains more hops than <paramref name="forwardedDepth"/>; otherwise the transport-level
-    /// <see cref="ConnectionInfo.RemoteIpAddress"/> (which may be <see langword="null"/>).
+    /// The <c>X-Forwarded-For</c> entry <paramref name="forwardedDepth"/> positions from the right when the header
+    /// has at least that many entries; otherwise the transport-level <see cref="ConnectionInfo.RemoteIpAddress"/>
+    /// (which may be <see langword="null"/>).
     /// </returns>
     /// <remarks>
-    /// Security invariant: an <c>X-Forwarded-For</c> entry is trusted ONLY when <c>hops.Length &gt; forwardedDepth</c>.
-    /// If the header carries fewer hops than the configured depth (a misconfiguration, or an attacker padding the
-    /// header), the previous <c>Math.Max(0, …)</c> clamp would select index 0 — the leftmost, fully
-    /// client-controlled value — letting a caller spoof the allowlist match and evade per-IP rate limiting. In that
-    /// case the method discards the untrusted chain and falls back to <see cref="ConnectionInfo.RemoteIpAddress"/>;
-    /// the allowlist fails safe on a <see langword="null"/>/unknown address.
+    /// <para>Every proxy APPENDS the address of the peer it received the request from — never its own. Behind
+    /// N trusted proxies the socket peer is the innermost proxy and the last N entries were written by trusted
+    /// proxies, the leftmost of them (<c>hops[^N]</c>) by the outermost proxy: that is the client. Everything
+    /// further left arrived in the caller's own <c>X-Forwarded-For</c> and is attacker-controlled. This matches
+    /// ASP.NET Core's <c>ForwardedHeadersMiddleware</c> with <c>ForwardLimit = N</c>.</para>
+    /// <para>With fewer than N entries the chain did not pass through all trusted proxies (a misconfiguration, or
+    /// a request that bypassed one), so no entry is trusted and the socket address is used; the allowlist fails
+    /// safe on a <see langword="null"/> / unknown address. An unparseable entry falls back the same way.</para>
+    /// <para>Per webhook request; parsed over spans, allocation-free apart from the header string itself.</para>
     /// </remarks>
     internal static IPAddress? ResolveClientIp(HttpContext http, int forwardedDepth)
     {
@@ -455,21 +788,18 @@ public sealed class WebhookSecurityPipeline
             && http.Request.Headers.TryGetValue("X-Forwarded-For", out var xff)
             && !string.IsNullOrWhiteSpace(xff))
         {
-            // X-Forwarded-For: client, proxy1, proxy2 (left-to-right). Trust the
-            // last `forwardedDepth` entries as proxies; the entry just before is
-            // the client we want.
-            var hops = xff.ToString().Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-            // Security: only trust an XFF entry when the header actually contains MORE hops than the
-            // configured proxy depth. If hops.Length <= forwardedDepth (misconfiguration, or an
-            // attacker padding the header with fewer entries than expected), the computed index would
-            // clamp to 0 — the leftmost, fully client-controlled value — and we'd trust a spoofed IP for
-            // the allowlist and rate-limit key. In that case treat the XFF chain as untrusted and fall
-            // back to the transport-level RemoteIpAddress (the allowlist fails safe on a null/unknown IP).
-            if (hops.Length > forwardedDepth)
+            // Several X-Forwarded-For header lines are one comma-joined list, in arrival order.
+            var rest = xff.ToString().AsSpan();
+            var remaining = forwardedDepth;
+            while (true)
             {
-                var index = hops.Length - forwardedDepth - 1;
-                if (IPAddress.TryParse(hops[index], out var addr)) return addr;
+                var comma = rest.LastIndexOf(',');
+                var entry = (comma < 0 ? rest : rest[(comma + 1)..]).Trim();
+                if (!entry.IsEmpty && --remaining == 0)
+                    return IPAddress.TryParse(entry, out var client) ? client : http.Connection.RemoteIpAddress;
+                if (comma < 0)
+                    break;
+                rest = rest[..comma];
             }
         }
         return http.Connection.RemoteIpAddress;
@@ -589,6 +919,8 @@ public sealed class WebhookSecurityPipeline
         private readonly long _start;
         private ValueStopwatch(long start) { _start = start; }
         public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
+        public static ValueStopwatch FromTimestamp(long start) => new(start);
+        public long StartTimestamp => _start;
         public TimeSpan Elapsed => Stopwatch.GetElapsedTime(_start);
     }
 }

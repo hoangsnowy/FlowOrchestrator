@@ -30,6 +30,12 @@ Registers a recurring job with the active runtime adapter that fires the flow on
 - **Hangfire runtime** — maps to a Hangfire `RecurringJob` driven by `IRecurringJobManager`.
 - **InMemory runtime** — driven by an in-process `PeriodicTimer` (1 s tick) using [Cronos](https://github.com/HangfireIO/Cronos) for expression parsing. No external scheduler needed.
 - **ServiceBus runtime** (v1.22+) — schedules each cron firing as a Service Bus message with `ScheduledEnqueueTime` on the `flow-cron-triggers` queue. The cron consumer fires the trigger and self-perpetuates the next message. Single-delivery semantics across replicas — no leader election needed.
+  Each job runs exactly one such chain. A chain is stamped with an epoch (its first tick), and the consumer
+  drops a tick of an older chain, so a cron change, a restart or a resume replaces the chain instead of
+  adding one next to it; a replica that receives a tick of a newer chain than it knows follows it. At startup
+  the hub peeks the cron queue once and adopts the tick the previous process left instead of scheduling a
+  second one. Before firing, the consumer also checks the shared state: a tick for a disabled flow, a trigger
+  the manifest no longer declares, or (with `PersistOverrides`) a schedule paused on any replica is dropped.
 
 All three runtimes implement the same `IRecurringTriggerDispatcher` / `IRecurringTriggerSync` abstractions, so cron behaviour (overrides, pause/resume, dashboard controls) is identical across them.
 
@@ -57,6 +63,11 @@ Common patterns:
 
 > [!TIP]
 > Cron overrides written via the dashboard or `PUT /flows/api/schedules/{jobId}/cron` are persisted when `Scheduler.PersistOverrides = true` and survive process restarts.
+>
+> The endpoint answers `400` for an expression that is not a valid 5-field (minute) or 6-field (second)
+> cron expression, and nothing is persisted or rescheduled. An unparseable override already persisted by
+> an older version is ignored at startup: the job runs on the manifest cron and a warning (EventId 5011)
+> names it.
 
 ### Disabled flows
 
@@ -124,6 +135,9 @@ X-Webhook-Key: my-secret-key
 { "orderId": "ORD-456", "total": 129.99 }
 ```
 
+- The body may be JSON or `application/x-www-form-urlencoded`. A form body reaches the run as a JSON
+  object (`Body=hi&From=%2B1555` becomes `{ "Body": "hi", "From": "+1555" }`; a repeated field becomes an
+  array), so `@triggerBody()?.From` reads the same either way.
 - `webhookSlug` — URL path segment. Must be unique across all registered webhooks.
 - `webhookSecret` — When set, every incoming request must include `X-Webhook-Key: {secret}`. Requests without or with the wrong secret receive `401 Unauthorized`.
 - If `webhookSecret` is omitted, the endpoint is unauthenticated.
@@ -156,13 +170,16 @@ invalid requests are accepted, you are in `Off`.
 
 Note the asymmetry with the legacy `webhookSecret` / `X-Webhook-Key` check, which runs *outside* the
 pipeline and therefore rejects with `401` whatever the enforcement mode is. `webhookSecret` secures an
-endpoint on its own; `webhookHmacKey` does not.
+endpoint on its own; `webhookHmacKey` does not. The one exception: when the trigger also sets
+`webhookSignatureScheme` and the signature **verified**, `webhookSecret` is acting as the HMAC key and the
+`X-Webhook-Key` check is skipped — publishers such as GitHub never send that header. A signature that did
+not verify (for example under `Audit`) still has to pass the `X-Webhook-Key` check.
 
 Configure per flow via manifest inputs. The full set of v1.25 fields:
 
 | Field | Purpose |
 |-------|---------|
-| `webhookSignatureScheme` | Selects a built-in dialect: `GitHub`, `GitHubLegacy`, `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`, `Linear`, `Dropbox`, `Mailgun`, `MicrosoftTeams`, `Atlassian`, `Calendly`, `Generic`, or `Custom`. |
+| `webhookSignatureScheme` | Selects a built-in dialect: `GitHub`, `GitHubLegacy`, `Bitbucket`, `Stripe`, `Slack`, `Shopify`, `Twilio`, `Square`, `Zoom`, `Linear`, `Dropbox`, `Mailgun`, `MicrosoftTeams`, `Atlassian`, `Calendly`, `StandardWebhooks` (Svix, Clerk, Resend, …), `Generic`, or `Custom`. |
 | `webhookHmacKey` | Signing key used for HMAC verification. Falls back to `webhookSecret` when absent. |
 | `webhookHmacKeyPrevious` / `webhookSecretPrevious` | Optional rotated-out key. Successful matches against the previous key emit `EventId 4010` (`WebhookLog.RotationUsedPreviousKey`). |
 | `webhookSignatureHeader`, `webhookSignatureAlgorithm`, `webhookSignatureEncoding`, `webhookSignaturePrefix`, `webhookSignatureMultiValueDelimiter`, `webhookSignatureKeyValueSeparator`, `webhookSignatureValueKey`, `webhookTimestampValueKey`, `webhookTimestampHeader`, `webhookSignedPayloadStrategy`, `webhookSignedPayloadDelimiter`, `webhookSignedPayloadVersion`, `webhookHeaderValuePrefix`, `webhookCustomStrategyName` | Drive the `Custom` scheme directly from the manifest (every aspect of the wire format is controllable). |
@@ -245,6 +262,10 @@ options.RunControl.IdempotencyHeaderName = "Idempotency-Key";  // default
 ```
 
 Idempotency keys work for both manual triggers and webhook triggers, but they are scoped per (flow, trigger key): the same key delivered to a flow's manual trigger and to its webhook trigger creates two separate runs.
+
+The key is registered just before the run is created. If the process dies in between, the key points at a run that never started any step. A retry with the same key then takes the key over and starts a new run, but only once the registration is older than `options.RunControl.IdempotencyReservationTimeout` (30 s by default). Until then, the retry is answered with the dead run's id as a duplicate. The dead run is cancelled and completed `Failed`, and its cancel reason names the run that replaced it. If many retries arrive at once, exactly one of them starts the new run, and the others get that run's id as duplicates.
+
+In practice: a caller that retries a delivery with the same key should keep retrying with backoff past the reservation timeout when the run it was given never progresses — an immediate retry (or a load balancer's instant failover to another replica) lands inside the window and is answered "duplicate" of the run that died. The pre-release stress run hit exactly this: a replica killed 12 ms after registering a key; the instant retry was a duplicate, a re-delivery 35 s later took the key over and its run succeeded.
 
 ### Per-run timeout override
 

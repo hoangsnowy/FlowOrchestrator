@@ -39,6 +39,30 @@ public interface IFlowRunStore
     Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage);
 
     /// <summary>
+    /// Records the outcome of a step exactly like <see cref="RecordStepCompleteAsync"/>, but only when the
+    /// step is still <see cref="StepStatus.Running"/>, and reports whether this call made the transition.
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The runtime step key, e.g. <c>"outer.1.inner"</c>.</param>
+    /// <param name="status">The terminal status to set.</param>
+    /// <param name="outputJson">The step output, or <see langword="null"/>.</param>
+    /// <param name="errorMessage">The failure or skip reason, or <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> when this call moved a <c>Running</c> step to <paramref name="status"/>;
+    /// <see langword="false"/> when the step was no longer <c>Running</c> (another writer won, or it has no row).
+    /// </returns>
+    /// <remarks>
+    /// The engine settles a <c>ForEach</c> loop step through this method. A loop step is the only step whose
+    /// completion is decided outside its own handler, by whichever worker completes the loop's last
+    /// outstanding child, so two workers can decide it at the same moment. Only the caller that wins the
+    /// transition publishes the loop's <c>StepCompletedEvent</c> and continues the graph from it. The check
+    /// and the write must be one atomic step (a conditional <c>UPDATE</c> and its row count, or a lock).
+    /// There is deliberately no default implementation: an unconditional fallback would bring the double
+    /// settle back without any compile-time signal.
+    /// </remarks>
+    Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage);
+
+    /// <summary>
     /// Marks the run as complete (status: <c>Succeeded</c>, <c>Failed</c>, or <c>Cancelled</c>)
     /// and sets <see cref="FlowRunRecord.CompletedAt"/>.
     /// </summary>
@@ -117,59 +141,156 @@ public interface IFlowRunStore
     /// id is a primary-key seek, a text term reads only the run's own columns inside the start-time
     /// window, and step payloads are read only when <see cref="RunSearchQuery.IncludeStepPayloads"/> is
     /// set. The default implementation keeps third-party providers correct by delegating to
-    /// <see cref="GetRunsPageAsync(Guid?, string?, int, int, string?, bool, DateTimeOffset?, DateTimeOffset?)"/>
-    /// with <c>Take + 1</c> rows; it does not get the seeks. It honours <see cref="RunSearchQuery.After"/>
-    /// by bounding <c>startedTo</c> at the cursor's start time and dropping the tied rows at or before the
-    /// cursor (a handful of extra rows are read for that), and applies
-    /// <see cref="RunSearchQuery.TotalCountCap"/> to the exact count the legacy overload returns.
+    /// <see cref="GetRunsPageAsync(Guid?, string?, int, int, string?, bool, DateTimeOffset?, DateTimeOffset?)"/>;
+    /// it does not get the seeks. That overload orders runs newest first but leaves runs that share a start
+    /// time in no defined order, so the default implementation re-sorts every page into the cursor order
+    /// (<c>StartedAt</c> descending, then <c>Id</c> ascending) and pages exactly — no run duplicated or
+    /// dropped — whatever the number of ties:
+    /// <list type="bullet">
+    /// <item>with <see cref="RunSearchQuery.After"/>, it reads the runs that started at the cursor's exact
+    /// start time as one group (a <c>startedFrom = startedTo</c> window), keeps those after the cursor, and
+    /// reads the rest strictly older than the cursor;</item>
+    /// <item>when the page's last row shares its start time with rows the read did not reach, it reads
+    /// that whole tie group too, so <see cref="RunSearchPage.NextCursor"/> never skips a tied run.</item>
+    /// </list>
+    /// A tie group is read with growing page sizes until the overload returns fewer rows than asked, so
+    /// the extra reads are proportional to the number of tied runs and happen only on a tie. Exactness
+    /// relies on the overload honouring <c>startedFrom</c> / <c>startedTo</c>; with a
+    /// <see cref="RunSearchQuery.Skip"/>, offset semantics apply to the rows older than the cursor, as they
+    /// do on the built-in providers. <see cref="RunSearchQuery.TotalCountCap"/> is applied to the exact
+    /// count the legacy overload returns.
     /// </remarks>
     async Task<RunSearchPage> SearchRunsAsync(RunSearchQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Rows read beyond Take + 1 so that runs sharing the cursor's start time, which the legacy
-        // overload returns in no defined order, can be dropped without shortening the page.
-        const int CursorTieSlack = 8;
-
         // A run id falls back to a substring match on the legacy overload, then is narrowed to the
         // exact id here. Text, when also present, wins the store-side match.
         var search = query.HasText ? query.Text : query.RunId?.ToString("D");
-        var take = Math.Clamp(query.Take, 0, int.MaxValue - 1 - CursorTieSlack);
-        var after = query.After;
-        var startedTo = after is { } cursor && (query.StartedTo is null || cursor.StartedAt < query.StartedTo)
-            ? cursor.StartedAt
-            : query.StartedTo;
-        var (runs, total) = await GetRunsPageAsync(
-            query.FlowId, query.Status, Math.Max(0, query.Skip), take + 1 + (after is null ? 0 : CursorTieSlack), search,
-            query.IncludeStepPayloads, query.StartedFrom, startedTo).ConfigureAwait(false);
+        var take = Math.Clamp(query.Take, 0, int.MaxValue - 1);
+        var skip = Math.Max(0, query.Skip);
+        var rows = new List<FlowRunRecord>(Math.Min(take + 1, 256));
+        var upper = query.StartedTo;
+        int? total = null;
 
-        var rows = new List<FlowRunRecord>(Math.Min(runs.Count, take + 1));
-        // foreach, not .Where(): two captured filters (runId, cursor position) would allocate a closure on
-        // every search call through this default implementation; CLAUDE.md prefers the loop.
-        foreach (var run in runs)
+        if (query.After is { } after)
         {
-            if (query.RunId is { } runId && run.Id != runId)
-                continue;
-            if (after is { } position && !position.Precedes(run))
-                continue;
-            rows.Add(run);
+            var cursorInWindow = (query.StartedTo is null || after.StartedAt <= query.StartedTo)
+                && (query.StartedFrom is null || after.StartedAt >= query.StartedFrom);
+            if (cursorInWindow)
+            {
+                var group = await ReadTieGroupAsync(query, search, after.StartedAt).ConfigureAwait(false);
+                // Serves the dashboard's polled run search (CLAUDE.md hot path): foreach + continue, no closure.
+                foreach (var run in group)
+                {
+                    if (!after.Precedes(run) || (query.RunId is { } id && run.Id != id))
+                        continue;
+                    if (skip > 0)
+                    {
+                        skip--;
+                        continue;
+                    }
+
+                    rows.Add(run);
+                }
+            }
+
+            // Strictly older than the cursor: the legacy window is inclusive, and the cursor's own start
+            // time was read above as a whole group.
+            var older = after.StartedAt.AddTicks(-1);
+            upper = upper is { } to && to < older ? to : older;
         }
 
-        if (after is not null)
+        var groupRows = rows.Count;
+        var need = take + 1 - groupRows;
+        if (need > 0 && (query.StartedFrom is null || upper is null || upper >= query.StartedFrom))
         {
-            rows.Sort(static (a, b) => b.StartedAt != a.StartedAt ? b.StartedAt.CompareTo(a.StartedAt) : a.Id.CompareTo(b.Id));
+            var (batch, batchTotal) = await GetRunsPageAsync(
+                query.FlowId, query.Status, skip, need, search,
+                query.IncludeStepPayloads, query.StartedFrom, upper).ConfigureAwait(false);
+            total = batchTotal;
 
-            // The count above covered only the rows up to the cursor; the total is over the plain
-            // filters, so take it with an empty page.
-            if (query.CountsTotal)
+            DateTimeOffset? boundary = null;
+            // foreach, not .Where(): the captured filters would allocate a closure on every search call
+            // through this default implementation; CLAUDE.md prefers the loop.
+            foreach (var run in batch)
             {
-                (_, total) = await GetRunsPageAsync(
-                    query.FlowId, query.Status, 0, 0, null, false, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
+                if (boundary is null || run.StartedAt < boundary)
+                    boundary = run.StartedAt;
+                if (query.RunId is { } id && run.Id != id)
+                    continue;
+                rows.Add(run);
+            }
+
+            rows.Sort(groupRows, rows.Count - groupRows, RunSearchCursor.ListOrder);
+
+            // The read stopped at `need` rows, so more runs may share the start time of its oldest row. If
+            // that tie group reaches onto the page, NextCursor would point into the middle of a group whose
+            // other members were never read: replace the partial group with the whole one. With an offset
+            // (skip > 0) the group's members before the offset cannot be told apart, so offset paging keeps
+            // its usual semantics.
+            var lastOnPage = take - 1;
+            if (batch.Count >= need && boundary is { } tie && skip == 0 && query.RunId is null
+                && lastOnPage >= groupRows && lastOnPage < rows.Count && rows[lastOnPage].StartedAt == tie)
+            {
+                var kept = groupRows;
+                for (var i = groupRows; i < rows.Count; i++)
+                {
+                    if (rows[i].StartedAt != tie)
+                        rows[kept++] = rows[i];
+                }
+
+                rows.RemoveRange(kept, rows.Count - kept);
+                rows.AddRange(await ReadTieGroupAsync(query, search, tie).ConfigureAwait(false));
             }
         }
 
-        return RunSearchPage.FromRows(rows, take, query.CountsTotal ? total : null, query.EffectiveTotalCountCap);
+        if (query.CountsTotal && (query.After is not null || total is null))
+        {
+            // With a cursor the reads above covered only the rows after it; the total is over the plain
+            // filters, so take it with an empty page.
+            (_, var counted) = await GetRunsPageAsync(
+                query.FlowId, query.Status, 0, 0, null, false, query.StartedFrom, query.StartedTo).ConfigureAwait(false);
+            total = counted;
+        }
+
+        return RunSearchPage.FromRows(rows, take, query.CountsTotal ? total ?? 0 : null, query.EffectiveTotalCountCap);
+    }
+
+    /// <summary>
+    /// Reads every run matching <paramref name="query"/>'s filters that started exactly at
+    /// <paramref name="startedAt"/>, in cursor order. Used by the default <see cref="SearchRunsAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Page sizes grow 64, 256, 1024, … until the overload returns fewer rows than asked, so the cost is
+    /// proportional to the tie group and needs no count. Rows outside the instant are dropped in case the
+    /// provider does not honour the window.
+    /// </remarks>
+    private async Task<List<FlowRunRecord>> ReadTieGroupAsync(RunSearchQuery query, string? search, DateTimeOffset startedAt)
+    {
+        var size = 64;
+        while (true)
+        {
+            var (batch, _) = await GetRunsPageAsync(
+                query.FlowId, query.Status, 0, size, search,
+                query.IncludeStepPayloads, startedAt, startedAt).ConfigureAwait(false);
+            if (batch.Count < size || size > int.MaxValue / 4)
+            {
+                var group = new List<FlowRunRecord>(batch.Count);
+                // Polled run-search path (CLAUDE.md hot path): foreach, not .Where with a closure over query.
+                foreach (var run in batch)
+                {
+                    if (run.StartedAt == startedAt && (query.RunId is not { } id || run.Id == id))
+                        group.Add(run);
+                }
+
+                group.Sort(RunSearchCursor.ListOrder);
+                return group;
+            }
+
+            size *= 4;
+        }
     }
 
     /// <summary>
@@ -258,10 +379,30 @@ public interface IFlowRunStore
     Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync();
 
     /// <summary>
-    /// Resets a step back to a re-runnable state so it can be re-enqueued by the retry flow.
-    /// Clears <c>Running</c>/<c>Failed</c> status and increments attempt count.
+    /// Resets a <c>Failed</c> step back to a re-runnable state for a manual retry, only if it is still
+    /// <c>Failed</c>, and reports whether this call made the reset.
     /// </summary>
-    Task RetryStepAsync(Guid runId, string stepKey);
+    /// <param name="runId">The run containing the step.</param>
+    /// <param name="stepKey">The step to reset.</param>
+    /// <returns>
+    /// <see langword="true"/> when this call reset a <c>Failed</c> step; <see langword="false"/> when the step
+    /// has no row or is not <c>Failed</c> (for example because a concurrent retry reset it first). Nothing is
+    /// changed when it returns <see langword="false"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// On success, one transaction: the step row becomes <c>Running</c> with its output, error and
+    /// completion time cleared; the run goes back to <c>Running</c> with no completion time; and the step's
+    /// claim and dispatch-ledger rows are deleted so the engine can dispatch and claim the new attempt.
+    /// </para>
+    /// <para>
+    /// The <c>Failed</c> check and the reset must be one atomic step (a conditional <c>UPDATE</c> and its row
+    /// count, inside the same transaction as the deletes). Before 2.0 the reset was unconditional and
+    /// unbatched, so a second concurrent retry deleted the first retry's claim and the handler ran twice at
+    /// once (RFC 2.0 S4). There is deliberately no default implementation.
+    /// </para>
+    /// </remarks>
+    Task<bool> RetryStepAsync(Guid runId, string stepKey);
 
     /// <summary>
     /// Clears cascade-skip records (<see cref="StepSkipReasons.PrerequisitesUnmet"/>) for the
@@ -331,4 +472,42 @@ public interface IFlowRunStore
         var dispatched = await GetDispatchedStepKeysAsync(runId).ConfigureAwait(false);
         return dispatched.Contains(stepKey);
     }
+
+    /// <summary>
+    /// Finds dispatch-ledger rows whose hand-off to the runtime never completed, and leases them to the
+    /// caller for re-delivery.
+    /// </summary>
+    /// <param name="minimumAge">How long a row must have gone without a runtime job id to qualify.</param>
+    /// <param name="maxCount">Upper bound on the rows returned by one call.</param>
+    /// <param name="ct">Honoured before the lease is written; never after.</param>
+    /// <returns>
+    /// The leased rows; empty when nothing qualifies or the store does not support the lease.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The engine writes a ledger row <em>before</em> it hands the step to the runtime and annotates it
+    /// with the runtime's job/message id (<see cref="AnnotateDispatchAsync"/>) once the hand-off returns.
+    /// A row that still has no id long after it was written means the hand-off never returned: the process
+    /// died mid-send, or the send is hung. Startup recovery skips every ledgered key, so without this lease
+    /// such a step is never dispatched again and its run stays <c>Running</c> for ever.
+    /// </para>
+    /// <para>
+    /// A row qualifies when all of these hold: it has no job id; it is older than
+    /// <paramref name="minimumAge"/>; its run is <c>Running</c>; no worker claims the step; and the step has
+    /// no status row, or only a <see cref="StepStatus.Pending"/> one (a poll whose re-attempt was never
+    /// handed over). Leasing re-stamps the row's dispatch time to now, in the same atomic statement that
+    /// selects it, so concurrent callers (one per replica) never lease the same row twice inside one
+    /// <paramref name="minimumAge"/> window, and a re-delivery that fails again is retried a window later.
+    /// </para>
+    /// <para>
+    /// The store cannot tell "never sent" from "sent, but the process died before the annotation". Both are
+    /// re-delivered; a duplicate message is absorbed by the execution claim
+    /// (<see cref="IFlowRunRuntimeStore.TryClaimStepAsync"/>), whereas a lost one strands the run.
+    /// </para>
+    /// <para>
+    /// No default implementation, deliberately: a store that silently returned nothing would keep the stranded-run
+    /// bug this member exists to close. Custom stores must implement it (see the migration guide).
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default);
 }

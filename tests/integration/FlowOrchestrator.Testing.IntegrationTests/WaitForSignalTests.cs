@@ -115,6 +115,68 @@ public sealed class WaitForSignalTests
     }
 
     [Fact]
+    public async Task SignalAfterDeadline_IsRefusedAsExpired_StepFails_FinishStepNeverRuns()
+    {
+        // Arrange — frozen clock: the step re-polls every 100 ms (fast polling) but only sees the deadline
+        // pass when the test moves the clock, so the signal lands after the deadline and before (or racing)
+        // the timeout poll — the stress harness's "signal after expiry" scenario, without a wall-clock race.
+        // Whichever runs first, the outcome must be the same.
+        await using var host = await FlowTestHost.For<WaitForSignalWithDeadlineFlow>()
+            .WithHandler<EchoStepHandler>("Echo")
+            .WithSystemClock(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero))
+            .WithFastPolling()
+            .BuildAsync();
+
+        var runId = await StartRunAsync(host);
+        var signals = host.Services.GetRequiredService<IFlowSignalDispatcher>();
+        await WaitForWaiterAsync(host, runId, "wait_for_approval");
+        await host.FastForwardAsync(TimeSpan.FromSeconds(61));
+
+        // Act
+        var delivery = await signals.DispatchAsync(runId, "approval", "{\"approver\":\"late\"}");
+        var result = await host.WaitForRunAsync(runId, TerminalTimeout);
+        var waiter = await host.Services.GetRequiredService<IFlowSignalStore>().GetWaiterAsync(runId, "wait_for_approval");
+
+        // Assert — refused, nothing recorded, the step timed out and its success branch never ran.
+        Assert.Equal(SignalDeliveryStatus.Expired, delivery.Status);
+        Assert.Null(waiter!.DeliveredAt);
+        Assert.False(result.TimedOut);
+        Assert.Equal(RunStatus.Failed, result.Status);
+        Assert.Equal(StepStatus.Failed, result.Steps["wait_for_approval"].Status);
+        Assert.Contains("not received within 60s", result.Steps["wait_for_approval"].FailureReason ?? string.Empty, StringComparison.Ordinal);
+        Assert.False(
+            result.Steps.TryGetValue("finalize", out var finalize) && finalize.Status == StepStatus.Succeeded,
+            "the finish step must not run after a late signal");
+    }
+
+    [Fact]
+    public async Task SignalBeforeDeadline_UnderAFrozenClock_IsDelivered_AndTheRunSucceeds()
+    {
+        // Arrange — same flow and frozen clock, the signal arrives 59 s into the 60 s window. Guards the
+        // clock wiring: the in-memory store must judge by the host's TimeProvider, not the wall clock (which
+        // is months past the frozen instant here and would refuse every delivery).
+        await using var host = await FlowTestHost.For<WaitForSignalWithDeadlineFlow>()
+            .WithHandler<EchoStepHandler>("Echo")
+            .WithSystemClock(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero))
+            .WithFastPolling()
+            .BuildAsync();
+
+        var runId = await StartRunAsync(host);
+        var signals = host.Services.GetRequiredService<IFlowSignalDispatcher>();
+        await WaitForWaiterAsync(host, runId, "wait_for_approval");
+        await host.FastForwardAsync(TimeSpan.FromSeconds(59));
+
+        // Act
+        var delivery = await signals.DispatchAsync(runId, "approval", "{\"approver\":\"on-time\"}");
+        var result = await host.WaitForRunAsync(runId, TerminalTimeout);
+
+        // Assert
+        Assert.Equal(SignalDeliveryStatus.Delivered, delivery.Status);
+        Assert.Equal(RunStatus.Succeeded, result.Status);
+        Assert.Equal(StepStatus.Succeeded, result.Steps["finalize"].Status);
+    }
+
+    [Fact]
     public async Task NoTimeout_StepRemainsPending_UntilSignalDelivered()
     {
         // Arrange

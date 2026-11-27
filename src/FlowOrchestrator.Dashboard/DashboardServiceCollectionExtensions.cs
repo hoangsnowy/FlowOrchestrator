@@ -31,14 +31,6 @@ namespace FlowOrchestrator.Dashboard;
 /// </summary>
 public static class DashboardServiceCollectionExtensions
 {
-    // Headers excluded from trigger capture: sensitive auth/session headers and low-level transport headers
-    private static readonly HashSet<string> _sensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Authorization", "Cookie", "Set-Cookie",
-        "X-Webhook-Key", "Proxy-Authorization",
-        "Connection", "Transfer-Encoding", "Upgrade", "Content-Length"
-    };
-
     /// <summary>
     /// Registers core dashboard services with default options.
     /// </summary>
@@ -245,35 +237,11 @@ public static class DashboardServiceCollectionExtensions
 
         // A caller that goes away mid-request — a load balancer timing out, a closed browser tab, a
         // fire-and-forget webhook — cancels HttpContext.RequestAborted, and every store call that
-        // honours it then throws. Without this filter that exception reaches the diagnostics
-        // middleware and is counted as an unhandled fault, so `aspnetcore.diagnostics.exceptions`
-        // climbs and the app reads as broken when nothing is. Swallow it only when the request was
-        // genuinely aborted: there is no response to write at that point, and a cancellation from
-        // any other source must still surface. Registered before the auth filter so it also covers
-        // a disconnect during authentication.
-        group.AddEndpointFilter(async (ctx, next) =>
-        {
-            try
-            {
-                return await next(ctx);
-            }
-            catch (OperationCanceledException) when (ctx.HttpContext.RequestAborted.IsCancellationRequested)
-            {
-                // No body can reach the caller — the socket is already gone — but the status code is
-                // still what access logs and http.server.request.duration record for this request.
-                // Leaving it at the default 200 would file an abandoned request as a success and
-                // hide disconnect rates entirely. 499 is nginx's "client closed request": not an
-                // IANA code, but the conventional one, and unambiguous in a latency histogram.
-                // Guarded because the status is immutable once the response has started, which is
-                // the normal case for the SSE stream.
-                if (!ctx.HttpContext.Response.HasStarted)
-                {
-                    ctx.HttpContext.Response.StatusCode = 499;
-                }
-
-                return Results.Empty;
-            }
-        });
+        // honours it then throws; a body read cut short throws BadHttpRequestException. Without this
+        // filter either reaches the diagnostics middleware as an unhandled fault. Registered before the
+        // auth filter so it also covers a disconnect during authentication, and on the webhook endpoint,
+        // which is mapped outside this group.
+        group.AddEndpointFilter(ClientDisconnectFilter);
 
         // Basic Auth and identity-based sign-in (OIDC / Keycloak) are evaluated side by side. With
         // neither configured, anonymous callers are operators only in Development (or when the host
@@ -283,6 +251,7 @@ public static class DashboardServiceCollectionExtensions
         var isDevelopment = environment is not null
             && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(environment);
         ValidateAndReportAccessConfiguration(endpoints.ServiceProvider, options, environment, isDevelopment);
+        ValidateWebhookSignatureSchemes(endpoints.ServiceProvider, options.WebhookSecurity);
         group.AddEndpointFilter(new Security.DashboardAccessFilter(
             options,
             basePath,
@@ -310,6 +279,8 @@ public static class DashboardServiceCollectionExtensions
             var home = http.Request.PathBase + basePath;
             if (!authorization.IsEnabled)
                 return Results.Redirect(home);
+            // AdditionalAuthenticationSchemes are deliberately left out: a bearer token has no server-side
+            // session to end, and JwtBearer is not a sign-out handler (SignOutAsync on it throws).
             var schemes = new List<string> { authorization.AuthenticationScheme! };
             if (authorization.EffectiveChallengeScheme is { } challenge && challenge != authorization.AuthenticationScheme)
                 schemes.Add(challenge);
@@ -380,8 +351,8 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            http.Response.ContentType = "text/plain; charset=utf-8";
-            await http.Response.WriteAsync(flow.ToMermaid());
+            // Multi-KB for real flows and rendered per request: negotiated like the JSON endpoints.
+            await WriteTextAsync(http.Response, flow.ToMermaid(), "text/plain; charset=utf-8");
         });
 
         group.MapPost("/api/flows/{id:guid}/enable", async (HttpContext http, IFlowStore store, IRecurringTriggerSync triggerSync, Guid id) =>
@@ -439,7 +410,7 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .Where(h => !TriggerHeaderPolicy.IsExcluded(h.Key))
                 .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             var ctx = new TriggerContext
@@ -558,66 +529,117 @@ public static class DashboardServiceCollectionExtensions
                 await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
                 return;
             }
+            if (buffered.Status == WebhookRequestBuffer.BufferStatus.InvalidForm)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Invalid form payload." });
+                return;
+            }
 
             var headers = (IReadOnlyDictionary<string, string>)http.Request.Headers
-                .Where(h => !_sensitiveHeaders.Contains(h.Key))
+                .Where(h => !TriggerHeaderPolicy.IsExcluded(h.Key))
                 .ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase);
 
             // Run the webhook security pipeline (signature verification today;
             // replay / rate-limit / IP allowlist plug into the same gate chain
             // in later phases).
             var pipeline = http.RequestServices.GetService<WebhookSecurityPipeline>();
+            var signatureVerified = false;
+            Webhooks.Replay.WebhookReplayRegistration? replayRegistration = null;
+            // The pipeline's "accepted" log row is held until the legacy key check below has run, so a delivery
+            // refused there is logged as the rejection it is, never as accepted.
+            var acceptance = new WebhookSecurityPipeline.DeferredAcceptance();
             if (pipeline is not null && triggerInputs is not null)
             {
                 var inputsRo = (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>(triggerInputs, StringComparer.OrdinalIgnoreCase);
-                var verdict = await pipeline.EvaluateAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, http.RequestAborted);
+                var verdict = await pipeline.EvaluateDeferringAcceptanceAsync(http, flow.Id, triggerKey, inputsRo, buffered.Bytes, headers, buffered.FormFields, acceptance, http.RequestAborted);
                 if (verdict.Decision == WebhookSecurityPipeline.Decision.Reject)
                 {
                     http.Response.StatusCode = verdict.StatusCode;
                     await WriteJsonAsync(http.Response, new { error = "Webhook rejected by security pipeline.", reason = verdict.Reason });
                     return;
                 }
+                signatureVerified = verdict.SignatureVerified;
+                replayRegistration = verdict.ReplayRegistration;
             }
 
-            // Backwards-compat shared-secret check (kept after the pipeline so flows
-            // that haven't migrated to webhookSignatureScheme still authenticate).
-            if (!string.IsNullOrEmpty(expectedSecret))
+            // From here until the trigger returns the delivery can still fail with no run started: a refused
+            // legacy key, a trigger that throws (5xx), a client disconnect before the trigger write. The replay
+            // gate has already recorded this delivery's key, so without compensation the publisher's retry is
+            // answered 409 and the delivery is lost. The finally block releases the key — only the key this
+            // request recorded (owner token), only on failure, and not once the engine has dispatched an entry
+            // step (EntryStepsStarted), because that run is alive and a retry would duplicate it.
+            var triggerReturned = false;
+            TriggerContext? ctx = null;
+            try
             {
-                var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
-                    ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
-                if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
+                // Backwards-compat shared-secret check (kept after the pipeline so flows
+                // that haven't migrated to webhookSignatureScheme still authenticate).
+                // Skipped when a signature scheme verified the request: webhookSecret is then the
+                // legacy alias of the HMAC key, and the publisher (GitHub, Stripe, …) never sends it
+                // back as X-Webhook-Key, so demanding it would reject every correctly signed delivery.
+                if (!string.IsNullOrEmpty(expectedSecret) && !signatureVerified)
                 {
-                    http.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
+                    var providedKey = http.Request.Headers["X-Webhook-Key"].FirstOrDefault()
+                        ?? http.Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
+                    if (string.IsNullOrEmpty(providedKey) || !SecureEquals(providedKey, expectedSecret))
+                    {
+                        var keyLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+                        if (keyLogger is not null)
+                            WebhookLog.SecretInvalid(keyLogger, flow.Id, triggerKey);
+                        if (pipeline is not null)
+                        {
+                            // "secret_invalid" is the reason the webhook_rejected_total metric documents for this check.
+                            await pipeline.RecordRejectionAfterPipelineAsync(
+                                http, flow.Id, triggerKey, "secret_invalid",
+                                StatusCodes.Status401Unauthorized, buffered.Bytes, headers, acceptance);
+                        }
+                        http.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        await WriteJsonAsync(http.Response,new { error = "Invalid or missing webhook key. Provide X-Webhook-Key header or Authorization: Bearer <key>." });
+                        return;
+                    }
+                }
+
+                pipeline?.CommitAcceptance(acceptance);
+
+                ctx = new TriggerContext
+                {
+                    RunId = Guid.NewGuid(),
+                    Flow = flow,
+                    Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), buffered.Parsed, headers)
+                };
+                var webhookResult = await engine.TriggerAsync(ctx) as FlowTriggerResult;
+                // The trigger returned: the delivery is handled (run started, duplicate, or disabled flow), so
+                // its replay key stays — from here on a repeat really is a replay.
+                triggerReturned = true;
+                var webhookLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
+
+                // A disabled flow must not be logged as an accepted delivery, and must not answer with a
+                // run id that no run backs. 202 rather than 409: a webhook sender cannot act on the
+                // distinction and retrying would not help, so the delivery is acknowledged as received
+                // and explicitly reported as not started.
+                if (webhookResult is { Disabled: true })
+                {
+                    http.Response.StatusCode = StatusCodes.Status202Accepted;
+                    await WriteJsonAsync(http.Response, new { runId = webhookResult.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
                     return;
                 }
+
+                var startedRunId = webhookResult?.RunId ?? ctx.RunId;
+                if (webhookLogger is not null)
+                    WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
+                await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
             }
-
-            var ctx = new TriggerContext
+            finally
             {
-                RunId = Guid.NewGuid(),
-                Flow = flow,
-                Trigger = new Trigger(triggerKey, TriggerType.Webhook.ToString(), buffered.Parsed, headers)
-            };
-            var webhookResult = await engine.TriggerAsync(ctx) as FlowTriggerResult;
-            var webhookLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Webhook");
-
-            // A disabled flow must not be logged as an accepted delivery, and must not answer with a
-            // run id that no run backs. 202 rather than 409: a webhook sender cannot act on the
-            // distinction and retrying would not help, so the delivery is acknowledged as received
-            // and explicitly reported as not started.
-            if (webhookResult is { Disabled: true })
-            {
-                http.Response.StatusCode = StatusCodes.Status202Accepted;
-                await WriteJsonAsync(http.Response, new { runId = webhookResult.RunId, disabled = true, message = $"Flow '{flow.GetType().Name}' is disabled; delivery accepted but no run was started." });
-                return;
+                if (!triggerReturned && replayRegistration is { } registration && pipeline is not null
+                    && ctx?.EntryStepsStarted != true)
+                {
+                    // CancellationToken.None inside: this may be running because the caller went away.
+                    await pipeline.ReleaseReplayRegistrationAsync(flow.Id, triggerKey, registration);
+                }
             }
-
-            var startedRunId = webhookResult?.RunId ?? ctx.RunId;
-            if (webhookLogger is not null)
-                WebhookLog.DeliveryAccepted(webhookLogger, flow.Id, triggerKey, startedRunId);
-            await WriteJsonAsync(http.Response,new { runId = startedRunId, duplicate = webhookResult?.Duplicate ?? false, message = $"Flow '{flow.GetType().Name}' triggered via webhook." });
-        });
+        }).AddEndpointFilter(ClientDisconnectFilter);
 
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
         {
@@ -668,7 +690,7 @@ public static class DashboardServiceCollectionExtensions
             {
                 var options = http.RequestServices.GetService<IOptions<FlowDashboardOptions>>()?.Value ?? new FlowDashboardOptions();
                 var clock = http.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System;
-                receivedFrom = clock.GetUtcNow() - options.EffectiveRunSearchWindow;
+                receivedFrom = RunListRequest.WindowStart(clock.GetUtcNow(), options.EffectiveRunSearchWindow);
                 windowDefaulted = true;
             }
 
@@ -856,7 +878,21 @@ public static class DashboardServiceCollectionExtensions
 
             run.TriggerHeaders = await outputsRepository.GetTriggerHeadersAsync(id);
             // Step inputs persist the manifest's configured values (API keys, tokens); mask them for viewers.
-            await WriteJsonAsync(http.Response, CanOperate(http) ? run : Security.ManifestSecretRedactor.Redacted(run));
+            var visible = CanOperate(http) ? run : Security.ManifestSecretRedactor.Redacted(run);
+
+            // Parked WaitForSignal steps with a per-signal restriction: tell the page who may approve and whether
+            // this caller may, so it can show "Send signal" or "Requires role: …". Added only when such a step is
+            // parked, so the common poll keeps the plain FlowRunRecord shape and its allocation-free write.
+            var signalAuthorization = await DescribeParkedSignalRestrictionsAsync(http, run, options.Authorization.UnregisteredFlowSignals);
+            if (signalAuthorization is null)
+            {
+                await WriteJsonAsync(http.Response, visible);
+                return;
+            }
+
+            var body = JsonSerializer.SerializeToNode(visible, _camelCaseOptions)!.AsObject();
+            body["signalAuthorization"] = JsonSerializer.SerializeToNode(signalAuthorization, _camelCaseOptions);
+            await WriteJsonAsync(http.Response, body);
         });
 
         group.MapGet("/api/runs/{id:guid}/steps", async (HttpContext http, IFlowRunStore store, Guid id) =>
@@ -952,7 +988,18 @@ public static class DashboardServiceCollectionExtensions
                     return;
                 }
 
-                var payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                JsonElement payload;
+                try
+                {
+                    payload = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
+                }
+                catch (JsonException)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonAsync(http.Response, new { error = "Invalid JSON payload." });
+                    return;
+                }
+
                 if (payload.ValueKind == JsonValueKind.Object
                     && payload.TryGetProperty("reason", out var reasonProp)
                     && reasonProp.ValueKind == JsonValueKind.String)
@@ -1022,11 +1069,38 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // The check above is a stale read, so it is only the cheap answer: the engine's reset is a
+            // compare-and-swap on Failed and decides. The engine dispatches the new attempt through the runtime
+            // and returns; the handler never runs inside this request (RFC 2.0 S4). No request token is passed:
+            // everything after the engine's durable reset must outlive a client that disconnects.
             var engine = http.RequestServices.GetRequiredService<IFlowOrchestrator>();
-            await engine.RetryStepAsync(run.FlowId, runId, stepKey);
+            var outcome = await engine.RetryStepAsync(run.FlowId, runId, stepKey);
+            if (outcome is StepRetryResult { Accepted: false } rejected)
+            {
+                var notFailed = rejected.Outcome == StepRetryOutcome.NotFailed;
+                http.Response.StatusCode = notFailed ? StatusCodes.Status400BadRequest : StatusCodes.Status409Conflict;
+                await WriteJsonAsync(http.Response, new
+                {
+                    error = notFailed
+                        ? "Step not found or is not in Failed state."
+                        : $"Step '{stepKey}' is already being retried."
+                });
+                return;
+            }
+
             await WriteJsonAsync(http.Response,new { success = true, message = $"Step '{stepKey}' retry enqueued." });
         });
 
+        // Per-signal authorization. The access filter lets every signed-in identity through to this endpoint
+        // (PerSignalAuthorizationMetadata) and the endpoint decides, before any durable write:
+        //   - a restricted signal (its WaitForSignal step declares allowedRoles / authorizationPolicy) needs an
+        //     identity signed in through FlowDashboard:Authorization that satisfies it. Basic Auth and anonymous
+        //     callers never do, and the operator role does not bypass it;
+        //   - an unrestricted signal needs the operator role, as before.
+        // Existence is not leaked beyond what it was: only an operator is told a run does not exist (404);
+        // every other caller gets the same 403 for a missing run as for a signal it may not deliver.
+        // Authorization runs before the run-status and body checks, so only a caller already allowed to
+        // deliver learns whether the run is still active or why its body was rejected.
         group.MapPost("/api/runs/{runId:guid}/signals/{signalName}", async (HttpContext http, IFlowRunStore runStore, IFlowSignalDispatcher signals, Guid runId, string signalName, [Microsoft.AspNetCore.Mvc.FromServices] FlowOrchestratorTelemetry? telemetry) =>
         {
             // Same inbound-traceparent extraction as the webhook endpoint — keeps signal delivery
@@ -1044,6 +1118,60 @@ public static class DashboardServiceCollectionExtensions
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(http.Response, new { error = "Signal name is required." });
+                return;
+            }
+
+            // One normalized name for the authorization decision AND the delivery below (see
+            // SignalAuthorization.TryNormalizeRequested): otherwise a compatibility spelling could be judged
+            // unrestricted here and still be folded onto a restricted waiter by the store.
+            if (!Security.SignalAuthorization.TryNormalizeRequested(signalName, out var normalizedSignalName)
+                || normalizedSignalName.Length == 0)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = "Signal name is not valid." });
+                return;
+            }
+
+            signalName = normalizedSignalName;
+
+            var access = http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess ?? Security.DashboardAccess.Unprotected;
+            var authLogger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("FlowOrchestrator.Dashboard.Auth");
+
+            var run = await runStore.GetRunAsync(runId);
+            if (run is null)
+            {
+                // Only an operator learns that the run does not exist — the answer every caller got before
+                // signals were authorized per step. Anyone else gets the 403 a refused delivery gets.
+                if (!access.CanOperate)
+                {
+                    await DenySignalAsync(http, authLogger, access, runId, signalName, new Security.SignalAccessDecision(false, [], false, "run not found"));
+                    return;
+                }
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await WriteJsonAsync(http.Response, new { error = "Run not found." });
+                return;
+            }
+
+            // Registry resolved with a fallback, per the dashboard DI rule. Restrictions are read from the flows
+            // registered in THIS host; a run whose flow it does not register is refused unless the host opted in
+            // to the operator rule (UnregisteredFlowSignals). Same decision as run detail's canSignal.
+            var registry = http.RequestServices.GetService<FlowRegistry>() ?? FlowRegistry.Empty;
+            var decision = await Security.SignalAuthorization.DecideAsync(
+                http,
+                access,
+                registry.TryGetFlow(run.FlowId, out var flow) ? flow : null,
+                signalName,
+                options.Authorization.UnregisteredFlowSignals);
+            if (!decision.Allowed)
+            {
+                await DenySignalAsync(http, authLogger, access, runId, signalName, decision);
+                return;
+            }
+
+            if (!string.Equals(run.Status, "Running", StringComparison.OrdinalIgnoreCase))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response, new { error = $"Run is not active (status: {run.Status})." });
                 return;
             }
 
@@ -1068,24 +1196,14 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
-            var run = await runStore.GetRunAsync(runId);
-            if (run is null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await WriteJsonAsync(http.Response, new { error = "Run not found." });
-                return;
-            }
-            if (!string.Equals(run.Status, "Running", StringComparison.OrdinalIgnoreCase))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response, new { error = $"Run is not active (status: {run.Status})." });
-                return;
-            }
-
+            // The dispatcher performs the durable write and the resume nudge with CancellationToken.None, so a
+            // caller that disconnects here cannot strand the step; the request token is not honoured past it.
             var result = await signals.DispatchAsync(runId, signalName, body, http.RequestAborted);
             switch (result.Status)
             {
                 case SignalDeliveryStatus.Delivered:
+                    if (decision.IsRestricted && authLogger is not null)
+                        Security.DashboardAuthLog.RestrictedSignalDelivered(authLogger, ForLog(signalName), ForLog(result.StepKey), runId, ForLog(access.UserName));
                     await WriteJsonAsync(http.Response, new
                     {
                         delivered = true,
@@ -1097,12 +1215,19 @@ public static class DashboardServiceCollectionExtensions
                     http.Response.StatusCode = StatusCodes.Status409Conflict;
                     await WriteJsonAsync(http.Response, new { error = "Signal already delivered.", stepKey = result.StepKey });
                     return;
+                case SignalDeliveryStatus.Expired:
+                    // 410 Gone, not 404: the waiter existed but its timeoutSeconds deadline passed, so the step
+                    // has timed out (or is about to be failed by its safety-net invocation) and no retry of this
+                    // signal can resume it. Nothing was written.
+                    http.Response.StatusCode = StatusCodes.Status410Gone;
+                    await WriteJsonAsync(http.Response, new { error = $"The wait for signal '{signalName}' timed out; the signal was not delivered.", stepKey = result.StepKey });
+                    return;
                 default:
                     http.Response.StatusCode = StatusCodes.Status404NotFound;
                     await WriteJsonAsync(http.Response, new { error = $"No waiter registered for signal '{signalName}' on this run." });
                     return;
             }
-        });
+        }).WithMetadata(Security.PerSignalAuthorizationMetadata.Instance);
 
         group.MapPost("/api/runs/{runId:guid}/rerun", async (HttpContext http, IFlowRunStore runStore, FlowRegistry flows, IFlowOrchestrator engine, Guid runId) =>
         {
@@ -1140,7 +1265,14 @@ public static class DashboardServiceCollectionExtensions
             // Idempotency-Key would hit the engine's dedup path, return the original
             // RunId, and silently drop the rerun (the user would see the success message
             // but no new run would actually start).
-            var rehydratedHeaders = StripIdempotencyHeader(run.TriggerHeaders, runControlOptions.IdempotencyHeaderName);
+            // Headers live in IOutputsRepository (run detail reads them from there too); no store fills
+            // FlowRunRecord.TriggerHeaders from GetRunAsync, so reading only the record replayed none and
+            // every @triggerHeaders() input of the rerun resolved null. Resolved with a fallback per the
+            // dashboard DI rule.
+            var originalHeaders = run.TriggerHeaders;
+            if (originalHeaders is null && http.RequestServices.GetService<IOutputsRepository>() is { } outputs)
+                originalHeaders = await outputs.GetTriggerHeadersAsync(runId);
+            var rehydratedHeaders = StripIdempotencyHeader(originalHeaders, runControlOptions.IdempotencyHeaderName);
 
             var triggerKey = string.IsNullOrWhiteSpace(run.TriggerKey) ? "manual" : run.TriggerKey!;
             var ctx = new TriggerContext
@@ -1336,14 +1468,27 @@ public static class DashboardServiceCollectionExtensions
             }
 
             var existing = await scheduleStateStore.GetAsync(jobId);
-            var cronExpr = existing?.CronOverride ?? ExtractCronExpression(flow.ManifestJson, triggerKey);
-            if (cronExpr is null)
+
+            // An override persisted by an older version may not parse (the cron endpoint did not validate it).
+            // Fall back to the manifest cron and clear the override — what startup sync does for the same row —
+            // instead of failing every Resume with a 500 until someone PUTs a valid expression.
+            var cronOverride = existing?.CronOverride;
+            if (cronOverride is not null && !Schedules.CronExpressionValidator.IsValid(cronOverride))
+            {
+                cronOverride = null;
+            }
+
+            var cronExpr = cronOverride ?? ExtractCronExpression(flow.ManifestJson, triggerKey);
+            if (cronExpr is null || !Schedules.CronExpressionValidator.IsValid(cronExpr))
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response,new { error = "Cron expression not found for this trigger." });
+                await WriteJsonAsync(http.Response,new { error = "No valid cron expression found for this trigger." });
                 return;
             }
 
+            // Register first, persist second (same order as the cron endpoint): a runtime that still rejects the
+            // expression leaves the stored state untouched.
+            triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, cronExpr);
             await scheduleStateStore.SaveAsync(new FlowScheduleState
             {
                 JobId = jobId,
@@ -1351,9 +1496,8 @@ public static class DashboardServiceCollectionExtensions
                 FlowName = flow.Name,
                 TriggerKey = triggerKey,
                 IsPaused = false,
-                CronOverride = existing?.CronOverride
+                CronOverride = cronOverride
             });
-            triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, cronExpr);
             await WriteJsonAsync(http.Response,new { success = true, message = $"Job '{jobId}' resumed with cron '{cronExpr}'." });
         });
 
@@ -1366,22 +1510,45 @@ public static class DashboardServiceCollectionExtensions
                 return;
             }
 
+            // The same capped reader as the manual-trigger endpoint: it enforces MaxBodyBytes while streaming,
+            // so a chunked body (no Content-Length) is bounded too, and maps malformed JSON to a status
+            // instead of an unhandled JsonException (500).
             var maxBodyBytes = ResolveMaxBodyBytes(http);
-            if (http.Request.ContentLength > maxBodyBytes)
+            var (bodyStatus, body) = await TryReadJsonBodyAsync(http.Request, maxBodyBytes);
+            if (bodyStatus == ReadBodyStatus.TooLarge)
             {
                 http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
                 await WriteJsonAsync(http.Response,new { error = $"Request body exceeds the configured cap of {maxBodyBytes} bytes." });
                 return;
             }
-
-            var body = await JsonSerializer.DeserializeAsync<JsonElement>(http.Request.Body);
-            if (!body.TryGetProperty("cronExpression", out var cronProp) || string.IsNullOrWhiteSpace(cronProp.GetString()))
+            if (bodyStatus == ReadBodyStatus.InvalidJson)
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonAsync(http.Response,new { error = "cronExpression is required." });
+                await WriteJsonAsync(http.Response,new { error = "Invalid JSON payload." });
+                return;
+            }
+
+            // A non-object body or a non-string cronExpression used to throw from TryGetProperty / GetString (500).
+            if (body is not JsonElement { ValueKind: JsonValueKind.Object } bodyObject
+                || !bodyObject.TryGetProperty("cronExpression", out var cronProp)
+                || cronProp.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(cronProp.GetString()))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is required and must be a string." });
                 return;
             }
             var newCron = cronProp.GetString()!;
+
+            // Reject an unparseable expression BEFORE anything is persisted or scheduled: a persisted bad
+            // override is re-applied on every restart, and the in-memory runtime used to stop every cron job
+            // in the process on the first fire of one.
+            if (!Schedules.CronExpressionValidator.IsValid(newCron))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(http.Response,new { error = "cronExpression is not a valid 5-field or 6-field cron expression." });
+                return;
+            }
 
             var flow = await store.GetByIdAsync(flowId);
             if (flow?.ManifestJson is null)
@@ -1393,6 +1560,23 @@ public static class DashboardServiceCollectionExtensions
 
             var existing = await scheduleStateStore.GetAsync(jobId);
             var paused = existing?.IsPaused ?? false;
+
+            // Schedule first, persist second: a runtime that still rejects the expression (each one validates
+            // in RegisterOrUpdate and leaves the job untouched) must not leave a persisted override behind.
+            if (!paused)
+            {
+                try
+                {
+                    triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
+                }
+                catch (Exception ex) when (ex is ArgumentException or FormatException)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonAsync(http.Response,new { error = "The runtime rejected cronExpression as an invalid cron expression." });
+                    return;
+                }
+            }
+
             await scheduleStateStore.SaveAsync(new FlowScheduleState
             {
                 JobId = jobId,
@@ -1403,15 +1587,69 @@ public static class DashboardServiceCollectionExtensions
                 CronOverride = newCron
             });
 
-            if (!paused)
-            {
-                triggerDispatcher.RegisterOrUpdate(jobId, flowId, triggerKey, newCron);
-            }
-
             await WriteJsonAsync(http.Response,new { success = true, message = $"Cron updated to '{newCron}'." });
         });
 
         return endpoints;
+    }
+
+    /// <summary>
+    /// Endpoint filter that turns a client disconnect into a quiet, correctly-logged response instead of
+    /// an unhandled exception, on every dashboard endpoint and the webhook receiver.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="OperationCanceledException"/> is swallowed only when <see cref="HttpContext.RequestAborted"/>
+    /// fired — a cancellation from any other source must still surface. No body can reach the caller, but
+    /// the status code is still what access logs and <c>http.server.request.duration</c> record: leaving it
+    /// at the default 200 would file an abandoned request as a success. 499 is nginx's "client closed
+    /// request": not an IANA code, but the conventional one.
+    /// </para>
+    /// <para>
+    /// <see cref="BadHttpRequestException"/> is what Kestrel throws from the request body when the client
+    /// stops sending mid-upload ("Unexpected end of request content") or exceeds the server's body limit.
+    /// It becomes its own status (400 / 413) with a short JSON error when the caller is still connected,
+    /// and 499 with no body when it is not.
+    /// </para>
+    /// <para>
+    /// Status writes are guarded because the status is immutable once the response has started, which is
+    /// the normal case for the SSE stream.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<object?> ClientDisconnectFilter(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var http = ctx.HttpContext;
+        try
+        {
+            return await next(ctx);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            if (!http.Response.HasStarted)
+                http.Response.StatusCode = 499;
+            return Results.Empty;
+        }
+        catch (BadHttpRequestException ex)
+        {
+            if (http.Response.HasStarted)
+                return Results.Empty;
+            if (http.RequestAborted.IsCancellationRequested)
+            {
+                http.Response.StatusCode = 499;
+                return Results.Empty;
+            }
+
+            http.Response.StatusCode = ex.StatusCode;
+            try
+            {
+                await WriteJsonAsync(http.Response, new { error = "The request body could not be read." });
+            }
+            catch (Exception writeFailure) when (writeFailure is IOException or OperationCanceledException)
+            {
+                // The client went away while we answered; nothing more to do.
+            }
+            return Results.Empty;
+        }
     }
 
     // We deliberately avoid HttpResponse.WriteAsJsonAsync — that helper writes
@@ -1462,7 +1700,7 @@ public static class DashboardServiceCollectionExtensions
 
         var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
 
-        if (HasEncoding(accept, "br"))
+        if (AcceptEncoding.Has(accept, "br"))
         {
             response.Headers.ContentEncoding = "br";
             await using var brotli = new System.IO.Compression.BrotliStream(
@@ -1471,7 +1709,7 @@ public static class DashboardServiceCollectionExtensions
             return;
         }
 
-        if (HasEncoding(accept, "gzip"))
+        if (AcceptEncoding.Has(accept, "gzip"))
         {
             response.Headers.ContentEncoding = "gzip";
             await using var gzip = new System.IO.Compression.GZipStream(
@@ -1481,6 +1719,47 @@ public static class DashboardServiceCollectionExtensions
         }
 
         await JsonSerializer.SerializeAsync(response.Body, value, _camelCaseOptions).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes a dynamically rendered text body (e.g. the Mermaid export), negotiating Brotli or Gzip per
+    /// the request's <c>Accept-Encoding</c> header and setting <c>Vary: Accept-Encoding</c> on every response.
+    /// </summary>
+    /// <param name="response">The response to write.</param>
+    /// <param name="text">The body; encoded as UTF-8.</param>
+    /// <param name="contentType">The <c>Content-Type</c> header value, including the charset.</param>
+    /// <remarks>
+    /// <see cref="System.IO.Compression.CompressionLevel.Fastest"/>, as for <see cref="WriteJsonAsync{T}"/>:
+    /// the body is rendered on every request, so encoder CPU per request outweighs the last few percent of
+    /// ratio.
+    /// </remarks>
+    internal static async Task WriteTextAsync(HttpResponse response, string text, string contentType)
+    {
+        response.ContentType = contentType;
+        response.Headers.Vary = "Accept-Encoding";
+
+        var accept = response.HttpContext.Request.Headers.AcceptEncoding.ToString();
+        var bytes = Encoding.UTF8.GetBytes(text);
+
+        if (AcceptEncoding.Has(accept, "br"))
+        {
+            response.Headers.ContentEncoding = "br";
+            await using var brotli = new System.IO.Compression.BrotliStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await brotli.WriteAsync(bytes).ConfigureAwait(false);
+            return;
+        }
+
+        if (AcceptEncoding.Has(accept, "gzip"))
+        {
+            response.Headers.ContentEncoding = "gzip";
+            await using var gzip = new System.IO.Compression.GZipStream(
+                response.Body, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+            await gzip.WriteAsync(bytes).ConfigureAwait(false);
+            return;
+        }
+
+        await response.Body.WriteAsync(bytes).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1500,83 +1779,19 @@ public static class DashboardServiceCollectionExtensions
 
         var accept = http.Request.Headers.AcceptEncoding.ToString();
 
-        if (HasEncoding(accept, "br"))
+        if (AcceptEncoding.Has(accept, "br"))
         {
             http.Response.Headers.ContentEncoding = "br";
             return http.Response.Body.WriteAsync(page.BrotliBytes, 0, page.BrotliBytes.Length);
         }
 
-        if (HasEncoding(accept, "gzip"))
+        if (AcceptEncoding.Has(accept, "gzip"))
         {
             http.Response.Headers.ContentEncoding = "gzip";
             return http.Response.Body.WriteAsync(page.GzipBytes, 0, page.GzipBytes.Length);
         }
 
         return http.Response.WriteAsync(page.Html);
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="acceptEncoding"/> advertises
-    /// <paramref name="token"/> as a coding with q-value &gt; 0.
-    /// </summary>
-    /// <remarks>
-    /// Per RFC 7231 §5.3.4, an entry like <c>br;q=0</c> means "do not use Brotli
-    /// even if you support it". This parser honors that: an explicit zero
-    /// q-value excludes the coding; any other (or omitted) q-value accepts it.
-    /// Full q-value precedence between codings (e.g. preferring <c>br;q=0.9</c>
-    /// over <c>gzip;q=0.5</c>) is not implemented because real-world browsers
-    /// only emit unweighted lists or the q=0 disable form.
-    /// </remarks>
-    private static bool HasEncoding(string acceptEncoding, string token)
-    {
-        if (string.IsNullOrEmpty(acceptEncoding))
-        {
-            return false;
-        }
-
-        foreach (var entry in acceptEncoding.Split(',').Select(p => p.Trim()))
-        {
-            if (entry.Length == 0)
-            {
-                continue;
-            }
-
-            // Split "<coding>" from "<coding>;<params>".
-            var semi = entry.IndexOf(';');
-            var coding = (semi < 0 ? entry : entry[..semi]).Trim();
-            if (!coding.Equals(token, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (semi < 0)
-            {
-                return true; // bare coding — implicitly q=1
-            }
-
-            // Walk the ";q=<value>" parameter list. Anything that's not a
-            // valid double, or any q-value > 0, is treated as accepted.
-            foreach (var p in entry[(semi + 1)..].Split(';').Select(x => x.Trim()))
-            {
-                if (!p.StartsWith("q=", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var value = p[2..].Trim();
-                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var q)
-                    && q <= 0d)
-                {
-                    return false;
-                }
-
-                return true;
-            }
-
-            return true; // matched coding, no q parameter
-        }
-
-        return false;
     }
 
     /// <summary>
@@ -1649,6 +1864,13 @@ public static class DashboardServiceCollectionExtensions
                 return (ReadBodyStatus.Ok, null);
             }
 
+            // System.Text.Json accepts invalid UTF-8 inside a JSON string and only fails when the string is
+            // transcoded — later, in the engine, as a 500. Reject it here as the malformed body it is.
+            if (!System.Text.Unicode.Utf8.IsValid(buffered.GetBuffer().AsSpan(0, (int)buffered.Length)))
+            {
+                return (ReadBodyStatus.InvalidJson, null);
+            }
+
             buffered.Position = 0;
             var body = await JsonSerializer.DeserializeAsync<object>(buffered).ConfigureAwait(false);
             return (ReadBodyStatus.Ok, body);
@@ -1673,6 +1895,47 @@ public static class DashboardServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Fails fast when a registered flow's webhook trigger names a signature scheme that nothing can verify — an
+    /// unknown name, or <c>Custom</c> with an unregistered payload strategy — instead of rejecting every delivery
+    /// to it at run time.
+    /// </summary>
+    /// <param name="services">The root service provider.</param>
+    /// <param name="webhookSecurity">The host's webhook security options.</param>
+    /// <exception cref="InvalidOperationException">A webhook trigger names an unverifiable scheme.</exception>
+    private static void ValidateWebhookSignatureSchemes(IServiceProvider services, WebhookSecurityOptions webhookSecurity)
+    {
+        // Off verifies nothing by design, so a scheme name cannot matter there. Flows are read from the root
+        // provider, like the restricted-signal check; a host that registers its FlowRegistry per scope still
+        // gets the request-time rejection.
+        if (webhookSecurity.EnforcementMode == WebhookEnforcementMode.Off || services.GetService<FlowRegistry>() is not { } registry)
+            return;
+
+        var customVerifiers = services.GetService<WebhookCustomVerifierRegistry>();
+        var checkStrategies = services.GetService<IWebhookSignatureVerifier>() is HmacSignatureVerifier;
+        var customSchemes = webhookSecurity.CustomSchemes.Count == 0
+            ? null
+            : new Dictionary<string, WebhookSignatureSpec>(webhookSecurity.CustomSchemes, StringComparer.OrdinalIgnoreCase);
+        foreach (var flow in registry.Flows)
+        {
+            foreach (var (key, trigger) in flow.Manifest.Triggers)
+            {
+                if (trigger.Type != TriggerType.Webhook
+                    || !trigger.Inputs.TryGetValue("webhookSignatureScheme", out var schemeObj)
+                    || schemeObj?.ToString() is not { } scheme
+                    || customVerifiers?.Contains(scheme) == true)
+                    continue;
+
+                var inputs = new Dictionary<string, object?>(trigger.Inputs, StringComparer.OrdinalIgnoreCase);
+                var spec = WebhookSignatureSpecResolver.Resolve(inputs, customSchemes);
+                if (WebhookSecurityPipeline.DescribeUnverifiableScheme(scheme, spec, webhookSecurity, checkStrategies) is { } problem)
+                    throw new InvalidOperationException(
+                        $"Flow '{flow.GetType().Name}' ({flow.Id}), webhook trigger '{key}', sets webhookSignatureScheme to {problem}. " +
+                        $"Its deliveries could never be verified and would all be rejected. Use a built-in scheme name, or register the scheme before mapping the dashboard.");
+            }
+        }
+    }
+
+    /// <summary>
     /// Fails fast when identity-based access names a scheme the host never registered, and warns about
     /// unprotected dashboards and Basic Auth set-ups that are not fit for production.
     /// </summary>
@@ -1690,12 +1953,32 @@ public static class DashboardServiceCollectionExtensions
         var authorization = options.Authorization;
         var basic = options.BasicAuth;
 
+        if (!authorization.IsEnabled && authorization.EffectiveAdditionalSchemes.Count > 0)
+            throw new InvalidOperationException(
+                "FlowDashboard:Authorization:AdditionalAuthenticationSchemes is set but AuthenticationScheme is not. Set AuthenticationScheme (for an API-only dashboard it can be the bearer scheme itself).");
+
+        // Restricted WaitForSignal steps: a malformed restriction or an unknown policy fails here, like an
+        // unknown ViewPolicy / OperatePolicy, rather than as a 403 on the first approval. Flows are read from
+        // the root provider; a host that registers its FlowRegistry per scope is checked per request instead.
+        var startupRegistry = services.GetService<FlowRegistry>();
+        var restrictedSignals = startupRegistry is { } registry
+            ? Security.SignalAuthorization.ValidateFlows(registry, services)
+            : 0;
+        // Webhook inputs read as int (webhookReplayToleranceSeconds): an out-of-range value fails here
+        // rather than being misread on every delivery.
+        if (startupRegistry is not null)
+            WebhookSecurityPipeline.ValidateTriggerInputs(startupRegistry);
+        if (restrictedSignals > 0 && !authorization.IsEnabled && logger is not null)
+            Security.DashboardAuthLog.RestrictedSignalsWithoutIdentitySignIn(logger, restrictedSignals);
+        if (authorization.UnregisteredFlowSignals == UnregisteredFlowSignalMode.OperatorRule && logger is not null)
+            Security.DashboardAuthLog.UnregisteredFlowSignalsUseOperatorRule(logger);
+
         if (authorization.IsEnabled)
         {
             var schemes = services.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationSchemeProvider>()
                 ?? throw new InvalidOperationException(
                     "FlowDashboard:Authorization:AuthenticationScheme is set but no authentication is registered. Call services.AddAuthentication(...) with that scheme.");
-            foreach (var name in new[] { authorization.AuthenticationScheme!, authorization.EffectiveChallengeScheme! })
+            foreach (var name in authorization.EffectiveAdditionalSchemes.Prepend(authorization.EffectiveChallengeScheme!).Prepend(authorization.AuthenticationScheme!))
             {
                 // Startup-only, once per scheme: the provider's lookup is a dictionary read wrapped in a Task.
                 if (schemes.GetSchemeAsync(name).GetAwaiter().GetResult() is null)
@@ -1764,6 +2047,139 @@ public static class DashboardServiceCollectionExtensions
     /// </remarks>
     private static IReadOnlyList<FlowRunRecord> RunsForCaller(HttpContext http, IReadOnlyList<FlowRunRecord> runs)
         => CanOperate(http) ? runs : runs.Select(Security.ManifestSecretRedactor.RedactedListRow).ToList();
+
+    /// <summary>
+    /// Answers a refused signal delivery with <c>403</c> and records the refusal (EventId 4108).
+    /// </summary>
+    /// <param name="http">The request.</param>
+    /// <param name="logger">The dashboard auth logger, when logging is registered.</param>
+    /// <param name="access">Who the caller is.</param>
+    /// <param name="runId">The addressed run.</param>
+    /// <param name="signalName">The addressed signal.</param>
+    /// <param name="decision">The refusal; its reason goes to the log, its restrictions to readers' messages.</param>
+    /// <remarks>
+    /// The body is the same for a missing run and for any refusal when the caller may not read runs, so the
+    /// endpoint does not tell such a caller which run ids exist. A viewer or operator could read the
+    /// restriction from run detail anyway, so they are told which roles or policy would let them in.
+    /// </remarks>
+    private static Task DenySignalAsync(
+        HttpContext http,
+        ILogger? logger,
+        Security.DashboardAccess access,
+        Guid runId,
+        string signalName,
+        Security.SignalAccessDecision decision)
+    {
+        if (logger is not null)
+            Security.DashboardAuthLog.SignalDeliveryDenied(logger, ForLog(signalName), runId, ForLog(access.UserName) ?? "anonymous", access.Method, decision.DenialReason ?? "refused");
+
+        var message = "You are not allowed to deliver this signal.";
+        if (access.CanView)
+        {
+            if (decision.FlowUnregistered)
+                message += " " + UnregisteredFlowMessage;
+            else if (decision.IsRestricted)
+                message += " " + Security.SignalAuthorization.Describe(decision.Requirements);
+            else if (!access.CanOperate)
+                message += " This signal needs an operator role.";
+        }
+
+        http.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return WriteJsonAsync(http.Response, new { error = message });
+    }
+
+    private const string UnregisteredFlowMessage =
+        "This run's flow is not registered on the dashboard host, so its signal restrictions cannot be checked and signals cannot be delivered here.";
+
+    /// <summary>
+    /// Describes, for every parked (<c>Pending</c>) <c>WaitForSignal</c> step in <paramref name="run"/> whose
+    /// signal is restricted (or whose flow this host does not register, under
+    /// <see cref="UnregisteredFlowSignalMode.Deny"/>), who may deliver it and whether this caller may — keyed by
+    /// runtime step key; <see langword="null"/> when no such step is parked.
+    /// </summary>
+    /// <param name="http">The request; supplies the caller and the authorization services.</param>
+    /// <param name="run">The run, with its step records.</param>
+    /// <param name="unregistered">The host's <see cref="FlowDashboardAuthorizationOptions.UnregisteredFlowSignals"/>.</param>
+    /// <returns>
+    /// Per step: <c>allowedRoles</c> / <c>policy</c> of the step's own restriction (names only),
+    /// <c>requirements</c> (every restricted step the signal name reaches), <c>misconfigured</c>,
+    /// <c>flowUnregistered</c>, <c>requirement</c> (sentence) and <c>canSignal</c>.
+    /// </returns>
+    /// <remarks>
+    /// <c>canSignal</c> comes from <see cref="Security.SignalAuthorization.DecideAsync"/>, the decision the signal
+    /// endpoint makes, for the signal name the step waits on — so steps sharing a name get the endpoint's union
+    /// rule and the page never offers a delivery the endpoint refuses. Run detail is polled while open: one pass
+    /// over the step records, and one decision per distinct signal name among the parked steps.
+    /// </remarks>
+    private static async ValueTask<Dictionary<string, object>?> DescribeParkedSignalRestrictionsAsync(
+        HttpContext http,
+        FlowRunRecord run,
+        UnregisteredFlowSignalMode unregistered)
+    {
+        if (run.Steps is not { Count: > 0 } steps)
+            return null;
+
+        var resolvedFlow = false;
+        IFlowDefinition? flow = null;
+        Security.DashboardAccess? access = null;
+        Dictionary<string, Security.SignalAccessDecision>? decisions = null;
+        Dictionary<string, object>? described = null;
+        // Per dashboard poll (CLAUDE.md hot path): a plain foreach + continue, not .Where with a closure.
+        foreach (var step in steps)
+        {
+            if (!string.Equals(step.Status, nameof(StepStatus.Pending), StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(step.StepType, WaitForSignalHandler.StepTypeName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!resolvedFlow)
+            {
+                resolvedFlow = true;
+                var registry = http.RequestServices.GetService<FlowRegistry>() ?? FlowRegistry.Empty;
+                flow = registry.TryGetFlow(run.FlowId, out var found) ? found : null;
+                access = http.Items[Security.DashboardAccess.ItemKey] as Security.DashboardAccess ?? Security.DashboardAccess.Unprotected;
+            }
+
+            var template = flow?.Manifest.Steps.FindStep(step.StepKey);
+            var signalName = Security.SignalAuthorization.SignalNameOf(step.InputJson, template);
+            decisions ??= new(StringComparer.OrdinalIgnoreCase);
+            if (!decisions.TryGetValue(signalName, out var decision))
+            {
+                decision = await Security.SignalAuthorization.DecideAsync(http, access!, flow, signalName, unregistered);
+                decisions[signalName] = decision;
+            }
+
+            if (!decision.IsRestricted && !decision.FlowUnregistered)
+                continue;   // operator rule: the page's view-only mode already matches it
+
+            var own = template is null ? null : Security.SignalAuthorization.Read(step.StepKey, template);
+            var shown = own ?? (decision.IsRestricted ? decision.Requirements[0] : null);
+            var requirements = new List<object>(decision.Requirements.Count);
+            var misconfigured = false;
+            foreach (var requirement in decision.Requirements)
+            {
+                misconfigured |= requirement.Error is not null;
+                requirements.Add(new { stepKey = requirement.StepKey, allowedRoles = requirement.AllowedRoles, policy = requirement.Policy });
+            }
+
+            (described ??= new(StringComparer.Ordinal))[step.StepKey] = new
+            {
+                allowedRoles = shown?.AllowedRoles ?? [],
+                policy = shown?.Policy,
+                requirements,
+                misconfigured,
+                flowUnregistered = decision.FlowUnregistered,
+                canSignal = decision.Allowed,
+                requirement = decision.FlowUnregistered ? UnregisteredFlowMessage : Security.SignalAuthorization.Describe(decision.Requirements),
+            };
+        }
+
+        return described;
+    }
+
+    /// <summary>Strips line breaks from a caller-supplied value before it is logged, so it cannot forge log lines.</summary>
+    [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(value))]
+    private static string? ForLog(string? value)
+        => value?.Replace("\r", string.Empty, StringComparison.Ordinal).Replace("\n", string.Empty, StringComparison.Ordinal);
 
     /// <summary>Whether the caller resolved by the access filter may change state (and see secrets).</summary>
     private static bool CanOperate(HttpContext http)

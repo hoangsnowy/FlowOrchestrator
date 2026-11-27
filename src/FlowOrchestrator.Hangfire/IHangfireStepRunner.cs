@@ -35,8 +35,9 @@ public interface IHangfireStepRunner
     ValueTask<object?> RunStepAsync(IExecutionContext ctx, Guid flowId, IStepInstance step, PerformContext? performContext = null);
 
     /// <summary>
-    /// Resets a step's state and re-executes it from scratch. Used by the dashboard Retry button.
-    /// Restores trigger data from <c>IOutputsRepository</c> before re-running.
+    /// Resets a <c>Failed</c> step and dispatches a fresh attempt of it; see
+    /// <see cref="IFlowOrchestrator.RetryStepAsync"/>. The attempt runs as its own job, not inside this one,
+    /// and the returned value is a <see cref="StepRetryResult"/>.
     /// </summary>
     /// <param name="flowId">The flow that owns the run.</param>
     /// <param name="runId">The run containing the step to retry.</param>

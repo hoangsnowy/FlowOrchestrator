@@ -25,4 +25,16 @@ internal static partial class DashboardAuthLog
 
     [LoggerMessage(EventId = 4105, Level = LogLevel.Warning, Message = "Flow dashboard has no authentication configured. Anonymous callers have full operator access because the host runs in the Development environment; outside Development the dashboard becomes read-only. Configure FlowDashboard:BasicAuth or FlowDashboard:Authorization before deploying.")]
     public static partial void UnprotectedInDevelopment(ILogger logger);
+
+    [LoggerMessage(EventId = 4106, Level = LogLevel.Warning, Message = "{Count} WaitForSignal step(s) restrict who may deliver their signal (allowedRoles / authorizationPolicy), but FlowDashboard:Authorization is not configured. Only an identity signed in through it can satisfy a restriction, so these signals cannot be delivered over HTTP; deliver them in-process with IFlowSignalDispatcher or configure identity sign-in.")]
+    public static partial void RestrictedSignalsWithoutIdentitySignIn(ILogger logger, int count);
+
+    [LoggerMessage(EventId = 4107, Level = LogLevel.Information, Message = "Restricted signal '{SignalName}' delivered to step '{StepKey}' of run {RunId} by '{User}'.")]
+    public static partial void RestrictedSignalDelivered(ILogger logger, string signalName, string? stepKey, Guid runId, string? user);
+
+    [LoggerMessage(EventId = 4108, Level = LogLevel.Warning, Message = "Signal '{SignalName}' for run {RunId} refused for '{User}' ({Method}): {Reason}.")]
+    public static partial void SignalDeliveryDenied(ILogger logger, string signalName, Guid runId, string? user, string method, string reason);
+
+    [LoggerMessage(EventId = 4109, Level = LogLevel.Warning, Message = "FlowDashboard:Authorization:UnregisteredFlowSignals is OperatorRule: a signal for a run whose flow this host does not register is delivered under the operator rule, so allowedRoles / authorizationPolicy on its WaitForSignal step are not enforced over HTTP. Register the same flows on the dashboard host and use Deny (the default) where you can.")]
+    public static partial void UnregisteredFlowSignalsUseOperatorRule(ILogger logger);
 }

@@ -22,11 +22,21 @@ public sealed class SqlWebhookReplayStore : IWebhookReplayStore
     }
 
     /// <inheritdoc/>
+    public ValueTask<bool> TryRegisterAsync(
+        Guid flowId,
+        string triggerKey,
+        string nonce,
+        DateTimeOffset expiresAt,
+        CancellationToken ct = default)
+        => TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, Guid.NewGuid(), ct);
+
+    /// <inheritdoc/>
     public async ValueTask<bool> TryRegisterAsync(
         Guid flowId,
         string triggerKey,
         string nonce,
         DateTimeOffset expiresAt,
+        Guid registrationId,
         CancellationToken ct = default)
     {
         // INSERT … WHERE NOT EXISTS returns 0 rows on a replay. Without a lock on the probe two
@@ -39,8 +49,8 @@ public sealed class SqlWebhookReplayStore : IWebhookReplayStore
         {
             var inserted = await conn.ExecuteAsync(new CommandDefinition(
                 """
-                INSERT INTO [WebhookReplayNonces] ([FlowId], [TriggerKey], [Nonce], [ExpiresAt])
-                SELECT @FlowId, @TriggerKey, @Nonce, @ExpiresAt
+                INSERT INTO [WebhookReplayNonces] ([FlowId], [TriggerKey], [Nonce], [ExpiresAt], [RegistrationId])
+                SELECT @FlowId, @TriggerKey, @Nonce, @ExpiresAt, @RegistrationId
                 WHERE NOT EXISTS (
                     SELECT 1 FROM [WebhookReplayNonces] WITH (UPDLOCK, HOLDLOCK)
                     WHERE [FlowId] = @FlowId AND [TriggerKey] = @TriggerKey AND [Nonce] = @Nonce
@@ -50,8 +60,10 @@ public sealed class SqlWebhookReplayStore : IWebhookReplayStore
                 {
                     FlowId = flowId,
                     TriggerKey = triggerKey,
-                    Nonce = nonce,
+                    // The column is 256 characters: an over-long nonce is stored as its digest (no 2628 / 22001).
+                    Nonce = WebhookReplayNonceStorage.ToStorageForm(nonce),
                     ExpiresAt = expiresAt,
+                    RegistrationId = registrationId,
                 },
                 cancellationToken: ct));
             return inserted == 1;
@@ -60,6 +72,36 @@ public sealed class SqlWebhookReplayStore : IWebhookReplayStore
         {
             return false;
         }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<bool> TryForgetAsync(
+        Guid flowId,
+        string triggerKey,
+        string nonce,
+        Guid registrationId,
+        CancellationToken ct = default)
+    {
+        if (registrationId == Guid.Empty) return false;
+
+        // Point delete on the primary key, guarded by the owner token: a row registered by another request
+        // (or before the owner column existed, NULL) never matches.
+        await using var conn = new SqlConnection(_connectionString);
+        var deleted = await conn.ExecuteAsync(new CommandDefinition(
+            """
+            DELETE FROM [WebhookReplayNonces]
+            WHERE [FlowId] = @FlowId AND [TriggerKey] = @TriggerKey AND [Nonce] = @Nonce
+              AND [RegistrationId] = @RegistrationId;
+            """,
+            new
+            {
+                FlowId = flowId,
+                TriggerKey = triggerKey,
+                Nonce = WebhookReplayNonceStorage.ToStorageForm(nonce),
+                RegistrationId = registrationId,
+            },
+            cancellationToken: ct));
+        return deleted == 1;
     }
 
     /// <inheritdoc/>

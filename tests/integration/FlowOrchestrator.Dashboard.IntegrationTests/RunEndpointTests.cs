@@ -499,4 +499,76 @@ public sealed class RunEndpointTests : IDisposable
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("success", body);
     }
+
+    /// <summary>A run whose only step is <c>Failed</c>, as the endpoint's pre-check reads it.</summary>
+    private Guid ArrangeFailedRun(Guid flowId)
+    {
+        var runId = Guid.NewGuid();
+        _server.FlowRunStore.GetRunDetailAsync(runId).Returns(new FlowRunRecord
+        {
+            Id = runId,
+            FlowId = flowId,
+            Status = "Failed",
+            Steps = [new FlowStepRecord { RunId = runId, StepKey = "step1", StepType = "T", Status = "Failed" }]
+        });
+        return runId;
+    }
+
+    [Fact]
+    public async Task POST_retry_returns_200_when_the_engine_accepts_the_retry_and_passes_no_request_token()
+    {
+        // Arrange
+        var flowId = Guid.NewGuid();
+        var runId = ArrangeFailedRun(flowId);
+        _server.FlowOrchestrator.RetryStepAsync(flowId, runId, "step1", Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>(new StepRetryResult(runId, "step1", StepRetryOutcome.Accepted)));
+
+        // Act
+        var response = await _client.PostAsync($"/flows/api/runs/{runId}/steps/step1/retry", null);
+
+        // Assert - same response shape as before; the engine only dispatched. The request token must not
+        // reach the engine: everything after its durable reset has to outlive a disconnecting client.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("Step 'step1' retry enqueued.", doc.RootElement.GetProperty("message").GetString());
+        await _server.FlowOrchestrator.Received(1).RetryStepAsync(
+            flowId, runId, "step1", Arg.Is<CancellationToken>(t => !t.CanBeCanceled));
+    }
+
+    [Fact]
+    public async Task POST_retry_returns_409_when_a_concurrent_retry_reset_the_step_first()
+    {
+        // Arrange - the pre-check saw Failed, but the engine's compare-and-swap lost to another retry.
+        var flowId = Guid.NewGuid();
+        var runId = ArrangeFailedRun(flowId);
+        _server.FlowOrchestrator.RetryStepAsync(flowId, runId, "step1", Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>(new StepRetryResult(runId, "step1", StepRetryOutcome.Conflict)));
+
+        // Act
+        var response = await _client.PostAsync($"/flows/api/runs/{runId}/steps/step1/retry", null);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Step 'step1' is already being retried.", doc.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task POST_retry_returns_400_when_the_engine_finds_the_step_no_longer_failed()
+    {
+        // Arrange - the dashboard's read is stale: by the time the engine looks, the step is not Failed.
+        var flowId = Guid.NewGuid();
+        var runId = ArrangeFailedRun(flowId);
+        _server.FlowOrchestrator.RetryStepAsync(flowId, runId, "step1", Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<object?>(new StepRetryResult(runId, "step1", StepRetryOutcome.NotFailed)));
+
+        // Act
+        var response = await _client.PostAsync($"/flows/api/runs/{runId}/steps/step1/retry", null);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Step not found or is not in Failed state.", doc.RootElement.GetProperty("error").GetString());
+    }
 }

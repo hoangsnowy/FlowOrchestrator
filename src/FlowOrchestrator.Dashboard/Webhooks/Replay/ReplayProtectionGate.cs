@@ -44,7 +44,28 @@ public sealed class ReplayProtectionGate
     }
 
     /// <summary>Verdict + the wall-clock skew measured for diagnostics.</summary>
-    public readonly record struct ReplayResult(Decision Decision, TimeSpan Skew, string? Reason);
+    public readonly record struct ReplayResult(Decision Decision, TimeSpan Skew, string? Reason)
+    {
+        /// <summary>
+        /// The replay entry this evaluation recorded (set only for <see cref="Decision.Fresh"/>), so a caller
+        /// whose request fails before the run starts can release it again with <see cref="ReleaseAsync"/>.
+        /// </summary>
+        public WebhookReplayRegistration? Registration { get; init; }
+    }
+
+    /// <summary>
+    /// Releases a replay entry this gate recorded, so a publisher's retry of a delivery that failed before its
+    /// run was started is not rejected as a replay.
+    /// </summary>
+    /// <param name="registration">The registration returned on the <see cref="Decision.Fresh"/> verdict.</param>
+    /// <param name="ct">Cancellation token; compensation callers pass <see cref="CancellationToken.None"/>.</param>
+    /// <returns><see langword="true"/> when the entry was still owned by <paramref name="registration"/> and is now gone.</returns>
+    /// <remarks>
+    /// The store removes the entry only when its owner token matches, so a release can never drop an entry a
+    /// different request recorded — a replayer's registration fails, and it never holds the token.
+    /// </remarks>
+    public ValueTask<bool> ReleaseAsync(WebhookReplayRegistration registration, CancellationToken ct = default)
+        => _store.TryForgetAsync(registration.FlowId, registration.TriggerKey, registration.Nonce, registration.RegistrationId, ct);
 
     /// <summary>
     /// Evaluates the request. Returns <see cref="Decision.Disabled"/> when
@@ -94,7 +115,9 @@ public sealed class ReplayProtectionGate
     /// Schemes that sign only the body (GitHub, Bitbucket, …) carry no authenticated timestamp. For them the
     /// replay key is the body hash and its expiry is measured from the server clock, so an identical delivery
     /// is rejected for <c>2 × toleranceSeconds</c>; beyond that window no replay protection is possible
-    /// without a signed timestamp.
+    /// without a signed timestamp. Such a delivery needs no timestamp header at all — these publishers send
+    /// none — and an unsigned one, when present, is ignored rather than skew-checked: whoever replays the
+    /// delivery chooses it, so it proves nothing about freshness.
     /// </remarks>
     public async ValueTask<ReplayResult> EvaluateAsync(
         Guid flowId,
@@ -113,6 +136,21 @@ public sealed class ReplayProtectionGate
             return new ReplayResult(Decision.Disabled, TimeSpan.Zero, null);
 
         var signedTimestamp = signatureVerified && !string.IsNullOrWhiteSpace(authenticatedTimestamp);
+
+        if (signatureVerified && !signedTimestamp)
+        {
+            // Body-only signature (GitHub, Shopify, Linear, …): no signed timestamp exists and the publisher
+            // sends no timestamp header, so demanding one rejected every genuine delivery (missing_timestamp).
+            // Freshness comes from the signed body alone: its hash (or a token the signature covered) is the
+            // replay key, held for 2 × tolerance from the server clock.
+            var bodyNonce = authenticatedNonce ?? DefaultNonce(body, string.Empty);
+            var bodyKeyExpiry = _clock.GetUtcNow().AddSeconds(2d * toleranceSeconds);
+            var bodyRegistration = new WebhookReplayRegistration(flowId, triggerKey, bodyNonce, Guid.NewGuid());
+            var fresh = await _store.TryRegisterAsync(flowId, triggerKey, bodyNonce, bodyKeyExpiry, bodyRegistration.RegistrationId, ct).ConfigureAwait(false);
+            return fresh
+                ? new ReplayResult(Decision.Fresh, TimeSpan.Zero, null) { Registration = bodyRegistration }
+                : new ReplayResult(Decision.ReplayRejected, TimeSpan.Zero, "nonce_seen");
+        }
 
         // Locate timestamp: the signed one when the signature covered it; otherwise explicit header first,
         // then common standards.
@@ -139,11 +177,10 @@ public sealed class ReplayProtectionGate
         DateTimeOffset expiresAt;
         if (signatureVerified)
         {
-            // Replay key from signed material only. With a signed timestamp the skew check above bounds
-            // the window, so the key may expire relative to it; without one, the unsigned timestamp is
-            // attacker-chosen and must not influence the key or its lifetime.
-            nonce = authenticatedNonce ?? DefaultNonce(body, signedTimestamp ? tsString : string.Empty);
-            expiresAt = (signedTimestamp ? ts : now).AddSeconds(2d * toleranceSeconds);
+            // Replay key from signed material only. The timestamp is signed here (the body-only case
+            // returned above), so the skew check bounds the window and the key may expire relative to it.
+            nonce = authenticatedNonce ?? DefaultNonce(body, tsString);
+            expiresAt = ts.AddSeconds(2d * toleranceSeconds);
         }
         else
         {
@@ -153,11 +190,15 @@ public sealed class ReplayProtectionGate
             expiresAt = ts.AddSeconds(2d * toleranceSeconds);
         }
 
-        var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, ct).ConfigureAwait(false);
+        // An unsigned nonce header is caller-controlled and uncapped; the SQL / PostgreSQL columns are 256
+        // characters. Over-long nonces are registered as a fixed-length digest, so they still dedupe.
+        nonce = WebhookReplayNonceStorage.ToStorageForm(nonce);
+        var registration = new WebhookReplayRegistration(flowId, triggerKey, nonce, Guid.NewGuid());
+        var registered = await _store.TryRegisterAsync(flowId, triggerKey, nonce, expiresAt, registration.RegistrationId, ct).ConfigureAwait(false);
         if (!registered)
             return new ReplayResult(Decision.ReplayRejected, skew, "nonce_seen");
 
-        return new ReplayResult(Decision.Fresh, skew, null);
+        return new ReplayResult(Decision.Fresh, skew, null) { Registration = registration };
     }
 
     // DateTimeOffset.FromUnixTimeSeconds throws outside this range; reject instead of surfacing a 500.

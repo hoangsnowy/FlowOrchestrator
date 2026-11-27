@@ -85,14 +85,31 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
             }
         }
 
+        // Standard Webhooks: the message id is part of the signed content (and becomes the replay key).
+        string? messageId = null;
+        if (spec.SignedPayloadStrategy == SignedPayloadStrategy.MessageIdTimestampBody)
+        {
+            if (string.IsNullOrEmpty(spec.MessageIdHeaderName)
+                || !context.Headers.TryGetValue(spec.MessageIdHeaderName, out var idHeader)
+                || string.IsNullOrWhiteSpace(idHeader))
+            {
+                return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.MissingHeader);
+            }
+            messageId = idHeader.Trim();
+        }
+
         // Build the byte sequence the digest covers.
-        if (!TryBuildSignedPayload(context, spec, timestamp, out var signedPayload, out var buildFailure))
+        if (!TryBuildSignedPayload(context, spec, timestamp, messageId, out var signedPayload, out var buildFailure))
             return WebhookSignatureResult.Failure(buildFailure);
 
         // Compute expected digests for current key and (optionally) previous key.
-        var currentDigest = ComputeHmac(spec.Algorithm, context.HmacKey!, signedPayload);
+        if (!TryGetKeyBytes(context.HmacKey!, spec.KeyEncoding, out var currentKey))
+            return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.KeyNotConfigured);
+        var currentDigest = ComputeHmac(spec.Algorithm, currentKey, signedPayload);
+        // An undecodable previous key is treated as absent: the rotation window simply does not apply.
         var previousDigest = !string.IsNullOrEmpty(context.HmacKeyPrevious)
-            ? ComputeHmac(spec.Algorithm, context.HmacKeyPrevious!, signedPayload)
+            && TryGetKeyBytes(context.HmacKeyPrevious!, spec.KeyEncoding, out var previousKey)
+            ? ComputeHmac(spec.Algorithm, previousKey, signedPayload)
             : null;
 
         // Constant-time compare across every candidate × every key.
@@ -117,9 +134,13 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
         // Only strategies whose signed payload includes the timestamp authenticate it. A timestamp that was
         // merely required (RequireTimestamp) but is not part of the digest proves nothing about freshness.
         var timestampIsSigned = spec.SignedPayloadStrategy is SignedPayloadStrategy.TimestampDotBody
-            or SignedPayloadStrategy.ColonDelimited;
+            or SignedPayloadStrategy.ColonDelimited
+            or SignedPayloadStrategy.MessageIdTimestampBody;
         var result = matchedCurrent ? WebhookSignatureResult.Success : WebhookSignatureResult.SuccessWithRotation;
-        return timestampIsSigned ? result with { AuthenticatedTimestamp = timestamp } : result;
+        if (!timestampIsSigned)
+            return result;
+        // messageId is non-null only for MessageIdTimestampBody, where the digest covers it: it is the replay key.
+        return result with { AuthenticatedTimestamp = timestamp, AuthenticatedNonce = messageId };
     }
 
     private WebhookSignatureResult VerifyBodyResident(WebhookSignatureContext context, WebhookSignatureSpec spec)
@@ -143,9 +164,12 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
             var candidate = sigEl.GetString()!;
 
             var signedPayload = SignedPayloadBuilder.TimestampPlusToken(timestamp, token);
-            var currentDigest = ComputeHmac(spec.Algorithm, context.HmacKey!, signedPayload);
+            if (!TryGetKeyBytes(context.HmacKey!, spec.KeyEncoding, out var currentKey))
+                return WebhookSignatureResult.Failure(WebhookSignatureFailureReason.KeyNotConfigured);
+            var currentDigest = ComputeHmac(spec.Algorithm, currentKey, signedPayload);
             var previousDigest = !string.IsNullOrEmpty(context.HmacKeyPrevious)
-                ? ComputeHmac(spec.Algorithm, context.HmacKeyPrevious!, signedPayload)
+                && TryGetKeyBytes(context.HmacKeyPrevious!, spec.KeyEncoding, out var previousKey)
+                ? ComputeHmac(spec.Algorithm, previousKey, signedPayload)
                 : null;
 
             if (!TryDecode(candidate, spec.Encoding, out var candidateBytes))
@@ -203,7 +227,7 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
 
         if (!string.IsNullOrEmpty(spec.MultiValueDelimiter))
         {
-            // Stripe / Calendly: "t=<ts>,v1=<sig>,v0=<sig>"
+            // Stripe / Calendly: "t=<ts>,v1=<sig>,v0=<sig>"; Standard Webhooks: "v1,<sig> v1,<sig> v2a,<sig>"
             var segments = headerValue.Split(spec.MultiValueDelimiter, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             var sep = spec.KeyValueSeparator ?? "=";
             foreach (var segment in segments)
@@ -211,6 +235,9 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
                 var sepIndex = segment.IndexOf(sep, StringComparison.Ordinal);
                 if (sepIndex <= 0)
                 {
+                    // Standard Webhooks: a malformed entry is just a candidate that can never match.
+                    if (spec.IgnoreMalformedEntries)
+                        continue;
                     failure = WebhookSignatureFailureReason.MalformedHeader;
                     return false;
                 }
@@ -261,6 +288,7 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
         WebhookSignatureContext context,
         WebhookSignatureSpec spec,
         string? timestamp,
+        string? messageId,
         out byte[] payload,
         out WebhookSignatureFailureReason failure)
     {
@@ -295,6 +323,21 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
                 }
                 payload = SignedPayloadBuilder.ColonDelimited(
                     spec.SignedPayloadVersion, timestamp, context.Body, spec.SignedPayloadDelimiter ?? ":");
+                return true;
+
+            case SignedPayloadStrategy.MessageIdTimestampBody:
+                if (string.IsNullOrEmpty(timestamp))
+                {
+                    failure = WebhookSignatureFailureReason.MissingTimestamp;
+                    return false;
+                }
+                if (string.IsNullOrEmpty(messageId))
+                {
+                    failure = WebhookSignatureFailureReason.MissingHeader;
+                    return false;
+                }
+                payload = SignedPayloadBuilder.MessageIdTimestampBody(
+                    messageId, timestamp, context.Body, spec.SignedPayloadDelimiter ?? ".");
                 return true;
 
             case SignedPayloadStrategy.UrlPlusSortedForm:
@@ -338,9 +381,38 @@ public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
         }
     }
 
-    private static byte[] ComputeHmac(HmacAlgorithm algorithm, string key, byte[] payload)
+    /// <summary>
+    /// Turns the configured key string into HMAC key bytes per <paramref name="encoding"/>.
+    /// </summary>
+    /// <returns><see langword="false"/> when a <see cref="HmacKeyEncoding.Base64"/> key is not valid base64.</returns>
+    private static bool TryGetKeyBytes(string key, HmacKeyEncoding encoding, out byte[] keyBytes)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(key);
+        if (encoding != HmacKeyEncoding.Base64)
+        {
+            keyBytes = Encoding.UTF8.GetBytes(key);
+            return true;
+        }
+
+        // Microsoft Teams: the HMAC is keyed with the base64-DECODED security token; Standard Webhooks: with
+        // "the base64 decoded part after whsec_" (see both entries in PartnerSchemeRegistry for the references).
+        // The prefix is optional — the reference libraries accept the secret with or without it.
+        var trimmed = key.AsSpan().Trim();
+        if (trimmed.StartsWith(StandardWebhooksSecretPrefix, StringComparison.Ordinal))
+            trimmed = trimmed[StandardWebhooksSecretPrefix.Length..];
+
+        // Decode straight from the span: no substring, no FormatException on a mis-pasted key.
+        var buffer = new byte[(trimmed.Length * 3 / 4) + 3];
+        var decoded = Convert.TryFromBase64Chars(trimmed, buffer, out var written) && written > 0;
+        keyBytes = decoded ? buffer.AsSpan(0, written).ToArray() : Array.Empty<byte>();
+        CryptographicOperations.ZeroMemory(buffer);
+        return decoded;
+    }
+
+    /// <summary>Prefix Standard Webhooks puts in front of the base64 secret "for easy identification".</summary>
+    private const string StandardWebhooksSecretPrefix = "whsec_";
+
+    private static byte[] ComputeHmac(HmacAlgorithm algorithm, byte[] keyBytes, byte[] payload)
+    {
         return algorithm switch
         {
             HmacAlgorithm.Sha1 => HMACSHA1.HashData(keyBytes, payload),

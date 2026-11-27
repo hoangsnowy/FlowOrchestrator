@@ -191,6 +191,7 @@ public class LoopBarrierTests
         var outputs = Substitute.For<IOutputsRepository>();
         outputs.GetStepOutputAsync(runId, "loop").Returns(ValueTask.FromResult<object?>(Iterations(2)));
         var runStore = Substitute.For<IFlowRunStore>();
+        runStore.TryCompleteRunningStepAsync(default, default!, default!, default, default).ReturnsForAnyArgs(true);
         var statuses = new Dictionary<string, StepStatus>
         {
             ["loop"] = StepStatus.Running,
@@ -206,7 +207,7 @@ public class LoopBarrierTests
 
         // Assert
         Assert.Equal(["loop"], settled);
-        await runStore.Received(1).RecordStepCompleteAsync(
+        await runStore.Received(1).TryCompleteRunningStepAsync(
             runId, "loop", nameof(StepStatus.Succeeded), """{"iterations":2}""", null);
     }
 
@@ -218,6 +219,7 @@ public class LoopBarrierTests
         var outputs = Substitute.For<IOutputsRepository>();
         outputs.GetStepOutputAsync(runId, "loop").Returns(ValueTask.FromResult<object?>(Iterations(2)));
         var runStore = Substitute.For<IFlowRunStore>();
+        runStore.TryCompleteRunningStepAsync(default, default!, default!, default, default).ReturnsForAnyArgs(true);
         var statuses = new Dictionary<string, StepStatus>
         {
             ["loop"] = StepStatus.Running,
@@ -232,7 +234,7 @@ public class LoopBarrierTests
 
         // Assert
         Assert.Empty(settled);
-        await runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(
+        await runStore.DidNotReceiveWithAnyArgs().TryCompleteRunningStepAsync(
             default, default!, default!, default, default);
     }
 
@@ -243,6 +245,7 @@ public class LoopBarrierTests
         var runId = Guid.NewGuid();
         var outputs = Substitute.For<IOutputsRepository>();
         var runStore = Substitute.For<IFlowRunStore>();
+        runStore.TryCompleteRunningStepAsync(default, default!, default!, default, default).ReturnsForAnyArgs(true);
         var statuses = new Dictionary<string, StepStatus>
         {
             ["loop"] = StepStatus.Succeeded,
@@ -256,7 +259,7 @@ public class LoopBarrierTests
 
         // Assert
         Assert.Empty(settled);
-        await runStore.DidNotReceiveWithAnyArgs().RecordStepCompleteAsync(
+        await runStore.DidNotReceiveWithAnyArgs().TryCompleteRunningStepAsync(
             default, default!, default!, default, default);
     }
 
@@ -286,6 +289,7 @@ public class LoopBarrierTests
         outputs.GetStepOutputAsync(runId, "outer").Returns(ValueTask.FromResult<object?>(Iterations(1)));
         outputs.GetStepOutputAsync(runId, "outer.0.inner").Returns(ValueTask.FromResult<object?>(Iterations(2)));
         var runStore = Substitute.For<IFlowRunStore>();
+        runStore.TryCompleteRunningStepAsync(default, default!, default!, default, default).ReturnsForAnyArgs(true);
 
         var statuses = new Dictionary<string, StepStatus>
         {

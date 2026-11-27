@@ -194,12 +194,10 @@ public sealed class RetryStepCascadeAdvanceTests
     public async Task RetryStepAsync_AfterDownstreamCascadeSkip_RecursivelyAdvancesAllDescendants()
     {
         // Arrange — A → B → C → D; B fails initially, succeeds on retry. The continuation
-        // only propagates skip ONE level (C is marked Skipped); D stays unscheduled (absent
-        // from the status map) because its prerequisite C is not yet final at the moment
-        // the eager-skip loop runs. After the retry of B, the natural per-step continuation
-        // chain should advance: B → C → D. The fix must:
-        //   1. Clear C's cascade-skip record (direct dependent of B), and
-        //   2. Let C's own post-completion continuation dispatch D (transitive dependent).
+        // cascade-skips transitively (C, then D once C's skip row is written). After the retry
+        // of B, the natural per-step continuation chain should advance: B → C → D. The fix must:
+        //   1. Clear the cascade-skip records of C and D (transitive dependents of B), and
+        //   2. Let C's own post-completion continuation dispatch D.
         var flow = MakeChainedFlow(Guid.NewGuid(), "a", "b", "c", "d");
         var runId = Guid.NewGuid();
         var bAttempt = 0;
@@ -214,8 +212,7 @@ public sealed class RetryStepCascadeAdvanceTests
 
         await rig.Store.StartRunAsync(flow.Id, "ChainFlow", runId, "manual", null, null);
 
-        // Act 1 — initial run; B fails → C cascade-skipped (direct dependent), D stays
-        // absent from the status map → run terminates Failed.
+        // Act 1 — initial run; B fails → C and D cascade-skipped → run terminates Failed.
         await rig.Engine.RunStepAsync(
             new CoreExecutionContext { RunId = runId },
             flow,
@@ -226,14 +223,13 @@ public sealed class RetryStepCascadeAdvanceTests
         Assert.Equal(StepStatus.Succeeded, statusesAfterFailure["a"]);
         Assert.Equal(StepStatus.Failed, statusesAfterFailure["b"]);
         Assert.Equal(StepStatus.Skipped, statusesAfterFailure["c"]);
-        Assert.False(statusesAfterFailure.ContainsKey("d"));
+        Assert.Equal(StepStatus.Skipped, statusesAfterFailure["d"]);
         Assert.Equal("Failed", await rig.Store.GetRunStatusAsync(runId));
 
         rig.EnqueuedKeys.Clear();
 
-        // Act 2 — retry B. Reset clears C (direct cascade-skipped descendant). D was never
-        // recorded so nothing to reset there; once C succeeds the engine will dispatch D
-        // through the normal continuation path.
+        // Act 2 — retry B. Reset clears C and D (cascade-skipped descendants); once C succeeds
+        // the engine dispatches D through the normal continuation path.
         await rig.Engine.RetryStepAsync(flow.Id, runId, "b");
         await rig.DrainAsync(flow);
 

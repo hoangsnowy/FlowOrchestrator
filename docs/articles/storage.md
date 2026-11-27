@@ -41,6 +41,7 @@ builder.Services.AddFlowOrchestrator(options =>
 | `FlowOutputs` | Step inputs and outputs serialized as JSON |
 | `FlowStepDispatches` | Idempotent dispatch ledger — supports the *Dispatch many, Execute once* invariant |
 | `FlowStepClaims` | Exclusive execution claim per step (the *Execute once* half) |
+| `FlowStepLeases` | Owner, fence and expiry of each claim taken under a lease; a worker that dies stops renewing, and the step is taken over (2.0) |
 | `FlowRunControls` | Cancellation, timeout, and idempotency key records |
 | `FlowIdempotencyKeys` | Trigger-time idempotency dedupe |
 | `FlowSignalWaiters` | Parked `WaitForSignal` step state (see [WaitForSignal](wait-for-signal.md)) |
@@ -147,6 +148,16 @@ builder.Services.AddFlowOrchestrator(options =>
 | Webhook deduplication | Yes | Yes | Session only |
 | Testcontainers support | Yes | Yes | — |
 | Production-ready | Yes | Yes | No |
+
+---
+
+## Switching storage backend (SQL Server ↔ PostgreSQL)
+
+FlowOrchestrator does not ship a tool that copies a database between SQL Server and PostgreSQL. To switch,
+point the host at an empty database on the new backend: its migrator creates the schema at startup, flow
+definitions are re-registered from your manifests, and schedule overrides and paused triggers have to be set
+again. Let in-flight runs finish (or cancel them) on the old backend first, and drain Hangfire's queues if you
+use Hangfire; the run history stays readable in the old database for as long as you keep it.
 
 ---
 

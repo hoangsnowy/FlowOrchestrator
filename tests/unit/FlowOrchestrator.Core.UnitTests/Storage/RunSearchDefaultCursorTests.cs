@@ -85,12 +85,14 @@ public sealed class RunSearchDefaultCursorTests
         public Task<FlowRunRecord> StartRunAsync(Guid flowId, string flowName, Guid runId, string triggerKey, string? triggerData, string? jobId, Guid? sourceRunId = null) => throw new NotSupportedException();
         public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId) => throw new NotSupportedException();
         public Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage) => throw new NotSupportedException();
+        public Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage) => throw new NotSupportedException();
         public Task CompleteRunAsync(Guid runId, string status) => throw new NotSupportedException();
         public Task<IReadOnlyList<FlowRunRecord>> GetRunsAsync(Guid? flowId = null, int skip = 0, int take = 50) => throw new NotSupportedException();
         public Task<FlowRunRecord?> GetRunDetailAsync(Guid runId) => throw new NotSupportedException();
         public Task<DashboardStatistics> GetStatisticsAsync() => throw new NotSupportedException();
         public Task<IReadOnlyList<FlowRunRecord>> GetActiveRunsAsync() => throw new NotSupportedException();
-        public Task RetryStepAsync(Guid runId, string stepKey) => throw new NotSupportedException();
+        public Task<bool> RetryStepAsync(Guid runId, string stepKey) => throw new NotSupportedException();
+        public Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ReleaseDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default) => throw new NotSupportedException();

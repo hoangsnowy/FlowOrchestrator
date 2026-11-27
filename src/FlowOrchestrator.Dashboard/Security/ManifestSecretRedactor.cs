@@ -18,21 +18,44 @@ namespace FlowOrchestrator.Dashboard.Security;
 /// <para>Masking is by property name, anywhere in the JSON: any value under a name containing one of
 /// <see cref="SecretNameFragments"/> is replaced, whatever its JSON type. It is a safety net for viewers,
 /// not a substitute for keeping secrets out of manifests (prefer configuration references).</para>
+/// <para>A name is normalised before it is matched: the separators in <see cref="NameSeparators"/> are
+/// dropped and the comparison ignores case, so <c>X-Api-Key</c>, <c>api_key</c>, <c>API.KEY</c> and
+/// <c>apiKey</c> are the same name. The fragments are deliberately broad. Masking a value that was not a
+/// secret costs a viewer some detail; showing one that was is a credential leak, so a doubtful name is
+/// masked (<c>tokenCount</c>, <c>signatureVersion</c> and <c>keyPassword</c> are masked too). The one fragment
+/// considered and left out is a bare <c>sas</c>, which would also hit ordinary words such as
+/// <c>disaster</c>; SAS credentials are caught through <c>saskey</c>, <c>sasurl</c>, <c>sasuri</c>,
+/// <c>sharedaccess</c> and <c>token</c> instead.</para>
 /// </remarks>
 internal static class ManifestSecretRedactor
 {
     /// <summary>Value written in place of a masked secret.</summary>
     public const string Mask = "***redacted***";
 
-    // Matched case-insensitively against property names anywhere in the JSON.
+    // Matched case-insensitively against the NORMALISED name (separators dropped), anywhere in the name.
+    // Keep every entry free of separators: a fragment containing one could never match.
     private static readonly string[] SecretNameFragments =
     [
-        "secret", "password", "passwd", "apikey", "api_key", "token", "hmackey", "privatekey",
-        "connectionstring", "credential", "authorization", "bearer", "cookie", "signature",
+        // Generic secrets and passwords.
+        "secret", "password", "passwd", "pwd", "passphrase", "credential", "connectionstring",
+        // Tokens and HTTP authentication material.
+        "token", "bearer", "authorization", "cookie", "sessionid", "signature", "jwt",
+        // Keys: API keys and the vendor-specific header / setting names for them.
+        "apikey", "privatekey", "hmackey", "signingkey", "accesskey", "accountkey", "masterkey",
+        "encryptionkey", "subscriptionkey", "functionkey", "functionskey", "webhookkey", "authkey",
+        // Shared access signatures (Azure Storage / Service Bus).
+        "sharedaccess", "saskey", "sasurl", "sasuri",
     ];
 
     private static readonly System.Buffers.SearchValues<string> SecretNameSearch =
         System.Buffers.SearchValues.Create(SecretNameFragments, StringComparison.OrdinalIgnoreCase);
+
+    // Dropped from a name before matching. Header names use '-', JSON / env-style names '_', configuration
+    // paths '.', and display-style names spaces.
+    private static readonly System.Buffers.SearchValues<char> NameSeparators = System.Buffers.SearchValues.Create("-_. ");
+
+    // Names up to this length are normalised on the stack; longer ones (rare) rent a pooled buffer.
+    private const int StackNameLimit = 256;
 
     // /api/flows is polled by the overview; viewers would otherwise re-parse every manifest on every poll.
     // Keyed by flow id + manifest content; bounded by clearing once it outgrows any realistic flow count.
@@ -152,9 +175,9 @@ internal static class ManifestSecretRedactor
             JobId = a.JobId,
             StartedAt = a.StartedAt,
             CompletedAt = a.CompletedAt,
-            EvaluationTraceJson = a.EvaluationTraceJson,
+            EvaluationTraceJson = RedactEvaluationTrace(a.EvaluationTraceJson),
         }).ToList(),
-        EvaluationTraceJson = step.EvaluationTraceJson,
+        EvaluationTraceJson = RedactEvaluationTrace(step.EvaluationTraceJson),
     };
 
     private static string? RedactManifestCached(Guid id, string? manifestJson)
@@ -224,23 +247,127 @@ internal static class ManifestSecretRedactor
         }
     }
 
-    /// <summary>Cheap text pre-check for <see cref="RedactJson"/>: any secret fragment or any <c>\u</c> escape.</summary>
+    /// <summary>
+    /// Masks the resolved values of a skipped step's <c>When</c> trace when its expression reads a
+    /// secret-looking name (for example <c>@triggerHeaders()['X-Api-Key']</c>).
+    /// </summary>
+    /// <param name="json">The stored trace (<c>{"expression","resolved","result"}</c>), or <see langword="null"/>.</param>
+    /// <returns>The trace with <c>resolved</c> masked when needed; <see langword="null"/> when it is not valid JSON.</returns>
+    /// <remarks>
+    /// The trace's own property names are never secret-looking, so <see cref="RedactJson"/> would pass it
+    /// through; but <c>resolved</c> is the expression with every operand replaced by its runtime value, i.e.
+    /// it carries the very value the trigger body / headers mask. The expression stays visible: it comes from
+    /// the manifest, which a viewer can already read.
+    /// </remarks>
+    internal static string? RedactEvaluationTrace(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || !MayContainSecretName(json))
+            return json;
+
+        try
+        {
+            if (JsonNode.Parse(json) is not JsonObject trace)
+                return json;
+            if (trace["expression"] is JsonValue expression
+                && expression.TryGetValue<string>(out var text)
+                && IsSecretName(text)
+                && trace["resolved"] is not null)
+            {
+                trace["resolved"] = Mask;
+            }
+            return trace.ToJsonString();
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Cheap text pre-check for <see cref="RedactJson"/>: <see langword="false"/> only when no property name in
+    /// <paramref name="json"/> can be secret-looking, so the parse can be skipped.
+    /// </summary>
+    /// <param name="json">The JSON text.</param>
+    /// <returns><see langword="true"/> when the normalised text contains a fragment, or the text contains a <c>\u</c> escape.</returns>
+    /// <remarks>
+    /// <para>Must never be stricter than <see cref="IsSecretName(ReadOnlySpan{char})"/>. Every property name appears
+    /// verbatim in the text (escapes aside, which force the parse), so its normalised form is a substring of the
+    /// normalised text: dropping the same separators from the whole text and searching it finds every name
+    /// <see cref="IsSecretName(ReadOnlySpan{char})"/> would flag. A fragment that only appears across a value and a
+    /// name merely costs a parse.</para>
+    /// <para>Cost: one vectorised search of the raw text; a text that also contains a separator (almost every
+    /// payload: GUIDs, dates, decimals) costs one more copy into a pooled buffer and a second search. Viewers
+    /// only; operators never reach the redactor.</para>
+    /// </remarks>
     internal static bool MayContainSecretName(string json)
     {
         var text = json.AsSpan();
         if (text.IndexOf(@"\u", StringComparison.Ordinal) >= 0)
             return true;
-        return text.IndexOfAny(SecretNameSearch) >= 0;
+        if (text.IndexOfAny(SecretNameSearch) >= 0)
+            return true;
+        if (text.IndexOfAny(NameSeparators) < 0)
+            return false;
+
+        var rented = System.Buffers.ArrayPool<char>.Shared.Rent(text.Length);
+        try
+        {
+            var length = StripSeparators(text, rented);
+            return rented.AsSpan(0, length).IndexOfAny(SecretNameSearch) >= 0;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(rented);
+        }
     }
 
     /// <summary><see langword="true"/> when a property or header name looks like it carries a secret.</summary>
-    internal static bool IsSecretName(string name)
+    /// <param name="name">The property or header name, as written.</param>
+    /// <returns><see langword="true"/> when the normalised name contains one of <see cref="SecretNameFragments"/>.</returns>
+    internal static bool IsSecretName(string name) => IsSecretName(name.AsSpan());
+
+    /// <summary><see langword="true"/> when a property or header name looks like it carries a secret.</summary>
+    /// <param name="name">The property or header name, as written.</param>
+    /// <returns><see langword="true"/> when the normalised name contains one of <see cref="SecretNameFragments"/>.</returns>
+    /// <remarks>
+    /// Runs once per property per viewer response: no allocation for names up to <see cref="StackNameLimit"/>
+    /// characters, and no copy at all for a name without separators.
+    /// </remarks>
+    internal static bool IsSecretName(ReadOnlySpan<char> name)
     {
-        foreach (var fragment in SecretNameFragments)
+        if (name.IndexOfAny(NameSeparators) < 0)
+            return name.IndexOfAny(SecretNameSearch) >= 0;
+
+        char[]? rented = null;
+        var buffer = name.Length <= StackNameLimit
+            ? stackalloc char[StackNameLimit]
+            : (rented = System.Buffers.ArrayPool<char>.Shared.Rent(name.Length));
+        try
         {
-            if (name.Contains(fragment, StringComparison.OrdinalIgnoreCase))
-                return true;
+            var length = StripSeparators(name, buffer);
+            return buffer[..length].IndexOfAny(SecretNameSearch) >= 0;
         }
-        return false;
+        finally
+        {
+            if (rented is not null)
+                System.Buffers.ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>Copies <paramref name="source"/> into <paramref name="destination"/> without its <see cref="NameSeparators"/>.</summary>
+    /// <returns>The number of characters written.</returns>
+    private static int StripSeparators(ReadOnlySpan<char> source, Span<char> destination)
+    {
+        var written = 0;
+        while (true)
+        {
+            var next = source.IndexOfAny(NameSeparators);
+            var chunk = next < 0 ? source : source[..next];
+            chunk.CopyTo(destination[written..]);
+            written += chunk.Length;
+            if (next < 0)
+                return written;
+            source = source[(next + 1)..];
+        }
     }
 }

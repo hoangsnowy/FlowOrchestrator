@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using FlowOrchestrator.Core.Abstractions;
 using FlowOrchestrator.Core.Storage;
@@ -29,19 +30,34 @@ public sealed class InMemoryFlowRunStore :
         _flowStore = flowStore;
     }
 
+    /// <summary>
+    /// Clock that stamps claims and judges their age in <see cref="ReleaseOrphanedClaimsAsync"/>; a seam for
+    /// tests, the system clock otherwise.
+    /// </summary>
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
+
     private readonly ConcurrentDictionary<Guid, FlowRunRecord> _runs = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowStepRecord> _steps = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey, int Attempt), FlowStepAttemptRecord> _stepAttempts = new();
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), int> _stepAttemptCounters = new();
-    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), byte> _stepClaims = new();
-    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), string?> _stepDispatches = new();
+    // Value: when the claim was taken (UTC), read by ReleaseOrphanedClaimsAsync.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DateTimeOffset> _stepClaims = new();
+    // Execution leases (2.0, RFC C1), next to the claim they qualify: a claim without an entry is permanent.
+    // Every lease transition (acquire, takeover, renew, release, pin, fenced completion, sweep) runs under
+    // _leaseGate, so a takeover and a fenced completion of one step serialise. ExpiresAt is null once the lease
+    // is no longer live; the entry is kept so the fence keeps rising across attempts.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), LeaseState> _leases = new();
+    private readonly Lock _leaseGate = new();
+    // Value: the runtime job id (null until annotated) and when the row was recorded or last leased.
+    private readonly ConcurrentDictionary<(Guid RunId, string StepKey), DispatchEntry> _stepDispatches = new();
     private readonly ConcurrentDictionary<Guid, FlowRunControlRecord> _runControls = new();
 
     // Cached completed tasks for the point-lookup reads, which run on the engine's per-step-completion
     // path: Task.FromResult(bool) allocates a fresh Task on every call.
     private static readonly Task<bool> TrueTask = Task.FromResult(true);
     private static readonly Task<bool> FalseTask = Task.FromResult(false);
-    private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), Guid> _idempotency = new();
+    // Value: the run the key maps to and when it was registered on Clock, read by TryTakeOverStaleIdempotencyKeyAsync.
+    private readonly ConcurrentDictionary<(Guid FlowId, string TriggerKey, string IdempotencyKey), IdempotencyReservation> _idempotency = new();
 
     // ── Secondary per-run indexes ─────────────────────────────────────────────
     //
@@ -64,6 +80,13 @@ public sealed class InMemoryFlowRunStore :
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _stepKeysByRun = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _claimsByRun = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _dispatchesByRun = new();
+
+    // Keys that were written with a Running or Pending status, per run: the index behind
+    // HasRunningOrPendingStepAsync. Pruned lazily by that reader — a key whose row is no longer open is
+    // removed when it is next looked at — so the set tracks the open steps plus the few closed since the last
+    // check, not the run's length. A writer that forgets to add a key can only make the reader answer false
+    // too early, which costs the engine a full status read and nothing else.
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _openStepsByRun = new();
 
     private static readonly Func<Guid, ConcurrentDictionary<string, byte>> _newRunStringSet =
         static _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
@@ -113,6 +136,10 @@ public sealed class InMemoryFlowRunStore :
             StartedAt = startedAt
         };
 
+        // The SQL Server / PostgreSQL upserts leave EvaluationTraceJson untouched on a restart (and
+        // RecordSkippedStepAsync COALESCEs a null trace into the existing one), so carry it over instead
+        // of dropping it with the replaced record.
+        _steps.TryGetValue(key, out var previous);
         _steps[key] = new FlowStepRecord
         {
             RunId = runId,
@@ -125,12 +152,14 @@ public sealed class InMemoryFlowRunStore :
             Status = "Running",
             StartedAt = startedAt,
             CompletedAt = null,
-            AttemptCount = attempt
+            AttemptCount = attempt,
+            EvaluationTraceJson = previous?.EvaluationTraceJson
         };
 
         // Maintain the per-run secondary index so GetStepStatusesAsync and
         // GetRunDetailAsync can enumerate without scanning _steps globally.
         _stepKeysByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+        NoteOpen(runId, stepKey);
 
         return Task.CompletedTask;
     }
@@ -145,6 +174,10 @@ public sealed class InMemoryFlowRunStore :
             step.OutputJson = outputJson;
             step.ErrorMessage = errorMessage;
             step.CompletedAt = completedAt;
+            if (IsOpenStatus(status))
+            {
+                NoteOpen(runId, stepKey);
+            }
         }
 
         // The latest attempt number is already tracked in _stepAttemptCounters
@@ -160,6 +193,42 @@ public sealed class InMemoryFlowRunStore :
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> TryCompleteRunningStepAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
+    {
+        if (!_steps.TryGetValue((runId, stepKey), out var step))
+        {
+            return FalseTask;
+        }
+
+        // The record lock serialises every conditional transition of this step (this method and
+        // RetryStepAsync), so two concurrent settles can never both observe Running.
+        lock (step)
+        {
+            if (!string.Equals(step.Status, "Running", StringComparison.Ordinal))
+            {
+                return FalseTask;
+            }
+
+            var completedAt = DateTimeOffset.UtcNow;
+            step.Status = status;
+            step.OutputJson = outputJson;
+            step.ErrorMessage = errorMessage;
+            step.CompletedAt = completedAt;
+
+            if (_stepAttemptCounters.TryGetValue((runId, stepKey), out var latestAttemptNum)
+                && _stepAttempts.TryGetValue((runId, stepKey, latestAttemptNum), out var latestAttempt))
+            {
+                latestAttempt.Status = status;
+                latestAttempt.OutputJson = outputJson;
+                latestAttempt.ErrorMessage = errorMessage;
+                latestAttempt.CompletedAt = completedAt;
+            }
+
+            return TrueTask;
+        }
     }
 
     public Task CompleteRunAsync(Guid runId, string status)
@@ -548,41 +617,58 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(result);
     }
 
-    public Task RetryStepAsync(Guid runId, string stepKey)
+    /// <inheritdoc/>
+    public Task<bool> RetryStepAsync(Guid runId, string stepKey)
     {
-        if (_steps.TryGetValue((runId, stepKey), out var step))
+        if (!_steps.TryGetValue((runId, stepKey), out var step))
         {
+            return FalseTask;
+        }
+
+        // The record lock serialises the Failed check with the reset (and with TryCompleteRunningStepAsync),
+        // so of two concurrent retries only one resets the step; the other changes nothing, and in particular
+        // does not delete the winner's claim (RFC 2.0 S4).
+        lock (step)
+        {
+            if (!string.Equals(step.Status, StepStatus.Failed.ToString(), StringComparison.Ordinal))
+            {
+                return FalseTask;
+            }
+
             step.Status = "Running";
             step.OutputJson = null;
             step.ErrorMessage = null;
             step.CompletedAt = null;
             step.StartedAt = DateTimeOffset.UtcNow;
-        }
+            NoteOpen(runId, stepKey);
 
-        if (_runs.TryGetValue(runId, out var run))
-        {
-            run.Status = "Running";
-            run.CompletedAt = null;
-        }
+            if (_runs.TryGetValue(runId, out var run))
+            {
+                run.Status = "Running";
+                run.CompletedAt = null;
+            }
 
-        // Release any prior execute-time claim so the retried RunStepAsync can re-claim.
-        // Mirrored in SqlFlowRunStore + PostgreSqlFlowRunStore. Pre-v1.22 the schedule-time
-        // claim was orphaned across retries; the engine now treats the claim as exclusive to
-        // a single attempt, so retry must clear it.
-        _stepClaims.TryRemove((runId, stepKey), out _);
-        if (_claimsByRun.TryGetValue(runId, out var set))
-        {
-            set.TryRemove(stepKey, out _);
-        }
-        // Also clear the dispatch ledger entry so the engine's TryRecordDispatchAsync gate
-        // accepts the re-dispatch. Without this, retry would silent-skip enqueue.
-        _stepDispatches.TryRemove((runId, stepKey), out _);
-        if (_dispatchesByRun.TryGetValue(runId, out var dset))
-        {
-            dset.TryRemove(stepKey, out _);
-        }
+            // Release any prior execute-time claim so the retried RunStepAsync can re-claim.
+            // Mirrored in SqlFlowRunStore + PostgreSqlFlowRunStore. Pre-v1.22 the schedule-time
+            // claim was orphaned across retries; the engine now treats the claim as exclusive to
+            // a single attempt, so retry must clear it.
+            _stepClaims.TryRemove((runId, stepKey), out _);
+            ClearLease((runId, stepKey));
+            if (_claimsByRun.TryGetValue(runId, out var set))
+            {
+                set.TryRemove(stepKey, out _);
+            }
 
-        return Task.CompletedTask;
+            // Also clear the dispatch ledger entry so the engine's TryRecordDispatchAsync gate
+            // accepts the re-dispatch. Without this, retry would silent-skip enqueue.
+            _stepDispatches.TryRemove((runId, stepKey), out _);
+            if (_dispatchesByRun.TryGetValue(runId, out var dset))
+            {
+                dset.TryRemove(stepKey, out _);
+            }
+
+            return TrueTask;
+        }
     }
 
     public Task ResetCascadeSkippedDependentsAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
@@ -617,6 +703,7 @@ public sealed class InMemoryFlowRunStore :
             }
 
             _stepClaims.TryRemove((runId, stepKey), out _);
+            ClearLease((runId, stepKey));
             if (_claimsByRun.TryGetValue(runId, out var claimSet))
             {
                 claimSet.TryRemove(stepKey, out _);
@@ -637,7 +724,7 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> TryRecordDispatchAsync(Guid runId, string stepKey, CancellationToken ct = default)
     {
-        var added = _stepDispatches.TryAdd((runId, stepKey), null);
+        var added = _stepDispatches.TryAdd((runId, stepKey), new DispatchEntry(null, Clock.GetUtcNow()));
         if (added)
         {
             _dispatchesByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
@@ -647,7 +734,11 @@ public sealed class InMemoryFlowRunStore :
 
     public Task AnnotateDispatchAsync(Guid runId, string stepKey, string jobId, CancellationToken ct = default)
     {
-        _stepDispatches[(runId, stepKey)] = jobId;
+        _stepDispatches.AddOrUpdate(
+            (runId, stepKey),
+            static (_, arg) => new DispatchEntry(arg.JobId, arg.Now),
+            static (_, entry, arg) => entry with { JobId = arg.JobId },
+            (JobId: jobId, Now: Clock.GetUtcNow()));
         // Annotate is called only after a successful TryRecordDispatch so the
         // per-run index already contains this step key; no maintenance needed.
         return Task.CompletedTask;
@@ -678,6 +769,56 @@ public sealed class InMemoryFlowRunStore :
         // ledger into a HashSet to test one key.
         => _stepDispatches.ContainsKey((runId, stepKey)) ? TrueTask : FalseTask;
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(dispatch rows of the active runs) per call — walks each <c>Running</c> run's ledger index; the
+    /// sweep that calls it runs at most every 30 s, never on the step-completion path. Each row is leased with
+    /// a compare-and-swap on its entry, so two concurrent callers never lease the same row.
+    /// </remarks>
+    public Task<IReadOnlyList<UnsentDispatch>> LeaseUnsentDispatchesAsync(TimeSpan minimumAge, int maxCount, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (maxCount <= 0)
+        {
+            return Task.FromResult<IReadOnlyList<UnsentDispatch>>([]);
+        }
+
+        var now = Clock.GetUtcNow();
+        var cutoff = now - (minimumAge < TimeSpan.Zero ? TimeSpan.Zero : minimumAge);
+        List<UnsentDispatch>? leased = null;
+
+        foreach (var run in _runs.Values)
+        {
+            if (run.Status != "Running" || !_dispatchesByRun.TryGetValue(run.Id, out var dispatchSet))
+            {
+                continue;
+            }
+
+            foreach (var stepKey in dispatchSet.Keys)
+            {
+                if (leased is not null && leased.Count >= maxCount)
+                {
+                    return Task.FromResult<IReadOnlyList<UnsentDispatch>>(leased);
+                }
+
+                var key = (run.Id, stepKey);
+                if (!_stepDispatches.TryGetValue(key, out var entry)
+                    || entry.JobId is not null
+                    || entry.At > cutoff
+                    || _stepClaims.ContainsKey(key)
+                    || (_steps.TryGetValue(key, out var step) && ParseStepStatus(step.Status) != StepStatus.Pending)
+                    || !_stepDispatches.TryUpdate(key, entry with { At = now }, entry))
+                {
+                    continue;
+                }
+
+                (leased ??= []).Add(new UnsentDispatch(run.Id, run.FlowId, stepKey));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<UnsentDispatch>>(leased ?? []);
+    }
+
     public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId)
     {
         // O(steps_in_run) via the secondary index. Each step key is unique per
@@ -694,6 +835,119 @@ public sealed class InMemoryFlowRunStore :
             .Where(pair => pair.record is not null)
             .ToDictionary(pair => pair.stepKey, pair => ParseStepStatus(pair.record!.Status), StringComparer.Ordinal);
         return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>O(keys): one dictionary probe per key, independent of the run's length.</remarks>
+    public Task<IReadOnlyDictionary<string, StepStatus>> GetStepStatusesAsync(Guid runId, IReadOnlyCollection<string> stepKeys)
+    {
+        var map = new Dictionary<string, StepStatus>(stepKeys.Count, StringComparer.Ordinal);
+        // foreach on purpose (CLAUDE.md hot-path rule): per step completion, no closure; CodeQL cs/linq/missed-where dismissed.
+        foreach (var stepKey in stepKeys)
+        {
+            if (_steps.TryGetValue((runId, stepKey), out var record))
+            {
+                map[stepKey] = ParseStepStatus(record.Status);
+            }
+        }
+
+        return Task.FromResult<IReadOnlyDictionary<string, StepStatus>>(map);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(open steps + steps closed since the last call) through the per-run open-step index, which this
+    /// reader prunes as it goes; the answer is decided on each row's current status, never on the index alone.
+    /// </remarks>
+    public Task<bool> HasRunningOrPendingStepAsync(Guid runId)
+    {
+        if (!_openStepsByRun.TryGetValue(runId, out var open))
+        {
+            return FalseTask;
+        }
+
+        // foreach on purpose (CLAUDE.md hot-path rule): per step completion, and the scan prunes closed keys as it
+        // goes; a Select would allocate a closure and hide the pruning. CodeQL cs/linq/missed-select dismissed.
+        foreach (var pair in open)
+        {
+            var stepKey = pair.Key;
+            if (_steps.TryGetValue((runId, stepKey), out var record) && IsOpenStatus(record.Status))
+            {
+                return TrueTask;
+            }
+
+            // Closed (or purged) since it was noted. A writer re-opening the key concurrently may lose its
+            // entry to this removal; that only makes a later call answer false, which the engine treats as
+            // "read the full map", never as "close the run".
+            open.TryRemove(stepKey, out _);
+        }
+
+        return FalseTask;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One pass over the run's step keys through the per-run index, parsed as spans, tallying terminal body
+    /// rows per iteration in a pooled array — no allocation proportional to the run. The in-memory counterpart
+    /// of the SQL backends' range read over the loop's rows, and like it O(rows of the run) in CPU: the
+    /// remaining linear term of the loop barrier until the store keeps per-loop counters (RFC 2.0 §4.7).
+    /// </remarks>
+    public Task<int> CountSettledIterationsAsync(Guid runId, string loopStepKey, int iterations, IReadOnlyCollection<string> bodyStepKeys)
+    {
+        if (iterations <= 0 || bodyStepKeys.Count == 0 || !_stepKeysByRun.TryGetValue(runId, out var stepKeys))
+        {
+            return Task.FromResult(0);
+        }
+
+        var body = new HashSet<string>(bodyStepKeys, StringComparer.Ordinal);
+        var bodyLookup = body.GetAlternateLookup<ReadOnlySpan<char>>();
+        var tally = ArrayPool<int>.Shared.Rent(iterations);
+        try
+        {
+            Array.Clear(tally, 0, iterations);
+
+            // The ConcurrentDictionary enumerator walks the live buckets; .Keys would copy every key first, and a
+            // Select would add a closure on a per-iteration path. CodeQL cs/linq/missed-select dismissed.
+            foreach (var pair in stepKeys)
+            {
+                var stepKey = pair.Key;
+                if (stepKey.Length <= loopStepKey.Length + 1
+                    || stepKey[loopStepKey.Length] != '.'
+                    || !stepKey.StartsWith(loopStepKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var rest = stepKey.AsSpan(loopStepKey.Length + 1);
+                var dot = rest.IndexOf('.');
+                if (dot <= 0
+                    || !TryParseCanonicalIndex(rest[..dot], out var index)
+                    || index >= iterations
+                    || !bodyLookup.Contains(rest[(dot + 1)..])
+                    || !_steps.TryGetValue((runId, stepKey), out var record)
+                    || !IsTerminalStatus(record.Status))
+                {
+                    continue;
+                }
+
+                tally[index]++;
+            }
+
+            var settled = 0;
+            for (var index = 0; index < iterations; index++)
+            {
+                if (tally[index] == body.Count)
+                {
+                    settled++;
+                }
+            }
+
+            return Task.FromResult(settled);
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(tally);
+        }
     }
 
     public Task<IReadOnlyCollection<string>> GetClaimedStepKeysAsync(Guid runId)
@@ -713,7 +967,7 @@ public sealed class InMemoryFlowRunStore :
 
     public Task<bool> TryClaimStepAsync(Guid runId, string stepKey)
     {
-        var claimed = _stepClaims.TryAdd((runId, stepKey), 1);
+        var claimed = _stepClaims.TryAdd((runId, stepKey), Clock.GetUtcNow());
         if (claimed)
         {
             _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
@@ -724,11 +978,222 @@ public sealed class InMemoryFlowRunStore :
     public Task ReleaseStepClaimAsync(Guid runId, string stepKey)
     {
         _stepClaims.TryRemove((runId, stepKey), out _);
+        ClearLease((runId, stepKey));
         if (_claimsByRun.TryGetValue(runId, out var set))
         {
             set.TryRemove(stepKey, out _);
         }
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task<StepLease?> TryAcquireStepLeaseAsync(Guid runId, string stepKey, string ownerId, TimeSpan duration)
+    {
+        var key = (runId, stepKey);
+        lock (_leaseGate)
+        {
+            var now = Clock.GetUtcNow();
+            if (_stepClaims.TryAdd(key, now))
+            {
+                _claimsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+                var fresh = _leases.GetOrAdd(key, static _ => new LeaseState());
+                return Task.FromResult<StepLease?>(Stamp(fresh, key, ownerId, now + duration));
+            }
+
+            if (!_leases.TryGetValue(key, out var state)
+                || state.ExpiresAt is not { } expiresAt
+                || expiresAt >= now
+                || (_steps.TryGetValue(key, out var step) && IsTerminal(step.Status)))
+            {
+                return Task.FromResult<StepLease?>(null);
+            }
+
+            return Task.FromResult<StepLease?>(Stamp(state, key, ownerId, now + duration));
+        }
+
+        static StepLease Stamp(LeaseState state, (Guid RunId, string StepKey) key, string ownerId, DateTimeOffset expiresAt)
+        {
+            state.Fence++;
+            state.Owner = ownerId;
+            state.ExpiresAt = expiresAt;
+            state.RedeliveredAt = null;
+            return new StepLease(key.RunId, key.StepKey, state.Fence);
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<StepLease>> RenewStepLeasesAsync(IReadOnlyList<StepLease> leases, TimeSpan duration)
+    {
+        var renewed = new List<StepLease>(leases.Count);
+        lock (_leaseGate)
+        {
+            var expiresAt = Clock.GetUtcNow() + duration;
+            // Renewal cadence (every RenewInterval), not a step-completion path: the Where reads clearer here.
+            foreach (var (lease, state) in leases
+                .Select(l => (Lease: l, State: _leases.GetValueOrDefault((l.RunId, l.StepKey))))
+                .Where(x => x.State is { ExpiresAt: not null } s && s.Fence == x.Lease.Fence))
+            {
+                state!.ExpiresAt = expiresAt;
+                renewed.Add(lease);
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<StepLease>>(renewed);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> ReleaseStepLeaseAsync(StepLease lease)
+    {
+        var key = (lease.RunId, lease.StepKey);
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue(key, out var state) || state.Fence != lease.Fence)
+            {
+                return FalseTask;
+            }
+
+            state.ExpiresAt = null;
+            _stepClaims.TryRemove(key, out _);
+            if (_claimsByRun.TryGetValue(lease.RunId, out var set))
+            {
+                set.TryRemove(lease.StepKey, out _);
+            }
+
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> PinStepLeaseAsync(StepLease lease)
+    {
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue((lease.RunId, lease.StepKey), out var state) || state.Fence != lease.Fence)
+            {
+                return FalseTask;
+            }
+
+            state.ExpiresAt = null;
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> TryRecordLeasedStepCompleteAsync(StepLease lease, string status, string? outputJson, string? errorMessage)
+    {
+        var key = (lease.RunId, lease.StepKey);
+        lock (_leaseGate)
+        {
+            if (!_leases.TryGetValue(key, out var state) || state.Fence != lease.Fence || !_stepClaims.ContainsKey(key))
+            {
+                return FalseTask;
+            }
+
+            RecordStepCompleteAsync(lease.RunId, lease.StepKey, status, outputJson, errorMessage);
+            if (IsTerminal(status))
+            {
+                state.ExpiresAt = null;
+            }
+
+            return TrueTask;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>O(leases ever taken in live runs): a scan of the lease map under the gate, at sweep cadence only.</remarks>
+    public Task<IReadOnlyList<ExpiredStepLease>> LeaseExpiredStepLeasesAsync(TimeSpan redeliveryBackoff, int maxCount)
+    {
+        List<ExpiredStepLease>? expired = null;
+        lock (_leaseGate)
+        {
+            var now = Clock.GetUtcNow();
+            var backoffCutoff = now - (redeliveryBackoff < TimeSpan.Zero ? TimeSpan.Zero : redeliveryBackoff);
+            foreach (var (key, state) in _leases)
+            {
+                if (expired is not null && expired.Count >= maxCount)
+                {
+                    break;
+                }
+
+                if (state.ExpiresAt is not { } expiresAt
+                    || expiresAt >= now
+                    || (state.RedeliveredAt is { } at && at > backoffCutoff)
+                    || !_stepClaims.ContainsKey(key)
+                    || !_runs.TryGetValue(key.RunId, out var run)
+                    || run.Status != "Running"
+                    || (_steps.TryGetValue(key, out var step) && IsTerminal(step.Status)))
+                {
+                    continue;
+                }
+
+                state.RedeliveredAt = now;
+                (expired ??= []).Add(new ExpiredStepLease(key.RunId, run.FlowId, key.StepKey));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<ExpiredStepLease>>(expired ?? []);
+    }
+
+    private void ClearLease((Guid RunId, string StepKey) key)
+    {
+        lock (_leaseGate)
+        {
+            if (_leases.TryGetValue(key, out var state))
+            {
+                state.ExpiresAt = null;
+            }
+        }
+    }
+
+    private static bool IsTerminal(string status)
+        => !string.Equals(status, nameof(StepStatus.Running), StringComparison.Ordinal)
+           && !string.Equals(status, nameof(StepStatus.Pending), StringComparison.Ordinal);
+
+    /// <summary>One step's execution lease; mutated only under <c>_leaseGate</c>.</summary>
+    private sealed class LeaseState
+    {
+        public long Fence;
+        public string Owner = string.Empty;
+        public DateTimeOffset? ExpiresAt;
+        public DateTimeOffset? RedeliveredAt;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// O(claims in the run) via the per-run claim index. A claim is removed only if its timestamp is still
+    /// the one that was judged old enough, so a claim re-taken in between is kept.
+    /// </remarks>
+    public Task<IReadOnlyList<string>> ReleaseOrphanedClaimsAsync(Guid runId, TimeSpan minimumAge)
+    {
+        if (!_claimsByRun.TryGetValue(runId, out var claimSet))
+        {
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        var cutoff = Clock.GetUtcNow() - (minimumAge < TimeSpan.Zero ? TimeSpan.Zero : minimumAge);
+        List<string>? released = null;
+        foreach (var stepKey in claimSet.Keys)
+        {
+            var key = (runId, stepKey);
+            if (_steps.ContainsKey(key)
+                || !_stepClaims.TryGetValue(key, out var claimedAt)
+                || claimedAt > cutoff
+                || !_stepClaims.TryRemove(new KeyValuePair<(Guid RunId, string StepKey), DateTimeOffset>(key, claimedAt)))
+            {
+                continue;
+            }
+
+            claimSet.TryRemove(stepKey, out _);
+            ClearLease(key);
+            if (_stepDispatches.TryRemove(key, out _) && _dispatchesByRun.TryGetValue(runId, out var dispatchSet))
+            {
+                dispatchSet.TryRemove(stepKey, out _);
+            }
+
+            (released ??= []).Add(stepKey);
+        }
+
+        return Task.FromResult<IReadOnlyList<string>>(released is null ? [] : released);
     }
 
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason)
@@ -765,16 +1230,34 @@ public sealed class InMemoryFlowRunStore :
         return Task.FromResult(run?.Status);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// An upsert like the SQL Server MERGE / PostgreSQL <c>ON CONFLICT</c>: configuring an existing record
+    /// rewrites the flow, trigger, idempotency key and deadline but keeps its cancel and timeout latches,
+    /// so a cancel recorded before a late configure is not silently dropped.
+    /// </remarks>
     public Task ConfigureRunAsync(Guid runId, Guid flowId, string triggerKey, string? idempotencyKey, DateTimeOffset? timeoutAtUtc)
     {
-        _runControls[runId] = new FlowRunControlRecord
-        {
-            RunId = runId,
-            FlowId = flowId,
-            TriggerKey = triggerKey,
-            IdempotencyKey = idempotencyKey,
-            TimeoutAtUtc = timeoutAtUtc
-        };
+        var storedKey = IdempotencyKeyStorage.ToStorageForm(idempotencyKey);
+        _runControls.AddOrUpdate(
+            runId,
+            static (id, args) => new FlowRunControlRecord
+            {
+                RunId = id,
+                FlowId = args.flowId,
+                TriggerKey = args.triggerKey,
+                IdempotencyKey = args.storedKey,
+                TimeoutAtUtc = args.timeoutAtUtc
+            },
+            static (_, existing, args) =>
+            {
+                existing.FlowId = args.flowId;
+                existing.TriggerKey = args.triggerKey;
+                existing.IdempotencyKey = args.storedKey;
+                existing.TimeoutAtUtc = args.timeoutAtUtc;
+                return existing;
+            },
+            (flowId, triggerKey, storedKey, timeoutAtUtc));
 
         return Task.CompletedTask;
     }
@@ -815,14 +1298,17 @@ public sealed class InMemoryFlowRunStore :
             return Task.FromResult(false);
         }
 
-        if (control.TimedOutAtUtc is not null)
+        // A user cancel that landed first wins: latching the timeout over it would relabel the run
+        // TimedOut and let a later retry's ExtendDeadlineAsync clear the user's cancel. Same guard as
+        // the SQL backends' "AND CancelRequested = 0".
+        if (control.TimedOutAtUtc is not null || control.CancelRequested)
         {
             return Task.FromResult(false);
         }
 
         control.TimedOutAtUtc = DateTimeOffset.UtcNow;
         control.CancelRequested = true;
-        control.CancelReason = reason ?? "Run timed out.";
+        control.CancelReason = reason ?? control.CancelReason ?? "Run timed out.";
         control.CancelRequestedAtUtc ??= DateTimeOffset.UtcNow;
 
         return Task.FromResult(true);
@@ -856,9 +1342,9 @@ public sealed class InMemoryFlowRunStore :
     public Task<Guid?> FindRunIdByIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey)
     {
         var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
-        if (_idempotency.TryGetValue(key, out var runId))
+        if (_idempotency.TryGetValue(key, out var reservation))
         {
-            return Task.FromResult<Guid?>(runId);
+            return Task.FromResult<Guid?>(reservation.RunId);
         }
 
         return Task.FromResult<Guid?>(null);
@@ -867,8 +1353,107 @@ public sealed class InMemoryFlowRunStore :
     public Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
     {
         var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
-        var added = _idempotency.TryAdd(key, runId);
+        var added = _idempotency.TryAdd(key, new IdempotencyReservation(runId, Clock.GetUtcNow()));
         return Task.FromResult(added);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> ReleaseIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
+    {
+        var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
+
+        // Conditional on the value: a registration that already points at another run is not ours to drop.
+        // TryRemove(KeyValuePair) compares the whole value, so a takeover landing in between makes it miss.
+        var removed = _idempotency.TryGetValue(key, out var current)
+            && current.RunId == runId
+            && _idempotency.TryRemove(new KeyValuePair<(Guid FlowId, string TriggerKey, string IdempotencyKey), IdempotencyReservation>(key, current));
+        return Task.FromResult(removed);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Age is judged on <see cref="Clock"/>, the clock that stamped the registration. Concurrent takeovers are
+    /// decided by one compare-and-swap on the whole reservation value (run id and registration time), so
+    /// exactly one wins; the losers return the winner's run id.
+    /// </para>
+    /// <para>
+    /// The started-work probe reads the per-run step and dispatch indexes without excluding a concurrent
+    /// first write, unlike the SQL stores' locked probe: taking a lock on the engine's dispatch path for a
+    /// case that needs a trigger stalled in-process for longer than the timeout is not worth its cost. A
+    /// process crash, the case the takeover exists for, also loses this store, so it cannot leave a stale
+    /// reservation behind; the cancel latch set after the swap still skips every step the stalled trigger
+    /// dispatches after it.
+    /// </para>
+    /// </remarks>
+    public Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+        Guid flowId,
+        string triggerKey,
+        string idempotencyKey,
+        Guid staleRunId,
+        Guid newRunId,
+        TimeSpan reservationTimeout)
+    {
+        var key = NormalizeIdempotencyKey(flowId, triggerKey, idempotencyKey);
+        if (!_idempotency.TryGetValue(key, out var current))
+        {
+            return Task.FromResult<Guid?>(null);
+        }
+
+        if (current.RunId != staleRunId
+            || Clock.GetUtcNow() - current.RegisteredAt < reservationTimeout
+            || HasStartedWork(staleRunId))
+        {
+            return Task.FromResult<Guid?>(current.RunId);
+        }
+
+        if (!_idempotency.TryUpdate(key, new IdempotencyReservation(newRunId, Clock.GetUtcNow()), current))
+        {
+            // A concurrent takeover (or a release) changed the value first: answer whoever holds the key now.
+            return Task.FromResult<Guid?>(_idempotency.TryGetValue(key, out var winner) ? winner.RunId : null);
+        }
+
+        LatchTakenOverRun(staleRunId, flowId, triggerKey, idempotencyKey, newRunId);
+        return Task.FromResult<Guid?>(newRunId);
+    }
+
+    /// <summary>Whether <paramref name="runId"/> has a dispatch-ledger row or a step status row.</summary>
+    private bool HasStartedWork(Guid runId)
+        => (_dispatchesByRun.TryGetValue(runId, out var dispatched) && !dispatched.IsEmpty)
+           || (_stepKeysByRun.TryGetValue(runId, out var steps) && !steps.IsEmpty);
+
+    /// <summary>
+    /// Sets the cancel latch of a run whose reservation was taken over, creating its control record when the
+    /// trigger died before <see cref="ConfigureRunAsync"/>; a cancel already recorded keeps its reason.
+    /// </summary>
+    private void LatchTakenOverRun(Guid staleRunId, Guid flowId, string triggerKey, string idempotencyKey, Guid newRunId)
+    {
+        var now = Clock.GetUtcNow();
+        var reason = IdempotencyKeyStorage.TakenOverCancelReason(newRunId);
+        _runControls.AddOrUpdate(
+            staleRunId,
+            static (id, args) => new FlowRunControlRecord
+            {
+                RunId = id,
+                FlowId = args.flowId,
+                TriggerKey = args.triggerKey,
+                IdempotencyKey = IdempotencyKeyStorage.ToStorageForm(args.idempotencyKey),
+                CancelRequested = true,
+                CancelReason = args.reason,
+                CancelRequestedAtUtc = args.now
+            },
+            static (_, existing, args) =>
+            {
+                if (!existing.CancelRequested)
+                {
+                    existing.CancelRequested = true;
+                    existing.CancelReason = args.reason;
+                }
+
+                existing.CancelRequestedAtUtc ??= args.now;
+                return existing;
+            },
+            (flowId, triggerKey, idempotencyKey, reason, now));
     }
 
     public Task CleanupAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
@@ -900,6 +1485,7 @@ public sealed class InMemoryFlowRunStore :
             _stepKeysByRun.TryRemove(runId, out _);
             _claimsByRun.TryRemove(runId, out _);
             _dispatchesByRun.TryRemove(runId, out _);
+            _openStepsByRun.TryRemove(runId, out _);
         }
 
         foreach (var key in _steps.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
@@ -907,6 +1493,11 @@ public sealed class InMemoryFlowRunStore :
             _steps.TryRemove(key, out _);
             _stepAttemptCounters.TryRemove(key, out _);
             _stepClaims.TryRemove(key, out _);
+        }
+
+        foreach (var key in _leases.Keys.Where(k => obsolete.Contains(k.RunId)).ToArray())
+        {
+            _leases.TryRemove(key, out _);
         }
 
         // The dispatch ledger is keyed independently of _steps: TryRecordDispatchAsync can record a
@@ -924,7 +1515,7 @@ public sealed class InMemoryFlowRunStore :
             _stepAttempts.TryRemove(key, out _);
         }
 
-        foreach (var key in _idempotency.Where(kvp => obsolete.Contains(kvp.Value)).Select(kvp => kvp.Key).ToArray())
+        foreach (var key in _idempotency.Where(kvp => obsolete.Contains(kvp.Value.RunId)).Select(kvp => kvp.Key).ToArray())
         {
             _idempotency.TryRemove(key, out _);
         }
@@ -1090,6 +1681,39 @@ public sealed class InMemoryFlowRunStore :
         EvaluationTraceJson = step.EvaluationTraceJson
     };
 
+    private void NoteOpen(Guid runId, string stepKey)
+        => _openStepsByRun.GetOrAdd(runId, _newRunStringSet).TryAdd(stepKey, 0);
+
+    // Both decide on ParseStepStatus, the same parse GetStepStatusesAsync applies, so these readers can never
+    // disagree with the status map the engine classifies from.
+    private static bool IsOpenStatus(string status)
+        => ParseStepStatus(status) is StepStatus.Running or StepStatus.Pending;
+
+    private static bool IsTerminalStatus(string status)
+        => ParseStepStatus(status) is StepStatus.Succeeded or StepStatus.Failed or StepStatus.Skipped;
+
+    /// <summary>Parses a decimal iteration index the way the engine writes it: no sign, no padding, no leading zero.</summary>
+    private static bool TryParseCanonicalIndex(ReadOnlySpan<char> segment, out int index)
+    {
+        index = 0;
+        if (segment.IsEmpty || segment.Length > 9 || (segment[0] == '0' && segment.Length > 1))
+        {
+            return false;
+        }
+
+        foreach (var c in segment)
+        {
+            if (c is < '0' or > '9')
+            {
+                return false;
+            }
+
+            index = (index * 10) + (c - '0');
+        }
+
+        return true;
+    }
+
     private static StepStatus ParseStepStatus(string status)
     {
         if (Enum.TryParse<StepStatus>(status, ignoreCase: true, out var parsed))
@@ -1102,6 +1726,14 @@ public sealed class InMemoryFlowRunStore :
 
     private static (Guid FlowId, string TriggerKey, string IdempotencyKey) NormalizeIdempotencyKey(Guid flowId, string triggerKey, string idempotencyKey)
     {
-        return (flowId, triggerKey.Trim().ToLowerInvariant(), idempotencyKey.Trim().ToLowerInvariant());
+        return (flowId, triggerKey.Trim().ToLowerInvariant(), IdempotencyKeyStorage.Normalize(idempotencyKey));
     }
+
+    /// <summary>One dispatch-ledger row: the runtime job id once annotated, and when it was recorded or last leased.</summary>
+    /// <param name="JobId">The runtime job/message id; <see langword="null"/> until the hand-off returns.</param>
+    /// <param name="At">When the row was recorded, re-stamped when <see cref="LeaseUnsentDispatchesAsync"/> leases it.</param>
+    private readonly record struct DispatchEntry(string? JobId, DateTimeOffset At);
+
+    /// <summary>An idempotency-key registration: the run it maps to and when it was registered.</summary>
+    private readonly record struct IdempotencyReservation(Guid RunId, DateTimeOffset RegisteredAt);
 }

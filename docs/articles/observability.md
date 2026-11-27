@@ -145,9 +145,13 @@ red without any extra configuration.
 | `flow_signal_wait_ms` | histogram | ms | `flow_id`, `step_key`, `signal_name` — recorded by `FlowSignalDispatcher` on delivery |
 | `flow_cron_lag_ms` | histogram | ms | `flow_id`, `trigger_key`, `runtime` (`hangfire` / `in_memory`) — gap between scheduled fire and actual dispatch. The Service Bus runtime does not currently emit cron-lag samples. |
 | `webhook_received_total` | counter | webhooks | `flow`, `result` (`accepted` / `rejected` / `off`), `scheme` — emitted on every webhook receive (v1.25) |
-| `webhook_rejected_total` | counter | webhooks | `flow`, `reason` (`signature_invalid` / `replay` / `rate_limited` / `payload_too_large` / `ip_denied` / `secret_invalid`) (v1.25) |
+| `webhook_rejected_total` | counter | webhooks | `flow`, `reason` (`signature_invalid` / `replay` / `rate_limited` / `payload_too_large` / `ip_denied` / `secret_invalid` / `signature_scheme_unknown`) (v1.25) |
 | `webhook_body_bytes` | histogram | bytes | `flow` — body size of every webhook receive (v1.25) |
 | `webhook_processing_ms` | histogram | ms | `flow`, `result` — wall-clock pipeline processing time (v1.25) |
+
+`step_key` is the **manifest** key: a ForEach child reports as `process_items.validate`, not
+`process_items.37.validate`, so a 500-item loop is one series rather than 500. Spans (`step.key`) and
+log scopes keep the full runtime key, which is where a single iteration is diagnosed.
 
 ### Distributed tracing across the runtime
 
@@ -199,6 +203,19 @@ LogEvents.DispatchEnqueued           = 3000
 LogEvents.PendingRescheduleLedgerTaken       = 3007   // Pending reschedule found its ledger row taken; dispatched anyway (v1.33+)
 LogEvents.ResumedSignalDeliveredWhileClaimed = 3008   // signal found by the post-release re-check; resume enqueued (v1.33+)
 LogEvents.SignalRecheckFailed                = 3009   // post-release waiter re-check failed; step falls back to its safety net (v1.33+)
+LogEvents.StepLeaseTakenOver                 = 3030   // a delivery took over a step whose worker stopped renewing its lease (2.0) — warning
+LogEvents.StepLeaseLost                      = 3031   // an attempt found its lease taken over; its outcome was discarded (2.0) — warning
+LogEvents.StepLeasePinFailed                 = 3032   // a loop step parked on its barrier could not make its lease permanent (2.0) — warning
+// 1013 = IdempotencyReservationTakenOver — a retry took over the key of a trigger that died before its run started (2.0).
+// 1014 = StaleReservationRunCompletionFailed — the abandoned run of that key could not be completed Failed (2.0).
+// 5050–5054 = step-lease sweep and renewal (FlowStepLeaseHostedService, 2.0): 5050 an expired lease's step was
+//        redelivered (warning — a worker died holding it), 5051 that redelivery failed, 5052 the step is unknown to
+//        this host, 5053 a renewal failed (leases expire if renewals keep failing), 5054 the sweep pass failed.
+// 3160 = Hangfire.PostgreSql DistributedLockTimeout is longer than InvisibilityTimeout (startup warning, 2.0).
+// 7216–7220 = background build of the open-step index (IX_FlowSteps_RunId_Open / ix_flow_steps_run_id_open, 2.0):
+//        building, built, failed (the completion gate stays correct, only slower), left to another host, and
+//        7220 (SQL Server, warning) a large FlowSteps table on an edition without online builds — build it by hand.
+//        These are emitted by internal source-generated loggers; filter on EventId.Id.
 
 // Webhook hardening pipeline EventIds (4000–4099 reserved, v1.25+). These are emitted by the internal
 // FlowOrchestrator.Dashboard.Webhooks.Logging.WebhookLog — there is no public constant class, so filter
@@ -209,12 +226,13 @@ ReplayRejected                = 4002   // skew or nonce reused — warning
 RateLimited                   = 4003   // token bucket empty — warning
 PayloadTooLarge               = 4004   // body cap exceeded — warning
 IpDenied                      = 4005   // CIDR allow/deny miss — warning
-SecretInvalid                 = 4006   // bearer-secret mismatch — warning
+SecretInvalid                 = 4006   // legacy X-Webhook-Key / bearer-secret mismatch — warning
 DeliveryAccepted              = 4007   // run dispatched — info
 RejectionStoreFailed          = 4008   // DLQ write failed — warning
 ReplayStoreFailed             = 4009   // replay store error — warning
 RotationUsedPreviousKey       = 4010   // accepted with rotated-out key — info
 ConflictingKeyFields          = 4011   // both webhookHmacKey and webhookSecret configured — warning
+SignatureSchemeUnknown        = 4012   // webhookSignatureScheme names a scheme nothing can verify — error
 ```
 
 The `flow.trigger` activity also receives a `flow.disabled = true` tag when the engine
@@ -400,7 +418,7 @@ When enabled, `FlowRetentionHostedService` runs on the configured interval and c
 
 **Nothing cascades.** The per-run tables carry no foreign key to `FlowRuns`, so `CleanupAsync` deletes each one explicitly, inside one transaction, for every run whose `CompletedAt` is older than the cutoff:
 
-`FlowStepClaims` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
+`FlowStepClaims` · `FlowStepLeases` · `FlowStepDispatches` · `FlowSignalWaiters` · `FlowRunControls` · `FlowIdempotencyKeys` · `FlowOutputs` · `FlowStepAttempts` · `FlowSteps` · `FlowRuns`
 (PostgreSQL: the `flow_*` snake_case equivalents.) A `FlowEvents` table left over from 1.x is not touched; see [Migrating to 2.0](migrating-to-2.0.md#step-8--database).
 
 > [!WARNING]

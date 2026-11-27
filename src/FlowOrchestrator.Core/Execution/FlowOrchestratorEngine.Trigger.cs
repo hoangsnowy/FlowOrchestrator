@@ -51,97 +51,105 @@ public sealed partial class FlowOrchestratorEngine
             }
 
             var idempotencyKey = TryGetIdempotencyKey(triggerContext.TriggerHeaders);
+            var registeredIdempotencyKey = false;
             if (!string.IsNullOrWhiteSpace(idempotencyKey))
             {
-                var existingRunId = await _runControlStore
-                    .FindRunIdByIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey)
-                    .ConfigureAwait(false);
-                if (existingRunId.HasValue)
+                var (registered, duplicateOf) = await ReserveIdempotencyKeyAsync(triggerContext, idempotencyKey).ConfigureAwait(false);
+                if (duplicateOf is { } existingRunId)
                 {
-                    triggerContext.RunId = existingRunId.Value;
+                    triggerContext.RunId = existingRunId;
                     activity?.SetTag("duplicate", true);
-                    return new FlowTriggerResult(existingRunId.Value, Duplicate: true);
+                    return new FlowTriggerResult(existingRunId, Duplicate: true);
                 }
 
-                var registered = await _runControlStore
-                    .TryRegisterIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey, triggerContext.RunId)
-                    .ConfigureAwait(false);
-                if (!registered)
-                {
-                    existingRunId = await _runControlStore
-                        .FindRunIdByIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey)
-                        .ConfigureAwait(false);
-
-                    if (existingRunId.HasValue)
-                    {
-                        triggerContext.RunId = existingRunId.Value;
-                        activity?.SetTag("duplicate", true);
-                        return new FlowTriggerResult(existingRunId.Value, Duplicate: true);
-                    }
-                }
-            }
-
-            var triggerDataJson = SafeSerialize(triggerContext.Trigger.Data);
-
-            try
-            {
-                await _runStore.StartRunAsync(
-                    triggerContext.Flow.Id,
-                    triggerContext.Flow.GetType().Name,
-                    triggerContext.RunId,
-                    triggerContext.Trigger.Key,
-                    triggerDataJson,
-                    triggerContext.JobId,
-                    triggerContext.SourceRunId).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                EngineLog.RunStartTrackingFailed(_logger, ex);
-            }
-
-            var timeoutAt = ResolveTimeoutAtUtc(triggerContext.TriggerData);
-            await _runControlStore.ConfigureRunAsync(
-                triggerContext.RunId,
-                triggerContext.Flow.Id,
-                triggerContext.Trigger.Key,
-                idempotencyKey,
-                timeoutAt).ConfigureAwait(false);
-
-            await _outputsRepository.SaveTriggerDataAsync(triggerContext, triggerContext.Flow, triggerContext.Trigger).ConfigureAwait(false);
-            await _outputsRepository.SaveTriggerHeadersAsync(triggerContext, triggerContext.Flow, triggerContext.Trigger).ConfigureAwait(false);
-
-            var entries = _graphPlanner.CreateEntrySteps(triggerContext);
-            if (entries.Count == 0)
-            {
-                throw new InvalidOperationException("No entry step found for flow.");
+                registeredIdempotencyKey = registered;
             }
 
             var anyEntryScheduled = false;
             var anyEntrySkipped = false;
-            foreach (var entry in entries)
+            List<string>? skippedEntryKeys = null;
+            try
             {
-                var skipped = await TryEvaluateWhenAndSkipAsync(triggerContext, triggerContext.Flow, entry.Key).ConfigureAwait(false);
-                if (skipped)
+                var triggerDataJson = SafeSerialize(triggerContext.Trigger.Data);
+
+                try
                 {
-                    anyEntrySkipped = true;
-                    continue;
+                    await _runStore.StartRunAsync(
+                        triggerContext.Flow.Id,
+                        triggerContext.Flow.GetType().Name,
+                        triggerContext.RunId,
+                        triggerContext.Trigger.Key,
+                        triggerDataJson,
+                        triggerContext.JobId,
+                        triggerContext.SourceRunId).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    EngineLog.RunStartTrackingFailed(_logger, ex);
                 }
 
-                if (await TryScheduleStepAsync(triggerContext, triggerContext.Flow, entry, null).ConfigureAwait(false))
+                var timeoutAt = ResolveTimeoutAtUtc(triggerContext.TriggerData);
+                await _runControlStore.ConfigureRunAsync(
+                    triggerContext.RunId,
+                    triggerContext.Flow.Id,
+                    triggerContext.Trigger.Key,
+                    idempotencyKey,
+                    timeoutAt).ConfigureAwait(false);
+
+                await _outputsRepository.SaveTriggerDataAsync(triggerContext, triggerContext.Flow, triggerContext.Trigger).ConfigureAwait(false);
+                await _outputsRepository.SaveTriggerHeadersAsync(triggerContext, triggerContext.Flow, triggerContext.Trigger).ConfigureAwait(false);
+
+                var entries = _graphPlanner.CreateEntrySteps(triggerContext);
+                if (entries.Count == 0)
                 {
-                    anyEntryScheduled = true;
+                    throw new InvalidOperationException("No entry step found for flow.");
+                }
+
+                foreach (var entry in entries)
+                {
+                    var skipped = await TryEvaluateWhenAndSkipAsync(triggerContext, triggerContext.Flow, entry.Key).ConfigureAwait(false);
+                    if (skipped)
+                    {
+                        anyEntrySkipped = true;
+                        (skippedEntryKeys ??= []).Add(entry.Key);
+                        triggerContext.EntryStepsStarted = true;
+                        continue;
+                    }
+
+                    if (await TryScheduleStepAsync(triggerContext, triggerContext.Flow, entry, null).ConfigureAwait(false))
+                    {
+                        anyEntryScheduled = true;
+                        triggerContext.EntryStepsStarted = true;
+                    }
                 }
             }
+            catch (Exception) when (registeredIdempotencyKey && !anyEntryScheduled && !anyEntrySkipped)
+            {
+                // This trigger registered the idempotency key and then failed before any entry step was
+                // dispatched or skipped (StartRunAsync, run control, trigger payload, or the entry dispatch
+                // itself threw). Left alone, the key keeps answering "duplicate" of a run that will never
+                // start work, so a caller retrying the failed delivery is silently absorbed. Neutralise the
+                // dead run and release the key, then rethrow so the caller still sees the failure.
+                // Catch-and-rethrow: never swallowed.
+                await AbandonUnstartedRunAsync(triggerContext, idempotencyKey!).ConfigureAwait(false);
+                throw;
+            }
 
-            // If every entry step was skipped by a When clause, kick off a single graph
-            // continuation pass so dependents can cascade or the run can terminate cleanly.
-            if (!anyEntryScheduled && anyEntrySkipped)
+            // A When-skipped entry step is a status change no step completion will report: continue the graph
+            // from it, so its dependents are classified now (a dependent that runs after a skip is dispatched,
+            // one that needs Succeeded is cascade-skipped) and a run whose every entry was skipped terminates.
+            // Since the continuation reads only the changed steps' frontier (#189 P0-1), this is also needed
+            // when other entries were scheduled: no later continuation re-reads the whole graph before the run
+            // is about to close. The gate cannot close the run under the scheduled entries — their ledger rows
+            // have no status row yet, which reads as in-flight work.
+            if (skippedEntryKeys is not null)
             {
                 await RunGraphContinuationAsync(
                     triggerContext,
                     triggerContext.Flow,
                     CreateRunLevelStep(triggerContext.RunId),
-                    new StepResult { Key = "__entry_skipped", Status = StepStatus.Skipped }).ConfigureAwait(false);
+                    new StepResult { Key = "__entry_skipped", Status = StepStatus.Skipped },
+                    skippedEntryKeys).ConfigureAwait(false);
             }
 
             if (_observabilityOptions.EnableOpenTelemetry)
@@ -175,11 +183,164 @@ public sealed partial class FlowOrchestratorEngine
         }
     }
 
+    /// <summary>
+    /// Reserves <paramref name="idempotencyKey"/> for the trigger's run, taking over a stale reservation whose
+    /// run never started work, and reports whether the trigger is a duplicate.
+    /// </summary>
+    /// <param name="triggerContext">The trigger; its run id is the one the key is reserved for.</param>
+    /// <param name="idempotencyKey">The caller-supplied key, as read from the trigger headers.</param>
+    /// <returns>
+    /// <c>Registered</c>: the key now maps to this trigger's run. <c>DuplicateOf</c>: the run this trigger is a
+    /// duplicate of, or <see langword="null"/> when it must start its run (with <c>Registered</c>
+    /// <see langword="false"/> only when the key vanished between a lost registration and the re-read, the
+    /// pre-existing behaviour of starting the run without a reservation).
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The key is registered before the run is created, so a trigger killed in between left it pointing at a
+    /// run that never started work, and every retry of the delivery was answered "duplicate" of that dead run
+    /// (RFC 2.0 S7). A trigger that finds the key taken therefore asks the store to take it over;
+    /// the store decides staleness (age on its own clock, no dispatch-ledger and no step row) atomically with
+    /// the re-point and returns the key's owner, so of N concurrent retries one wins and the rest are
+    /// answered as duplicates of the winner.
+    /// </para>
+    /// <para>
+    /// A trigger that loses the <i>registration</i> race does not try a takeover: the winner registered just
+    /// now, so its reservation cannot be stale. Store round trips: two on a fresh key (read, register) and two on
+    /// a taken one (read, takeover; one more than before). The built-in stores answer a duplicate of a fresh
+    /// reservation or of a run that started work with one unlocked read of primary-key point lookups.
+    /// </para>
+    /// </remarks>
+    private async Task<(bool Registered, Guid? DuplicateOf)> ReserveIdempotencyKeyAsync(ITriggerContext triggerContext, string idempotencyKey)
+    {
+        var flowId = triggerContext.Flow.Id;
+        var triggerKey = triggerContext.Trigger.Key;
+        var existingRunId = await _runControlStore
+            .FindRunIdByIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey)
+            .ConfigureAwait(false);
+
+        if (existingRunId is not { } staleCandidate)
+        {
+            if (await _runControlStore
+                    .TryRegisterIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey, triggerContext.RunId)
+                    .ConfigureAwait(false))
+            {
+                return (true, null);
+            }
+
+            var winner = await _runControlStore
+                .FindRunIdByIdempotencyKeyAsync(flowId, triggerKey, idempotencyKey)
+                .ConfigureAwait(false);
+            return (false, winner);
+        }
+
+        var owner = await _runControlStore
+            .TryTakeOverStaleIdempotencyKeyAsync(
+                flowId,
+                triggerKey,
+                idempotencyKey,
+                staleCandidate,
+                triggerContext.RunId,
+                _runControlOptions.IdempotencyReservationTimeout)
+            .ConfigureAwait(false);
+
+        if (owner != triggerContext.RunId)
+        {
+            // A live owner, a concurrent retry that won the takeover, or (null) a key its own trigger's
+            // compensation released since the read above: a duplicate, exactly as before the takeover existed.
+            return (false, owner ?? staleCandidate);
+        }
+
+        EngineLog.IdempotencyReservationTakenOver(_logger, flowId, triggerKey, staleCandidate, triggerContext.RunId);
+        await CompleteAbandonedReservationRunAsync(staleCandidate).ConfigureAwait(false);
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Completes the run of a taken-over idempotency reservation as <c>Failed</c>, so startup recovery and the
+    /// dashboard do not keep a run that will never start counted as <c>Running</c>.
+    /// </summary>
+    /// <param name="staleRunId">The run the key pointed at before the takeover.</param>
+    /// <remarks>
+    /// Best-effort and logged: the store already set the stale run's cancel latch atomically with the takeover,
+    /// so even when this write fails no step of the stale run can execute. A no-op when the run row was never
+    /// written. No cancellation token: a caller that disconnects must not interrupt it.
+    /// </remarks>
+    private async Task CompleteAbandonedReservationRunAsync(Guid staleRunId)
+    {
+        try
+        {
+            await _runStore.CompleteRunIfActiveAsync(staleRunId, StepStatus.Failed.ToString()).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.StaleReservationRunCompletionFailed(_logger, ex, staleRunId);
+        }
+    }
+
+    /// <summary>
+    /// Compensates a trigger that registered its idempotency key and then failed before dispatching or
+    /// skipping any entry step: cancels and fails the run it created, then releases the key so the
+    /// caller's retry of the same delivery starts a new run instead of being answered "duplicate".
+    /// </summary>
+    /// <param name="triggerContext">The failed trigger; its run id is the one the key points at.</param>
+    /// <param name="idempotencyKey">The key this trigger registered.</param>
+    /// <remarks>
+    /// <para>
+    /// Releasing the key (rather than letting a duplicate re-drive the existing run) is the safer choice
+    /// under concurrency: a duplicate arriving while the first trigger is still between its key
+    /// registration and its trigger-payload write cannot tell a live start from a dead one, and re-driving
+    /// would dispatch entry steps that read no payload. A duplicate that lands inside that window is still
+    /// answered with the first run's id, which is the normal "in progress" answer of an idempotent API.
+    /// </para>
+    /// <para>
+    /// Order matters. The cancel latch goes first, so an entry step whose dispatch threw ambiguously (the
+    /// broker accepted the message, then the call failed) is skipped by the termination gate rather than
+    /// running alongside the retry's run. The run is completed <c>Failed</c> next, so startup recovery does
+    /// not resurrect it. The key is released last, so no retry can start before the dead run is inert.
+    /// Each write is best-effort and logged: the caller rethrows the original failure either way. None of
+    /// these store calls takes a cancellation token, so a caller that disconnects cannot interrupt them.
+    /// </para>
+    /// </remarks>
+    private async Task AbandonUnstartedRunAsync(ITriggerContext triggerContext, string idempotencyKey)
+    {
+        var runId = triggerContext.RunId;
+        try
+        {
+            await _runControlStore.RequestCancelAsync(runId, "Trigger failed before any step was dispatched.").ConfigureAwait(false);
+            await _runStore.CompleteRunIfActiveAsync(runId, StepStatus.Failed.ToString()).ConfigureAwait(false);
+            await _runControlStore
+                .ReleaseIdempotencyKeyAsync(triggerContext.Flow.Id, triggerContext.Trigger.Key, idempotencyKey, runId)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort compensation on a path that is already failing: logged, never masks the original.
+            EngineLog.IdempotencyKeyReleaseFailed(_logger, ex, runId);
+        }
+    }
+
     /// <inheritdoc/>
+    /// <remarks>
+    /// A schedule for a trigger key the current manifest does not declare as a
+    /// <see cref="TriggerType.Cron"/> trigger is rejected: logged (EventId 1012) and answered with a
+    /// <see cref="FlowTriggerResult"/> whose <see cref="FlowTriggerResult.RunId"/> is <see langword="null"/>,
+    /// without starting a run. Recurring jobs outlive the code that created them — Hangfire keeps
+    /// <c>flow-{flowId}-{triggerKey}</c> in its storage and a Service Bus tick can already be in the broker —
+    /// and the trigger sync only walks the triggers the manifest still declares, so a renamed or deleted cron
+    /// trigger left its job firing real runs for ever. Not thrown, so a runtime does not retry the orphaned job.
+    /// </remarks>
     public async ValueTask<object?> TriggerByScheduleAsync(Guid flowId, string triggerKey, string? jobId = null, CancellationToken ct = default)
     {
         var flow = _flows.Find(flowId)
             ?? throw new InvalidOperationException($"Flow {flowId} not found.");
+
+        // O(1) dictionary lookup per tick; the manifest is immutable after startup.
+        if (!flow.Manifest.Triggers.TryGetValue(triggerKey, out var trigger) || trigger.Type != TriggerType.Cron)
+        {
+            EngineLog.StaleScheduleRejected(_logger, flowId, triggerKey, jobId);
+            return new FlowTriggerResult(null);
+        }
 
         var ctx = new TriggerContext
         {

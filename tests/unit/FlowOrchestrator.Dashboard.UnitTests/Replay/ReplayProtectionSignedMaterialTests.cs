@@ -122,6 +122,55 @@ public sealed class ReplayProtectionSignedMaterialTests
         Assert.Equal(ReplayProtectionGate.Decision.ReplayRejected, replay.Decision);
     }
 
+    [Fact]
+    public async Task Body_only_signature_without_any_timestamp_header_is_fresh_and_its_replay_rejected()
+    {
+        // Arrange — GitHub / Shopify / Linear: the publisher sends no timestamp header at all.
+        var gate = NewGate();
+
+        // Act
+        var first = await gate.EvaluateAsync(Flow, Trigger, Headers(), Body, toleranceSeconds: 300,
+            timestampHeader: null, nonceHeader: "X-GitHub-Delivery",
+            signatureVerified: true, authenticatedTimestamp: null, authenticatedNonce: null);
+        var replay = await gate.EvaluateAsync(Flow, Trigger, Headers(("X-GitHub-Delivery", "other")), Body, toleranceSeconds: 300,
+            timestampHeader: null, nonceHeader: "X-GitHub-Delivery",
+            signatureVerified: true, authenticatedTimestamp: null, authenticatedNonce: null);
+
+        // Assert
+        Assert.Equal(ReplayProtectionGate.Decision.Fresh, first.Decision);
+        Assert.Equal(ReplayProtectionGate.Decision.ReplayRejected, replay.Decision);
+    }
+
+    [Fact]
+    public async Task Body_only_signature_ignores_a_stale_unsigned_timestamp_header()
+    {
+        // Arrange — the unsigned header proves nothing about freshness either way.
+        var gate = NewGate();
+        var headers = Headers(("X-Webhook-Timestamp", (Now - 3600).ToString()));
+
+        // Act
+        var verdict = await gate.EvaluateAsync(Flow, Trigger, headers, Body, toleranceSeconds: 300,
+            timestampHeader: null, nonceHeader: null,
+            signatureVerified: true, authenticatedTimestamp: null, authenticatedNonce: null);
+
+        // Assert
+        Assert.Equal(ReplayProtectionGate.Decision.Fresh, verdict.Decision);
+    }
+
+    [Fact]
+    public async Task Unsigned_delivery_still_needs_a_timestamp()
+    {
+        // Arrange — no signature scheme: the timestamp header is the only freshness signal there is.
+        var gate = NewGate();
+
+        // Act
+        var verdict = await gate.EvaluateAsync(Flow, Trigger, Headers(), Body, toleranceSeconds: 300,
+            timestampHeader: null, nonceHeader: null);
+
+        // Assert
+        Assert.Equal(ReplayProtectionGate.Decision.TimestampMissing, verdict.Decision);
+    }
+
     [Theory]
     [InlineData("99999999999999")]
     [InlineData("-99999999999999")]

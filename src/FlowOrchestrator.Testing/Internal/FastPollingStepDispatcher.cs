@@ -38,4 +38,7 @@ internal sealed class FastPollingStepDispatcher : IStepDispatcher
         var clamped = delay > _maxDelay ? _maxDelay : delay;
         return _inner.ScheduleStepAsync(context, flow, step, clamped, ct);
     }
+
+    /// <inheritdoc/>
+    public bool LosesQueuedStepsOnRestart => _inner.LosesQueuedStepsOnRestart;
 }

@@ -1,6 +1,8 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution;
 using FlowOrchestrator.Core.Execution.Internal;
+using FlowOrchestrator.Core.Expressions;
 using FlowOrchestrator.Core.Hosting.Internal;
 using FlowOrchestrator.Core.Storage;
 using Microsoft.Extensions.Hosting;
@@ -16,6 +18,12 @@ namespace FlowOrchestrator.Core.Hosting;
 /// Runs once during <see cref="StartAsync"/>. For each active (Running) run, evaluates the DAG
 /// and re-dispatches any ready step whose dispatch record is missing — indicating that the previous
 /// host crashed between persisting a result and enqueuing the next step.
+/// </para>
+/// <para>
+/// Recovery applies the same schedule-time rules as the engine's graph continuation before it dispatches:
+/// a ready step whose <c>When</c> clause is false is recorded <c>Skipped</c> (with its evaluation trace), a
+/// step whose prerequisites finished in an unaccepted status is recorded skipped, and the pass repeats until
+/// it writes nothing. A dispatch that throws is logged and the run's remaining steps are still recovered.
 /// </para>
 /// <para>
 /// Two layers of safety prevent duplicate execution even when multiple replicas start simultaneously:
@@ -41,8 +49,20 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
     private readonly IStepDispatcher _dispatcher;
     private readonly IOutputsRepository _outputsRepository;
     private readonly ILogger<FlowRunRecoveryHostedService> _logger;
+    private readonly TimeSpan? _orphanedClaimTimeout;
 
     /// <summary>Initialises the recovery service with its dependencies.</summary>
+    /// <param name="runStore">Run store the active runs and the dispatch ledger are read from.</param>
+    /// <param name="runtimeStores">Runtime stores; the first one is used.</param>
+    /// <param name="flows">Registered flow definitions.</param>
+    /// <param name="graphPlanner">Planner that classifies ready steps.</param>
+    /// <param name="dispatcher">Runtime adapter recovered steps are handed to.</param>
+    /// <param name="outputsRepository">Outputs repository (trigger data, loop iteration counts).</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="runControlOptions">
+    /// Supplies <see cref="FlowRunControlOptions.OrphanedClaimTimeout"/>; when <see langword="null"/> the
+    /// default timeout applies.
+    /// </param>
     public FlowRunRecoveryHostedService(
         IFlowRunStore runStore,
         IEnumerable<IFlowRunRuntimeStore> runtimeStores,
@@ -50,7 +70,8 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         IFlowGraphPlanner graphPlanner,
         IStepDispatcher dispatcher,
         IOutputsRepository outputsRepository,
-        ILogger<FlowRunRecoveryHostedService> logger)
+        ILogger<FlowRunRecoveryHostedService> logger,
+        FlowRunControlOptions? runControlOptions = null)
     {
         _runStore = runStore;
         _runtimeStore = RequiredStore.First(runtimeStores, nameof(FlowRunRecoveryHostedService));
@@ -59,6 +80,9 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         _dispatcher = dispatcher;
         _outputsRepository = outputsRepository;
         _logger = logger;
+        _orphanedClaimTimeout = runControlOptions is null
+            ? FlowRunControlOptions.DefaultOrphanedClaimTimeout
+            : runControlOptions.OrphanedClaimTimeout;
     }
 
     /// <summary>Scans active runs and re-dispatches any orphaned steps.</summary>
@@ -83,13 +107,18 @@ public sealed class FlowRunRecoveryHostedService : IHostedService
         _logger.LogInformation(
             "FlowRunRecoveryHostedService: found {Count} active run(s) to evaluate for recovery.", activeRuns.Count);
 
+        // The same evaluator the engine builds: recovery is a scheduling path, so a ready step's When clause
+        // must be applied before it is dispatched (RunStepAsync never re-checks it).
+        var whenGate = new WhenSkipGate(new WhenClauseEvaluator(_outputsRepository, _runStore), _runtimeStore, _logger);
         var recoverer = new RunRecoverer(
             _runStore,
             _runtimeStore,
             _graphPlanner,
             _dispatcher,
             _outputsRepository,
-            _logger);
+            whenGate,
+            _logger,
+            _orphanedClaimTimeout);
 
         foreach (var run in activeRuns)
         {

@@ -113,6 +113,46 @@ public class FlowRunRecoveryHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShutdownAfterTheLedgerRowWasRecorded_StillDispatchesWithAnUncancellableToken()
+    {
+        // Arrange - host shutdown cancels the StartAsync token right after recovery recorded the ledger row
+        // (RFC 2.0 P-1(d)). Handing that token to the dispatcher aborted the hand-off with the row in place.
+        var flowId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var flow = FlowWith(flowId, "step1");
+        using var shutdown = new CancellationTokenSource();
+
+        _runStore.GetActiveRunsAsync()
+            .Returns(Task.FromResult(RunList(new FlowRunRecord { Id = runId, FlowId = flowId, Status = "Running" })));
+        _flowRepo = new FlowRegistry(new IFlowDefinition[] { flow });
+        _runtimeStore.GetStepStatusesAsync(runId)
+            .Returns(Task.FromResult(EmptyStatuses()));
+        _runStore.GetDispatchedStepKeysAsync(runId)
+            .Returns(Task.FromResult(EmptyDispatched()));
+        _runStore.TryRecordDispatchAsync(runId, "step1", Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                shutdown.Cancel();
+                return Task.FromResult(true);
+            });
+        _dispatcher.EnqueueStepAsync(default!, default!, default!, default)
+            .ReturnsForAnyArgs(new ValueTask<string?>("job-1"));
+
+        // Act
+        await CreateSut().StartAsync(shutdown.Token);
+
+        // Assert
+        await _dispatcher.Received(1).EnqueueStepAsync(
+            Arg.Is<IExecutionContext>(c => c!.RunId == runId),
+            flow,
+            Arg.Is<IStepInstance>(s => s!.Key == "step1"),
+            Arg.Is<CancellationToken>(t => !t.CanBeCanceled));
+        await _runStore.Received(1).AnnotateDispatchAsync(
+            runId, "step1", "job-1", Arg.Is<CancellationToken>(t => !t.CanBeCanceled));
+        await _runStore.DidNotReceiveWithAnyArgs().ReleaseDispatchAsync(default, default!, default);
+    }
+
+    [Fact]
     public async Task StartAsync_ReadyStepAlreadyDispatched_DoesNotReEnqueue()
     {
         // Arrange
@@ -131,8 +171,10 @@ public class FlowRunRecoveryHostedServiceTests
         // Act
         await CreateSut().StartAsync(default);
 
-        // Assert
-        Assert.Empty(_dispatcher.ReceivedCalls());
+        // Assert — the substitute reports the default (durable runtime): a ledger row means the runtime
+        // still holds the step. Reading that capability is the only call the dispatcher may see.
+        await _dispatcher.DidNotReceiveWithAnyArgs().EnqueueStepAsync(default!, default!, default!, default);
+        await _dispatcher.DidNotReceiveWithAnyArgs().ScheduleStepAsync(default!, default!, default!, default, default);
     }
 
     [Fact]
@@ -276,6 +318,8 @@ public class FlowRunRecoveryHostedServiceTests
                 JsonSerializer.SerializeToElement(new { iterations = 2 }, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
         _runStore.GetDispatchedStepKeysAsync(runId)
             .Returns(Task.FromResult(EmptyDispatched()));
+        _runStore.TryCompleteRunningStepAsync(runId, "loop", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(true));
         _runStore.TryRecordDispatchAsync(runId, "after", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
 
@@ -283,7 +327,7 @@ public class FlowRunRecoveryHostedServiceTests
         await CreateSut().StartAsync(default);
 
         // Assert
-        await _runStore.Received(1).RecordStepCompleteAsync(
+        await _runStore.Received(1).TryCompleteRunningStepAsync(
             runId, "loop", nameof(StepStatus.Succeeded), """{"iterations":2}""", null);
         await _dispatcher.Received(1).EnqueueStepAsync(
             Arg.Is<IExecutionContext>(c => c!.RunId == runId),

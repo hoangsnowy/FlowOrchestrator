@@ -1,4 +1,5 @@
 using FlowOrchestrator.Core.Abstractions;
+using FlowOrchestrator.Core.Configuration;
 using FlowOrchestrator.Core.Execution.Internal;
 using FlowOrchestrator.Core.Notifications;
 using FlowOrchestrator.Core.Observability;
@@ -65,10 +66,19 @@ public sealed partial class FlowOrchestratorEngine
     /// best-effort ledger update.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Split out of <see cref="TryScheduleStepAsync"/> so the Pending path can reserve the ledger row
     /// <em>before</em> it releases the execution claim and dispatch only <em>after</em> (#190, race 2).
     /// Every other caller should keep using <see cref="TryScheduleStepAsync"/>, which reserves and
     /// dispatches in one call.
+    /// </para>
+    /// <para>
+    /// The ledger row is durable before this runs, so the runtime call takes <see cref="CancellationToken.None"/>
+    /// and any failure releases the row before it propagates. The annotation is what tells a completed
+    /// hand-off from one that never returned: a row still unannotated after
+    /// <see cref="FlowRunControlOptions.UnsentDispatchTimeout"/> is re-delivered by
+    /// <see cref="Hosting.FlowUnsentDispatchRecoveryHostedService"/>.
+    /// </para>
     /// </remarks>
     private async Task DispatchReservedStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, TimeSpan? delay)
     {
@@ -79,19 +89,25 @@ public sealed partial class FlowOrchestratorEngine
             if (delay.HasValue)
             {
                 step.ScheduledTime = DateTimeOffset.UtcNow + delay.Value;
-                jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value).ConfigureAwait(false);
+                jobId = await _dispatcher.ScheduleStepAsync(ctx, flow, step, delay.Value, CancellationToken.None).ConfigureAwait(false);
             }
             else
             {
-                jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step).ConfigureAwait(false);
+                jobId = await _dispatcher.EnqueueStepAsync(ctx, flow, step, CancellationToken.None).ConfigureAwait(false);
             }
         }
-        catch (Exception dispatchFailure) when (dispatchFailure is not OperationCanceledException)
+        catch (Exception)
         {
-            // The ledger row was recorded before this call. Left in place it claims "an attempt is queued"
-            // for an attempt that never reached the runtime, and recovery skips ledgered keys, so the step
-            // would never run. Release it so recovery (or a re-run of this continuation) can dispatch again;
-            // a duplicate delivery, if the runtime did accept the message, is absorbed by the step claim.
+            // Catch-all-and-rethrow: never swallowed. The ledger row was recorded before this call. Left in
+            // place it claims "an attempt is queued" for an attempt that never reached the runtime, and
+            // recovery skips ledgered keys, so the step would never run. Release it so recovery (or a re-run
+            // of this continuation) can dispatch again; a duplicate delivery, if the runtime did accept the
+            // message, is absorbed by the step claim.
+            //
+            // OperationCanceledException included. No token reaches the dispatcher, so a cancellation here is
+            // the adapter's own (an SDK or HTTP timeout surfacing as TaskCanceledException), and after the
+            // durable ledger write even a genuine shutdown must not strand the row. Until this fix the filter
+            // excluded it and the row stayed, unannotated, for ever.
             try
             {
                 await _runStore.ReleaseDispatchAsync(ctx.RunId, step.Key, CancellationToken.None).ConfigureAwait(false);
@@ -104,17 +120,17 @@ public sealed partial class FlowOrchestratorEngine
             throw;
         }
 
-        // Best-effort: record the runtime job/message ID for observability.
-        if (jobId is not null)
+        // Best-effort: record the runtime job/message ID. Besides observability, the annotation marks the
+        // hand-off as completed; an annotation that fails leaves the row to the unsent-dispatch sweep, which
+        // re-delivers it — a duplicate the execution claim absorbs. A runtime that returns no id still gets a
+        // marker, so the row does not read as unsent.
+        try
         {
-            try
-            {
-                await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, jobId).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
-            }
+            await _runStore.AnnotateDispatchAsync(ctx.RunId, step.Key, DispatchLedgerMarker.For(jobId)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            EngineLog.DispatchAnnotateFailed(_logger, ex, step.Key);
         }
     }
 
@@ -124,9 +140,35 @@ public sealed partial class FlowOrchestratorEngine
     /// the run. Used to gate run completion and to keep the periodic timeout sweep from latching a run
     /// that is not actually stuck.
     /// </summary>
+    /// <remarks>
+    /// Asks the indexed existence query first: a Running or Pending row answers <see langword="true"/> without
+    /// reading the run, which is the answer every step of a long cancelled ForEach gets while it drains — each
+    /// of them calls <see cref="TryCompleteRunAsync"/> (#189 P0-1). Only a run with no open row pays the full
+    /// status, claim and ledger reads, the same three the snapshot form below decides on.
+    /// </remarks>
     private async Task<bool> HasInFlightWorkAsync(Guid runId)
     {
+        if (await _runtimeStore.HasRunningOrPendingStepAsync(runId).ConfigureAwait(false))
+        {
+            return true;
+        }
+
         var statuses = await _runtimeStore.GetStepStatusesAsync(runId).ConfigureAwait(false);
+        return await HasInFlightWorkAsync(runId, statuses).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Snapshot form of <see cref="HasInFlightWorkAsync(Guid)"/>: decides against a status map the caller
+    /// already read, so a completion gate can take every one of its checks on the same snapshot.
+    /// </summary>
+    /// <param name="runId">The run being inspected.</param>
+    /// <param name="statuses">Every status row in the run, as the caller just read it.</param>
+    /// <remarks>
+    /// Two store reads (claims, ledger) plus O(n) walks over the map; the claim and ledger reads follow the
+    /// status read, so a key claimed or dispatched in between reads as in flight — the conservative side.
+    /// </remarks>
+    private async Task<bool> HasInFlightWorkAsync(Guid runId, IReadOnlyDictionary<string, StepStatus> statuses)
+    {
         if (statuses.Values.Any(IsInFlight))
         {
             return true;
@@ -155,6 +197,29 @@ public sealed partial class FlowOrchestratorEngine
         return false;
     }
 
+    /// <summary>
+    /// Releases the run's claims that have no step status row and are older than
+    /// <see cref="FlowRunControlOptions.OrphanedClaimTimeout"/>, logging what it released.
+    /// </summary>
+    /// <param name="runId">The run to clean up.</param>
+    /// <remarks>
+    /// Used by the timeout sweep for a run that is being cancelled or timed out, where the orphaned step
+    /// does not need to run, only to stop blocking the run's completion. No-op when the option is off.
+    /// </remarks>
+    private async Task ReleaseOrphanedClaimsAsync(Guid runId)
+    {
+        if (_runControlOptions.OrphanedClaimTimeout is not { } timeout || timeout <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var released = await _runtimeStore.ReleaseOrphanedClaimsAsync(runId, timeout).ConfigureAwait(false);
+        if (released.Count > 0)
+        {
+            EngineLog.OrphanedClaimsReleased(_logger, released.Count, runId, string.Join(", ", released));
+        }
+    }
+
     private async Task TryCompleteRunAsync(Guid runId, string status)
     {
         if (await HasInFlightWorkAsync(runId).ConfigureAwait(false))
@@ -162,6 +227,22 @@ public sealed partial class FlowOrchestratorEngine
             return;
         }
 
+        await CompleteActiveRunAsync(runId, status).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Moves a still-<c>Running</c> run to <paramref name="status"/> and, when this call won that
+    /// transition, publishes <see cref="RunCompletedEvent"/>. Performs no in-flight check of its own.
+    /// </summary>
+    /// <param name="runId">The run to complete.</param>
+    /// <param name="status">The terminal run status.</param>
+    /// <remarks>
+    /// Callers must have established on a fresh snapshot that nothing is in flight —
+    /// <see cref="TryCompleteRunAsync"/> does it with <see cref="HasInFlightWorkAsync(Guid)"/>, the graph
+    /// continuation with its own single-snapshot gate.
+    /// </remarks>
+    private async Task CompleteActiveRunAsync(Guid runId, string status)
+    {
         // Idempotent, race-safe completion: only the call that actually transitions the run out of
         // Running publishes the lifecycle event and bumps telemetry. Collapses the race between the
         // graph continuation and the periodic timeout sweep (single- or multi-instance) without a
@@ -230,11 +311,30 @@ public sealed partial class FlowOrchestratorEngine
 
         if (control.TimeoutAtUtc is not null && DateTimeOffset.UtcNow >= control.TimeoutAtUtc.Value)
         {
-            await _runControlStore.MarkTimedOutAsync(runId, "Run timed out before scheduling next step.").ConfigureAwait(false);
+            if (!await _runControlStore.MarkTimedOutAsync(runId, "Run timed out before scheduling next step.").ConfigureAwait(false))
+            {
+                // The store refuses to latch a timeout once a user cancel is recorded: a cancel that landed
+                // between the read above and this write must win, or the run is reported TimedOut while the
+                // control record says Cancelled. One extra point read, only on this losing path.
+                return await ReadVerdictAfterRefusedTimeoutAsync(runId).ConfigureAwait(false);
+            }
+
             return "TimedOut";
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Re-reads the control record after <see cref="IFlowRunControlStore.MarkTimedOutAsync"/> refused to latch
+    /// a timeout, and returns the verdict the store actually holds.
+    /// </summary>
+    /// <param name="runId">The run whose timeout latch was refused.</param>
+    /// <returns><c>"Cancelled"</c> when a user cancel is recorded without a timeout; otherwise <c>"TimedOut"</c>.</returns>
+    private async Task<string> ReadVerdictAfterRefusedTimeoutAsync(Guid runId)
+    {
+        var current = await _runControlStore.GetRunControlAsync(runId).ConfigureAwait(false);
+        return current is { CancelRequested: true, TimedOutAtUtc: null } ? "Cancelled" : "TimedOut";
     }
 
     /// <inheritdoc/>
@@ -294,6 +394,13 @@ public sealed partial class FlowOrchestratorEngine
                 // the graph continuation (which classifies terminal status from step statuses, not the
                 // control record) would complete the run as Succeeded, leaving the control record and
                 // the run status inconsistent. Skipping in-flight runs avoids that entirely.
+                //
+                // A claim with no status row reads as in-flight work, so a worker that died between its
+                // claim and its start write would keep this terminating run open for ever (RFC 2.0 S1b).
+                // Release such claims first once they are old enough. Not on the step-completion path:
+                // one store call per terminating run per sweep tick.
+                await ReleaseOrphanedClaimsAsync(run.Id).ConfigureAwait(false);
+
                 var stuck = !await HasInFlightWorkAsync(run.Id).ConfigureAwait(false);
 
                 // The "in-flight" work may be parked rather than live: a WaitForSignal registered with
@@ -310,16 +417,23 @@ public sealed partial class FlowOrchestratorEngine
                 // A stuck run the user already cancelled must be finalised as Cancelled, not mislabelled
                 // TimedOut, and must NOT latch the timeout — otherwise a later retry's ExtendDeadlineAsync
                 // would clear the cancel.
-                if (mustLatchTimeout)
+                if (mustLatchTimeout
+                    && !await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false))
                 {
-                    await _runControlStore.MarkTimedOutAsync(run.Id, "Run exceeded its timeout deadline.").ConfigureAwait(false);
+                    // A user cancel landed after this sweep read the control record; the store kept it, so
+                    // the run closes as Cancelled rather than TimedOut.
+                    terminalStatus = await ReadVerdictAfterRefusedTimeoutAsync(run.Id).ConfigureAwait(false);
                 }
 
                 await TryCompleteRunAsync(run.Id, terminalStatus).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                // Per-run isolation: a single bad run must never abort the whole sweep.
+                // Per-run isolation: a single bad run must never abort the whole sweep. That includes an
+                // OperationCanceledException the sweep did not ask for — an HTTP-backed store's
+                // TaskCanceledException on a client timeout, a linked CTS inside a custom store: it is a
+                // fault of this run's I/O, not shutdown, and used to end the sweep for every later run.
+                // Only an OCE while the sweep's own token is cancelled propagates.
                 EngineLog.TimeoutEnforcementRunFailed(_logger, ex, run.Id);
             }
         }

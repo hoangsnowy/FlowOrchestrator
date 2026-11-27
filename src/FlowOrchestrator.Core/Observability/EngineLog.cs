@@ -37,7 +37,7 @@ internal static partial class EngineLog
     [LoggerMessage(EventId = 3001, Level = LogLevel.Warning, Message = "Failed to annotate dispatch for step {StepKey}.")]
     public static partial void DispatchAnnotateFailed(ILogger logger, Exception ex, string stepKey);
 
-    [LoggerMessage(EventId = 3011, Level = LogLevel.Error, Message = "Dispatching step {StepKey} failed and its dispatch-ledger row could not be released; startup recovery will skip it.")]
+    [LoggerMessage(EventId = 3011, Level = LogLevel.Error, Message = "Dispatching step {StepKey} failed and its dispatch-ledger row could not be released; the unsent-dispatch sweep re-delivers it once it is older than UnsentDispatchTimeout.")]
     public static partial void DispatchReleaseAfterFailureFailed(ILogger logger, Exception ex, string stepKey);
 
     // EventId 3002 (EventPersistenceFailed) is retired: persisted run events were removed in 2.0.
@@ -66,6 +66,48 @@ internal static partial class EngineLog
 
     [LoggerMessage(EventId = 3010, Level = LogLevel.Warning, Message = "Could not release the execution claim on step {StepKey} after its Pending hand-off failed; the step stays claimed until the run timeout sweep closes the run.")]
     public static partial void ClaimReleaseAfterFailedHandOffFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 3012, Level = LogLevel.Warning, Message = "Could not release the execution claim or dispatch-ledger row on step {StepKey} after its start failed; startup recovery releases it once it is older than OrphanedClaimTimeout.")]
+    public static partial void ReleaseAfterFailedStartFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 3013, Level = LogLevel.Warning, Message = "Released {Count} orphaned execution claim(s) with no step status for run {RunId}: {StepKeys}.")]
+    public static partial void OrphanedClaimsReleased(ILogger logger, int count, Guid runId, string stepKeys);
+
+    [LoggerMessage(EventId = 3014, Level = LogLevel.Error, Message = "A manual retry of step {StepKey} could not be dispatched, and putting the step back to Failed failed too; the step stays Running with nothing queued until the run timeout sweep or a restart closes the run.")]
+    public static partial void RetryRestoreFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 3015, Level = LogLevel.Warning, Message = "Graph continuation for run {RunId} stopped after {Passes} passes without converging; the run is left open for recovery instead of being completed under unfinished work.")]
+    public static partial void ContinuationPassLimitReached(ILogger logger, Guid runId, int passes);
+
+    [LoggerMessage(EventId = 3020, Level = LogLevel.Information, Message = "Step {StepKey} is not in this worker's manifest of flow {FlowId}, and another manifest version is registered (rolling deploy); handed it back for redelivery in {DelaySeconds} s.")]
+    public static partial void UnknownStepHandedBack(ILogger logger, string stepKey, Guid flowId, double delaySeconds);
+
+    [LoggerMessage(EventId = 3021, Level = LogLevel.Warning, Message = "Step {StepKey} is not in the registered manifest of flow {FlowId}; it was removed from the flow and is recorded Skipped.")]
+    public static partial void UnknownStepRemovedFromManifest(ILogger logger, string stepKey, Guid flowId);
+
+    [LoggerMessage(EventId = 3022, Level = LogLevel.Warning, Message = "Could not read the registered manifest to decide step {StepKey}, which this worker's manifest does not contain; handed it back for redelivery instead of skipping it.")]
+    public static partial void UnknownStepManifestCheckFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 3030, Level = LogLevel.Warning, Message = "Took over the expired execution lease of step {StepKey} (fence {Fence}); the worker that held it stopped renewing it, so the step runs again here.")]
+    public static partial void StepLeaseTakenOver(ILogger logger, string stepKey, long fence);
+
+    [LoggerMessage(EventId = 3031, Level = LogLevel.Warning, Message = "Lost the execution lease of step {StepKey} (fence {Fence}) to another worker; this attempt's outcome is discarded, and the step's new owner records it.")]
+    public static partial void StepLeaseLost(ILogger logger, string stepKey, long fence);
+
+    [LoggerMessage(EventId = 3032, Level = LogLevel.Warning, Message = "Could not pin the execution lease of loop step {StepKey} parked on its barrier; if this process stops before the loop settles, the loop step can be run again by another worker.")]
+    public static partial void StepLeasePinFailed(ILogger logger, Exception ex, string stepKey);
+
+    [LoggerMessage(EventId = 1011, Level = LogLevel.Error, Message = "A trigger for run {RunId} failed before dispatching any step, and abandoning that run or releasing its idempotency key failed too; a retry with the same key may be answered as a duplicate of the dead run.")]
+    public static partial void IdempotencyKeyReleaseFailed(ILogger logger, Exception ex, Guid runId);
+
+    [LoggerMessage(EventId = 1012, Level = LogLevel.Warning, Message = "Schedule rejected: flow {FlowId} declares no cron trigger '{TriggerKey}' (job {JobId}); no run started. Remove the orphaned recurring job.")]
+    public static partial void StaleScheduleRejected(ILogger logger, Guid flowId, string triggerKey, string? jobId);
+
+    [LoggerMessage(EventId = 1013, Level = LogLevel.Warning, Message = "Idempotency key of flow {FlowId} ('{TriggerKey}') pointed at run {StaleRunId}, which never started work and was registered more than IdempotencyReservationTimeout ago; run {RunId} took the key over and the stale run is cancelled.")]
+    public static partial void IdempotencyReservationTakenOver(ILogger logger, Guid flowId, string triggerKey, Guid staleRunId, Guid runId);
+
+    [LoggerMessage(EventId = 1014, Level = LogLevel.Warning, Message = "Could not complete the abandoned run {StaleRunId} as Failed after its idempotency key was taken over; its cancel latch is set, so none of its steps can execute.")]
+    public static partial void StaleReservationRunCompletionFailed(ILogger logger, Exception ex, Guid staleRunId);
 
     [LoggerMessage(EventId = 1010, Level = LogLevel.Warning, Message = "Trigger rejected: flow {FlowId} ('{TriggerKey}') is disabled.")]
     public static partial void TriggerRejectedDisabledFlow(ILogger logger, Guid flowId, string triggerKey);

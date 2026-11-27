@@ -9,11 +9,21 @@ internal static class ExpressionPathHelper
 {
     /// <summary>
     /// Walks <paramref name="payload"/> along <paramref name="path"/>, supporting
-    /// dot-separated property names (<c>a.b.c</c>) and bracket array indices
-    /// (<c>items[0]</c> normalised to <c>items.0</c> internally).
+    /// dot-separated property names (<c>a.b.c</c>), bracket array indices
+    /// (<c>items[0]</c> normalised to <c>items.0</c> internally), and the null-conditional
+    /// <c>?.</c> / <c>?[</c> anywhere in the path (<c>order?.lines?[0]?.sku</c>).
     /// Returns <see langword="false"/> when any segment is not found.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// A null-conditional is the separator preceded by <c>?</c>, so it is handled by dropping one
+    /// trailing <c>?</c> from each segment: a missing or <c>null</c> member short-circuits to
+    /// "not found" either way, which the callers already resolve to <see langword="null"/>. Before
+    /// this, only a <i>leading</i> <c>?.</c> was stripped by the callers, so a mid-path one left
+    /// <c>order?</c> as a property name and <c>@triggerBody()?.order?.id</c> silently resolved to
+    /// <see langword="null"/>. Span slicing only — no allocation.
+    /// </para>
+    /// <para>
     /// Property matching is case-sensitive first, then falls back to an ordinal
     /// case-insensitive scan. The fallback exists because step outputs and trigger payloads
     /// are persisted with <see cref="JsonSerializerDefaults.Web"/> (camelCase), while
@@ -23,6 +33,7 @@ internal static class ExpressionPathHelper
     /// <see cref="JsonSerializerOptions.PropertyNameCaseInsensitive"/> on the
     /// deserialisation side and never changes the meaning of a path that already matched
     /// exactly.
+    /// </para>
     /// </remarks>
     internal static bool TryResolvePath(JsonElement payload, string path, out JsonElement target)
     {
@@ -51,6 +62,11 @@ internal static class ExpressionPathHelper
             }
 
             segment = segment.Trim();
+            if (!segment.IsEmpty && segment[^1] == '?')
+            {
+                segment = segment[..^1].TrimEnd();
+            }
+
             if (segment.IsEmpty)
             {
                 continue;

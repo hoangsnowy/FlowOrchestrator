@@ -119,6 +119,10 @@ public sealed class EngineSpanCoverageTests
         meterListener.Start();
         var afterRetry = EngineTestStores.PermissiveRuntimeStore(
             new Dictionary<string, StepStatus>(StringComparer.Ordinal) { ["step1"] = StepStatus.Succeeded });
+        // Only a Failed step is retried, and only a won reset counts as a retry.
+        _runStore.GetStepAsync(runId, "step1")
+            .Returns(new FlowStepRecord { RunId = runId, StepKey = "step1", StepType = "Work", Status = "Failed" });
+        _runStore.RetryStepAsync(runId, "step1").Returns(true);
 
         // Act
         await CreateEngine(afterRetry).RetryStepAsync(flowId, runId, "step1");
@@ -152,6 +156,8 @@ public sealed class EngineSpanCoverageTests
                 new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Skipped }));
         runtimeStore.GetClaimedStepKeysAsync(Arg.Any<Guid>())
             .Returns(Task.FromResult<IReadOnlyCollection<string>>(new[] { "step1" }));
+        EngineTestStores.DeriveKeyedReads(
+            runtimeStore, () => new Dictionary<string, StepStatus> { ["step1"] = StepStatus.Skipped });
 
         var flow = Substitute.For<IFlowDefinition>();
         flow.Id.Returns(flowId);

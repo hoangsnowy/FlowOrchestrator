@@ -10,6 +10,160 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Changed — the continuation reads the frontier, not the whole run (#189 P0-1)
+
+The engine runs its continuation on every step completion, and that continuation used to read every status
+row of the run one to three times — a `ForEach` of n iterations read O(n²) rows (the stress harness: 4 013
+status rows per iteration at 1 000 items on SQL Server). Now (RFC 2.0 §3.5,
+`docs/benchmarks/issue-189-p0-1-frontier-reads-2026-11-27.md`):
+
+- **Frontier read.** When a step reaches a status, the engine reads by key only its dependents in its scope
+  instance and their dependencies (`FlowTopology`, the reverse `RunAfter` graph built once per flow), and
+  classifies only those (`IFlowGraphPlanner.EvaluateFrontier`). Blocked and `When` skips and loop settles
+  are walked wave by wave the same way. Status rows read per step completion: **2 003.5 → 4.0** at 1 000
+  iterations, flat in n; whole in-memory run **850 ms / 647 MB → 62 ms / 18 MB**.
+- **Write-skew rule.** Every frontier read is its own statement issued after the completing step's write
+  committed, so of two steps that unlock one join concurrently the last committer always sees both; the
+  dispatch ledger absorbs the case where both dispatch it. Pinned on SQL Server, PostgreSQL and InMemory by
+  a concurrent-join test that must dispatch the join exactly once, never zero.
+- **Completion gate.** A continuation that dispatched nothing first asks the new
+  `HasRunningOrPendingStepAsync` (an index on the open rows only); a parked `ForEach` or any running step
+  ends the check there. Only when nothing is open does it read the whole run, claims and ledger — the same
+  single-snapshot check as before, which is also what dispatches a step another worker made ready but has
+  not dispatched yet, so a run still cannot close under unfinished work.
+- **ForEach barrier and admission.** Only the innermost loop of a changed step is advanced, and only when
+  that step's iteration just settled. Admission reads the loop's settled-iteration count from the store
+  (`CountSettledIterationsAsync`, one row) and dispatches the window `[settled, settled + ConcurrencyLimit)`
+  — exactly what the full-map scan admitted, still exact under concurrent workers. The count is a range read
+  of the loop's rows on the server once per iteration settle; the per-loop counters of RFC §4.7 that would
+  make it O(1) are not part of this change (see the benchmark document).
+
+#### Read before upgrading
+
+- **Custom `IFlowRunRuntimeStore` implementations must add three members**, with no default implementation
+  on purpose (a silent fallback to the whole-run read would keep the engine O(n²)):
+  `GetStepStatusesAsync(runId, keys)`, `HasRunningOrPendingStepAsync(runId)` and
+  `CountSettledIterationsAsync(runId, loopKey, iterations, bodyKeys)`. Each must see every write committed
+  before it started — its own statement against the primary, never a replica or an older transaction. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
+- **New index on the step table, built without blocking:** `IX_FlowSteps_RunId_Open` on SQL Server (filtered
+  on `Status IN ('Running', 'Pending')`) and `ix_flow_steps_run_id_open` on PostgreSQL (partial). It holds only
+  the open rows. Because `FlowSteps` is the busiest table, the migrators never build it in the startup batch:
+  - **SQL Server:** the run-search indexes' policy. `ONLINE = ON` in the background where the edition supports
+    it (Azure SQL Database, Managed Instance, Enterprise / Developer), with `WAIT_AT_LOW_PRIORITY` on Azure and
+    SQL Server 2022+, so startup does not wait and step writes do not queue behind it. On other editions it is
+    built at startup only while `FlowSteps` has at most `OfflineIndexBuildRowLimit` (2 000 000) rows;
+    above that it is skipped with warning 7220 naming the DDL to run in a maintenance window.
+  - **PostgreSQL:** `CREATE INDEX CONCURRENTLY` in the background, before the run-search index, leaving another
+    host's in-flight build alone and dropping and rebuilding an `INVALID` leftover of an interrupted one.
+
+  Until the index exists the engine is correct, and the completion gate's open-row check reads each run's
+  rows instead. Events 7216-7219 report the build (building, built, failed, left to another host).
+  Pre-building it by hand before the deployment still works (DDL in the migration guide), and the
+  migrators then find nothing to do.
+- **Custom `IFlowGraphPlanner` implementations** get `EvaluateFrontier` as a default interface member (a
+  filtered `Evaluate`, same answer); override it to keep the per-completion cost independent of the run.
+- **Behaviour:** a step whose `RunAfter` accepts any status of a predecessor (an empty status list) is now
+  dispatched by that predecessor's own continuation — when it completes — rather than opportunistically by
+  an unrelated step's completion while the predecessor is still `Running` or `Pending`. And a continuation
+  that died between a step's completion write and its dispatches is now repaired by the completion gate's
+  full read when the run has nothing else open, or by startup recovery — no longer by whichever unrelated
+  step happens to complete next (see the migration guide).
+
+### Changed — `FlowOrchestrator.SqlServer` depends on Microsoft.Data.SqlClient 8.0
+
+- **Microsoft.Data.SqlClient 7.1.2 → 8.0.0.** 8.0 ships a `net10.0` build, so the transitive
+  `System.Security.Cryptography.Pkcs` pin that lifted 7.1.2's `net9.0` dependency group out of the
+  vulnerable 9.0.x line is gone (it now resolves the patched 10.0.x line; `dotnet list package --vulnerable`
+  is clean).
+- **Read before upgrading — SqlClient 8.0 changes two connection defaults** for every SQL Server connection
+  your host makes, FlowOrchestrator's included:
+  - an omitted `MultiSubnetFailover` now means `true` for eligible TCP connections;
+  - waiting for a pooled connection now spends the same `Connect Timeout` budget as the login, so
+    `Open` can time out sooner under pool exhaustion. `Switch.Microsoft.Data.SqlClient.UseOverallConnectTimeoutForPoolWait = false`
+    restores the separate budgets.
+
+  Set either explicitly in the connection string or through the AppContext switch to keep 7.x behaviour. See the
+  [SqlClient 8.0 release notes](https://github.com/dotnet/SqlClient/releases/tag/v8.0.0).
+
+### Changed — migrator background index build is awaitable
+
+- `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
+  are now public, for code that runs a migrator outside a host and must wait for its background index build.
+
+### Added — per-signal authorization and bearer-token access for `WaitForSignal`
+
+- **Restricted signals.** A `WaitForSignal` step can name who may deliver its signal with two new static
+  inputs: `allowedRoles` (any one of them) and `authorizationPolicy` (an ASP.NET Core policy registered with
+  `AddAuthorization`); with both set the caller needs both. `POST {base}/api/runs/{runId}/signals/{signalName}`
+  then admits only an identity signed in through `FlowDashboard:Authorization` that satisfies the
+  restriction. **The `flow-operator` role does not bypass it**, Basic Auth and anonymous callers (also in
+  `Development` and with `AllowAnonymousOperators`) get `403`, and an approver needs no viewer or operator
+  role for that one endpoint. The check runs before the payload is written; the step is resolved from the
+  manifest, `ForEach` / scope children included. Unrestricted signals keep the operator rule. A restricted
+  `signalName` must be ASCII, and the endpoint normalizes the requested name (Unicode NFKC, trimmed) once for
+  both the check and the delivery, so a compatibility spelling such as U+212A KELVIN SIGN cannot be judged
+  unrestricted and still reach a restricted waiter through a store's case folding. See
+  [WaitForSignal → Security](docs/articles/wait-for-signal.md#security).
+- **Machine-to-machine access.** `FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes`
+  (default none) lists extra schemes — e.g. `"Bearer"` from `AddJwtBearer` — tried after
+  `AuthenticationScheme`, so a Keycloak service account (client credentials) can deliver signals and call
+  the API with an access token. Same roles, policies and restrictions apply.
+- **Audit:** EventId `4107` (Information) records who delivered a restricted signal (user, run, signal,
+  step); `4108` (Warning) records every refused signal delivery; `4106` (Warning) at startup when flows
+  declare restricted signals but identity sign-in is not configured. The stored payload is unchanged.
+- **Run detail** (`GET {base}/api/runs/{id}`) gains a `signalAuthorization` object — only while a restricted
+  `WaitForSignal` step (or one of a flow this host does not register) is parked — with the step's `allowedRoles`,
+  `policy` name, `requirements` (every restricted step the signal name reaches), `misconfigured`,
+  `flowUnregistered` and the caller's `canSignal`, computed by the same decision the endpoint makes. The
+  page shows **Send signal** only to callers the endpoint accepts (also in view-only mode) and otherwise a
+  "Requires role: …" chip.
+- `WaitForSignalInput.AllowedRoles` / `.AuthorizationPolicy` document the inputs. `IFlowSignalDispatcher`
+  is unchanged and stays unauthenticated by design: in-process delivery is trusted and the host owns
+  authorization there.
+
+#### Read before upgrading
+
+- **Signals of flows the dashboard host does not register are refused (`403`, for every caller).** The
+  dashboard reads a signal's restriction from the flow manifest; without the flow it cannot tell, so it
+  fails closed (`FlowDashboard:Authorization:UnregisteredFlowSignals = Deny`, the default; refusal logged as
+  EventId `4108`). Hosts that call `AddFlow` for every flow are unaffected. A **split deployment** whose
+  dashboard host does not register the flows either registers them there (recommended) or sets
+  `UnregisteredFlowSignals` to `OperatorRule` — the 1.x behaviour, any operator may deliver, restrictions
+  not enforced over HTTP — which logs EventId `4109` (Warning) at startup.
+- `GET {base}/api/me` reports a caller signed in through an additional scheme as `method: "bearer"` with
+  `canSignOut: false`.
+- Otherwise nothing changes unless a step declares `allowedRoles` / `authorizationPolicy` or you set
+  `AdditionalAuthenticationSchemes`, with two small exceptions: a request that carries an `Authorization`
+  header other than Basic and is not accepted now gets `401` instead of the identity-provider redirect
+  (page requests included), and the signal endpoint looks the run up before it validates the body, so a
+  missing run answers `404` (operators) / `403` (everyone else) even when the body is not valid JSON.
+- Startup (`MapFlowDashboard`) fails fast when a restricted step is malformed (`allowedRoles` not a non-empty
+  string array, an expression in either input, or a non-static `signalName`), names an unregistered policy,
+  or when `AdditionalAuthenticationSchemes` names an unregistered scheme or is set without
+  `AuthenticationScheme`.
+
+### Added — Standard Webhooks signature scheme
+
+- **`webhookSignatureScheme = "StandardWebhooks"`** verifies deliveries signed per the
+  [Standard Webhooks spec](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md)
+  — Svix and the providers that deliver through it (Clerk, Resend, Lemon Squeezy, …): `webhook-signature`
+  (space-delimited `v1,<base64>` list; accepted when any `v1` entry matches, other versions and malformed
+  entries ignored) over `{webhook-id}.{webhook-timestamp}.{body}`, keyed with the base64-decoded part after
+  `whsec_` (the prefix is optional). Under replay protection the signed `webhook-timestamp` is skew-checked
+  and the signed `webhook-id` is the replay key, so a resend of the same message id inside the window is
+  `409`. Key rotation (`webhookHmacKeyPrevious`) works as for every other scheme. Pinned by the reference
+  libraries' known-answer vectors. There is deliberately no `Svix` alias — it stays an unknown scheme name.
+- New building blocks, also reachable from `Custom` specs: `SignedPayloadStrategy.MessageIdTimestampBody`,
+  `WebhookSignatureSpec.MessageIdHeaderName` / `IgnoreMalformedEntries`, and the manifest fields
+  `webhookHmacKeyEncoding`, `webhookMessageIdHeader`, `webhookIgnoreMalformedSignatureEntries`.
+  `HmacKeyEncoding.Base64` now strips an optional leading `whsec_` before decoding (no valid base64 key can
+  start with it, so Microsoft Teams keys are unaffected) and no longer throws internally on an invalid key.
+- New enum members are appended (`WebhookSignatureScheme.StandardWebhooks` and
+  `SignedPayloadStrategy.MessageIdTimestampBody` after `Custom`), so existing numeric values are unchanged. A
+  custom verifier registered with `AddWebhookSignatureVerifier` under the name `StandardWebhooks` now
+  collides with the built-in scheme and fails at registration — rename it.
+
 ### Changed — dashboard UI
 
 - **Dashboard redesigned as a dense operator view.** Overview leads with a "Needs attention" list
@@ -49,9 +203,13 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Schema (SQL Server, additive):** two non-persisted computed columns on `FlowRuns` (`IdText`,
   `RunSearchText`, metadata-only) and two indexes (`IX_FlowRuns_IdText`,
   `IX_FlowRuns_StartedAt_Search`, ~56 MB per 200k runs). On Azure SQL Database, Managed Instance and
-  Enterprise/Developer the indexes build **online in the background** after startup; on other editions
-  they build at startup while `FlowRuns` has at most 2M rows, and above that a warning names the two
-  statements to run in a maintenance window. Search works (more slowly) until they exist. 1.34.x keeps
+  Enterprise/Developer the indexes build **online in the background** after startup (with
+  `WAIT_AT_LOW_PRIORITY` on Azure and SQL Server 2022+, so its brief table locks never make writers queue
+  behind it); on other editions they build at startup while `FlowRuns` has at most 2M rows, and above that
+  a warning names the two statements to run in a maintenance window. Hosts starting together build them
+  once, under an application lock: a racing second host used to fail its start with error 1913 on the
+  offline path and log a false build failure (7206) on the online one; it now waits (offline) or leaves the
+  build to the first host (online, event 7209). Search works (more slowly) until they exist. 1.34.x keeps
   working against the upgraded database. See
   [Migrating to 2.0 → Database](docs/articles/migrating-to-2.0.md#step-8--database).
 - **Indexed computed columns need the standard `SET` options** (`QUOTED_IDENTIFIER`, `ANSI_NULLS`,
@@ -61,7 +219,11 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Schema (PostgreSQL, additive):** `ix_flow_runs_run_search_trgm`, a trigram GIN index on the
   lower-cased run search expression (~47 MB per 200k runs), built `CREATE INDEX CONCURRENTLY` in the
   background after startup — no table rewrite, writers not blocked; an `INVALID` leftover is rebuilt on the
-  next start. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
+  next start. Another replica (or a restarted host) can start while the build is still running: its
+  migration requests no lock on `flow_runs` (see the start-up fix below), and its own background build sees
+  the other host's build in `pg_stat_progress_create_index` and leaves it alone (event 7215) instead of
+  taking the `INVALID` in-progress index for a leftover, dropping it once it finished and building it a
+  second time. It needs `pg_trgm` like the existing trigram indexes: where the extension is not available
   (Azure Database for PostgreSQL requires allow-listing it in `azure.extensions`) the migrator logs a
   warning and search runs the same SQL as a scan. PostgreSQL run-column matching is now
   `lower(...) LIKE lower(term)` instead of `ILIKE` per column: same results for ASCII and identifiers.
@@ -96,16 +258,380 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
   built in (22% extra storage, asynchronous indexing, hyphenated ids split into common words — see the
   benchmark doc).
 
+### Changed — **breaking:** step keys must be storage-safe
+
+Flow validation (run by the flow-sync hosted service at startup) now rejects three kinds of step key that
+the stores could not keep apart. Each one used to be accepted and fail later, at runtime, on some
+providers only:
+
+- **Keys that differ only by case within one scope** (`Notify` / `notify`, also between the children of one
+  `ForEach`). `StepCollection` is ordinal, but every `StepKey` column on SQL Server inherits the database's
+  case-insensitive collation, so both steps shared one claim, one dispatch row and one status row and the
+  run never finished. Message: `Step keys '…' and '…' differ only by case; …`.
+- **Keys containing `:`**, at any nesting level. `:` separates the outputs-key namespace
+  (`"{stepKey}:input"`, `"__trigger:data"`), so a step named `x:input` overwrote step `x`'s inputs.
+  Message: `Step key '…' contains ':', which is reserved as the outputs-key separator …`.
+- **Keys longer than 250 characters** (`FlowGraphPlanner.MaxStepKeyLength`), measured on the flattened
+  path (`loop.child`). The stores persist `"{stepKey}:input"` in a 256-character column; longer keys failed
+  the write with a truncation error on SQL Server / PostgreSQL. Message: `Step key '…' is N characters long;
+  the maximum is 250 …`.
+
+#### Read before upgrading
+
+- A flow with such a key now **fails startup** instead of misbehaving. Rename the step and every
+  `runAfter` / `@steps('…')` reference to it; run history keeps the old key. See
+  [Migrating to 2.0 → Step 5](docs/articles/migrating-to-2.0.md#step-5--fix-what-the-new-startup-checks-report).
+
+### Fixed — a worker killed mid-step no longer leaves its run `Running` for ever (step execution leases)
+
+The execution claim that makes a step run once (`FlowStepClaims`) never expired. A worker killed in the middle of
+a handler — or between its claim and its start write, or between its handler and its completion write — left its
+claim behind; every redelivery of the step exited as "claimed by another worker", and the run stayed `Running`
+until an operator stepped in (RFC 2.0 C1). The pre-release stress harness hit it on every backend: 23 of 600 runs
+on SQL Server + Hangfire, 10 on PostgreSQL + Hangfire, 9 on Service Bus, with 6 hard kills.
+
+- A step is now claimed under a **lease** (`FlowRunControlOptions.StepLeaseDuration`, default 60 s). The
+  process running it renews it every `StepLeaseRenewInterval` (default 20 s, at most a third of the lease), so a
+  live handler is never taken over however long it runs.
+- Once the owner stops renewing, the next delivery of the step **takes the expired lease over** (the runtime's own
+  redelivery: Hangfire's invisibility timeout, a Service Bus lock expiry) and runs the step again. A step that
+  reached a terminal status is never taken over, so execution stays once-only for completed work.
+- `FlowStepLeaseHostedService` renews the process's leases and, every half lease (1–30 s), **redelivers** steps
+  whose lease expired without a terminal status, for runtimes whose redelivery came while the lease was still
+  live, or never came. Every replica runs it; the selection is atomic.
+- Every write of an attempt is **fenced** by its lease: a stalled worker that returns after a takeover has its
+  completion rejected (and skips its output write once a renewal told it), so it cannot overwrite the new owner's
+  outcome. A loop step parked on its barrier pins its lease, so it is never re-run.
+
+**Read before upgrading.**
+- An interrupted attempt now runs again after a crash — at-least-once for the attempt the crash cut short, as
+  in Temporal. Make handlers with side effects idempotent, as the at-least-once runtimes already required.
+- `StepLeaseDuration = null` restores the 1.x claim. Claims written by 1.x have no lease and stay permanent.
+- New table `FlowStepLeases` / `flow_step_leases` with a filtered index; `FlowStepClaims` is not altered.
+- Custom storage backends must implement six new `IFlowRunRuntimeStore` members (`TryAcquireStepLeaseAsync`,
+  `RenewStepLeasesAsync`, `ReleaseStepLeaseAsync`, `PinStepLeaseAsync`, `TryRecordLeasedStepCompleteAsync`,
+  `LeaseExpiredStepLeasesAsync`); there is no default implementation. See the migration guide's checklist.
+- `FlowOrchestratorEngine` takes an optional `StepLeaseKeeper`; a hand-built engine without one keeps 1.x claims.
+- Logs: EventIds 3030-3032 (takeover, lease lost, pin failed) and 5050-5054 (sweep, renewal).
+
+### Fixed — Hangfire.PostgreSql: a step whose worker was killed waits for the lock timeout, now flagged at startup
+
+- **On Hangfire.PostgreSql job storage, a step whose worker process is killed during a Hangfire state
+  change runs again only after `DistributedLockTimeout` (10 min by default), not after
+  `InvisibilityTimeout`.** Hangfire.PostgreSql keeps distributed locks as rows in its `lock` table, and
+  nothing releases a row when the process that wrote it dies (upstream
+  [hangfire-postgres/Hangfire.PostgreSql#329](https://github.com/hangfire-postgres/Hangfire.PostgreSql/issues/329)).
+  The worker takes the job's `job:{id}:state-lock` for Enqueued → Processing and for Processing →
+  Succeeded. A kill inside either change leaves the row behind. The job is re-fetched once
+  `InvisibilityTimeout` has passed, and the worker that re-fetches it then waits on the orphaned row. Each
+  re-fetch until the row expires parks one more worker. Until then the step has a dispatch-ledger row,
+  no claim and no status row, which looks like a lost job. The 3-replica crash-recovery stress run
+  (60 s invisibility, 120 s quiet period) reported three runs in that state. Hangfire.SqlServer is not
+  affected: its `sp_getapplock` locks belong to the session and are released when the connection drops.
+- **`UseHangfire()` now logs a startup warning (EventId 3160) when the Hangfire job storage is
+  Hangfire.PostgreSql and `DistributedLockTimeout` is longer than `InvisibilityTimeout`.** The package
+  defaults (30 min / 10 min) do not warn. To keep crash recovery at the invisibility timeout, set
+  `PostgreSqlStorageOptions.DistributedLockTimeout` to at most `InvisibilityTimeout`. See
+  [Production checklist → Hangfire on PostgreSQL](docs/articles/production-checklist.md#hangfire-on-postgresql).
+  The check reads the options by name, because FlowOrchestrator does not reference the community package.
+  Integration tests against real PostgreSQL pin it to Hangfire.PostgreSql 1.21.1, together with the
+  recovery behaviour behind it.
+
+### Fixed — a trigger killed after registering its idempotency key no longer loses the delivery
+
+- **A retry is no longer absorbed as a duplicate of a run that never started (RFC 2.0 S7).** `TriggerAsync`
+  registers the `Idempotency-Key` before it creates the run. A process killed in between left the key
+  pointing at a run with no dispatched or recorded step, and possibly no run row at all. Every retry of
+  that delivery was then answered `Duplicate` with the dead run's id, so the run was lost silently. The
+  in-process compensation (`AbandonUnstartedRunAsync`) only covers an exception, not a kill. The stress
+  harness lost 1 run of 600 this way in its crash-recovery scenario. A duplicate trigger now takes the key
+  over when the registration is older than the new `FlowRunControlOptions.IdempotencyReservationTimeout`
+  (default **30 s**) and its run has **no dispatch-ledger row and no step row**. The retry starts a fresh
+  run, and the dead run is cancel-latched and completed `Failed`; its cancel reason names the run that
+  replaced it. A younger registration, or one whose run started work, is still answered `Duplicate`. The
+  store decides in one atomic operation, with the age measured on the clock that stamped the registration
+  (`SYSDATETIMEOFFSET()` / `NOW()` / the in-memory store's clock), so of N concurrent retries exactly one
+  starts the run and the rest are duplicates of it. If the first trigger was only slow, the steps it
+  dispatches after the takeover are skipped by the termination gate. A takeover logs EventId 1013
+  (Warning); EventId 1014 means completing the dead run failed, but its cancel latch is already set.
+- **No schema change:** `FlowIdempotencyKeys.CreatedAtUtc` / `flow_idempotency_keys.created_at_utc` already
+  stamp each registration.
+
+#### Read before upgrading
+
+- **Custom stores:** `IFlowRunControlStore` has a new required member, `TryTakeOverStaleIdempotencyKeyAsync`.
+  It has no default implementation, because a silent fallback would hide the lost delivery. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend)
+  for the contract.
+- A trigger that stalls for longer than `IdempotencyReservationTimeout` between registering its key and
+  dispatching its first step has its run cancelled, and the retry's run takes over. Raise the value if
+  your store can stall for that long. Setting zero or a negative value throws `ArgumentOutOfRangeException`.
+- **PostgreSQL:** a takeover holds a per-run advisory lock on the dead run (class `1179601234`, key
+  `hashtext(run_id::text)`), exclusive, while it checks and swaps. Every write of a ledger or step row
+  (`TryRecordDispatchAsync`, `RecordStepStartAsync`, `RecordSkippedStepAsync`) takes the same lock shared
+  in its existing statement or transaction, so no first dispatch of the dead run can slip in before the
+  latch commits. Only the run being taken over waits; shared with shared never waits, so dispatches of
+  other runs, and of the same run among themselves, are unaffected (measured within noise: about +2 µs
+  per insert on the server, no extra round trip). **SQL Server** takes key-range locks on the dead run's
+  rows only. Neither store takes a lock for a duplicate of a fresh or started run.
+
+### Fixed — starting a PostgreSQL host beside running ones takes no table locks
+
+- **The PostgreSQL migrator requested a table lock for every index and column on every start**, even when
+  the schema was already up to date: PostgreSQL takes the lock of `CREATE INDEX IF NOT EXISTS` (SHARE) and
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (ACCESS EXCLUSIVE) before it checks the name. A host starting
+  beside running ones (a rolling deployment, a restart) queued behind any in-flight write, autovacuum or
+  index build on `flow_runs`, `flow_steps`, `flow_step_attempts`, `flow_step_dispatches`,
+  `flow_idempotency_keys`, `flow_signal_waiters`, `webhook_replay_nonces` or `webhook_rejections`. Every
+  later write to that table queued behind the start, and a start that waited past the 30 s command
+  timeout failed. Against the 2.0 run-search index build it also deadlocked (`40P01`), killing either the
+  build or the start. Each statement now runs behind a catalog check that takes no lock, so a start on an
+  up-to-date schema requests none; the resulting schema is identical. A unit test rejects any unguarded
+  `CREATE INDEX` / `ALTER TABLE` in the start-up SQL.
+
+### Fixed — Pending re-checks queued by 1.x run on a 2.0 Hangfire worker
+
+- **A poll re-check or `WaitForSignal` deadline check left in the Hangfire queue by 1.17 – 1.34.x no longer
+  fails for ever on 2.0.** 1.x re-dispatched a `Pending` step with its resolved inputs, which were
+  `System.Text.Json.JsonElement` values; Hangfire's Newtonsoft.Json argument store keeps only their
+  `ValueKind`, so the job came back with `default(JsonElement)` inputs (and trigger data), and 2.0 threw
+  `InvalidOperationException: Operation is not valid due to the current state of the object` while
+  recording the step start (EventId 2006). Hangfire retried the job until it failed, and the run stayed
+  `Running`: every polling step, every `ForEach` child that polls and every parked `WaitForSignal` with a
+  `timeoutSeconds` that had a re-check scheduled at the upgrade. The legacy `IHangfireStepRunner.RunStepAsync`
+  overload now restores destroyed inputs from the manifest (expressions are resolved again from the run's
+  stored trigger data), lets the engine recompute `__loopItem`, and drops the destroyed poll bookkeeping, so
+  such a poll starts a fresh attempt count and `pollTimeoutSeconds` window. Found by the 1.34.7 → 2.0
+  upgrade rehearsal (`tests/upgrade`); see [Migrating to 2.0 → Step 4](docs/articles/migrating-to-2.0.md#step-4--move-the-hangfire-queue-across-hangfire-hosts-only).
+
+### Fixed — a signal sent after a `WaitForSignal` timeout no longer resumes the step
+
+- **`IFlowSignalStore.DeliverSignalAsync` refuses an expired waiter** (all three stores). It ignored
+  `ExpiresAt`, so a signal landing between the step's deadline and its safety-net invocation (deadline + 1 s,
+  later under load) was recorded and the step **succeeded past its timeout**; once the step had failed, the
+  caller was still told `Delivered` while nothing ran. The stress harness reproduced it on Hangfire + SQL
+  Server: 7 of 20 runs signalled after expiry resumed and ran their finish step. Delivery now goes to the
+  oldest waiter that is undelivered **and live**, with expiry judged by the store's own clock in the write
+  that stamps `DeliveredAt` (`SYSDATETIMEOFFSET()` / `now()` / the registered `TimeProvider` in memory) and the
+  handler's inclusive boundary; an expired waiter no longer blocks a live one with the same signal name.
+- **New `SignalDeliveryStatus.Expired`**, returned with nothing written; `FlowSignalDispatcher` sends no
+  resume nudge for it. `POST {base}/api/runs/{runId}/signals/{signalName}` answers **`410 Gone`**, and the
+  dashboard's **Send signal** reports the timeout instead of a generic error.
+- **`WaitForSignalHandler` fails a payload recorded at or after the deadline** with the timeout reason
+  instead of succeeding with it — rows a pre-fix replica wrote during a rolling upgrade, or a custom store
+  that ignores `ExpiresAt`. Built-in stores never record one, so clock skew cannot fail a delivery they accepted.
+- **InMemory:** `InMemoryFlowSignalStore` stamps and judges waiters by the registered `TimeProvider`
+  (new constructors take one), so `FlowTestHostBuilder.WithSystemClock` and the handler agree on when a waiter
+  expired; waiters with equal `CreatedAt` are served in registration order.
+
+#### Read before upgrading
+
+- A `switch` over `SignalDeliveryStatus` needs an `Expired` case; callers of the signal endpoint should
+  treat `410` as final (retrying cannot succeed).
+- **Custom stores:** apply the same rule in `DeliverSignalAsync` — see
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
+
+### Fixed — the storage providers agree on one contract
+
+A storage audit compared SQL Server, PostgreSQL and InMemory call by call; each item below is a place
+where one provider behaved differently from the others.
+
+- **SQL Server: concurrent first saves no longer fail with a primary-key violation.** Every `MERGE` upsert
+  now takes `WITH (HOLDLOCK, UPDLOCK)`, the pattern `SqlFlowStore.SaveAsync` already used. Two dashboard
+  replicas pausing a never-saved schedule at once hit `PK_FlowScheduleStates`; the same race was latent in
+  `RegisterWaiterAsync` (`FlowSignalWaiters`), the outputs upsert (`FlowOutputs`) and `ConfigureRunAsync`
+  (`FlowRunControls`).
+- **Idempotency keys longer than 256 characters no longer return 500 on SQL Server / PostgreSQL.** The
+  `Idempotency-Key` header is uncapped but the key columns hold 256 characters. All three stores now
+  normalise through the new `IdempotencyKeyStorage.Normalize`: trimmed and lower-cased as before, and a key
+  that is still longer than 256 characters is stored as `sha256:` + its hex SHA-256 (71 characters), so
+  duplicates are still detected. No schema change.
+- **PostgreSQL: a duplicate signal delivery racing the first one reports `AlreadyDelivered` (409), not
+  `NotFound` (404).** `DeliverSignalAsync` used `FOR UPDATE SKIP LOCKED`, which skipped the waiter the
+  first delivery was holding. It now waits for the lock like SQL Server, and when two waiters share a
+  signal name a delivery that loses the oldest one moves on to the next.
+- **PostgreSQL: signal names and the run-list status filter are case-insensitive**, as on SQL Server and
+  InMemory. Signal names compare with `lower()` on both sides (lookups pin `run_id` first, so the index
+  range scan is unchanged); the status filter is canonicalised to the persisted spelling with the new
+  `RunStatusNames.Canonicalize`, so the status indexes stay usable.
+- **A user cancel is no longer relabelled a timeout.** `MarkTimedOutAsync` no longer applies when a cancel
+  was already requested (all three stores). A cancel that landed between the engine's deadline check and
+  the timeout write used to turn the run `TimedOut`, and a later retry then cleared the user's cancel. When the
+  store refuses the latch, the engine (graph continuation and timeout sweep) re-reads the control record and
+  closes the run `Cancelled` as well.
+- **InMemory matches the SQL stores** in four places: trigger headers are stored as a case-insensitive
+  snapshot (a caller's ordinal dictionary made `@triggerHeaders()['x-request-id']` miss, and a reused
+  dictionary rewrote a started run's headers); `ConfigureRunAsync` updates an existing control record
+  instead of replacing it, so an earlier cancel survives; `MarkTimedOutAsync` without a reason keeps an
+  existing reason; and a step's `When` evaluation trace survives a restart of the step.
+- **The default `IFlowRunStore.SearchRunsAsync` (custom stores) pages exactly when runs share a start
+  time.** Its first page was not sorted into cursor order and ties were dropped with a fixed 8-row slack,
+  so tied runs could be repeated or skipped. Every page is now sorted, and tie groups at the cursor and at
+  the page boundary are read whole.
+
+#### Read before upgrading
+
+- **PostgreSQL:** `POST …/signals/{name}` now matches `Approval` and `approval` as one signal, and
+  `?status=failed` finds `Failed` runs. If two waiters of one run were told apart only by the case of
+  their signal name, rename one.
+- **Custom stores:** `IFlowRunControlStore.MarkTimedOutAsync` must return `false` without writing when
+  `CancelRequested` is already set, and keep an existing `CancelReason` when `reason` is `null`. Call
+  `IdempotencyKeyStorage.Normalize` on idempotency keys (and `IdempotencyKeyStorage.ToStorageForm` on the
+  copy passed to `ConfigureRunAsync`) to deduplicate exactly like the built-in stores. See
+  [Migrating to 2.0 → Custom storage backend](docs/articles/migrating-to-2.0.md#custom-storage-backend).
+
+### Fixed — webhooks, dashboard REST, FlowTestHost and telemetry
+
+- **A webhook delivery that fails before its run starts no longer turns the publisher's retries into
+  `409`s.** The replay gate records the delivery's replay key (signed `webhook-id`, Mailgun token, the
+  timestamp + body hash, the body hash for body-only schemes, or `webhookNonceHeader`) before the run is
+  started. When the request then failed — the trigger threw (`5xx`), the client disconnected before the
+  run was written, or the legacy `X-Webhook-Key` check refused it — the key stayed, so every retry inside the
+  window was rejected as a replay and the delivery was lost (and a caller without the shared secret could
+  burn any `webhookNonceHeader` value). The endpoint now releases the key on those failures, with
+  `CancellationToken.None`, best effort (EventId 4013 on failure, 4014 on success). The release is
+  owner-bound — each registration carries a random token that never leaves the process and the store deletes
+  only a matching entry — runs only on failure, and is skipped once the engine has dispatched or skipped an
+  entry step (new `ITriggerContext.EntryStepsStarted`, default interface member), because that run is alive.
+  **Custom stores:** new `IWebhookReplayStore.TryRegisterAsync(…, Guid registrationId, …)` and
+  `IWebhookReplayStore.TryForgetAsync` (no default implementation — a silent no-op would keep the lost-retry
+  bug); the old five-argument `TryRegisterAsync` is now a default member that delegates with an unrevealed
+  token. SQL Server and PostgreSQL add a nullable `RegistrationId` / `registration_id` column to the replay
+  table on startup; pre-upgrade rows have no owner and expire as before.
+
+- **Microsoft Teams outgoing webhooks verify.** The verifier never saw the `Authorization` header Teams
+  signs in (the endpoint strips it from the captured headers), and it keyed the HMAC with the token's UTF-8
+  bytes instead of the base64-**decoded** security token Microsoft documents. The signature header is now
+  handed to the verifier only — still never captured, stored or logged — and
+  `WebhookSignatureSpec.KeyEncoding` (`HmacKeyEncoding.Base64` for Teams) selects the key bytes.
+- **`webhookSecret` used as the HMAC key works with a signature scheme.** After the signature verified,
+  the endpoint still demanded `X-Webhook-Key` = the key, which GitHub, Stripe & co. never send, so every
+  signed delivery got `401`. The legacy check is skipped when a signature scheme verified the request
+  (`PipelineResult.SignatureVerified`); without a scheme, or when the signature failed under `Audit`, it
+  still applies.
+- **Form-encoded webhook deliveries (Twilio) are accepted.** `application/x-www-form-urlencoded` bodies
+  used to get `400 Invalid JSON payload.` and the verifier received no form fields. The form is now parsed
+  into a JSON-object trigger body (one string per field, an array for a repeated field) and its fields are
+  passed to the verifier (new `WebhookSecurityPipeline.EvaluateAsync` overload,
+  `WebhookRequestBuffer.BufferedBody.FormFields`). A malformed form is `400 Invalid form payload.`
+- **Host-wide replay protection accepts body-only signed publishers** (GitHub, Shopify, Linear, Dropbox,
+  Bitbucket, Atlassian, Teams). They send no timestamp header and were rejected `409 missing_timestamp`. A
+  verified signature without a signed timestamp is now keyed on the body hash for `2 × tolerance`, as
+  `ReplayProtectionGate` documents; unsigned timestamp headers are ignored for it.
+- **Webhook rate limits are per trigger.** The bucket key was the flow id, and a bucket kept the
+  parameters it was first created with, so two webhook triggers of one flow shared the first one's limit.
+  Keys are now `flowId|triggerKey[|clientIp]` and a bucket follows its trigger's inputs.
+- **Rerun replays the original trigger headers.** It read `FlowRunRecord.TriggerHeaders`, which no store
+  fills from `GetRunAsync`, so every `@triggerHeaders()` input of a rerun was `null`. Headers now come from
+  `IOutputsRepository` (idempotency header still stripped).
+- **Client disconnects and truncated bodies no longer surface as unhandled exceptions** on the webhook
+  endpoint (mapped outside the dashboard group, so its disconnect filter never applied) or on any dashboard
+  endpoint (`BadHttpRequestException` was not handled). One shared filter answers `499` when the caller is
+  gone and the exception's own status (`400` / `413`) with a short JSON error when it is not.
+- **`POST /api/runs/{id}/cancel` with a malformed reason body** is `400`, not `500`.
+- **A run search with `to` near year 1** (or a very large `RunSearchWindow`) no longer returns `500`; the
+  default window start clamps to `DateTimeOffset.MinValue`. Same for the webhook-delivery search.
+- **`GET /api/flows/{id}/mermaid` honours `Accept-Encoding`** (Brotli / Gzip, `CompressionLevel.Fastest`)
+  and sends `Vary: Accept-Encoding`, like every other dashboard endpoint.
+- **Mermaid export gives every node a distinct id.** `fetch-data` and `fetch_data`, or a child key used
+  in two loops, collapsed into one node carrying both nodes' edges. The first node keeps its sanitized id
+  (exports without collisions are byte-identical); a later loop child is qualified with its loop
+  (`refunds__work`) and any other later node gets a stable hash suffix.
+- **SSE heartbeats no longer write concurrently with an event frame** on the same response; writes are
+  serialised and the heartbeat stops when the event loop does.
+- **Step metrics tag the manifest step key.** `step_key` on `flow_step_duration_ms`, queue delay, claim
+  lost, poll attempts, retries, skips and signal wait carried the runtime key `loop.N.child`, one time
+  series per ForEach iteration (unbounded cardinality, past the OpenTelemetry 2,000-series default cap). It
+  is now the template key (`loop.child`); spans and logs keep the runtime key. ~60 ns / 0 B per loop-step
+  metric (`docs/benchmarks/metric-step-key-2026-11-24.md`).
+- **`webhookReplayToleranceSeconds` outside `0 … 2147483647` fails `MapFlowDashboard` at startup.** It was
+  truncated to `int`, so `4294967296` became `0` and silently disabled replay protection.
+- **FlowTestHost matches the production runtime.** `RunStatus.Skipped` is new and terminal, so a run whose
+  every leaf was When-skipped completes instead of timing out as `Running`. `WithFastPolling()` no longer
+  replaces the runtime store with a wrapper that granted every claim (a duplicate delivery executed twice)
+  and dropped the When evaluation trace of skipped steps; it now only clamps the reschedule delay.
+  `TriggerWebhookAsync` drops `Authorization`, `Cookie`, `X-Webhook-Key` and transport headers like the
+  dashboard endpoint (shared list: the new `TriggerHeaderPolicy` in Core).
+
+#### Read before upgrading
+
+- **Microsoft Teams:** `webhookHmacKey` must be the security token exactly as Teams shows it (base64). A
+  key that is not valid base64 is rejected as `KeyNotConfigured`.
+- **Rate limits:** a flow with several webhook triggers now gets one budget per trigger instead of one
+  shared budget — the effective flow-wide limit is the sum of its triggers' limits.
+- **Replay protection, body-only schemes:** a byte-identical delivery inside `2 × webhookReplayToleranceSeconds`
+  is rejected `409`, including a publisher's own manual redelivery of the same payload. An unsigned
+  timestamp header sent alongside such a signature no longer causes `409 skew_exceeded`.
+- **Webhook bodies:** a request declaring `application/x-www-form-urlencoded` is parsed as a form, not as
+  JSON, so `@triggerBody()` is the field object.
+- **Dashboards & alerts on step metrics:** `step_key` values of loop children change from `loop.N.child`
+  to `loop.child`; queries filtering on a specific iteration index must move to traces.
+- **Tests on FlowTestHost:** a run that ends `Skipped` now returns `RunStatus.Skipped` with
+  `TimedOut = false` (it used to return `Running` / `TimedOut = true`). Under `WithFastPolling()` a duplicate
+  delivery of the same step is now absorbed by the claim guard, as in production.
+- **Startup:** an out-of-range `webhookReplayToleranceSeconds` (negative, or above `int.MaxValue`) now
+  throws from `MapFlowDashboard`.
+
 ### Fixed
+
+- **A trigger or webhook body with invalid UTF-8 is a `400`, not a `500`.** `System.Text.Json` accepts invalid
+  UTF-8 inside a JSON string and only fails when the string is transcoded, so the request reached the engine
+  and failed there with `DecoderFallbackException`. The manual-trigger and webhook endpoints now validate the
+  body (`Utf8.IsValid`, allocation-free) before parsing it.
 
 - Includes the six storage fixes released in 1.34.3 (see the `[1.34.3]` section below): execute-once gates
   on cascade reset, race-safe SQL Server gates, case-insensitive trigger headers, PostgreSQL timeseries /
   synthetic-attempt trace, InMemory outputs retention.
+- **A rolling deploy that adds a step no longer skips it — or the run.** A replica that had not restarted
+  yet and was handed a step of the new manifest (dispatched by a restarted replica's continuation or
+  startup recovery) did not find it in its own manifest and recorded it `Skipped` ("Step metadata not
+  found."), so its dependents were cascade-skipped and the run could end `Skipped` with the new step never
+  run — while the in-memory runtime, which has no mixed-version window, ran the same step. The two
+  runtimes now agree: a worker handed a step its manifest does not contain compares its manifest with the
+  one registered in the flow store; if they differ it hands the step back for redelivery in 5 s without
+  claiming it (EventId 3020), and only a worker holding the registered manifest records the step `Skipped`
+  as removed (EventId 3021; 3022 when the store read fails and the step is handed back). The in-memory
+  runtime's startup recovery now also redelivers a lost queued step that the new manifest removed, instead
+  of leaving its ledger row to keep the run open for ever. Found by the stress harness (`deploy-mid-run`,
+  SQL Server + Hangfire ×2 vs SQL Server + InMemory).
+- **docs: [Versioning Flows](docs/articles/versioning.md) states the real in-flight behaviour.** It claimed
+  in-flight runs "do not retroactively gain" an appended step and "continue with the old graph" after an
+  insert — both false: a run is not pinned to the manifest it started under, and every decision uses the
+  latest manifest, so a new step whose prerequisites are satisfied runs, a new entry step included. The page
+  now gives the outcome for append / insert / rename / remove / new `runAfter` / new entry step, the
+  rolling-deploy rules, and which changes to drain for. Per-run manifest pinning is not provided.
 - **A failed dispatch no longer strands the step.** The engine records the dispatch-ledger row before
   handing the step to the runtime; when the runtime call threw (broker or Hangfire storage blip), the row
   stayed behind, and recovery skips ledgered steps, so the step never ran. The engine now releases the row
   before rethrowing (EventId 3011 if that release also fails). The `Pending` re-poll path still re-asserts
   it afterwards so the runtime's job retry can re-claim.
+- **A dispatch whose send never returned no longer strands the run for ever.** The stress harness
+  (crash-recovery, SQL Server + Service Bus emulator, 3 replicas, 600 runs, 6 hard kills) left 29 of 2,927
+  dispatch-ledger rows with no `DispatchJobId`, and 26 of those runs stayed `Running` for good. The ledger row
+  is written before the runtime send; a replica killed while the send is in flight — or a send stuck in the
+  Azure Service Bus client's retry loop (60 s `TryTimeout`, 3 retries, so up to about four minutes, logging
+  nothing until it gives up) — leaves the row unannotated, and startup recovery skips every ledgered key.
+  - New `FlowUnsentDispatchRecoveryHostedService`, registered by `AddFlowOrchestrator`, re-delivers such
+    steps on every replica: once at startup, then every half of the new
+    `FlowRunControlOptions.UnsentDispatchTimeout` (default 60 s; at most every 30 s; `null` turns it off).
+    A row qualifies when it has no job id, is older than the timeout, its run is `Running`, its step is not
+    claimed, and the step has no status row or a `Pending` one. EventIds 5040–5044.
+  - New `IFlowRunStore.LeaseUnsentDispatchesAsync` selects and re-stamps qualifying rows in one atomic
+    statement, so replicas never lease the same row twice inside one window. Implemented by SQL Server
+    (`UPDATE TOP … OUTPUT` with `READPAST`), PostgreSQL (`FOR UPDATE SKIP LOCKED`) and InMemory. **Custom
+    stores must implement it** — it has no default implementation, because a store that returned nothing would
+    keep the stranded-run bug.
+  - Schema: a filtered index `IX_FlowStepDispatches_Unsent` (SQL Server) / partial index
+    `ix_flow_step_dispatches_unsent` (PostgreSQL) on the dispatch time of rows with no job id, created by the
+    migrator. It holds only in-flight or stranded rows.
+  - The store cannot tell "never sent" from "sent, but the process died before the annotation", so both are
+    re-delivered: a duplicate is absorbed by the execution claim, a lost message strands the run. A send
+    still legitimately in flight after the timeout is also delivered twice — raise the timeout if your
+    broker is that slow.
+- **A dispatch that fails with `OperationCanceledException` now releases its ledger row too.** The release
+  added for broker failures excluded cancellation, but no token reaches the dispatcher, so a cancellation
+  there is the adapter's own timeout (`TaskCanceledException`); the row stayed behind and the step never ran.
+  Startup recovery's re-delivery of lost in-process steps now also annotates the row it re-sent.
 - **A signal delivered by a client that disconnects no longer strands the waiting step.** With
   OpenTelemetry on, `FlowSignalDispatcher` read the waiter for the wait-time metric with the request
   token *after* the signal was durably delivered; on SQL Server / PostgreSQL an aborted request threw
@@ -115,10 +641,244 @@ Implements `docs/benchmarks/run-search-2026-11-23.md`; the shipped code was re-m
 - **Startup recovery releases the ledger row when its own dispatch fails**, like the engine does: a
   recovery dispatch that threw after recording the row left it behind, so the next recovery skipped the
   step and it never ran.
+- **Startup recovery no longer hands the host's shutdown token to the dispatcher** (RFC 2.0 P-1(d)). Once
+  the ledger row is recorded, the dispatch and its annotation run with `CancellationToken.None`; a shutdown
+  landing in between used to abort the hand-off with the row already written.
 - Dashboard-persisted cron overrides are stripped of line breaks before they are logged by the cron sync.
+- **A `ForEach` loop step that two workers finish at the same moment completes once.** When the last two
+  iterations completed concurrently, both continuations saw "all iterations terminal", both wrote the loop
+  step `Succeeded`, and both published its `StepCompletedEvent` (RFC 2.0 P-1(a)). The settle is now a
+  compare-and-swap on `Running`; only the winner publishes and continues the graph. A run-control abandon
+  (`Skipped "Run is Cancelled."`) is conditional the same way, so it no longer overwrites a loop that just
+  settled. **Custom stores:** new `IFlowRunStore.TryCompleteRunningStepAsync` (no default implementation).
+- **A step claimed by a worker that died before recording its start no longer holds the run open for
+  ever** (RFC 2.0 S1b, P-1(b)). Three changes:
+  - A failed start (the run-control read or the start write) is no longer swallowed. The handler used to
+    run anyway with no status row; the engine now releases the step's claim and dispatch-ledger row and
+    rethrows, so the runtime retries the job (EventId 3012 if the release fails too).
+  - SQL Server and PostgreSQL write a blocked or `When`-skipped step (`RecordSkippedStepAsync`) in one
+    transaction instead of up to three, so a crash cannot leave the claim without its `Skipped` row.
+  - New `FlowRunControlOptions.OrphanedClaimTimeout` (default 60 s; `null` turns it off). A claim with no
+    status row older than that is released, with its ledger row, by startup recovery (which then
+    re-dispatches the step) and by the timeout sweep on a cancelled or timed-out run (EventId 3013). The
+    age is the only evidence the worker is gone: a worker stalled longer than the timeout between claim and
+    start can run the step twice, and a restart faster than the timeout leaves the claim to the next
+    startup. The lease redesign (RFC P3) closes both. **Custom stores:** new
+    `IFlowRunRuntimeStore.ReleaseOrphanedClaimsAsync` (no default implementation).
+- **Dashboard Retry no longer runs the step inside the HTTP request, and two concurrent retries no longer
+  run it twice** (RFC 2.0 S4, P-1(c)). The engine ran the handler inline while the endpoint answered "retry
+  enqueued", and the store's reset deleted the claim unconditionally, so a second retry deleted the first
+  one's claim and executed the handler again concurrently. The store reset is now a compare-and-swap on
+  `Failed` in one transaction (`IFlowRunStore.RetryStepAsync` returns `Task<bool>`), and the engine
+  dispatches the new attempt through `IStepDispatcher` with `CancellationToken.None` after the reset; if the
+  dispatch throws, the step is put back to `Failed` (EventId 3014 if that fails too).
+  **Read before upgrading:** only a `Failed` step can be retried — anything else gets `400` (engine:
+  `StepRetryOutcome.NotFailed`), a retry that loses the race gets `409` (`Conflict`), and
+  `IFlowOrchestrator.RetryStepAsync` returns a `StepRetryResult` instead of the step's result. The accepted
+  response body is unchanged. See [Migrating to 2.0](docs/articles/migrating-to-2.0.md#manual-retry-is-dispatched-and-accepts-only-a-failed-step).
+- **A run is no longer completed while a parallel join is ready but not yet dispatched.** Two branches
+  finishing at the same moment on different workers: the first continuation's completion gate re-read the
+  statuses, saw the second branch already terminal, found nothing in flight and closed the run, while the
+  second branch's continuation was still about to dispatch the join (observed 1 in 1,000 runs across 3
+  replicas in the stress harness). The gate now takes every check on one status snapshot and also asks the
+  graph planner about that snapshot: a step that is ready (or owed a cascade-skip row) keeps the run open,
+  and the gate dispatches it itself — the dispatch ledger absorbs the other worker's duplicate. The gate
+  also does two fewer store reads per completion than before (EventId 3015 if a continuation ever fails
+  to converge).
+- **Dependents of a `When`-skipped step are cascade-skipped.** The blocked-step pass ran once, before the
+  `When` evaluation, so a step needing `Succeeded` from a `When`-skipped step got no row at all: at top
+  level a `Skipped`-accepting step after it was silently dropped and the run closed `Skipped`; inside a
+  `ForEach` the iteration never settled and the run stayed `Running` for ever. The continuation now runs
+  the blocked-step, loop-advance and `When` passes to a fixpoint. Cascade-skips are transitive as a result
+  (`a` fails → `b` and `c` both `Skipped`, where `c` used to have no row); a retry still resets all of them.
+- **A malformed or out-of-range number in a `When` clause no longer strands the run.** `1.2.3` threw
+  `FormatException` from the parser, and a value outside the `decimal` range (`1e300` in a payload, or a
+  36-digit literal) threw `OverflowException` from the comparer. Neither is the `FlowExpressionException`
+  the engine turns into a `When`-skip, so the exception escaped after the upstream step was recorded
+  `Succeeded` and the run stayed `Running`. A malformed literal is now an authoring error (the step is
+  skipped with the message in its trace); an out-of-range number compares correctly, as `double`, against
+  the other operand. In-range numbers still compare as exact `decimal`.
+- **A `When` clause on a `ForEach` body step can reference a sibling in the same iteration.** The `When`
+  resolver did not get the step's runtime key, so `@steps('work').output.ok` on `loop.0.check` looked for a
+  top-level `work`, resolved `null`, and the step was silently skipped. It now resolves in the iteration's
+  scope, exactly like the step's inputs. New overload `WhenClauseEvaluator.EvaluateAsync(ctx, flow,
+  metadata, currentStepKey)`.
+- **A null-conditional in the middle of a path resolves.** Only a leading `?.` was stripped, so
+  `@triggerBody()?.order?.id` looked for a property named `order?` and resolved `null`. `?.` and `?[` are
+  now honoured anywhere in a trigger-body, step-output, `ForEach` source or poll-condition path.
+- **A retry with the same `Idempotency-Key` after a failed trigger starts the run.** The key was
+  registered before the run was started and its entry steps dispatched; when that dispatch threw (broker
+  blip, 5xx to the caller), the caller's retry with the same key was answered "duplicate" of a run that
+  never started work. When a trigger fails before dispatching or skipping any entry step, the engine now
+  cancel-latches the dead run (so a message the broker did accept is skipped, not run twice), completes it
+  `Failed` (so startup recovery does not resurrect it), and releases the key (EventId 1011 if that fails).
+  A trigger that already dispatched an entry keeps its key: that run is alive. **Custom stores:** new
+  `IFlowRunControlStore.ReleaseIdempotencyKeyAsync` (default: no-op returning `false`, which keeps the old
+  behaviour); it must delete the key only while it still maps to the given run.
+- **A renamed or removed cron trigger stops starting runs.** Recurring jobs outlive the code that made
+  them (Hangfire keeps `flow-{flowId}-{triggerKey}` in its storage; a Service Bus tick can already be in
+  the broker), and the trigger sync only walks the triggers the manifest still declares, so the old job
+  kept firing real runs on the old schedule. `TriggerByScheduleAsync` now rejects a key the manifest does
+  not declare as a `Cron` trigger: no run, a `null` run id, and a warning (EventId 1012) naming the job to
+  remove.
+- **A `WaitForSignal` that timed out can be retried.** The handler keeps the expired waiter as a
+  tombstone, and the retry reset the step but not the waiter, so the retried attempt failed at once with
+  the same "not received within Ns". Retry now removes a waiter that never received a signal (after the
+  durable reset, with `CancellationToken.None`), so the attempt registers a fresh wait.
+- **One run's stray `OperationCanceledException` no longer aborts the timeout sweep for every later
+  run.** The per-run catch excluded every `OperationCanceledException`, so an HTTP-backed store's client
+  timeout (`TaskCanceledException`) on one run escaped `EnforceDueTimeoutsAsync` and skipped the rest of
+  the tick. It is now logged per run (EventId 3005) like any other fault; only an OCE while the sweep's own
+  token is cancelled propagates.
+- **The timeout and retention sweeps survive an `OperationCanceledException` that is not a shutdown.**
+  Both loops let every `OperationCanceledException` escape their per-tick catch, not just shutdown, so a
+  store that cancels for its own reasons (an HTTP client timeout, a linked token) ended the sweep for the
+  life of the process — and, under the default `BackgroundServiceExceptionBehavior.StopHost`, stopped the
+  host. Only the stopping token's own cancellation ends them now; everything else is logged and retried on
+  the next tick (timeout sweep: new EventId 5010).
+- **InMemory runtime: a step scheduled with a delay that is already in the past is delivered at once.**
+  `ScheduleStepAsync` fed the delay straight to `Task.Delay` in a discarded task: `-1 ms` waited for ever,
+  any other negative value threw, and a delay above ~49.7 days threw — the step was never delivered while
+  its dispatch-ledger row said it was queued. A delay at or below zero now behaves like an immediate
+  enqueue (Hangfire / Service Bus parity), and very long delays are waited out in chunks.
+- **InMemory runtime: a rejected cron override no longer stops every cron job in the process.**
+  `PeriodicTimerRecurringTriggerDispatcher.RegisterOrUpdate` assigned the new cron to the live job before
+  parsing it, so a bad override (accepted by the dashboard, which only checked for blank) replaced the
+  job's schedule anyway; the job's next fire then threw from a `finally` block, out of the shared timer
+  loop, and no cron job fired again until restart. The cron is now parsed first — an unparseable one
+  throws `ArgumentException` and leaves the job on its previous schedule (Hangfire's contract) — and the
+  timer loop isolates each job, so one failing job cannot end it (EventIds 3120-3126).
+- **Dashboard `PUT /api/schedules/{jobId}/cron` answers `400` for an unparseable cron expression** and
+  persists nothing. It validates with Cronos (5- or 6-field), then schedules before persisting, so an
+  expression the runtime itself rejects is not left behind as an override either.
+- **An unparseable persisted cron override no longer aborts host startup.** `RecurringTriggerSync` passed
+  the persisted override straight to the runtime; its rejection propagated out of `FlowSyncHostedService`,
+  so every restart failed until the schedule-state row was edited by hand. A rejected override is now
+  logged (EventId 5011) and the job is registered on the manifest cron instead — the same for Hangfire,
+  the in-memory runtime and Service Bus, which all sync through it. Only a cron rejection
+  (`ArgumentException` / `FormatException`) is absorbed; an invalid manifest cron or any other runtime
+  failure still propagates.
+- **Startup recovery honours `When` clauses.** `When` is evaluated only when a step is scheduled, and
+  recovery dispatched a Ready step from its statuses alone — so a host that died between a parent's
+  completion and its continuation ran a child whose `When` was false on restart (a "refund when
+  amount > 100" step ran for an amount of 5). Recovery now evaluates the clause first and records the
+  step `Skipped` with the same reason and evaluation trace the continuation writes, records dependents
+  whose prerequisites can no longer be met as skipped, and repeats until the run is stable — then closes it
+  if nothing is left.
+  A `ForEach` child's clause is evaluated in its iteration's scope there too, so `@steps('sibling')` reads
+  this iteration's sibling, as in the continuation.
+- **One failed recovery dispatch no longer abandons the rest of the run.** A dispatch that threw ended the
+  run's recovery pass, so its other ready steps (and loop admissions) waited for the next restart. The
+  failure is now logged (EventId 5026), its ledger row released as before, and the remaining steps are
+  still dispatched; the run is not closed while a dispatch failed. Recovery logs moved to
+  `LoggerMessage` (EventIds 5020-5032).
+- **InMemory runtime over a durable store resumes runs that had queued work at shutdown.** Every
+  dispatched step gets a dispatch-ledger row in the store, but on the in-memory runtime the step itself
+  lives only in the process's channel (or a pending `Task.Delay` for a poll). After a restart recovery read
+  the surviving row as "still queued" and skipped the step, so the run stayed `Running` for ever — with
+  `UseInMemoryRuntime()` + `UseSqlServer()` / `UsePostgreSql()`, the combination the configuration guide
+  documents. New `IStepDispatcher.LosesQueuedStepsOnRestart` (default interface member, `false`; the
+  in-memory dispatcher reports `true`): recovery then re-enqueues every ledgered step that has not started
+  and is not claimed, including a `Pending` poll, without recording a second ledger row; the execution
+  claim still runs it once (EventIds 5033-5034). **Custom runtimes:** nothing to do for a durable one; a
+  dispatcher decorator must forward the property. Run one replica with this combination (see
+  [Configuration](docs/articles/configuration.md)).
+- **InMemory runtime: shutdown waits for the steps already running.** The runner fired each step on a
+  discarded task and stopped as soon as the channel loop saw the stopping token, so the host disposed the
+  DI scope and store connections a running step still needed for its final status write, claim release
+  or poll reschedule. The runner now signals the stopping token to running steps (as Hangfire does) and
+  waits for them to return, bounded by `HostOptions.ShutdownTimeout` (EventIds 3130-3131).
+- **Service Bus cron: a cron change, a pause and a restart no longer leave a second schedule running.**
+  Three defects in the self-perpetuating cron chain:
+  - The consumer computed the next tick from the cron carried in the message, and `RegisterOrUpdate` for an
+    existing job seeded a new chain without retiring the old one — after a dashboard cron change the flow
+    fired on **both** schedules for ever, across restarts.
+  - A tick already in the broker when its job was paused (a tick from before a restart, or a pause made on
+    another replica) still started a run: the consumer called the engine whether or not the job was
+    registered.
+  - Every restart seeded the next tick under the same message id as the tick the previous process left,
+    and duplicate detection (10-minute window) only absorbs it when the surviving tick was sent less than
+    10 minutes earlier — any schedule with a longer period fired twice after each restart.
+
+  Each job now runs exactly one chain, stamped with an epoch (new `chainEpoch` field on the cron message;
+  ticks written before 2.0 rank below any chain seeded since). The consumer drops a tick of an older chain,
+  a second copy of a tick that already fired, a tick for a job that is not registered, and — reading the
+  shared state — a trigger the manifest no longer declares, or a tick whose cron differs from the persisted
+  cron override (`PersistOverrides`; so a replica that has not yet seen a cron change does not fire the
+  replaced chain); a replica receiving a newer chain's tick follows it. A tick for a disabled flow, or for a
+  schedule paused on any replica, starts **no run but keeps its chain alive** (it schedules its successor):
+  ending the chain left a resume or re-enable that landed on another replica — one that still held the job,
+  saw "same cron, chain alive" and seeded nothing — with no chain at all, and the schedule never fired again
+  (2.0 stress run, pause on one replica and resume on another; the same held for disable and re-enable).
+  `Remove` (pause, disable) therefore forgets the job on that replica without cancelling its pending tick,
+  and registering a job a replica does not hold after startup peeks the cron queue and adopts the job's
+  live tick instead of seeding a second chain. A muted job is not listed by the inspector; the dashboard
+  shows it from the persisted pause state, as on every other runtime. Re-registering a job with its current cron schedules nothing; a different cron
+  cancels the known pending tick and seeds a newer chain. A recurring tick's message id carries its chain
+  epoch (`{flowId}:{triggerKey}:{fireAt}:{epochTicks}`; one-off fires keep `{flowId}:{triggerKey}:{fireAt}`),
+  so a new chain whose first tick falls on the instant of the replaced chain's pending tick — e.g. `* * * * *`
+  changed to `*/2 * * * *` at 12:19 with 12:20 already scheduled — is not discarded by duplicate detection;
+  the 2.0 pre-release stress run caught exactly that, the schedule going silent after a cron change. At startup the hub peeks the cron queue once and adopts the surviving tick instead of seeding
+  a duplicate, and the consumer starts processing only after `ApplicationStarted` (the startup sync has
+  registered every job). An unparseable cron now throws `ArgumentException` with the job untouched. Logs
+  moved to `LoggerMessage` (EventIds 3140-3155). **Read before upgrading:** saving a schedule again with
+  the cron it already runs no longer schedules an extra tick; a chain that died (its tick dead-lettered
+  after `MaxDeliveryCount` failures) is re-seeded by the next restart; a paused job, or a disabled flow's
+  cron trigger, keeps one scheduled message per tick on the cron queue (no run is started).
+- **Dashboard schedule Resume no longer fails on an override an older version persisted unvalidated.** It
+  falls back to the manifest cron and clears the override (as startup sync does), and registers with the
+  runtime before saving the state, instead of answering `500` on every attempt.
+- **Dashboard `PUT /api/schedules/{jobId}/cron` rejects malformed and oversized bodies.** A non-object
+  body (`[]`), a non-string `cronExpression` (`5`) or malformed JSON threw out of the endpoint (`500`);
+  they now answer `400`. The body cap (`MaxBodyBytes`) was checked only against `Content-Length`, so a
+  chunked body was read without any limit; the endpoint now uses the same streaming, capped reader as the
+  manual-trigger endpoint and answers `413`.
 
 ### Security
 
+- **A webhook signature scheme nothing can verify no longer turns signature checking off.** When a
+  trigger's `webhookSignatureScheme` named a scheme that is not built in, not registered with
+  `RegisterScheme` / `AddWebhookSignatureVerifier`, or was `Custom` with an unregistered
+  signed-payload strategy, the pipeline found no spec and skipped the signature gate, so unsigned
+  deliveries were accepted. Such a delivery is now rejected with `401` and reason
+  `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
+  EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
+  `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
+- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote.** Proxies append the
+  address they received the request from, so behind N trusted proxies the caller is the
+  `X-Forwarded-For` entry N positions from the right. The pipeline read the entry one further left,
+  which the caller supplies itself: with `UseForwardedHeaders(1)` behind a single proxy, any caller could
+  pick the address used for `webhookIpAllowList` / deny lists and per-IP rate limiting, and a caller
+  that sent no header got the proxy's address. The client is now `hops[^N]` (the same rule as ASP.NET
+  Core's `ForwardedHeadersMiddleware` with `ForwardLimit = N`); with fewer than N entries the socket
+  address is used. **Check your setting:** it must equal the number of proxies in front of the app. A
+  value raised by one to compensate for the old behaviour now trusts a caller-supplied entry.
+- **Read-only dashboard callers no longer see credentials whose names use separators.** Values are masked
+  for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
+  name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
+  `Ocp-Apim-Subscription-Key`, `pwd` and similar names were served unmasked in run detail, run lists,
+  flow manifests and the webhook delivery log. Names are now normalised first (case ignored; `-`, `_`, `.`
+  and spaces dropped), the list of name fragments is extended (API / subscription / function / access /
+  signing / account keys, private keys, SAS, session ids, JWTs, …), and the *Why skipped* trace of a
+  `When` condition that reads a secret-looking name no longer shows the resolved value. Masking is
+  deliberately broad (a name such as `tokenCount` is masked too); operators still see payloads as stored.
+- **The webhook delivery log records the outcome the sender received.** A delivery refused by the legacy
+  `webhookSecret` / `X-Webhook-Key` check (401) was logged in the Webhooks tab as accepted (200), because
+  the security pipeline wrote its "accepted" row before that check ran. The row is now written after the
+  final decision: a refused delivery is logged as rejected with status 401 and reason `secret_invalid`
+  (also the `webhook_rejected_total` reason tag), and EventId 4006 is logged. The write does not depend on the request's abort
+  token, so a sender that disconnects cannot keep a refusal out of the log.
+- **An over-long replay nonce no longer fails the webhook request.** With replay protection on and no
+  signature scheme, the nonce comes from the configured header (`webhookNonceHeader`) and was stored
+  verbatim; a value longer than the 256-character nonce column made SQL Server / PostgreSQL reject the
+  insert and the endpoint answered 500. A nonce over 256 characters is now registered as `sha256:` + its
+  hex SHA-256 (new `WebhookReplayNonceStorage` helper, used by the replay gate and all three built-in
+  stores), so a long nonce still gets replay protection. No schema change; shorter nonces are stored as
+  before.
+- **Approvals can be bound to the approver.** Before, any operator could deliver any signal of any run;
+  a `WaitForSignal` step can now restrict delivery to named roles or a policy (see *Added — per-signal
+  authorization* above). A restricted signal cannot be delivered with the shared Basic Auth account or
+  anonymously, and every delivery and refusal is logged with the caller's identity.
 - Includes the fix released in 1.34.4 (see the `[1.34.4]` section below): GHSA-5mx6-chp3-36c4, webhook
   replay protection judges freshness from the signed timestamp. Its "Read before upgrading" notes apply.
 - Includes the three fixes released in 1.34.2 (see the `[1.34.2]` section below):
@@ -375,6 +1135,9 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
 
 ### Performance
 
+- **Dashboard `Accept-Encoding` check no longer allocates.** It ran on every dashboard response (including
+  the 5 s auto-refresh polls) through `string.Split` + LINQ + substrings; it is now parsed over spans —
+  0 bytes per call, pinned by a test — with the same results (q=0 disable form, case, spacing).
 - **Four superlinear terms from #189 removed** (`docs/benchmarks/issue-189-superlinear-terms-2026-11-23.md`).
   - `RunTerminationClassifier` now classifies a run in one pass over a set of non-leaf keys. It used to
     scan every status for every status, which was O(n²); it is now O(n). At a 500-iteration loop the
@@ -389,6 +1152,90 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.7] - 2026-11-24
+
+Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
+[GHSA-jp6f-v95r-vrv7](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-jp6f-v95r-vrv7) (a webhook trigger naming an unknown signature scheme skipped
+signature verification) and [GHSA-mgh4-hgh4-7767](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-mgh4-hgh4-7767) (the webhook client address was
+read from the wrong `X-Forwarded-For` entry). Hosts that receive webhooks should upgrade; read the notes on
+startup validation and `ForwardedHeaderDepth` below.
+
+### Security
+
+- **A webhook signature scheme nothing can verify no longer turns signature checking off** ([GHSA-jp6f-v95r-vrv7](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-jp6f-v95r-vrv7)). When a
+  trigger's `webhookSignatureScheme` named a scheme that is not built in, not registered with
+  `RegisterScheme` / `AddWebhookSignatureVerifier`, or was `Custom` with an unregistered
+  signed-payload strategy, the pipeline found no spec and skipped the signature gate, so unsigned
+  deliveries were accepted. Such a delivery is now rejected with `401` and reason
+  `signature_scheme_unknown` in `Enforce` (recorded as a violation and let through in `Audit`;
+  EventId 4012), and `MapFlowDashboard` throws at startup for a registered flow that names one (in
+  `Enforce` and `Audit`). An empty value or `None` still means "unsigned"; `Off` is unchanged.
+- **`ForwardedHeaderDepth` selects the address the outermost trusted proxy wrote** ([GHSA-mgh4-hgh4-7767](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-mgh4-hgh4-7767)). Proxies append the
+  address they received the request from, so behind N trusted proxies the caller is the
+  `X-Forwarded-For` entry N positions from the right. The pipeline read the entry one further left,
+  which the caller supplies itself: with `UseForwardedHeaders(1)` behind a single proxy, any caller could
+  pick the address used for `webhookIpAllowList` / deny lists and per-IP rate limiting, and a caller
+  that sent no header got the proxy's address. The client is now `hops[^N]` (the same rule as ASP.NET
+  Core's `ForwardedHeadersMiddleware` with `ForwardLimit = N`); with fewer than N entries the socket
+  address is used. **Check your setting:** it must equal the number of proxies in front of the app. A
+  value raised by one to compensate for the old behaviour now trusts a caller-supplied entry.
+
+## [1.34.6] - 2026-11-24
+
+Security release for the 1.34 line (.NET 8 / 9 / 10), fixing
+[GHSA-q3pv-v2mj-hrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-q3pv-v2mj-hrmj):
+read-only dashboard views did not mask common API-key header and input names. Hosts that give read-only
+dashboard access (`flow-viewer`, or anonymous access outside `Development`) should upgrade.
+
+### Security
+
+- **Read-only dashboard callers no longer see credentials whose names use separators**
+  ([GHSA-q3pv-v2mj-hrmj](https://github.com/hoangsnowy/FlowOrchestrator/security/advisories/GHSA-q3pv-v2mj-hrmj)). Values are masked
+  for `flow-viewer` callers (and anonymous callers outside `Development`) by property / header name, but the
+  name was matched as written, so `X-Api-Key`, `api-key`, `private_key`, `hmac_key`, `x-functions-key`,
+  `Ocp-Apim-Subscription-Key`, `pwd` and similar names were served unmasked in run detail, run lists,
+  flow manifests and the webhook delivery log. Names are now normalised first (case ignored; `-`, `_`, `.`
+  and spaces dropped), the list of name fragments is extended (API / subscription / function / access /
+  signing / account keys, private keys, SAS, session ids, JWTs, …), and the *Why skipped* trace of a
+  `When` condition that reads a secret-looking name no longer shows the resolved value. Masking is
+  deliberately broad (a name such as `tokenCount` is masked too); operators still see payloads as stored.
+- **The webhook delivery log records the outcome the sender received.** A delivery refused by the legacy
+  `webhookSecret` / `X-Webhook-Key` check (401) was logged in the Webhooks tab as accepted (200), because
+  the security pipeline wrote its "accepted" row before that check ran. The row is now written after the
+  final decision: a refused delivery is logged as rejected with status 401 and reason `secret_invalid`
+  (also the `webhook_rejected_total` reason tag), and EventId 4006 is logged. The write does not depend on
+  the request's abort token, so a sender that disconnects cannot keep a refusal out of the log.
+- **An over-long replay nonce no longer fails the webhook request.** With replay protection on and no
+  signature scheme, the nonce comes from the configured header (`webhookNonceHeader`) and was stored
+  verbatim; a value longer than the 256-character nonce column made SQL Server / PostgreSQL reject the
+  insert and the endpoint answered 500. A nonce over 256 characters is now registered as `sha256:` + its
+  hex SHA-256 (new public `WebhookReplayNonceStorage` helper in `FlowOrchestrator.Core.Storage`, used by
+  the replay gate and all three built-in stores), so a long nonce still gets replay protection. No schema
+  change; shorter nonces are stored as before.
+
+## [1.34.5] - 2026-11-24
+
+Patch release for the 1.34 line (.NET 8 / 9 / 10). A `WaitForSignal` step could stay parked until its
+timeout when the client that delivered its signal disconnected mid-request — on SQL Server even without
+telemetry. Hosts that deliver signals over the dashboard endpoint should upgrade.
+
+### Fixed
+
+- **A signal delivered by a client that disconnects no longer strands the waiting step.** The dashboard
+  signal endpoint passes the request's abort token to `FlowSignalDispatcher`, which used it in two places
+  *after* the signal was durably delivered:
+  - the delivery write itself. SqlClient reports a cancel that lands while the `UPDATE` is in flight by
+    throwing even when the statement has committed, so on **SQL Server** the waiter was marked delivered
+    while the resume dispatch was never sent, and every retry of the signal was answered 409 "already
+    delivered";
+  - with OpenTelemetry on, the waiter read for the wait-time metric (SQL Server and PostgreSQL).
+
+  Either way the `WaitForSignal` step stayed parked until its timeout (up to 24 h). Both now use
+  `CancellationToken.None`, like the resume dispatch. Measured with the 2.0 stress harness (client
+  disconnects at random points, then retries): SQL Server + Hangfire 127 of 630 runs stranded before,
+  **0** after; the "unhandled exception" error logs from those aborts are gone too. Same failure class
+  as 1.26.1 and #188.
 
 ## [1.34.4] - 2026-11-23
 

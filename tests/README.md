@@ -10,6 +10,10 @@ Tests are split into three categories, each with its own project layout, CI cade
 | **Integration** | `tests/integration/` | `*.IntegrationTests` | Every PR + push to main | Hits real DB via Testcontainers, `WebApplicationFactory`, Hangfire in-memory, or other real components. Docker required locally. |
 | **Regression** | `tests/regression/` | `FlowOrchestrator.RegressionTests` | Nightly (03:00 UTC) + push to `main` + `workflow_dispatch` | Timing-sensitive (cron, polling, timeout) and concurrency stress (64-task gate contests). Has its own `xunit.runner.json` with parallelization disabled. |
 
+Outside the three categories, `tests/upgrade/FlowOrchestrator.UpgradeRehearsal/` rehearses the 1.34 → 2.0
+upgrade end to end against the released 1.34.x packages and real databases (Docker). It is a script, not a
+test project, and runs before every 2.0 release — see its [README](upgrade/FlowOrchestrator.UpgradeRehearsal/README.md).
+
 ## Picker
 
 When you write a new test, pick the project this way:

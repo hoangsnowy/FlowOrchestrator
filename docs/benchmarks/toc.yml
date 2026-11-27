@@ -1,3 +1,6 @@
+- name: Viewer redaction — normalised secret names (2026-11-24)
+  href: viewer-secret-name-normalisation-2026-11-24.md
+
 - name: "#189 superlinear terms — classifier, planner, ledger, search (2026-11-23)"
   href: issue-189-superlinear-terms-2026-11-23.md
 
@@ -33,3 +36,9 @@
 
 - name: Run search at production scale + FlowEvents cost (2026-11-23)
   href: run-search-2026-11-23.md
+
+- name: Bounded step_key metric tag (2026-11-24)
+  href: metric-step-key-2026-11-24.md
+
+- name: "#189 P0-1 — frontier reads instead of the whole-run status map (2026-11-27)"
+  href: issue-189-p0-1-frontier-reads-2026-11-27.md

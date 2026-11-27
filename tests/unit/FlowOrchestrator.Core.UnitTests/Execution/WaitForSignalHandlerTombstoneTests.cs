@@ -77,7 +77,7 @@ public sealed class WaitForSignalHandlerTombstoneTests
     {
         // Arrange - the iteration parked, the signal was delivered, and the step already ran to
         // Succeeded. A poll queued before the delivery now arrives late.
-        var store = new InMemoryFlowSignalStore();
+        var store = new InMemoryFlowSignalStore(new FixedClock(Now));
         var handler = new WaitForSignalHandler(store, new FixedClock(Now));
         var runId = Guid.NewGuid();
         var step = new SignalStepInstance(
@@ -123,24 +123,79 @@ public sealed class WaitForSignalHandlerTombstoneTests
     }
 
     [Fact]
-    public async Task DeliveryAfterExpiryButBeforeTheTimeoutPoll_winsOverTheExpiryBranch()
+    public async Task DeliveryBeforeExpiry_observedByAPollAfterTheDeadline_stillSucceeds()
     {
-        // Arrange - the deadline lapsed, but the signal lands before the timeout poll runs.
-        var store = new InMemoryFlowSignalStore();
+        // Arrange - the signal lands inside the window; the step only runs again after the deadline
+        // (a resume nudge delayed under load, or the timeout poll itself).
+        var store = new InMemoryFlowSignalStore(new FixedClock(Now.AddSeconds(4)));
         var runId = Guid.NewGuid();
         var step = new SignalStepInstance(
             "scan.0.wait", new WaitForSignalInput { SignalName = "robot_goto", TimeoutSeconds = 5 });
 
         await new WaitForSignalHandler(store, new FixedClock(Now)).ExecuteAsync(Context(runId), Flow(), step);
-        await store.DeliverSignalAsync(runId, "robot_goto", "{\"Location\":\"LATE\"}");
+        var delivery = await store.DeliverSignalAsync(runId, "robot_goto", "{\"Location\":\"IN-TIME\"}");
 
         // Act
         var result = (StepResult)(await new WaitForSignalHandler(store, new FixedClock(Now.AddSeconds(10)))
             .ExecuteAsync(Context(runId), Flow(), step))!;
 
-        // Assert - the delivered branch is evaluated before the expiry branch, so a signal that
-        // beat the poll is honoured rather than discarded.
+        // Assert - the delivered branch is evaluated before the expiry branch, so a signal that was
+        // received within the timeout is honoured even when the step observes it after the deadline.
+        Assert.Equal(SignalDeliveryStatus.Delivered, delivery.Status);
         Assert.Equal(StepStatus.Succeeded, result.Status);
+    }
+
+    [Fact]
+    public async Task DeliveryAfterExpiryButBeforeTheTimeoutPoll_isRefused_andTheStepTimesOut()
+    {
+        // Arrange - the deadline lapsed and the signal lands before the timeout poll runs (the stress
+        // harness's "signal after expiry" scenario). The store and handler share one clock, as DI wires them.
+        var store = new InMemoryFlowSignalStore(new FixedClock(Now.AddSeconds(5.5)));
+        var runId = Guid.NewGuid();
+        var step = new SignalStepInstance(
+            "scan.0.wait", new WaitForSignalInput { SignalName = "robot_goto", TimeoutSeconds = 5 });
+
+        await new WaitForSignalHandler(store, new FixedClock(Now)).ExecuteAsync(Context(runId), Flow(), step);
+
+        // Act
+        var delivery = await store.DeliverSignalAsync(runId, "robot_goto", "{\"Location\":\"LATE\"}");
+        var result = (StepResult)(await new WaitForSignalHandler(store, new FixedClock(Now.AddSeconds(6)))
+            .ExecuteAsync(Context(runId), Flow(), step))!;
+
+        // Assert - the late signal is refused and never resumes the step: it fails with the timeout reason.
+        Assert.Equal(SignalDeliveryStatus.Expired, delivery.Status);
+        Assert.Equal(StepStatus.Failed, result.Status);
+        Assert.Contains("not received within 5s", result.FailedReason);
+        Assert.Null(result.Result);
+    }
+
+    [Fact]
+    public async Task PayloadRecordedAtOrAfterTheDeadline_failsTheStep_insteadOfSucceedingWithIt()
+    {
+        // Arrange - a waiter row whose DeliveredAt is past its ExpiresAt: written by a pre-fix replica during
+        // a rolling upgrade, or by a custom store that ignores ExpiresAt.
+        var runId = Guid.NewGuid();
+        var store = Substitute.For<IFlowSignalStore>();
+        store.GetWaiterAsync(runId, "approve", Arg.Any<CancellationToken>()).Returns(new ValueTask<FlowSignalWaiter?>(new FlowSignalWaiter
+        {
+            RunId = runId,
+            StepKey = "approve",
+            SignalName = "approval",
+            CreatedAt = Now,
+            ExpiresAt = Now.AddSeconds(5),
+            DeliveredAt = Now.AddSeconds(5),
+            PayloadJson = "{\"approved\":true}"
+        }));
+        var step = new SignalStepInstance("approve", new WaitForSignalInput { SignalName = "approval", TimeoutSeconds = 5 });
+
+        // Act
+        var result = (StepResult)(await new WaitForSignalHandler(store, new FixedClock(Now.AddSeconds(6)))
+            .ExecuteAsync(Context(runId), Flow(), step))!;
+
+        // Assert
+        Assert.Equal(StepStatus.Failed, result.Status);
+        Assert.Contains("not received within 5s", result.FailedReason);
+        Assert.Null(result.Result);
     }
 
     [Fact]

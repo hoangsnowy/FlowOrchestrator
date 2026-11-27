@@ -25,6 +25,31 @@ public static class LogEvents
     /// <summary>A run start could not be persisted to the run store. Engine continues; log is informational.</summary>
     public static readonly EventId RunStartTrackingFailed = new(1003, nameof(RunStartTrackingFailed));
 
+    /// <summary>
+    /// A trigger failed before dispatching any step and the compensation that frees its idempotency key
+    /// (cancel and fail the dead run, release the key) failed too.
+    /// </summary>
+    public static readonly EventId IdempotencyKeyReleaseFailed = new(1011, nameof(IdempotencyKeyReleaseFailed));
+
+    /// <summary>
+    /// A scheduled trigger named a key the flow's manifest does not declare as a cron trigger (an orphaned
+    /// recurring job from a renamed or removed trigger); no run was started.
+    /// </summary>
+    public static readonly EventId StaleScheduleRejected = new(1012, nameof(StaleScheduleRejected));
+
+    /// <summary>
+    /// A duplicate trigger took over an idempotency key whose registration was older than
+    /// <c>FlowRunControlOptions.IdempotencyReservationTimeout</c> and whose run never started work (the
+    /// trigger that registered it died before creating the run); the retry starts a new run.
+    /// </summary>
+    public static readonly EventId IdempotencyReservationTakenOver = new(1013, nameof(IdempotencyReservationTakenOver));
+
+    /// <summary>
+    /// After taking over a stale idempotency reservation, completing the abandoned run as <c>Failed</c>
+    /// failed; the run's cancel latch is already set, so none of its steps can execute.
+    /// </summary>
+    public static readonly EventId StaleReservationRunCompletionFailed = new(1014, nameof(StaleReservationRunCompletionFailed));
+
     /// <summary>A step transitioned to <c>Running</c>.</summary>
     public static readonly EventId StepStarted = new(2000, nameof(StepStarted));
 
@@ -97,4 +122,40 @@ public static class LogEvents
     /// claim release that follows failed too; the step stays claimed until the run timeout sweep.
     /// </summary>
     public static readonly EventId ClaimReleaseAfterFailedHandOffFailed = new(3010, nameof(ClaimReleaseAfterFailedHandOffFailed));
+
+    /// <summary>
+    /// A step's start (run-control read or start write) threw after it was claimed, and the best-effort
+    /// release of its claim and dispatch-ledger row failed too; recovery releases the orphaned claim later.
+    /// </summary>
+    public static readonly EventId ReleaseAfterFailedStartFailed = new(3012, nameof(ReleaseAfterFailedStartFailed));
+
+    /// <summary>
+    /// Recovery or the timeout sweep released claims that had no step status row and were older than
+    /// <c>FlowRunControlOptions.OrphanedClaimTimeout</c> (a worker died between claim and start).
+    /// </summary>
+    public static readonly EventId OrphanedClaimsReleased = new(3013, nameof(OrphanedClaimsReleased));
+
+    /// <summary>
+    /// A manual retry was accepted but its dispatch threw, and moving the step back to <c>Failed</c> failed
+    /// too; the step stays <c>Running</c> with nothing queued.
+    /// </summary>
+    public static readonly EventId RetryRestoreFailed = new(3014, nameof(RetryRestoreFailed));
+
+    /// <summary>
+    /// A graph continuation went round more passes than the manifest can need without converging, and
+    /// left the run open rather than complete it while steps were still ready or owed a skip row.
+    /// </summary>
+    public static readonly EventId ContinuationPassLimitReached = new(3015, nameof(ContinuationPassLimitReached));
+
+    /// <summary>
+    /// A delivery took over a step whose execution lease had expired without a terminal status: the worker
+    /// that held it died or lost its store, and the step runs again.
+    /// </summary>
+    public static readonly EventId StepLeaseTakenOver = new(3030, nameof(StepLeaseTakenOver));
+
+    /// <summary>An attempt found that another worker had taken its expired lease over; its outcome was discarded.</summary>
+    public static readonly EventId StepLeaseLost = new(3031, nameof(StepLeaseLost));
+
+    /// <summary>The lease of a loop step parked on its barrier could not be made permanent.</summary>
+    public static readonly EventId StepLeasePinFailed = new(3032, nameof(StepLeasePinFailed));
 }

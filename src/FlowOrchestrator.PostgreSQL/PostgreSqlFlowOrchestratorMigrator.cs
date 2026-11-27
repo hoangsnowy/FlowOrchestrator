@@ -18,6 +18,16 @@ namespace FlowOrchestrator.PostgreSQL;
 /// the next start. Without <c>pg_trgm</c> (not allow-listed on Azure Database for PostgreSQL, or no
 /// privilege) every trigram step is skipped with a warning and search runs the same SQL as a
 /// sequential scan.</para>
+/// <para><b>Open-step index (2.0, #189 P0-1).</b> <c>ix_flow_steps_run_id_open</c>, a partial index on the
+/// Running and Pending rows of <c>flow_steps</c>, is built the same way — <c>CONCURRENTLY</c>, in the background,
+/// before the run-search index, with the same in-flight detection and <c>INVALID</c>-leftover repair. Until it
+/// exists the completion gate's open-row check reads each run's rows through the primary key: correct, only
+/// slower.</para>
+/// <para><b>Starting beside running hosts.</b> Every index and column statement is guarded by a catalog check,
+/// so a migration on an up-to-date schema requests no lock on any table. A second replica (or a restarted
+/// host) can therefore start during a rolling deployment, or while the run-search index is still being built,
+/// without stalling writers or deadlocking with the build; and it leaves another host's in-flight build
+/// alone instead of dropping and rebuilding it.</para>
 /// <para>The <c>flow_steps.output_json</c> trigram index stays on by default: no measurable write cost at
 /// p50 and 200x faster deep search in the default window, at about half the size of the step table.</para>
 /// </remarks>
@@ -51,8 +61,16 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
         _runSearchIndexRequested = runSearchIndexRequested;
     }
 
-    /// <summary>The background build of the run-search index, if one was started; completes when it ends.</summary>
-    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
+    /// <summary>
+    /// The background (<c>CONCURRENTLY</c>) build of the open-step index and, with <c>pg_trgm</c>, the run-search
+    /// index, started by <see cref="StartAsync"/>, or a completed task when none was started. Completes when the build ends; it never faults (a failed build is
+    /// logged and retried on the next start).
+    /// </summary>
+    /// <remarks>
+    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not bulk-load
+    /// <c>flow_runs</c> while the build is still running.
+    /// </remarks>
+    public Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>Applies the schema; starts the background run-search index build when <c>pg_trgm</c> is available.</summary>
     /// <param name="cancellationToken">Host start-up cancellation.</param>
@@ -70,8 +88,9 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            if (await TryCreateTrigramIndexesAsync(conn, cancellationToken).ConfigureAwait(false))
-                _backgroundIndexBuild = Task.Run(() => BuildRunSearchIndexInBackgroundAsync(_stopping.Token), CancellationToken.None);
+            // The open-step index is always built in the background; the run-search index only with pg_trgm.
+            var trigram = await TryCreateTrigramIndexesAsync(conn, cancellationToken).ConfigureAwait(false);
+            _backgroundIndexBuild = Task.Run(() => BuildIndexesInBackgroundAsync(trigram, _stopping.Token), CancellationToken.None);
             if (_runSearchIndexRequested)
                 LogTokenIndexNotSupported();
 
@@ -133,77 +152,229 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     }
 
     /// <summary>
-    /// Builds <c>ix_flow_runs_run_search_trgm</c> with <c>CREATE INDEX CONCURRENTLY</c>, first dropping an
-    /// <c>INVALID</c> leftover of an interrupted build. Each statement runs as its own command:
-    /// <c>CONCURRENTLY</c> refuses to run inside a (multi-statement, implicit) transaction.
+    /// The background work started by <see cref="StartAsync"/>: the open-step index first (small, and on the
+    /// engine's per-completion path), then the run-search index when <c>pg_trgm</c> is available. One after the
+    /// other, because a <c>CREATE INDEX CONCURRENTLY</c> waits for every older snapshot in the database —
+    /// including another concurrent build's.
     /// </summary>
-    private async Task BuildRunSearchIndexInBackgroundAsync(CancellationToken cancellationToken)
+    private async Task BuildIndexesInBackgroundAsync(bool runSearch, CancellationToken cancellationToken)
+    {
+        var openStep = await BuildIndexConcurrentlyAsync(OpenStepIndex, cancellationToken).ConfigureAwait(false);
+        switch (openStep)
+        {
+            case ConcurrentBuildOutcome.Built:
+                LogOpenStepIndexBuilt();
+                break;
+            case ConcurrentBuildOutcome.InFlightElsewhere:
+                LogOpenStepIndexBuildInFlightElsewhere();
+                break;
+            case ConcurrentBuildOutcome.Failed failed:
+                // HasRunningOrPendingStepAsync stays correct without it, only slower; the next start retries.
+                LogOpenStepIndexBuildFailed(failed.Exception);
+                break;
+            case ConcurrentBuildOutcome.Cancelled:
+                return;
+        }
+
+        if (!runSearch)
+            return;
+
+        switch (await BuildIndexConcurrentlyAsync(RunSearchIndex, cancellationToken).ConfigureAwait(false))
+        {
+            case ConcurrentBuildOutcome.Built:
+                LogRunSearchIndexBuilt();
+                break;
+            case ConcurrentBuildOutcome.InFlightElsewhere:
+                LogRunSearchIndexBuildInFlightElsewhere();
+                break;
+            case ConcurrentBuildOutcome.Failed failed:
+                // E.g. another replica building it at the same moment. Search keeps working (sequential scan).
+                LogRunSearchIndexFailed(failed.Exception);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Builds <paramref name="index"/> with <c>CREATE INDEX CONCURRENTLY</c>, first dropping an <c>INVALID</c>
+    /// leftover of an interrupted build. Each statement runs as its own command: <c>CONCURRENTLY</c> refuses to
+    /// run inside a (multi-statement, implicit) transaction.
+    /// </summary>
+    /// <remarks>
+    /// An index that another host is still building is <c>INVALID</c> too, exactly like a leftover. Treating
+    /// it as one dropped the other host's build once it finished and built the index a second time (twice
+    /// the work on a large table, no index in between), so a build in flight on another backend is detected
+    /// through <c>pg_stat_progress_create_index</c> and left alone. That view shows the relation of another
+    /// role's session only to members of <c>pg_read_all_stats</c>; hosts that connect as different roles
+    /// without it fall back to drop-and-rebuild, which is still correct.
+    /// </remarks>
+    private async Task<ConcurrentBuildOutcome> BuildIndexConcurrentlyAsync(ConcurrentIndex index, CancellationToken cancellationToken)
     {
         try
         {
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
+            await using (var inFlight = conn.CreateCommand())
+            {
+                inFlight.CommandText = IndexBuildInFlightSql;
+                inFlight.Parameters.AddWithValue("table", index.Table);
+                inFlight.Parameters.AddWithValue("index", index.Name);
+                if (await inFlight.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
+                    return ConcurrentBuildOutcome.InFlightElsewhere.Instance;
+            }
+
             bool? valid;
             await using (var probe = conn.CreateCommand())
             {
-                probe.CommandText = RunSearchIndexStateSql;
+                probe.CommandText = IndexStateSql;
+                probe.Parameters.AddWithValue("index", index.Name);
                 valid = await probe.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as bool?;
             }
 
             if (valid == true)
-                return;
+                return ConcurrentBuildOutcome.AlreadyValid.Instance;
 
             if (valid == false)
             {
                 await using var drop = conn.CreateCommand();
-                drop.CommandText = "DROP INDEX CONCURRENTLY IF EXISTS ix_flow_runs_run_search_trgm";
+                drop.CommandText = $"DROP INDEX CONCURRENTLY IF EXISTS {index.Name}";
                 drop.CommandTimeout = 0;
                 await drop.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            LogBuildingRunSearchIndex();
+            index.LogBuilding(this);
             await using (var build = conn.CreateCommand())
             {
-                build.CommandText = CreateRunSearchIndexSql;
+                build.CommandText = index.CreateSql;
                 build.CommandTimeout = 0;
                 await build.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            // An expression index has no statistics until ANALYZE: without them the planner estimates ~20
-            // matches for any term and bitmap-scans + sorts thousands of rows for a common one (measured
-            // 32-40 ms instead of ~1 ms). ANALYZE samples the table and blocks neither reads nor writes.
-            await using (var analyze = conn.CreateCommand())
+            if (index.AnalyzeAfterBuild)
             {
-                analyze.CommandText = "ANALYZE flow_runs";
+                // An expression index has no statistics until ANALYZE: without them the planner estimates ~20
+                // matches for any term and bitmap-scans + sorts thousands of rows for a common one (measured
+                // 32-40 ms instead of ~1 ms). ANALYZE samples the table and blocks neither reads nor writes.
+                await using var analyze = conn.CreateCommand();
+                analyze.CommandText = $"ANALYZE {index.Table}";
                 analyze.CommandTimeout = 0;
                 await analyze.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            LogRunSearchIndexBuilt();
+            return ConcurrentBuildOutcome.Built.Instance;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Host stopping: the index is left INVALID and rebuilt on the next start.
+            return ConcurrentBuildOutcome.Cancelled.Instance;
         }
         catch (NpgsqlException ex)
         {
-            // E.g. another replica building it at the same moment. Search keeps working (sequential scan).
-            LogRunSearchIndexFailed(ex);
+            return new ConcurrentBuildOutcome.Failed(ex);
         }
     }
 
-    /// <summary>No row when the index does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
+    /// <summary>An index built <c>CONCURRENTLY</c> in the background rather than in the migration batch.</summary>
+    /// <param name="Name">Index name.</param>
+    /// <param name="Table">Table it is built on.</param>
+    /// <param name="CreateSql">The <c>CREATE INDEX CONCURRENTLY IF NOT EXISTS</c> statement.</param>
+    /// <param name="AnalyzeAfterBuild">Run <c>ANALYZE</c> on the table afterwards (expression indexes need it).</param>
+    /// <param name="LogBuilding">Logs that the build starts.</param>
+    private sealed record ConcurrentIndex(
+        string Name,
+        string Table,
+        string CreateSql,
+        bool AnalyzeAfterBuild,
+        Action<PostgreSqlFlowOrchestratorMigrator> LogBuilding);
+
+    /// <summary>How one background build ended.</summary>
+    private abstract record ConcurrentBuildOutcome
+    {
+        public sealed record Built : ConcurrentBuildOutcome { public static readonly Built Instance = new(); }
+
+        public sealed record AlreadyValid : ConcurrentBuildOutcome { public static readonly AlreadyValid Instance = new(); }
+
+        public sealed record InFlightElsewhere : ConcurrentBuildOutcome { public static readonly InFlightElsewhere Instance = new(); }
+
+        public sealed record Cancelled : ConcurrentBuildOutcome { public static readonly Cancelled Instance = new(); }
+
+        public sealed record Failed(NpgsqlException Exception) : ConcurrentBuildOutcome;
+    }
+
+    // Properties, not fields: CreateRunSearchIndexSql is a static field declared further down, and a field
+    // initialiser here would read it before it is assigned.
+    private static ConcurrentIndex RunSearchIndex => new(
+        "ix_flow_runs_run_search_trgm", "flow_runs", CreateRunSearchIndexSql, AnalyzeAfterBuild: true,
+        static migrator => migrator.LogBuildingRunSearchIndex());
+
+    private static ConcurrentIndex OpenStepIndex => new(
+        "ix_flow_steps_run_id_open", "flow_steps", CreateOpenStepIndexSql, AnalyzeAfterBuild: false,
+        static migrator => migrator.LogBuildingOpenStepIndex());
+
+    /// <summary>No row when the run-search index does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
     internal const string RunSearchIndexStateSql = """
         SELECT i.indisvalid FROM pg_index AS i
         JOIN pg_class AS c ON c.oid = i.indexrelid
         WHERE c.relname = 'ix_flow_runs_run_search_trgm' AND c.relnamespace = to_regnamespace(current_schema())
         """;
 
+    /// <summary>No row when the open-step index does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
+    internal const string OpenStepIndexStateSql = """
+        SELECT i.indisvalid FROM pg_index AS i
+        JOIN pg_class AS c ON c.oid = i.indexrelid
+        WHERE c.relname = 'ix_flow_steps_run_id_open' AND c.relnamespace = to_regnamespace(current_schema())
+        """;
+
+    /// <summary>No row when index <c>@index</c> does not exist; otherwise its <c>pg_index.indisvalid</c>.</summary>
+    private const string IndexStateSql = """
+        SELECT i.indisvalid FROM pg_index AS i
+        JOIN pg_class AS c ON c.oid = i.indexrelid
+        WHERE c.relname = @index AND c.relnamespace = to_regnamespace(current_schema())
+        """;
+
+    /// <summary>
+    /// <see langword="true"/> while another backend runs <c>CREATE INDEX CONCURRENTLY</c> for index <c>@index</c>
+    /// on table <c>@table</c>; <c>index_relid = 0</c> covers the instant before that build has created its
+    /// catalog entry.
+    /// </summary>
+    private const string IndexBuildInFlightSql = """
+        SELECT EXISTS (
+            SELECT 1 FROM pg_stat_progress_create_index AS p
+            WHERE p.datid = (SELECT oid FROM pg_database WHERE datname = current_database())
+              AND p.pid <> pg_backend_pid()
+              AND p.command = 'CREATE INDEX CONCURRENTLY'
+              AND p.relid = to_regclass(@table)
+              AND (p.index_relid = 0 OR p.index_relid = to_regclass(@index)))
+        """;
+
     /// <summary>The run-search expression index; the expression must stay identical to the query's.</summary>
     internal static readonly string CreateRunSearchIndexSql =
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_runs_run_search_trgm ON flow_runs USING gin (("
         + PostgreSqlRunSearchCommandBuilder.RunSearchExpression(string.Empty) + ") gin_trgm_ops)";
+
+    /// <summary>
+    /// The open-step partial index behind <see cref="PostgreSqlFlowRunStore.HasRunningOrPendingStepAsync"/>
+    /// (#189 P0-1): only the Running and Pending rows, so the completion gate's open-row check costs O(open steps).
+    /// </summary>
+    /// <remarks>
+    /// Built <c>CONCURRENTLY</c> in the background, never in the migration batch: <c>flow_steps</c> is the hottest
+    /// table, and a plain <c>CREATE INDEX</c> holds SHARE on it — blocking every step write — for the whole build
+    /// of an upgraded 1.x table. The predicate must stay identical to the store's query.
+    /// </remarks>
+    internal const string CreateOpenStepIndexSql =
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_flow_steps_run_id_open ON flow_steps (run_id) INCLUDE (step_key) WHERE status IN ('Running', 'Pending')";
+
+    [LoggerMessage(EventId = 7216, Level = LogLevel.Information, Message = "Building the open-step index ix_flow_steps_run_id_open concurrently in the background; the completion gate's open-row check reads each run's rows until it exists.")]
+    private partial void LogBuildingOpenStepIndex();
+
+    [LoggerMessage(EventId = 7217, Level = LogLevel.Information, Message = "Open-step index ix_flow_steps_run_id_open built.")]
+    private partial void LogOpenStepIndexBuilt();
+
+    [LoggerMessage(EventId = 7218, Level = LogLevel.Warning, Message = "Open-step index build failed; the completion gate stays correct, only slower, and the next start retries.")]
+    private partial void LogOpenStepIndexBuildFailed(Exception exception);
+
+    [LoggerMessage(EventId = 7219, Level = LogLevel.Information, Message = "Another host is building the open-step index; this host leaves the build to it.")]
+    private partial void LogOpenStepIndexBuildInFlightElsewhere();
 
     [LoggerMessage(EventId = 7211, Level = LogLevel.Information, Message = "Building the run-search trigram index concurrently in the background; quick search scans flow_runs until it exists.")]
     private partial void LogBuildingRunSearchIndex();
@@ -214,10 +385,15 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     [LoggerMessage(EventId = 7213, Level = LogLevel.Warning, Message = "Run-search trigram index build failed; quick search keeps working as a scan and the next start retries.")]
     private partial void LogRunSearchIndexFailed(Exception exception);
 
+    [LoggerMessage(EventId = 7215, Level = LogLevel.Information, Message = "Another host is building the run-search trigram index; this host leaves the build to it.")]
+    private partial void LogRunSearchIndexBuildInFlightElsewhere();
+
     [LoggerMessage(EventId = 7214, Level = LogLevel.Warning, Message = "UseRunSearchIndex() is not implemented on PostgreSQL and is ignored: deep search uses the pg_trgm indexes on flow_steps.")]
     private partial void LogTokenIndexNotSupported();
 
-    private const string MigrationSql = """
+    // Every CREATE INDEX / ADD COLUMN below goes through EnsureIndex / EnsureColumn: see EnsureIndex for why a
+    // plain IF NOT EXISTS is not enough. CREATE TABLE IF NOT EXISTS takes no lock on an existing table.
+    internal static readonly string MigrationSql = $"""
         CREATE TABLE IF NOT EXISTS flow_definitions (
             id            UUID         NOT NULL PRIMARY KEY,
             name          VARCHAR(256) NOT NULL,
@@ -284,6 +460,23 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (run_id, step_key)
         );
 
+        -- Execution leases (2.0, RFC C1): the claim row says "taken", this row says by whom, until when, and under
+        -- which fence. A claim without a lease row is permanent (skip claims, claims written before 2.0).
+        -- expires_at is NULL once the lease is no longer live (released, pinned, or its step terminal); the row
+        -- is kept so the fence keeps rising across attempts.
+        CREATE TABLE IF NOT EXISTS flow_step_leases (
+            run_id         UUID         NOT NULL,
+            step_key       VARCHAR(256) NOT NULL,
+            fence          BIGINT       NOT NULL,
+            owner          VARCHAR(128) NOT NULL,
+            expires_at     TIMESTAMPTZ  NULL,
+            redelivered_at TIMESTAMPTZ  NULL,
+            PRIMARY KEY (run_id, step_key)
+        );
+
+        -- Live leases only, for the expired-lease sweep: stays as small as the number of steps executing.
+        {EnsureIndex("flow_step_leases", "ix_flow_step_leases_live", "(expires_at) WHERE expires_at IS NOT NULL")}
+
         CREATE TABLE IF NOT EXISTS flow_run_controls (
             run_id                  UUID         NOT NULL PRIMARY KEY,
             flow_id                 UUID         NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
@@ -305,7 +498,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (flow_id, trigger_key, idempotency_key)
         );
 
-        CREATE INDEX IF NOT EXISTS ix_flow_idempotency_keys_run_id ON flow_idempotency_keys (run_id);
+        {EnsureIndex("flow_idempotency_keys", "ix_flow_idempotency_keys_run_id", "(run_id)")}
 
         CREATE TABLE IF NOT EXISTS flow_step_dispatches (
             run_id          UUID         NOT NULL,
@@ -314,6 +507,10 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             dispatch_job_id VARCHAR(128) NULL,
             PRIMARY KEY (run_id, step_key)
         );
+
+        -- Rows whose runtime hand-off never returned (no job id), for the unsent-dispatch sweep. Partial, so it
+        -- holds only in-flight or stranded dispatches and stays tiny however large the ledger grows.
+        {EnsureIndex("flow_step_dispatches", "ix_flow_step_dispatches_unsent", "(dispatched_at) WHERE dispatch_job_id IS NULL")}
 
         CREATE TABLE IF NOT EXISTS flow_signal_waiters (
             run_id        UUID         NOT NULL,
@@ -326,8 +523,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             PRIMARY KEY (run_id, step_key)
         );
 
-        CREATE INDEX IF NOT EXISTS ix_flow_signal_waiters_run_id_signal_name
-            ON flow_signal_waiters (run_id, signal_name);
+        {EnsureIndex("flow_signal_waiters", "ix_flow_signal_waiters_run_id_signal_name", "(run_id, signal_name)")}
 
         CREATE TABLE IF NOT EXISTS flow_schedule_states (
             job_id         VARCHAR(256) NOT NULL PRIMARY KEY,
@@ -339,27 +535,26 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             updated_at_utc TIMESTAMPTZ  NOT NULL DEFAULT NOW()
         );
 
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id ON flow_runs (flow_id);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_status ON flow_runs (status);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_started_at ON flow_runs (started_at DESC);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_id_status_started_at ON flow_runs (flow_id, status, started_at DESC);
+        {EnsureIndex("flow_runs", "ix_flow_runs_flow_id", "(flow_id)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_status", "(status)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_started_at", "(started_at DESC)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_flow_id_status_started_at", "(flow_id, status, started_at DESC)")}
         -- INCLUDE mirrors the SQL Server definitions. GetStepStatusesAsync is the engine's single
         -- most frequent query — issued on every step completion and returning every step row in the
         -- run — and without the payload columns in the index Postgres must fetch each row from the
         -- heap. With them the scan is index-only. Postgres has supported INCLUDE since 11.
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_run_id_started_at ON flow_steps (run_id, started_at)
-            INCLUDE (step_key, step_type, status, job_id, completed_at);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_run_id ON flow_steps (step_key, run_id);
-        CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_started_at ON flow_step_attempts (run_id, started_at);
-        CREATE INDEX IF NOT EXISTS ix_flow_step_attempts_run_id_step_key_attempt_no ON flow_step_attempts (run_id, step_key, attempt_no);
+        {EnsureIndex("flow_steps", "ix_flow_steps_run_id_started_at", "(run_id, started_at) INCLUDE (step_key, step_type, status, job_id, completed_at)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_step_key_run_id", "(step_key, run_id)")}
+        {EnsureIndex("flow_step_attempts", "ix_flow_step_attempts_run_id_started_at", "(run_id, started_at)")}
+        {EnsureIndex("flow_step_attempts", "ix_flow_step_attempts_run_id_step_key_attempt_no", "(run_id, step_key, attempt_no)")}
 
-        -- Re-run lineage column (idempotent — Postgres ADD COLUMN IF NOT EXISTS).
-        ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS source_run_id UUID NULL;
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_source_run_id ON flow_runs (source_run_id) WHERE source_run_id IS NOT NULL;
+        -- Re-run lineage column.
+        {EnsureColumn("flow_runs", "source_run_id", "UUID NULL")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_source_run_id", "(source_run_id) WHERE source_run_id IS NOT NULL")}
 
         -- When-clause evaluation trace columns (idempotent), parity with the SQL Server backend.
-        ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
-        ALTER TABLE flow_step_attempts ADD COLUMN IF NOT EXISTS evaluation_trace_json TEXT NULL;
+        {EnsureColumn("flow_steps", "evaluation_trace_json", "TEXT NULL")}
+        {EnsureColumn("flow_step_attempts", "evaluation_trace_json", "TEXT NULL")}
 
         -- Webhook hardening tables (v1.25).
         CREATE TABLE IF NOT EXISTS webhook_replay_nonces (
@@ -369,7 +564,10 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             expires_at  TIMESTAMPTZ  NOT NULL,
             PRIMARY KEY (flow_id, trigger_key, nonce)
         );
-        CREATE INDEX IF NOT EXISTS ix_webhook_replay_nonces_expires_at ON webhook_replay_nonces (expires_at);
+        {EnsureIndex("webhook_replay_nonces", "ix_webhook_replay_nonces_expires_at", "(expires_at)")}
+        -- Owner token of a replay entry: only the request that recorded it can release it again
+        -- (TryForgetAsync). NULL on rows written before the column existed, which never match a release.
+        {EnsureColumn("webhook_replay_nonces", "registration_id", "UUID NULL")}
 
         CREATE TABLE IF NOT EXISTS webhook_rejections (
             id              BIGSERIAL    PRIMARY KEY,
@@ -386,20 +584,65 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
             processing_ms   DOUBLE PRECISION NULL,
             is_accepted     BOOLEAN      NOT NULL DEFAULT FALSE
         );
-        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_flow_received ON webhook_rejections (flow_id, received_at DESC);
-        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_reason ON webhook_rejections (reason);
-        CREATE INDEX IF NOT EXISTS ix_webhook_rejections_received_at ON webhook_rejections (received_at DESC);
+        {EnsureIndex("webhook_rejections", "ix_webhook_rejections_flow_received", "(flow_id, received_at DESC)")}
+        {EnsureIndex("webhook_rejections", "ix_webhook_rejections_reason", "(reason)")}
+        {EnsureIndex("webhook_rejections", "ix_webhook_rejections_received_at", "(received_at DESC)")}
         """;
 
     // Trigram (pg_trgm) GIN indexes for substring run-search acceleration. Run separately
     // from MigrationSql via TryCreateTrigramIndexesAsync because CREATE EXTENSION may be denied
     // on locked-down roles; a failure must not abort the mandatory schema migration.
-    private const string TrigramSql = """
+    internal static readonly string TrigramSql = $"""
         CREATE EXTENSION IF NOT EXISTS pg_trgm;
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_flow_name_trgm     ON flow_runs  USING gin (flow_name gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_runs_trigger_key_trgm   ON flow_runs  USING gin (trigger_key gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_step_key_trgm      ON flow_steps USING gin (step_key gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_error_message_trgm ON flow_steps USING gin (error_message gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS ix_flow_steps_output_json_trgm   ON flow_steps USING gin (output_json gin_trgm_ops);
+        {EnsureIndex("flow_runs", "ix_flow_runs_flow_name_trgm", "USING gin (flow_name gin_trgm_ops)")}
+        {EnsureIndex("flow_runs", "ix_flow_runs_trigger_key_trgm", "USING gin (trigger_key gin_trgm_ops)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_step_key_trgm", "USING gin (step_key gin_trgm_ops)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_error_message_trgm", "USING gin (error_message gin_trgm_ops)")}
+        {EnsureIndex("flow_steps", "ix_flow_steps_output_json_trgm", "USING gin (output_json gin_trgm_ops)")}
+        """;
+
+    /// <summary>
+    /// A <c>DO</c> block that creates <paramref name="index"/> on <paramref name="table"/> only when no relation
+    /// of that name exists in the table's schema.
+    /// </summary>
+    /// <remarks>
+    /// <c>CREATE INDEX IF NOT EXISTS</c> alone is not a no-op: PostgreSQL takes SHARE on the table BEFORE it
+    /// looks for the name (<c>ALTER TABLE ... ADD COLUMN IF NOT EXISTS</c> takes ACCESS EXCLUSIVE). On a running
+    /// cluster that request queues behind any in-flight write, autovacuum or <c>CREATE INDEX CONCURRENTLY</c>,
+    /// and every later write to the table queues behind it. Against the run-search index build it also
+    /// deadlocks (40P01): the build waits for this transaction's snapshot. The catalog reads here take no lock
+    /// on the table, so a start on an up-to-date schema requests none. <c>IF NOT EXISTS</c> stays inside for two
+    /// hosts creating the same index on first boot.
+    /// </remarks>
+    /// <param name="table">Table name, resolved through <c>search_path</c> like the DDL itself.</param>
+    /// <param name="index">Index name.</param>
+    /// <param name="definition">Everything after <c>ON table</c>: method, columns, <c>INCLUDE</c>, predicate.</param>
+    private static string EnsureIndex(string table, string index, string definition) => $"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '{index}'
+                           AND relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = '{table}'::regclass)) THEN
+                CREATE INDEX IF NOT EXISTS {index} ON {table} {definition};
+            END IF;
+        END
+        $$;
+        """;
+
+    /// <summary>
+    /// A <c>DO</c> block that adds <paramref name="column"/> to <paramref name="table"/> only when the column is
+    /// missing; see <see cref="EnsureIndex"/> for why the check is not left to <c>IF NOT EXISTS</c>.
+    /// </summary>
+    /// <param name="table">Table name, resolved through <c>search_path</c> like the DDL itself.</param>
+    /// <param name="column">Column name.</param>
+    /// <param name="type">Column type and nullability, e.g. <c>UUID NULL</c>.</param>
+    private static string EnsureColumn(string table, string column, string type) => $"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                           WHERE attrelid = '{table}'::regclass AND attname = '{column}' AND NOT attisdropped) THEN
+                ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {type};
+            END IF;
+        END
+        $$;
         """;
 }

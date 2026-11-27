@@ -31,6 +31,11 @@ public sealed class FlowRunControlStoreDefaultMethodTests
 
         public Task<bool> TryRegisterIdempotencyKeyAsync(Guid flowId, string triggerKey, string idempotencyKey, Guid runId)
             => Task.FromResult(true);
+
+        // Required since 2.0 (no default implementation), so a legacy store must implement it to compile.
+        public Task<Guid?> TryTakeOverStaleIdempotencyKeyAsync(
+            Guid flowId, string triggerKey, string idempotencyKey, Guid staleRunId, Guid newRunId, TimeSpan reservationTimeout)
+            => Task.FromResult<Guid?>(staleRunId);
     }
 
     [Fact]
@@ -44,5 +49,18 @@ public sealed class FlowRunControlStoreDefaultMethodTests
 
         // Assert
         Assert.False(result);
+    }
+
+    [Fact]
+    public async Task ReleaseIdempotencyKeyAsync_DefaultInterfaceMethod_ReturnsFalse()
+    {
+        // Arrange
+        IFlowRunControlStore store = new LegacyControlStore();
+
+        // Act
+        var released = await store.ReleaseIdempotencyKeyAsync(Guid.NewGuid(), "webhook", "order-1", Guid.NewGuid());
+
+        // Assert
+        Assert.False(released);
     }
 }

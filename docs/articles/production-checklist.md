@@ -21,6 +21,7 @@ FlowOrchestrator writes to fourteen tables. The auto-migrator
 | `FlowOutputs` | Step outputs keyed by `(RunId, StepKey)`. |
 | `FlowStepDispatches` | Idempotent dispatch ledger — supports the *Dispatch many, Execute once* invariant. |
 | `FlowStepClaims` | Exclusive execution claim per step (the "Execute once" half). |
+| `FlowStepLeases` | Owner, fence and expiry of each claim taken under a lease, so a crashed worker's step is taken over (2.0). |
 | `FlowRunControls` | Cancellation, idempotency key, run timeout. |
 | `FlowIdempotencyKeys` | Idempotency dedupe at trigger time. |
 | `FlowSignalWaiters` | Parked `WaitForSignal` steps. |
@@ -46,6 +47,44 @@ FlowOrchestrator writes to fourteen tables. The auto-migrator
 - Leave autovacuum on. The dispatch ledger is hot under high throughput; bloat shows up as `EXPLAIN` plans falling off index scans.
 - Logical replication or `pg_basebackup` for backups — both work, just have a tested restore drill.
 
+### Hangfire on PostgreSQL
+
+Hangfire.PostgreSql (the community job storage for the Hangfire runtime) keeps its distributed locks as
+rows in its `lock` table. Hangfire.SqlServer uses session-scoped `sp_getapplock` instead. A row survives
+the process that wrote it, and only stops counting once it is older than `DistributedLockTimeout`. Hangfire
+takes a job's `job:{id}:state-lock` for each state change. So when a replica is killed during one, a
+surviving server re-fetches the job after `InvisibilityTimeout` and then waits on the orphaned lock.
+**Crash recovery takes the longer of the two timeouts**, and each re-fetch in between parks another worker.
+While the step waits, it has a dispatch-ledger row, no claim and no status row: it is delayed, not lost.
+
+- Keep `DistributedLockTimeout` **at most** `InvisibilityTimeout`. The package defaults (30 min invisibility,
+  10 min lock timeout) satisfy that. If you shorten `InvisibilityTimeout` to recover faster, shorten the lock
+  timeout with it, or recovery stays at 10 min. `UseHangfire()` logs a warning at startup (EventId 3160) when
+  the lock timeout is the longer one.
+- Do not set the lock timeout below the longest time a lock is legitimately held. Once a lock is older than
+  the timeout, another server takes it over. FlowOrchestrator's step jobs hold no Hangfire locks beyond
+  Hangfire's own (state changes, the schedule poller, the recurring-job scheduler), which are held for
+  milliseconds to seconds. A `[DisableConcurrentExecution]` job of your own holds its lock for the whole
+  job.
+- A replica killed while holding the schedule poller or recurring-job lock delays every scheduled step
+  (`Pending` re-polls, delayed dispatches) or every cron trigger, cluster-wide, for up to
+  `DistributedLockTimeout`.
+
+```csharp
+builder.Services.AddHangfire(c => c.UsePostgreSqlStorage(
+    o => o.UseNpgsqlConnection(pgConnStr),
+    new PostgreSqlStorageOptions
+    {
+        InvisibilityTimeout = TimeSpan.FromMinutes(5),
+        DistributedLockTimeout = TimeSpan.FromMinutes(1),   // <= InvisibilityTimeout
+    }));
+```
+
+Orphaned lock rows can be listed with
+`SELECT resource, acquired FROM hangfire.lock ORDER BY acquired;`. Use your own schema if you set
+`SchemaName`. A `…:job:{id}:state-lock` row more than a few seconds old was almost certainly left by a
+killed process, because state changes take milliseconds.
+
 ### Backup recipe
 
 Full backup + transaction-log / WAL replay covers every table above. Step inputs and outputs are persisted in `FlowOutputs`, so restoring is restoring **state**, not just configuration.
@@ -58,7 +97,7 @@ FlowOrchestrator's core invariant — **Dispatch many, Execute once** — is wha
 horizontal scale safe.
 
 - `IFlowRunStore.TryRecordDispatchAsync` is an idempotent INSERT into `FlowStepDispatches`. Multiple workers may try; only one row lands. Backed by `SqlFlowRunStore` ([source](https://github.com/hoangsnowy/FlowOrchestrator/blob/main/src/FlowOrchestrator.SqlServer/SqlFlowRunStore.cs)).
-- `TryClaimStepAsync` (the claim guard) ensures only one runtime instance executes a given step attempt; the others exit silently.
+- `TryAcquireStepLeaseAsync` (the claim guard) ensures only one runtime instance executes a given step attempt; the others exit silently. The claim is a **lease** (`RunControl.StepLeaseDuration`, default 60 s) renewed by the instance running the step: if that instance is killed or loses its database, the lease expires and another instance takes the step over (the runtime's redelivery, or `FlowStepLeaseHostedService`'s sweep every half lease). A step interrupted by a crash therefore runs again — make handlers with external side effects idempotent. Recovery after a kill takes roughly the lease duration plus up to half of it; lower the lease to recover faster, but keep it at least three times your database's worst round trip, or a stalled-but-alive instance loses its step to another one (its late result is then rejected by the lease's fence).
 - **Cron triggers** under the Hangfire runtime use `IRecurringJobManager`, which fires each schedule on exactly one server. The ServiceBus runtime fires cron via self-perpetuating scheduled messages on a queue — Service Bus's exactly-once-per-tick delivery handles cross-replica coordination without leader election. No extra coordination needed in either case.
 
 > [!WARNING]
@@ -85,7 +124,7 @@ horizontal scale safe.
 3. Cut over traffic to the new version.
 4. Resume cron triggers.
 
-The dispatch ledger means an interrupted run will be re-driven by `FlowRunRecoveryHostedService` on the new instance — no manual replay step required.
+The dispatch ledger means an interrupted run will be re-driven by `FlowRunRecoveryHostedService` on the new instance — no manual replay step required. A step that was executing on an instance you stopped hard is taken over once its lease expires (see above).
 
 ---
 
@@ -130,6 +169,7 @@ The full instrument list lives in [Observability — What is emitted](observabil
 - **Failed-run rate.** `rate(flow_runs_completed{status="failed"}[5m]) > 1` — tune to your volume.
 - **Cron lag.** `now() - last_recurring_fire > 2 × schedule_interval` — Hangfire server unhealthy or paused inadvertently.
 - **Queue depth.** Hangfire's own `enqueued` counter; FlowOrchestrator inherits it.
+- **Crashed workers.** EventId 5050 (a step whose lease expired was redelivered) and 3030 (a delivery took over an expired lease) mean an instance died or lost its database while running steps. A few around a deploy or a node loss are expected; a steady rate is not. EventId 3031 (an attempt lost its lease) means an instance was alive but could not renew for longer than `StepLeaseDuration` — a database or network stall.
 
 ### Health-check endpoint
 
@@ -200,6 +240,7 @@ A single run typically writes:
 - *N* rows in `FlowOutputs` (one per step that produced output)
 - *N* rows in `FlowStepDispatches` (one per dispatched step — the idempotent dispatch ledger)
 - *N* rows in `FlowStepClaims` (one per executed step; deliberately **not** released on terminal status, since the row is what makes execution exactly-once)
+- *N* rows in `FlowStepLeases` (one per leased step; retired, not deleted, when the step ends, so its fence keeps rising; only live leases are in its filtered index)
 - *M* rows in `FlowStepAttempts` (one per attempt — usually 1, more with retries)
 - 1 row in `FlowSignalWaiters` per `WaitForSignal` step
 - 1 row in `FlowIdempotencyKeys` per trigger carrying an idempotency key

@@ -1,0 +1,496 @@
+using System.Collections.Concurrent;
+using System.Data;
+using Dapper;
+using Microsoft.Extensions.Logging;
+using Npgsql;
+
+namespace FlowOrchestrator.PostgreSQL.Tests;
+
+/// <summary>
+/// Pins that <see cref="PostgreSqlFlowOrchestratorMigrator"/> can start beside running hosts (a rolling
+/// deployment, a restart): on an up-to-date schema it requests no lock on any table, so it neither waits for
+/// nor stalls writers, autovacuum or a run-search index build (<c>CREATE INDEX CONCURRENTLY</c>) and cannot
+/// deadlock with one; it leaves another host's in-flight build alone; and it still repairs a build that was
+/// genuinely interrupted.
+/// </summary>
+/// <remarks>
+/// Regression for the intermittent <c>40P01: deadlock detected</c> in
+/// <see cref="PostgreSqlFlowEventsRemovalTests"/>: the schema batch requested SHARE / ACCESS EXCLUSIVE on
+/// <c>flow_runs</c> for no-op <c>IF NOT EXISTS</c> statements, queued behind the build's
+/// SHARE UPDATE EXCLUSIVE lock, and the build then waited for the batch's snapshot.
+/// </remarks>
+public sealed class PostgreSqlMigratorConcurrentIndexBuildTests : IClassFixture<PostgreSqlFixture>
+{
+    // Generous: the healthy path finishes in milliseconds; only a regression ever spends this budget.
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+
+    private readonly string _serverConnectionString;
+
+    /// <summary>Uses the class's container only as a server; the test migrates a database of its own.</summary>
+    /// <param name="fixture">The per-class PostgreSQL container.</param>
+    public PostgreSqlMigratorConcurrentIndexBuildTests(PostgreSqlFixture fixture)
+    {
+        _serverConnectionString = fixture.ConnectionString;
+    }
+
+    [Fact]
+    public async Task Migration_rerun_during_an_in_flight_index_build_neither_waits_nor_blocks_writers_nor_kills_the_build()
+    {
+        // Arrange — an up-to-date schema whose run-search index is missing, so the next start builds it.
+        var cs = await CreateDatabaseAsync();
+        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger()))
+        {
+            await initial.StartAsync(CancellationToken.None);
+            await initial.BackgroundIndexBuild;
+        }
+
+        await using (var conn = new NpgsqlConnection(cs))
+        {
+            await conn.ExecuteAsync("DROP INDEX ix_flow_runs_run_search_trgm");
+        }
+
+        // An open REPEATABLE READ snapshot parks the CONCURRENTLY build in its wait for older snapshots,
+        // where it keeps holding SHARE UPDATE EXCLUSIVE on flow_runs until the snapshot closes.
+        await using var snapshotHolder = new NpgsqlConnection(cs);
+        await snapshotHolder.OpenAsync();
+        await using var snapshotTx = await snapshotHolder.BeginTransactionAsync(IsolationLevel.RepeatableRead);
+        await snapshotHolder.ExecuteScalarAsync<int>("SELECT 1", transaction: snapshotTx);
+
+        var buildingLog = new CapturingLogger();
+        using var building = new PostgreSqlFlowOrchestratorMigrator(cs, buildingLog);
+        await building.StartAsync(CancellationToken.None);
+        await WaitUntilBuildIsParkedAsync(cs);
+
+        using var restarted = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger());
+        var store = new PostgreSqlFlowRunStore(cs);
+        string? rerunFailure, writeFailure;
+        bool buildStillRunning;
+
+        // Act — the restarted host's migration and a running host's write, both while the build is parked.
+        try
+        {
+            var rerun = OutcomeWithinBudgetAsync(restarted.StartAsync(CancellationToken.None));
+            var write = OutcomeWithinBudgetAsync(
+                store.StartRunAsync(Guid.NewGuid(), "ConcurrentBuildFlow", Guid.NewGuid(), "manual", null, null));
+            rerunFailure = await rerun;
+            writeFailure = await write;
+            buildStillRunning = !building.BackgroundIndexBuild.IsCompleted;
+        }
+        finally
+        {
+            await snapshotTx.CommitAsync();
+        }
+
+        await building.BackgroundIndexBuild.WaitAsync(Budget);
+        await restarted.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.True(rerunFailure is null, $"The re-run migration did not complete beside the in-flight index build: {rerunFailure}");
+        Assert.True(writeFailure is null, $"A flow_runs write did not complete during the re-run migration: {writeFailure}");
+        Assert.True(buildStillRunning, "The build was not in flight during the re-run, so the test proved nothing.");
+        Assert.DoesNotContain(buildingLog.Entries, e => e.EventId == 7213);
+    }
+
+    [Fact]
+    public async Task Host_starting_during_another_hosts_index_build_leaves_that_build_alone()
+    {
+        // Arrange — host A's build is in flight (parked on an open snapshot), so the index is INVALID.
+        var cs = await CreateMigratedDatabaseWithoutSearchIndexAsync();
+        await using var snapshotHolder = await OpenSnapshotHolderAsync(cs);
+        var hostALog = new CapturingLogger();
+        using var hostA = new PostgreSqlFlowOrchestratorMigrator(cs, hostALog);
+        await hostA.StartAsync(CancellationToken.None);
+        var buildingPid = await WaitUntilBuildIsParkedAsync(cs);
+        var indexBeingBuilt = await SearchIndexOidAsync(cs);
+        var hostBLog = new CapturingLogger();
+        using var hostB = new PostgreSqlFlowOrchestratorMigrator(cs, hostBLog);
+
+        // Act — host B starts, its background build decides what to do, then host A's build may finish.
+        await hostB.StartAsync(CancellationToken.None);
+        await WaitUntilBuildDecidedAsync(cs, hostB, buildingPid);
+        await snapshotHolder.DisposeAsync();
+        await hostA.BackgroundIndexBuild.WaitAsync(Budget);
+        await hostB.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert — the index host A built is the one that stays; host B neither dropped nor rebuilt it.
+        Assert.NotNull(indexBeingBuilt);
+        Assert.Equal(indexBeingBuilt, await SearchIndexOidAsync(cs));
+        Assert.True(await SearchIndexValidAsync(cs));
+        Assert.DoesNotContain(hostBLog.Entries, e => e.EventId == 7211);
+        Assert.Contains(hostBLog.Entries, e => e.EventId == 7215);
+        Assert.DoesNotContain(hostALog.Entries, e => e.EventId == 7213);
+    }
+
+    [Fact]
+    public async Task Build_interrupted_by_host_shutdown_is_repaired_by_the_next_start()
+    {
+        // Arrange — host A's build is in flight, then host A stops: PostgreSQL leaves the index INVALID.
+        var cs = await CreateMigratedDatabaseWithoutSearchIndexAsync();
+        await using (await OpenSnapshotHolderAsync(cs))
+        {
+            using var hostA = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger());
+            await hostA.StartAsync(CancellationToken.None);
+            await WaitUntilBuildIsParkedAsync(cs);
+            await hostA.StopAsync(CancellationToken.None);
+            await hostA.BackgroundIndexBuild.WaitAsync(Budget);
+        }
+
+        var leftoverValid = await SearchIndexValidAsync(cs);
+        var restartLog = new CapturingLogger();
+        using var restarted = new PostgreSqlFlowOrchestratorMigrator(cs, restartLog);
+
+        // Act
+        await restarted.StartAsync(CancellationToken.None);
+        await restarted.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.False(leftoverValid);
+        Assert.True(await SearchIndexValidAsync(cs));
+        Assert.Contains(restartLog.Entries, e => e.EventId == 7212);
+        Assert.DoesNotContain(restartLog.Entries, e => e.EventId == 7215);
+    }
+
+    [Fact]
+    public async Task Migration_rerun_on_an_up_to_date_schema_requests_no_lock_a_running_host_could_be_holding()
+    {
+        // Arrange — a fully migrated database, then one open transaction that holds, on EVERY table, what a
+        // running cluster holds: ROW EXCLUSIVE (an in-flight write) and SHARE UPDATE EXCLUSIVE (autovacuum,
+        // ANALYZE, an index build). Any DDL lock the re-run requests on any table conflicts with one of them.
+        var cs = await CreateDatabaseAsync();
+        var initialLog = new CapturingLogger();
+        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, initialLog))
+        {
+            await initial.StartAsync(CancellationToken.None);
+            await initial.BackgroundIndexBuild;
+        }
+
+        var store = new PostgreSqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "RerunLockFlow", runId, "manual", null, null);
+        await using var holder = new NpgsqlConnection(cs);
+        await holder.OpenAsync();
+        var tables = string.Join(", ", await holder.QueryAsync<string>(
+            "SELECT quote_ident(tablename) FROM pg_tables WHERE schemaname = current_schema() ORDER BY tablename"));
+        await holder.ExecuteAsync(
+            $"BEGIN; LOCK TABLE {tables} IN ROW EXCLUSIVE MODE; LOCK TABLE {tables} IN SHARE UPDATE EXCLUSIVE MODE;");
+        var rerunLog = new CapturingLogger();
+        using var restarted = new PostgreSqlFlowOrchestratorMigrator(cs, rerunLog);
+        string? rerunFailure, writeFailure, lockSnapshot = null;
+
+        // Act — the restarted host's migration and a running host's writes, both beside the holder.
+        try
+        {
+            var rerunStart = restarted.StartAsync(CancellationToken.None);
+            var rerun = OutcomeWithinBudgetAsync(rerunStart);
+            var write = OutcomeWithinBudgetAsync(Task.Run(async () =>
+            {
+                await store.StartRunAsync(Guid.NewGuid(), "RerunLockFlow", Guid.NewGuid(), "manual", null, null);
+                await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+                await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
+            }));
+            // Diagnostics only: the healthy re-run takes milliseconds. If it is still running after a few
+            // seconds, record who waits on what while the state is live, so a CI failure names the lock.
+            if (await Task.WhenAny(rerunStart, Task.Delay(TimeSpan.FromSeconds(5))) != rerunStart)
+                lockSnapshot = await DescribeLockWaitsAsync(cs);
+            rerunFailure = await rerun;
+            writeFailure = await write;
+        }
+        finally
+        {
+            await holder.ExecuteAsync("ROLLBACK");
+        }
+
+        await restarted.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert — the trigram step swallows its own failures as warnings, so a warning is a failure too.
+        Assert.True(
+            rerunFailure is null,
+            $"The re-run migration waited on a lock a running host holds: {rerunFailure}\n"
+            + $"Lock waits: {lockSnapshot}\nInitial migration warnings: {Warnings(initialLog)}\nRe-run log: {Warnings(rerunLog)}");
+        Assert.True(writeFailure is null, $"A write did not complete during the re-run migration: {writeFailure}");
+        Assert.True(!rerunLog.Entries.Any(e => e.Level >= LogLevel.Warning), $"Re-run warnings: {Warnings(rerunLog)}");
+        Assert.NotEmpty(tables);
+    }
+
+    [Fact]
+    public async Task Open_step_index_is_built_concurrently_in_the_background_and_neither_start_nor_step_writes_wait_for_it()
+    {
+        // Arrange — an up-to-date schema without the open-step index (an upgraded 1.x database), and an open
+        // snapshot that parks a CONCURRENTLY build in its wait for older snapshots.
+        var cs = await CreateMigratedDatabaseWithoutOpenStepIndexAsync();
+        var store = new PostgreSqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OpenStepIndexFlow", runId, "manual", null, null);
+        await using var snapshotHolder = await OpenSnapshotHolderAsync(cs);
+        var log = new CapturingLogger();
+        using var host = new PostgreSqlFlowOrchestratorMigrator(cs, log);
+        string? startFailure, writeFailure;
+        bool buildStillRunning;
+
+        // Act — the host starts while its build is parked, and a running host keeps writing steps.
+        try
+        {
+            startFailure = await OutcomeWithinBudgetAsync(host.StartAsync(CancellationToken.None));
+            await WaitUntilOpenStepBuildIsParkedAsync(cs);
+            writeFailure = await OutcomeWithinBudgetAsync(Task.Run(async () =>
+            {
+                await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+                await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
+            }));
+            buildStillRunning = !host.BackgroundIndexBuild.IsCompleted;
+        }
+        finally
+        {
+            await snapshotHolder.DisposeAsync();
+        }
+
+        await host.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.True(startFailure is null, $"The start waited for the open-step index build: {startFailure}");
+        Assert.True(writeFailure is null, $"A flow_steps write waited for the open-step index build: {writeFailure}");
+        Assert.True(buildStillRunning, "The build was not in flight during the writes, so the test proved nothing.");
+        Assert.True(await OpenStepIndexValidAsync(cs));
+        Assert.Contains(log.Entries, e => e.EventId == 7217);
+        Assert.DoesNotContain(log.Entries, e => e.EventId == 7218);
+    }
+
+    [Fact]
+    public async Task Open_step_index_left_invalid_by_an_interrupted_build_is_dropped_and_rebuilt()
+    {
+        // Arrange — the build is parked, then the host stops: PostgreSQL leaves the index INVALID.
+        var cs = await CreateMigratedDatabaseWithoutOpenStepIndexAsync();
+        await using (await OpenSnapshotHolderAsync(cs))
+        {
+            using var stopped = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger());
+            await stopped.StartAsync(CancellationToken.None);
+            await WaitUntilOpenStepBuildIsParkedAsync(cs);
+            await stopped.StopAsync(CancellationToken.None);
+            await stopped.BackgroundIndexBuild.WaitAsync(Budget);
+        }
+
+        var leftoverValid = await OpenStepIndexValidAsync(cs);
+        var log = new CapturingLogger();
+        using var restarted = new PostgreSqlFlowOrchestratorMigrator(cs, log);
+
+        // Act
+        await restarted.StartAsync(CancellationToken.None);
+        await restarted.BackgroundIndexBuild.WaitAsync(Budget);
+
+        // Assert
+        Assert.False(leftoverValid);
+        Assert.True(await OpenStepIndexValidAsync(cs));
+        Assert.Contains(log.Entries, e => e.EventId == 7217);
+    }
+
+    [Fact]
+    public async Task Open_row_check_is_correct_before_the_open_step_index_exists()
+    {
+        // Arrange — no index at all: the store's query must still answer from the rows.
+        var cs = await CreateMigratedDatabaseWithoutOpenStepIndexAsync();
+        var store = new PostgreSqlFlowRunStore(cs);
+        var runId = Guid.NewGuid();
+        await store.StartRunAsync(Guid.NewGuid(), "OpenStepIndexFlow", runId, "manual", null, null);
+
+        // Act
+        var empty = await store.HasRunningOrPendingStepAsync(runId);
+        await store.RecordStepStartAsync(runId, "a", "Work", null, null);
+        var running = await store.HasRunningOrPendingStepAsync(runId);
+        await store.RecordStepCompleteAsync(runId, "a", "Succeeded", null, null);
+        var closed = await store.HasRunningOrPendingStepAsync(runId);
+
+        // Assert
+        Assert.Null(await OpenStepIndexValidAsync(cs));
+        Assert.False(empty);
+        Assert.True(running);
+        Assert.False(closed);
+    }
+
+    private async Task<string> CreateMigratedDatabaseWithoutOpenStepIndexAsync()
+    {
+        var cs = await CreateDatabaseAsync();
+        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger()))
+        {
+            await initial.StartAsync(CancellationToken.None);
+            await initial.BackgroundIndexBuild;
+        }
+
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.ExecuteAsync("DROP INDEX ix_flow_steps_run_id_open");
+        return cs;
+    }
+
+    private static async Task<bool?> OpenStepIndexValidAsync(string cs)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        return await conn.ExecuteScalarAsync<bool?>(PostgreSqlFlowOrchestratorMigrator.OpenStepIndexStateSql);
+    }
+
+    private static async Task WaitUntilOpenStepBuildIsParkedAsync(string cs)
+    {
+        const string ParkedSql = """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND query LIKE 'CREATE INDEX CONCURRENTLY%ix_flow_steps_run_id_open%'
+                  AND wait_event_type = 'Lock' AND wait_event = 'virtualxid')
+            """;
+        using var timeout = new CancellationTokenSource(Budget);
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync(timeout.Token);
+        while (!await conn.ExecuteScalarAsync<bool>(new CommandDefinition(ParkedSql, cancellationToken: timeout.Token)))
+        {
+            await Task.Delay(25, timeout.Token);
+        }
+    }
+
+    private static string Warnings(CapturingLogger log) =>
+        string.Join(" | ", log.Entries.Where(e => e.Level >= LogLevel.Warning).Select(e => $"{e.EventId} {e.Message}"));
+
+    /// <summary>
+    /// Every backend of the database with its wait and the pids blocking it, and every lock request not yet
+    /// granted, as one line each: what a failing run needs to name the statement and the lock it waited on.
+    /// </summary>
+    private static async Task<string> DescribeLockWaitsAsync(string cs)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        var activity = await conn.QueryAsync<string>("""
+            SELECT format('pid %s [%s] %s wait=%s/%s blocked_by=%s :: %s',
+                          a.pid, a.backend_type, a.state, a.wait_event_type, a.wait_event,
+                          pg_blocking_pids(a.pid), left(regexp_replace(a.query, '\s+', ' ', 'g'), 160))
+            FROM pg_stat_activity AS a
+            WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
+            """);
+        var waiting = await conn.QueryAsync<string>("""
+            SELECT format('pid %s waits %s on %s %s', l.pid, l.mode, l.locktype,
+                          coalesce(l.relation::regclass::text, l.virtualxid, l.transactionid::text, ''))
+            FROM pg_locks AS l
+            WHERE NOT l.granted
+            """);
+        return string.Join(" || ", activity.Concat(waiting));
+    }
+
+    /// <summary>A migrated database whose run-search index is missing, so the next start builds it.</summary>
+    private async Task<string> CreateMigratedDatabaseWithoutSearchIndexAsync()
+    {
+        var cs = await CreateDatabaseAsync();
+        using (var initial = new PostgreSqlFlowOrchestratorMigrator(cs, new CapturingLogger()))
+        {
+            await initial.StartAsync(CancellationToken.None);
+            await initial.BackgroundIndexBuild;
+        }
+
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.ExecuteAsync("DROP INDEX ix_flow_runs_run_search_trgm");
+        return cs;
+    }
+
+    /// <summary>
+    /// Opens a REPEATABLE READ transaction with a live snapshot. A CONCURRENTLY build started after it parks in
+    /// its wait for older snapshots, holding SHARE UPDATE EXCLUSIVE on flow_runs, until this is disposed.
+    /// </summary>
+    private static async Task<NpgsqlConnection> OpenSnapshotHolderAsync(string cs)
+    {
+        var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync();
+        await conn.ExecuteAsync("BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT 1;");
+        return conn;
+    }
+
+    private static async Task<long?> SearchIndexOidAsync(string cs)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        return await conn.ExecuteScalarAsync<long?>("SELECT to_regclass('ix_flow_runs_run_search_trgm')::oid::bigint");
+    }
+
+    private static async Task<bool?> SearchIndexValidAsync(string cs)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        return await conn.ExecuteScalarAsync<bool?>(PostgreSqlFlowOrchestratorMigrator.RunSearchIndexStateSql);
+    }
+
+    /// <summary>
+    /// Waits until <paramref name="host"/>'s background build has made its decision: it finished, or it is
+    /// blocked on a lock in a CONCURRENTLY statement of its own (the drop-and-rebuild path).
+    /// </summary>
+    private static async Task WaitUntilBuildDecidedAsync(string cs, PostgreSqlFlowOrchestratorMigrator host, int buildingPid)
+    {
+        const string BlockedSql = """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_stat_activity
+                WHERE datname = current_database() AND pid <> @buildingPid
+                  AND query LIKE '% INDEX CONCURRENTLY%ix_flow_runs_run_search_trgm%'
+                  AND wait_event_type = 'Lock')
+            """;
+        using var timeout = new CancellationTokenSource(Budget);
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync(timeout.Token);
+        while (!host.BackgroundIndexBuild.IsCompleted
+               && !await conn.ExecuteScalarAsync<bool>(new CommandDefinition(BlockedSql, new { buildingPid }, cancellationToken: timeout.Token)))
+        {
+            await Task.Delay(25, timeout.Token);
+        }
+    }
+
+    private async Task<string> CreateDatabaseAsync()
+    {
+        var name = "fo_cic_" + Guid.NewGuid().ToString("N");
+        await using (var conn = new NpgsqlConnection(_serverConnectionString))
+        {
+            await conn.ExecuteAsync($"CREATE DATABASE {name}");
+        }
+
+        return new NpgsqlConnectionStringBuilder(_serverConnectionString) { Database = name, IncludeErrorDetail = true }.ConnectionString;
+    }
+
+    /// <summary>
+    /// Waits until the background build is blocked on another transaction's virtual xid, i.e. it holds its
+    /// table lock and cannot finish. The other backend's lock state is only observable through the catalog,
+    /// so this polls it — bounded by <see cref="Budget"/>, with a precise failure message.
+    /// </summary>
+    /// <returns>The building backend's pid.</returns>
+    private static async Task<int> WaitUntilBuildIsParkedAsync(string cs)
+    {
+        const string ParkedSql = """
+            SELECT pid FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND query LIKE 'CREATE INDEX CONCURRENTLY%ix_flow_runs_run_search_trgm%'
+              AND wait_event_type = 'Lock' AND wait_event = 'virtualxid'
+            LIMIT 1
+            """;
+        using var timeout = new CancellationTokenSource(Budget);
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync(timeout.Token);
+        while (true)
+        {
+            var pid = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(ParkedSql, cancellationToken: timeout.Token));
+            if (pid is { } parked)
+                return parked;
+            await Task.Delay(25, timeout.Token);
+        }
+    }
+
+    /// <summary>Returns <see langword="null"/> when <paramref name="task"/> succeeds within <see cref="Budget"/>, otherwise why not.</summary>
+    private static async Task<string?> OutcomeWithinBudgetAsync(Task task)
+    {
+        // Read the outcome from the task instead of a catch-all: whatever ended it (WaitAsync's
+        // TimeoutException, or the migrator's own failure: Npgsql's 30 s command timeout, a 40P01 deadlock) is reported by type and message.
+        var waited = task.WaitAsync(Budget);
+        await waited.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (waited.IsCanceled)
+            return "TaskCanceledException: A task was canceled.";
+        return waited.Exception?.InnerException is { } ex ? $"{ex.GetType().Name}: {ex.Message}" : null;
+    }
+
+    private sealed class CapturingLogger : ILogger<PostgreSqlFlowOrchestratorMigrator>
+    {
+        public ConcurrentQueue<(int EventId, LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Enqueue((eventId.Id, logLevel, formatter(state, exception)));
+    }
+}

@@ -289,6 +289,61 @@ public sealed class FlowSignalResumeDispatchTests
             Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
     }
 
+    [Fact]
+    public async Task Resume_still_dispatches_when_the_request_aborts_while_the_delivery_write_is_in_flight()
+    {
+        // Arrange — models SqlClient: the delivery UPDATE commits, but a cancel that lands while the
+        // statement is in flight still surfaces as an exception. If the store received the request token,
+        // the waiter would be delivered while DispatchAsync threw before the resume nudge, stranding the
+        // parked step (every retry of the signal is then answered "already delivered").
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        runtimeStore.IsStepClaimedAsync(_runId, StepKey).Returns(Task.FromResult(false));
+        using var aborted = new CancellationTokenSource();
+        _signalStore.DeliverSignalAsync(_runId, SignalName, "{}", Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                aborted.Cancel(); // the client disconnects while the write is in flight; the row is committed
+                var token = call.Arg<CancellationToken>();
+                return token.IsCancellationRequested
+                    ? ValueTask.FromException<SignalDeliveryResult>(new OperationCanceledException(token))
+                    : new ValueTask<SignalDeliveryResult>(
+                        new SignalDeliveryResult(SignalDeliveryStatus.Delivered, StepKey, DateTimeOffset.UtcNow));
+            });
+        var dispatcher = CreateDispatcher(runtimeStore);
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => dispatcher.DispatchAsync(_runId, SignalName, "{}", aborted.Token).AsTask());
+
+        // Assert
+        Assert.Null(ex);
+        await _stepDispatcher.Received(1).EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Expired_delivery_is_returned_as_is_and_sends_no_resume_nudge()
+    {
+        // Arrange — the store refused the signal because the waiter's deadline passed; nothing was written,
+        // so there is nothing to resume and a nudge would only re-run a step that is timing out.
+        _signalStore.DeliverSignalAsync(_runId, SignalName, "{}", Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<SignalDeliveryResult>(
+                new SignalDeliveryResult(SignalDeliveryStatus.Expired, StepKey, null)));
+        var runtimeStore = Substitute.For<IFlowRunRuntimeStore>();
+        var dispatcher = CreateDispatcher(runtimeStore);
+
+        // Act
+        var result = await dispatcher.DispatchAsync(_runId, SignalName, "{}");
+
+        // Assert
+        Assert.Equal(SignalDeliveryStatus.Expired, result.Status);
+        Assert.Equal(StepKey, result.StepKey);
+        await _stepDispatcher.DidNotReceive().EnqueueStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<CancellationToken>());
+        await _stepDispatcher.DidNotReceive().ScheduleStepAsync(
+            Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        await runtimeStore.DidNotReceive().IsStepClaimedAsync(Arg.Any<Guid>(), Arg.Any<string>());
+    }
+
     /// <summary>Builds the subject under test with the shared substitutes and the supplied runtime store.</summary>
     private FlowSignalDispatcher CreateDispatcher(IFlowRunRuntimeStore runtimeStore) => new(
         _signalStore,

@@ -30,6 +30,21 @@ internal sealed class LoopBarrierEngineHarness
     private readonly IFlowDefinition _flow;
     private readonly List<IStepInstance> _pending = [];
     private readonly List<string> _enqueued = [];
+    private Exception? _nextDispatchFault;
+
+    private (string StepKey, Exception Fault)? _keyedDispatchFault;
+
+    /// <summary>Makes the next dispatcher call throw <paramref name="fault"/> instead of queueing the step.</summary>
+    public void FailNextDispatch(Exception fault) => Volatile.Write(ref _nextDispatchFault, fault);
+
+    /// <summary>Makes the first dispatcher call for <paramref name="stepKey"/> throw <paramref name="fault"/>.</summary>
+    public void FailDispatchOf(string stepKey, Exception fault)
+    {
+        lock (_pending)
+        {
+            _keyedDispatchFault = (stepKey, fault);
+        }
+    }
 
     /// <summary>Creates a harness bound to <paramref name="flow"/>.</summary>
     /// <param name="flow">Flow definition executed by the harness.</param>
@@ -38,11 +53,26 @@ internal sealed class LoopBarrierEngineHarness
     /// </param>
     /// <param name="runControlOptions">Run-control options; defaults to no run timeout.</param>
     /// <param name="eventNotifier">Optional lifecycle-event sink, for exactly-once completion assertions.</param>
+    /// <param name="runtimeStore">
+    /// Optional decorator over <see cref="Store"/> handed to the engine as its runtime store, so a test can
+    /// gate one read and force an interleaving. Defaults to <see cref="Store"/> itself.
+    /// </param>
+    /// <param name="runStore">
+    /// Optional decorator over <see cref="Store"/> handed to the engine as its run store, so a test can
+    /// inject a fault into one write. Defaults to <see cref="Store"/> itself.
+    /// </param>
+    /// <param name="controlStore">
+    /// Optional decorator over <see cref="Store"/> handed to the engine as its run-control store, so a test can
+    /// interleave a write (e.g. a user cancel) with the engine's. Defaults to <see cref="Store"/> itself.
+    /// </param>
     public LoopBarrierEngineHarness(
         IFlowDefinition flow,
         Func<string, IStepResult> resultForStep,
         FlowRunControlOptions? runControlOptions = null,
-        IFlowEventNotifier? eventNotifier = null)
+        IFlowEventNotifier? eventNotifier = null,
+        Func<InMemoryFlowRunStore, IFlowRunRuntimeStore>? runtimeStore = null,
+        Func<InMemoryFlowRunStore, IFlowRunStore>? runStore = null,
+        Func<InMemoryFlowRunStore, IFlowRunControlStore>? controlStore = null)
     {
         _flow = flow;
         Store = new InMemoryFlowRunStore();
@@ -51,9 +81,20 @@ internal sealed class LoopBarrierEngineHarness
 
         ValueTask<string?> Capture(NSubstitute.Core.CallInfo call)
         {
+            if (Interlocked.Exchange(ref _nextDispatchFault, null) is { } fault)
+            {
+                return ValueTask.FromException<string?>(fault);
+            }
+
             var step = call.Arg<IStepInstance>()!;
             lock (_pending)
             {
+                if (_keyedDispatchFault is { } keyed && string.Equals(keyed.StepKey, step.Key, StringComparison.Ordinal))
+                {
+                    _keyedDispatchFault = null;
+                    return ValueTask.FromException<string?>(keyed.Fault);
+                }
+
                 _enqueued.Add(step.Key);
                 _pending.Add(step);
             }
@@ -83,12 +124,12 @@ internal sealed class LoopBarrierEngineHarness
             new FlowGraphPlanner(),
             stepExecutor,
             Substitute.For<IFlowStore>(),
-            Store,
+            runStore?.Invoke(Store) ?? Store,
             new InMemoryOutputsRepository(),
             Substitute.For<IExecutionContextAccessor>(),
             flowRepo,
-            [Store],
-            [Store],
+            [runtimeStore?.Invoke(Store) ?? Store],
+            [controlStore?.Invoke(Store) ?? Store],
             runControlOptions ?? new FlowRunControlOptions(),
             new FlowObservabilityOptions { EnableOpenTelemetry = false },
             new FlowOrchestratorTelemetry(),
