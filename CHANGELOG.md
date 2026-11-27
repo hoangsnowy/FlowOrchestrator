@@ -10,42 +10,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
-### Added — `flow-orchestrator storage copy`: move a database between SQL Server and PostgreSQL
+### Changed — migrator background index build is awaitable
 
-- **New .NET tool `FlowOrchestrator.Cli`** (command `flow-orchestrator`) and **library
-  `FlowOrchestrator.StorageMigration`** (`FlowStorageCopier`). `flow-orchestrator storage copy --from sqlserver|postgresql
-  --from-connection … --to postgresql|sqlserver --to-connection … [--dry-run] [--verify-only] [--batch-size N]`
-  copies everything FlowOrchestrator stores — flow definitions (with the enabled flag), runs, steps, step
-  attempts, outputs (trigger body / headers, step inputs / outputs), run controls, idempotency keys, the
-  dispatch ledger and claims, schedule state (cron overrides, paused triggers), signal waiters, the webhook
-  delivery / rejection log, unexpired replay nonces, and the 1.x `FlowEvents` table when the source still has
-  it — so a SQL Server customer can move to PostgreSQL (or back) keeping the run history.
-- **Preflight, nothing written on refusal:** in-flight runs (`Running`) on the source (`--force` copies them
-  as they are), a target that already holds FlowOrchestrator rows, a source schema older than 2.0
-  (`--migrate-source` upgrades it in place), a schema with columns the tool does not know, and the same
-  database on both sides. The target schema is created by the target backend's own 2.0 migrator.
-- **Bulk paths, bounded memory:** keyset-ordered batches (`SqlBulkCopy` into SQL Server, binary `COPY` into
-  PostgreSQL), one transaction per table, `--resume` after an interruption; ids are kept and the
-  `WebhookRejections` identity / sequence is moved past them.
-- **Verification:** row count plus an order-independent SHA-256 content checksum per table, computed from
-  normalized values on both sides; `--verify-only` re-runs it. Exit codes `0` ok, `2` usage, `3` preflight
-  refused, `4` mismatch, `5` copy failed, `130` cancelled. Connection values accept `env:NAME`.
-- **Transport-security warning:** connection strings are used exactly as given, but a SQL Server one that sets
-  `Encrypt=False`/`Optional` or `TrustServerCertificate=True` prints a `warning:` line to stderr (even with
-  `--quiet`) and in the summary; from code it is `FlowStorageCopyResult.Warnings`, a
-  `FlowStorageCopyPhase.Warning` progress event and a `Warning` log (event 7404).
 - `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
   are now public, for code that runs a migrator outside a host and must wait for its background index build.
-- Runbook, table mapping and limits: [Switching Storage Backend](docs/articles/switching-storage-backend.md).
-
-#### Read before using it
-
-- **Timestamps lose their seventh digit SQL Server → PostgreSQL** (100 ns → 1 µs, truncated) and are stored
-  in UTC; PostgreSQL → SQL Server is exact. **Hangfire storage is not copied** — drain the queues; recurring
-  jobs are re-registered from the manifests and the copied schedule state on start-up. The SQL Server
-  run-search token index is rebuilt by `UseRunSearchIndex()`'s back-fill, not copied.
-- Text PostgreSQL cannot store (U+0000, unpaired surrogates) and keys that collide under a case-insensitive
-  SQL Server collation stop the copy with the table, row key and column named.
 
 ### Added — per-signal authorization and bearer-token access for `WaitForSignal`
 

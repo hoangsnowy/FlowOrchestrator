@@ -18,8 +18,6 @@
     <Project Path="src/FlowOrchestrator.SqlServer/FlowOrchestrator.SqlServer.csproj" />
     <Project Path="src/FlowOrchestrator.Testing/FlowOrchestrator.Testing.csproj" />
     <Project Path="src/FlowOrchestrator.OpenTelemetry/FlowOrchestrator.OpenTelemetry.csproj" />
-    <Project Path="src/FlowOrchestrator.StorageMigration/FlowOrchestrator.StorageMigration.csproj" />
-    <Project Path="src/FlowOrchestrator.Cli/FlowOrchestrator.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/integration/">
@@ -30,7 +28,6 @@
     <Project Path="tests/integration/FlowOrchestrator.ServiceBus.IntegrationTests/FlowOrchestrator.ServiceBus.IntegrationTests.csproj" />
     <Project Path="tests/integration/FlowOrchestrator.SqlServer.IntegrationTests/FlowOrchestrator.SqlServer.IntegrationTests.csproj" />
     <Project Path="tests/integration/FlowOrchestrator.Testing.IntegrationTests/FlowOrchestrator.Testing.IntegrationTests.csproj" />
-    <Project Path="tests/integration/FlowOrchestrator.StorageMigration.IntegrationTests/FlowOrchestrator.StorageMigration.IntegrationTests.csproj" />
   </Folder>
   <Folder Name="/tests/regression/">
     <Project Path="tests/regression/FlowOrchestrator.RegressionTests/FlowOrchestrator.RegressionTests.csproj" />
@@ -43,7 +40,6 @@
     <Project Path="tests/unit/FlowOrchestrator.SqlServer.UnitTests/FlowOrchestrator.SqlServer.UnitTests.csproj" />
     <Project Path="tests/unit/FlowOrchestrator.PostgreSQL.UnitTests/FlowOrchestrator.PostgreSQL.UnitTests.csproj" />
     <Project Path="tests/unit/FlowOrchestrator.Dashboard.UnitTests/FlowOrchestrator.Dashboard.UnitTests.csproj" />
-    <Project Path="tests/unit/FlowOrchestrator.StorageMigration.UnitTests/FlowOrchestrator.StorageMigration.UnitTests.csproj" />
   </Folder>
   <Project Path="FlowOrchestrator.AppHost/FlowOrchestrator.AppHost.csproj" />
 </Solution>

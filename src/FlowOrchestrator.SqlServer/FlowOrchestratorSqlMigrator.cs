@@ -71,7 +71,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     /// retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, the storage copy tool) and must not write to
+    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not write to
     /// <c>FlowRuns</c> while the online build is still running.
     /// </remarks>
     public Task BackgroundIndexBuild => _backgroundIndexBuild;

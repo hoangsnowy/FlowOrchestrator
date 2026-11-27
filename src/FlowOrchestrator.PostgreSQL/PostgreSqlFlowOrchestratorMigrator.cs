@@ -62,7 +62,7 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     /// logged and retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, the storage copy tool) and must not bulk-load
+    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not bulk-load
     /// <c>flow_runs</c> while the build is still running.
     /// </remarks>
     public Task BackgroundIndexBuild => _backgroundIndexBuild;
