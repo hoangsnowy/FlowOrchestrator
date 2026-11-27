@@ -20,13 +20,17 @@ namespace FlowOrchestrator.ServiceBus;
 /// cron is low-throughput and ordering is more useful than parallelism.
 /// </para>
 /// <para>
-/// A recurring tick is fired only when it is still wanted. It is dropped (completed without a run and
-/// without scheduling a successor, which ends its chain) when:
+/// A recurring tick is fired only when it is still wanted. When the shared state says the job is paused on the
+/// dashboard (with <see cref="FlowSchedulerOptions.PersistOverrides"/>) or its flow is disabled, the tick starts
+/// no run but still schedules its successor: the chain stays alive, muted, so a resume or re-enable made on ANY
+/// replica finds it running. Ending the chain instead left a resume on a replica that still held the job (and so
+/// saw "same cron, chain alive" and seeded nothing) with no chain at all — the schedule never fired again.
+/// </para>
+/// <para>
+/// A tick is dropped (completed without a run and without scheduling a successor, which ends its chain) when:
 /// </para>
 /// <list type="bullet">
-///   <item>the persisted state says the schedule is inactive — the flow is disabled or no longer declares the
-///         cron trigger, or the job is paused on the dashboard (with <see cref="FlowSchedulerOptions.PersistOverrides"/>,
-///         so a pause made on another replica counts);</item>
+///   <item>the flow no longer declares the cron trigger;</item>
 ///   <item>the job is not registered in this process and no persisted state says otherwise;</item>
 ///   <item>the tick belongs to a chain the job has replaced (a cron change, a restart, a resume) — known
 ///         locally from the chain epoch, or on any replica from a persisted cron override that differs from
@@ -154,7 +158,8 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
             var recurring = !string.IsNullOrEmpty(envelope.Cron);
             if (recurring)
             {
-                if (await ShouldDropAsync(scope.ServiceProvider, envelope).ConfigureAwait(false))
+                var action = await DecideAsync(scope.ServiceProvider, envelope).ConfigureAwait(false);
+                if (action == TickAction.Drop)
                 {
                     // Completing without a successor ends this chain; the job's current chain (if any) is a
                     // different message stream.
@@ -184,6 +189,14 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
                 await _hub.ScheduleNextAsync(
                         envelope.JobId, envelope.FlowId, envelope.TriggerKey, envelope.Cron, nextFire, envelope.ChainEpoch, args.CancellationToken)
                     .ConfigureAwait(false);
+
+                if (action == TickAction.Perpetuate)
+                {
+                    // Muted (paused / disabled): the successor is scheduled, no run is started.
+                    LogTickMuted(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor);
+                    await args.CompleteMessageAsync(args.Message, args.CancellationToken).ConfigureAwait(false);
+                    return;
+                }
             }
 
             var runner = scope.ServiceProvider.GetRequiredService<IServiceBusFlowRunner>();
@@ -202,22 +215,20 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
     }
 
     /// <summary>
-    /// Decides whether a recurring tick must be dropped instead of fired; see the class remarks.
+    /// Decides whether a recurring tick fires, is kept alive without a run, or is dropped; see the class remarks.
     /// </summary>
     /// <param name="services">The tick's scope.</param>
     /// <param name="envelope">The recurring tick.</param>
-    /// <returns><see langword="true"/> to complete the tick without a run and without a successor.</returns>
-    private async Task<bool> ShouldDropAsync(IServiceProvider services, CronEnvelope envelope)
+    /// <returns>What the consumer does with the tick.</returns>
+    private async Task<TickAction> DecideAsync(IServiceProvider services, CronEnvelope envelope)
     {
         var authority = await ResolveAuthorityAsync(services, envelope).ConfigureAwait(false);
         if (authority == ScheduleAuthority.Inactive)
         {
-            // Align this process with the shared state (the pause or disable may have been made on another
-            // replica). Dropping the tick ends the job's chain, so a later resume here must seed a new one —
-            // which RegisterOrUpdate only does for a job it does not already hold.
+            // The flow no longer declares the trigger: the job is gone for good, on every replica.
             _hub.Remove(envelope.JobId);
-            LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "the schedule is paused, or its flow is disabled or no longer declares the trigger");
-            return true;
+            LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "its flow no longer declares the cron trigger");
+            return TickAction.Drop;
         }
 
         if (authority == ScheduleAuthority.Superseded)
@@ -225,24 +236,32 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
             // The persisted schedule runs on another cron: this tick belongs to a replaced chain. Every replica
             // sharing the store reaches the same answer, so a replica that has not yet seen the new chain does
             // not fire (and perpetuate) the old one. The job itself stays registered — it lives on the new chain.
+            // Checked before the pause, so a cron changed while paused ends the old chain and the resume seeds
+            // the new one.
             LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "its cron differs from the schedule's persisted cron override (the chain was replaced)");
-            return true;
+            return TickAction.Drop;
         }
 
-        var verdict = _hub.ObserveTick(envelope, registerIfMissing: authority == ScheduleAuthority.Active);
+        // Muted and Active both register the job from the tick where this process does not hold it: the shared
+        // state is the authority, and this tick's chain is the one every replica must keep.
+        var muted = authority == ScheduleAuthority.Muted;
+        var verdict = _hub.ObserveTick(
+            envelope,
+            registerIfMissing: authority is ScheduleAuthority.Active or ScheduleAuthority.Muted,
+            paused: authority == ScheduleAuthority.Unknown ? null : muted);
         switch (verdict)
         {
             case ServiceBusRecurringTriggerHub.TickVerdict.Current:
-                return false;
+                return muted ? TickAction.Perpetuate : TickAction.Fire;
             case ServiceBusRecurringTriggerHub.TickVerdict.NotRegistered:
                 LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "the job is not registered (paused or removed)");
-                return true;
+                return TickAction.Drop;
             case ServiceBusRecurringTriggerHub.TickVerdict.Superseded:
                 LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "it belongs to a chain the job has replaced (cron change, restart or resume)");
-                return true;
+                return TickAction.Drop;
             default:
                 LogTickDropped(_logger, Sanitize(envelope.JobId), envelope.ScheduledFor, "this tick already fired");
-                return true;
+                return TickAction.Drop;
         }
     }
 
@@ -253,7 +272,9 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
     /// <param name="services">The tick's scope.</param>
     /// <param name="envelope">The recurring tick.</param>
     /// <returns>
-    /// <see cref="ScheduleAuthority.Inactive"/> when the tick must not fire whatever this process believes;
+    /// <see cref="ScheduleAuthority.Inactive"/> when the flow no longer declares the trigger;
+    /// <see cref="ScheduleAuthority.Superseded"/> when the persisted cron override names another cron;
+    /// <see cref="ScheduleAuthority.Muted"/> when the flow is disabled or the job paused;
     /// <see cref="ScheduleAuthority.Active"/> when the shared state says the job is live;
     /// <see cref="ScheduleAuthority.Unknown"/> when only this process's registration can decide (no shared
     /// pause state, services missing, or the store unreachable).
@@ -279,24 +300,18 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
         try
         {
             var record = await flowStore.GetByIdAsync(envelope.FlowId).ConfigureAwait(false);
-            if (record is { IsEnabled: false })
-            {
-                return ScheduleAuthority.Inactive;
-            }
+            var disabled = record is { IsEnabled: false };
 
             var schedulerOptions = services.GetService<FlowSchedulerOptions>();
             var stateStore = services.GetService<IFlowScheduleStateStore>();
             if (schedulerOptions is not { PersistOverrides: true } || stateStore is null)
             {
-                // The pause state is process-local: only this process's registration knows it.
-                return ScheduleAuthority.Unknown;
+                // The pause state is process-local: only this process's registration knows it. The enabled flag
+                // is still shared.
+                return disabled ? ScheduleAuthority.Muted : ScheduleAuthority.Unknown;
             }
 
             var state = await stateStore.GetAsync(envelope.JobId).ConfigureAwait(false);
-            if (state?.IsPaused == true)
-            {
-                return ScheduleAuthority.Inactive;
-            }
 
             // A valid persisted override is the job's cron on every replica. An unparseable one is ignored, as
             // the startup sync ignores it (the job then runs on the manifest cron).
@@ -307,7 +322,7 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
                 return ScheduleAuthority.Superseded;
             }
 
-            return ScheduleAuthority.Active;
+            return disabled || state?.IsPaused == true ? ScheduleAuthority.Muted : ScheduleAuthority.Active;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -352,6 +367,22 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
     [LoggerMessage(EventId = 3154, Level = LogLevel.Error, Message = "Service Bus cron processor error (Source={Source}, Entity={Entity}).")]
     private static partial void LogProcessorError(ILogger logger, Exception ex, string source, string entity);
 
+    [LoggerMessage(EventId = 3155, Level = LogLevel.Debug, Message = "Cron tick for {JobId} scheduled for {ScheduledFor:O} started no run (the schedule is paused or its flow disabled); its chain is kept alive.")]
+    private static partial void LogTickMuted(ILogger logger, string jobId, DateTimeOffset scheduledFor);
+
+    /// <summary>What the consumer does with a recurring tick.</summary>
+    private enum TickAction
+    {
+        /// <summary>Schedule the successor and start a run.</summary>
+        Fire,
+
+        /// <summary>Schedule the successor without starting a run (the job is paused or its flow disabled).</summary>
+        Perpetuate,
+
+        /// <summary>Complete the tick without a run and without a successor, ending its chain.</summary>
+        Drop,
+    }
+
     /// <summary>What the shared, persisted state says about a recurring job.</summary>
     private enum ScheduleAuthority
     {
@@ -361,8 +392,14 @@ internal sealed partial class ServiceBusCronProcessorHostedService : BackgroundS
         /// <summary>The shared state says the job is live.</summary>
         Active,
 
-        /// <summary>The shared state says the job must not fire.</summary>
+        /// <summary>The flow no longer declares the trigger: the job is gone.</summary>
         Inactive,
+
+        /// <summary>
+        /// The shared state says the job is paused or its flow disabled: no run, but the chain is kept alive so a
+        /// resume on any replica needs no new one.
+        /// </summary>
+        Muted,
 
         /// <summary>The shared state says the job runs on another cron: the tick belongs to a replaced chain.</summary>
         Superseded,

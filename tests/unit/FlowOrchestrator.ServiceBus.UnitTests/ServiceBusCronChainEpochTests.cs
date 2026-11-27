@@ -312,7 +312,7 @@ public sealed class ServiceBusCronChainEpochTests
     }
 
     [Fact]
-    public async Task PausedInTheSharedState_TickIsDroppedEvenWhereTheJobIsStillRegistered()
+    public async Task PausedInTheSharedState_TickStartsNoRunButKeepsItsChainAlive()
     {
         // Arrange — the pause was made on another replica: this replica still has the job registered.
         var hub = CreateHub();
@@ -324,16 +324,16 @@ public sealed class ServiceBusCronChainEpochTests
         // Act
         await DeliverAsync(consumer, tick);
 
-        // Assert — no run, no successor, and this replica no longer holds the job.
+        // Assert — no run, but the successor of the same chain is scheduled, so a resume on any replica finds it.
         Assert.Equal(0, _runner.TriggerCount);
-        Assert.Single(Scheduled());
-        Assert.False(hub.TryGetJob(JobId, out _));
+        Assert.Equal(2, Scheduled().Count);
+        Assert.Equal(tick.ChainEpoch, Scheduled()[1].ChainEpoch);
     }
 
     [Fact]
-    public async Task PausedElsewhereThenResumedHere_SeedsANewChain()
+    public async Task PausedElsewhereThenResumedHere_KeepsTheMutedChainWithoutSeeding()
     {
-        // Arrange — the tick of the paused job was dropped here, which ended its chain.
+        // Arrange — the tick of the paused job was muted here: no run, its successor scheduled.
         var hub = CreateHub();
         hub.RegisterOrUpdate(JobId, _flowId, "tick", Cron);
         var tick = Assert.Single(Scheduled());
@@ -344,10 +344,9 @@ public sealed class ServiceBusCronChainEpochTests
         // Act — the dashboard resume lands on this replica.
         hub.RegisterOrUpdate(JobId, _flowId, "tick", Cron);
 
-        // Assert — a new chain, ranked above the one the pause ended.
+        // Assert — the chain is alive, so nothing new is seeded (a second chain would fire every tick twice).
         Assert.Equal(2, Scheduled().Count);
-        var resumed = Scheduled()[1];
-        Assert.True(resumed.ChainEpoch > tick.ChainEpoch);
+        Assert.All(Scheduled(), e => Assert.Equal(tick.ChainEpoch, e.ChainEpoch));
     }
 
     [Fact]

@@ -44,6 +44,7 @@ public sealed class ServiceBusCronChangeTests
     private readonly List<DateTimeOffset> _fires = new();
     private readonly Guid _flowId = Guid.Parse("5f0e0000-0000-4000-8002-000000000003");
     private readonly InMemoryFlowScheduleStateStore _scheduleState = new();
+    private bool _flowEnabled = true;
 
     /// <summary>Wires the client to the in-test cron queue (10-minute duplicate-detection window, as production).</summary>
     public ServiceBusCronChangeTests()
@@ -165,7 +166,7 @@ public sealed class ServiceBusCronChangeTests
     {
         var hub = new ServiceBusRecurringTriggerHub(_client, new ServiceBusRuntimeOptions(), NullLogger<ServiceBusRecurringTriggerHub>.Instance, _clock);
         var flowStore = Substitute.For<IFlowStore>();
-        flowStore.GetByIdAsync(_flowId).Returns(new FlowDefinitionRecord { Id = _flowId, IsEnabled = true });
+        flowStore.GetByIdAsync(_flowId).Returns(_ => new FlowDefinitionRecord { Id = _flowId, IsEnabled = _flowEnabled });
         var flows = new FlowRegistry([new CronFlow(_flowId)]);
         var services = new ServiceCollection()
             .AddSingleton<IServiceBusFlowRunner>(new RecordingRunner(() => _clock.Now, _fires))
@@ -202,6 +203,59 @@ public sealed class ServiceBusCronChangeTests
             FlowName = "StressCronFlow",
             TriggerKey = "tick",
             CronOverride = cron,
+            UpdatedAtUtc = at,
+        });
+    }
+
+    /// <summary>The dashboard's <c>PUT /api/schedules/{jobId}/cron</c> on a paused job: the override is only persisted.</summary>
+    private async Task PutCronWhilePausedAsync(string cron, DateTimeOffset at)
+    {
+        _clock.Now = at;
+        await _scheduleState.SaveAsync(new FlowScheduleState
+        {
+            JobId = JobId,
+            FlowId = _flowId,
+            FlowName = "StressCronFlow",
+            TriggerKey = "tick",
+            IsPaused = true,
+            CronOverride = cron,
+            UpdatedAtUtc = at,
+        });
+    }
+
+    /// <summary>The dashboard's <c>POST /api/schedules/{jobId}/pause</c>: persist the pause, then Remove on the receiving replica.</summary>
+    private async Task PauseAsync(Replica replica, DateTimeOffset at)
+    {
+        _clock.Now = at;
+        var existing = await _scheduleState.GetAsync(JobId);
+        await _scheduleState.SaveAsync(new FlowScheduleState
+        {
+            JobId = JobId,
+            FlowId = _flowId,
+            FlowName = "StressCronFlow",
+            TriggerKey = "tick",
+            IsPaused = true,
+            CronOverride = existing?.CronOverride ?? EveryMinute,
+            UpdatedAtUtc = at,
+        });
+        replica.Hub.Remove(JobId);
+    }
+
+    /// <summary>The dashboard's <c>POST /api/schedules/{jobId}/resume</c>: register on the receiving replica, then persist.</summary>
+    private async Task ResumeAsync(Replica replica, DateTimeOffset at)
+    {
+        _clock.Now = at;
+        var existing = await _scheduleState.GetAsync(JobId);
+        var cron = existing?.CronOverride ?? EveryMinute;
+        replica.Hub.RegisterOrUpdate(JobId, _flowId, "tick", cron);
+        await _scheduleState.SaveAsync(new FlowScheduleState
+        {
+            JobId = JobId,
+            FlowId = _flowId,
+            FlowName = "StressCronFlow",
+            TriggerKey = "tick",
+            IsPaused = false,
+            CronOverride = existing?.CronOverride,
             UpdatedAtUtc = at,
         });
     }
@@ -308,5 +362,137 @@ public sealed class ServiceBusCronChangeTests
 
         // Assert
         Assert.Equal("12:16,12:17,12:18,12:19,12:20,12:21,12:22,12:23,12:24,12:25", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task PausedOnOneReplicaAndResumedOnAnother_ScheduleFiresAgain()
+    {
+        // Arrange — the 2026-11-27 stress-run timeline on three replicas, API calls spread over them: */2 from
+        // 12:19:19 on r0, paused at 12:25:20 on r1. While paused every tick lands on r0. r2 still holds the job
+        // on */2 (it fired 12:24), so before the fix it took the resume for "same cron, chain alive" — but the
+        // paused tick had ended the chain on r0, and the schedule never fired again.
+        var replicas = new[] { await StartReplicaAsync(), await StartReplicaAsync(), await StartReplicaAsync() };
+        await RunUntilAsync(At(12, 19, 19), replicas);
+        await PutCronAsync(replicas[0], EveryTwoMinutes, At(12, 19, 19));
+        await RunUntilAsync(At(12, 25, 20), replicas);
+        await PauseAsync(replicas[1], At(12, 25, 20));
+        await RunUntilAsync(At(12, 30, 20), replicas[0]);
+
+        // Act
+        await ResumeAsync(replicas[2], At(12, 30, 20));
+        await RunUntilAsync(At(12, 36), replicas);
+
+        // Assert — nothing while paused, then every two minutes again; no gap, no double fire.
+        Assert.Equal("12:16,12:17,12:18,12:19,12:20,12:22,12:24,12:32,12:34,12:36", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task PausedAndResumedOnTheReplicaThatScheduledTheNextTick_FiresOnceEachMinute()
+    {
+        // Arrange — pause and resume both land on the only replica, which scheduled (and so could cancel) the
+        // pending 12:20 tick; the resume comes before that tick, while its chain is alive.
+        var replica = await StartReplicaAsync();
+        await RunUntilAsync(At(12, 19, 30), replica);
+        await PauseAsync(replica, At(12, 19, 30));
+
+        // Act
+        await ResumeAsync(replica, At(12, 19, 40));
+        await RunUntilAsync(At(12, 23), replica);
+
+        // Assert — exactly one chain: every minute once, the pause too short to skip a tick.
+        Assert.Equal("12:16,12:17,12:18,12:19,12:20,12:21,12:22,12:23", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task PausedThenResumedOnTheSameReplicaAfterAMutedTick_FiresOnceEachMinute()
+    {
+        // Arrange
+        var replica = await StartReplicaAsync();
+        await RunUntilAsync(At(12, 19, 30), replica);
+        await PauseAsync(replica, At(12, 19, 30));
+        await RunUntilAsync(At(12, 20, 30), replica);
+
+        // Act
+        await ResumeAsync(replica, At(12, 20, 30));
+        await RunUntilAsync(At(12, 23), replica);
+
+        // Assert — 12:20 skipped while paused, then once a minute.
+        Assert.Equal("12:16,12:17,12:18,12:19,12:21,12:22,12:23", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task DisabledOnOneReplicaAndReEnabledOnAnother_ScheduleFiresAgain()
+    {
+        // Arrange — the flow is disabled through r0 (the sync Removes the job there) while its ticks land on r0;
+        // r2 still holds the job and takes the re-enable.
+        var replicas = new[] { await StartReplicaAsync(), await StartReplicaAsync(), await StartReplicaAsync() };
+        await RunUntilAsync(At(12, 19, 30), replicas);
+        _flowEnabled = false;
+        replicas[0].Hub.Remove(JobId);
+        await RunUntilAsync(At(12, 22, 30), replicas[0]);
+
+        // Act — what RecurringTriggerSync does on the re-enable.
+        _flowEnabled = true;
+        replicas[2].Hub.RegisterOrUpdate(JobId, _flowId, "tick", EveryMinute);
+        await RunUntilAsync(At(12, 25), replicas);
+
+        // Assert
+        Assert.Equal("12:16,12:17,12:18,12:19,12:23,12:24,12:25", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task CronChangedWhilePaused_ResumeElsewhereFiresOnlyTheNewSchedule()
+    {
+        // Arrange — paused on r0, a muted tick perpetuates the old chain on r1, then the cron is changed while
+        // paused (only persisted), which ends the old chain at its next tick.
+        var replicas = new[] { await StartReplicaAsync(), await StartReplicaAsync(), await StartReplicaAsync() };
+        await RunUntilAsync(At(12, 19, 30), replicas);
+        await PauseAsync(replicas[0], At(12, 19, 30));
+        await RunUntilAsync(At(12, 20, 30), replicas[1]);
+        await PutCronWhilePausedAsync(EveryTwoMinutes, At(12, 20, 30));
+        await RunUntilAsync(At(12, 23, 30), replicas[1]);
+
+        // Act — r2 still holds the job on the old cron.
+        await ResumeAsync(replicas[2], At(12, 23, 30));
+        await RunUntilAsync(At(12, 28), replicas);
+
+        // Assert
+        Assert.Equal("12:16,12:17,12:18,12:19,12:24,12:26,12:28", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task PausedThenEveryReplicaRestarted_ResumeFiresOnceEachMinute()
+    {
+        // Arrange — the replacement process starts while the job is paused, so its startup sync never registers it.
+        var before = await StartReplicaAsync();
+        await RunUntilAsync(At(12, 19, 30), before);
+        await PauseAsync(before, At(12, 19, 30));
+        _clock.Now = At(12, 19, 45);
+        var after = await StartReplicaAsync();
+        await RunUntilAsync(At(12, 21, 30), after);
+
+        // Act
+        await ResumeAsync(after, At(12, 21, 30));
+        await RunUntilAsync(At(12, 24), after);
+
+        // Assert
+        Assert.Equal("12:16,12:17,12:18,12:19,12:22,12:23,12:24", FiredMinutes());
+    }
+
+    [Fact]
+    public async Task MutedJob_IsNotListedAsAnActiveSchedule()
+    {
+        // Arrange — paused on r1; the muted tick registers the job on r0, which did not hold it.
+        var replicas = new[] { await StartReplicaAsync(), await StartReplicaAsync() };
+        await RunUntilAsync(At(12, 19, 30), replicas);
+        await PauseAsync(replicas[1], At(12, 19, 30));
+        replicas[0].Hub.Remove(JobId);
+        await RunUntilAsync(At(12, 20, 30), replicas[0]);
+
+        // Act
+        var listed = await replicas[0].Hub.GetJobsAsync();
+
+        // Assert — the dashboard lists a paused job from the persisted state, never as active.
+        Assert.Empty(listed);
     }
 }

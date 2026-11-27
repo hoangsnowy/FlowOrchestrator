@@ -38,6 +38,10 @@ namespace FlowOrchestrator.ServiceBus;
 ///         message id, and the queue's duplicate detection (10-minute window) could only absorb it when the
 ///         surviving tick had been sent less than 10 minutes earlier — any schedule with a longer period
 ///         fired twice after each restart.</item>
+///   <item>Registering a job this process does not hold after startup (a resume or re-enable) peeks the queue
+///         afresh and adopts the job's live tick the same way. A pause or disable keeps the chain alive, muted
+///         (see <see cref="ServiceBusCronProcessorHostedService"/>), and <see cref="Remove"/> forgets the job here
+///         without cancelling its tick, so exactly one chain survives a pause and resume made on any replicas.</item>
 /// </list>
 /// <para>
 /// Multi-replica safety: Service Bus delivers each scheduled message exactly once to a single consumer, so
@@ -101,6 +105,7 @@ internal sealed partial class ServiceBusRecurringTriggerHub
         long? supersededSequence = null;
         var seed = false;
         var adoptFromInventory = false;
+        var startupRegistration = false;
         DateTimeOffset epoch = default;
         lock (_startupGate)
         {
@@ -129,12 +134,13 @@ internal sealed partial class ServiceBusRecurringTriggerHub
                     EffectiveCron = cronExpression,
                     NextExecution = nextFire,
                 };
+                // Not held here — but its chain may well be alive: a pause or disable keeps it running muted, and
+                // the pause, the resume and the tick that last perpetuated it may each have landed on a different
+                // replica. Look on the queue before seeding: the startup snapshot while the host starts, a fresh
+                // peek afterwards (a resume, a re-enable). Seeding blindly here started a second chain.
                 seed = true;
-                adoptFromInventory = !_startupComplete;
-                if (!adoptFromInventory)
-                {
-                    epoch = NextEpochLocked(jobId, nextFire);
-                }
+                adoptFromInventory = true;
+                startupRegistration = !_startupComplete;
             }
         }
 
@@ -154,8 +160,8 @@ internal sealed partial class ServiceBusRecurringTriggerHub
         // Fire-and-forget — keeping RegisterOrUpdate synchronous matches the PeriodicTimer dispatcher's
         // signature. ScheduleNextAsync throws on failure so the self-perpetuating consumer can redeliver; for
         // the registration-time call we log and continue, since the next sync re-attempts.
-        var seeding = SeedAsync(jobId, flowId, triggerKey, cronExpression, nextFire, epoch, adoptFromInventory);
-        if (adoptFromInventory)
+        var seeding = SeedAsync(jobId, flowId, triggerKey, cronExpression, nextFire, epoch, adoptFromInventory, startupRegistration);
+        if (startupRegistration)
         {
             lock (_startupGate)
             {
@@ -167,17 +173,19 @@ internal sealed partial class ServiceBusRecurringTriggerHub
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Forgets the job in this process only; the pending tick is NOT cancelled. Remove is how a pause and a
+    /// disable reach the runtime, and with shared schedule state the consumer keeps such a job's chain alive
+    /// without starting runs, so a resume or re-enable on any replica finds it. Cancelling the tick here ended
+    /// that chain while the other replicas still held the job — a resume there saw "same cron, chain alive",
+    /// seeded nothing, and the schedule never fired again. A job whose flow no longer declares the trigger has its
+    /// chain ended by the consumer at the next tick.
+    /// </remarks>
     public void Remove(string jobId)
     {
-        if (_jobs.TryRemove(jobId, out var state))
+        if (_jobs.TryRemove(jobId, out _))
         {
             LogRemoved(_logger, Sanitize(jobId));
-            // Best-effort cancellation of the pending tick; a tick this process cannot cancel (sent by a previous
-            // process, or already delivered) is dropped by the consumer because the job is no longer registered.
-            if (state.LastSequenceNumber is { } seq)
-            {
-                _ = TryCancelScheduledAsync(seq);
-            }
         }
     }
 
@@ -248,11 +256,14 @@ internal sealed partial class ServiceBusRecurringTriggerHub
     /// <inheritdoc/>
     public Task<IReadOnlyList<RecurringTriggerInfo>> GetJobsAsync()
     {
+        // A muted job (paused or disabled, its chain kept alive) is not an active schedule: the dashboard lists it
+        // from the persisted pause state, as with every other runtime, which drops a paused job altogether.
         IReadOnlyList<RecurringTriggerInfo> result = _jobs
+            .Where(kvp => !kvp.Value.Paused)
             .Select(kvp => new RecurringTriggerInfo(
                 Id: kvp.Key,
                 Cron: kvp.Value.EffectiveCron,
-                NextExecution: kvp.Value.Paused ? null : kvp.Value.NextExecution.UtcDateTime,
+                NextExecution: kvp.Value.NextExecution.UtcDateTime,
                 LastExecution: kvp.Value.LastExecution?.UtcDateTime,
                 LastJobId: kvp.Value.LastJobId,
                 LastJobState: kvp.Value.LastJobState,
@@ -297,13 +308,17 @@ internal sealed partial class ServiceBusRecurringTriggerHub
     /// </summary>
     /// <param name="envelope">The received recurring tick (non-empty <see cref="CronEnvelope.Cron"/>).</param>
     /// <param name="registerIfMissing">
-    /// <see langword="true"/> when the persisted schedule state says the job is active although this process has
-    /// no registration for it (it was paused or disabled here and resumed on another replica): the job is then
-    /// registered from the tick, without seeding, so the chain the other replica started keeps running.
+    /// <see langword="true"/> when the persisted state is the authority for the job although this process has no
+    /// registration for it (it was paused or disabled here and resumed, or its chain kept alive, elsewhere): the
+    /// job is then registered from the tick, without seeding, so the chain every replica shares keeps running.
+    /// </param>
+    /// <param name="paused">
+    /// What the persisted state says: <see langword="true"/> paused or disabled (the tick is muted),
+    /// <see langword="false"/> live, <see langword="null"/> unknown (the registration's flag is left as it is).
     /// </param>
     /// <returns>What the consumer must do with the tick.</returns>
     /// <remarks>O(1): one dictionary lookup and a few comparisons, under the hub's gate.</remarks>
-    internal TickVerdict ObserveTick(CronEnvelope envelope, bool registerIfMissing)
+    internal TickVerdict ObserveTick(CronEnvelope envelope, bool registerIfMissing, bool? paused = null)
     {
         lock (_startupGate)
         {
@@ -322,6 +337,11 @@ internal sealed partial class ServiceBusRecurringTriggerHub
                     NextExecution = envelope.ScheduledFor,
                 };
                 _jobs[envelope.JobId] = state;
+            }
+
+            if (paused is { } isPaused)
+            {
+                state.Paused = isPaused;
             }
 
             if (_latestEpoch.TryGetValue(envelope.JobId, out var latest))
@@ -393,11 +413,12 @@ internal sealed partial class ServiceBusRecurringTriggerHub
     /// host restart.
     /// </summary>
     /// <remarks>
-    /// Short-circuits when <paramref name="jobId"/> is no longer in the hub's job map. This guards
-    /// against the v1.22 disabled-flow self-perpetuation bug: the cron consumer calls this method
-    /// BEFORE invoking the engine, so a flow that was disabled mid-flight (which calls
-    /// <see cref="Remove(string)"/> via <see cref="RecurringTriggerSync.SyncTriggersAsync"/>) would otherwise
-    /// keep enqueuing scheduled messages every tick even though the engine rejects each fire.
+    /// Short-circuits when <paramref name="jobId"/> is no longer in the hub's job map, so a job removed
+    /// in this process with no shared state to say otherwise stops perpetuating (the v1.22 disabled-flow
+    /// self-perpetuation bug). A disabled flow or a paused job whose state the store does share is
+    /// different: the consumer registers it from the tick and keeps its chain alive on purpose, starting no
+    /// run (see <see cref="ServiceBusCronProcessorHostedService"/>), so a re-enable or resume on any replica
+    /// finds the chain running.
     /// </remarks>
     internal Task ScheduleNextAsync(
         string jobId,
@@ -561,17 +582,37 @@ internal sealed partial class ServiceBusRecurringTriggerHub
     }
 
     /// <summary>
-    /// Seeds the first tick of a job's chain — unless, for a startup registration, the previous process left a
-    /// tick for the same job and cron on the queue, in which case that tick is adopted as the chain.
+    /// Seeds the first tick of a job's chain — unless a tick for the same job and cron is already on the queue
+    /// (left by the previous process, or kept alive while the job was paused), in which case that tick is adopted
+    /// as the chain.
     /// </summary>
+    /// <param name="jobId">The job.</param>
+    /// <param name="flowId">The job's flow.</param>
+    /// <param name="triggerKey">The job's manifest trigger key.</param>
+    /// <param name="cron">The job's cron.</param>
+    /// <param name="nextFire">The first tick's instant when a new chain is seeded.</param>
+    /// <param name="epoch">The new chain's epoch; recomputed after the queue was consulted.</param>
+    /// <param name="consultInventory">Whether to look on the queue before seeding (a job this process did not hold).</param>
+    /// <param name="startupRegistration">
+    /// <see langword="true"/> to use the one peek shared by every startup registration; otherwise the queue is
+    /// peeked afresh, because the consumer has been completing ticks since that snapshot.
+    /// </param>
     private async Task SeedAsync(
-        string jobId, Guid flowId, string triggerKey, string cron, DateTimeOffset nextFire, DateTimeOffset epoch, bool consultInventory)
+        string jobId,
+        Guid flowId,
+        string triggerKey,
+        string cron,
+        DateTimeOffset nextFire,
+        DateTimeOffset epoch,
+        bool consultInventory,
+        bool startupRegistration)
     {
         try
         {
             if (consultInventory)
             {
-                if (await TryAdoptSurvivingTickAsync(jobId, cron).ConfigureAwait(false))
+                var inventory = startupRegistration ? GetInventoryAsync() : LoadInventoryAsync();
+                if (await TryAdoptSurvivingTickAsync(jobId, cron, inventory).ConfigureAwait(false))
                 {
                     return;
                 }
@@ -595,9 +636,9 @@ internal sealed partial class ServiceBusRecurringTriggerHub
     /// ticks scheduled under a different cron.
     /// </summary>
     /// <returns><see langword="true"/> when a surviving tick on <paramref name="cron"/> was adopted.</returns>
-    private async Task<bool> TryAdoptSurvivingTickAsync(string jobId, string cron)
+    private async Task<bool> TryAdoptSurvivingTickAsync(string jobId, string cron, Task<Dictionary<string, List<PendingTick>>> inventorySource)
     {
-        var inventory = await GetInventoryAsync().ConfigureAwait(false);
+        var inventory = await inventorySource.ConfigureAwait(false);
         List<PendingTick>? ticks;
         lock (_startupGate)
         {

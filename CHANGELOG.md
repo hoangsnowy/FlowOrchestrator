@@ -666,10 +666,17 @@ where one provider behaved differently from the others.
   Each job now runs exactly one chain, stamped with an epoch (new `chainEpoch` field on the cron message;
   ticks written before 2.0 rank below any chain seeded since). The consumer drops a tick of an older chain,
   a second copy of a tick that already fired, a tick for a job that is not registered, and — reading the
-  shared state — a tick for a disabled flow, a trigger the manifest no longer declares, a schedule paused
-  on any replica, or a tick whose cron differs from the persisted cron override (`PersistOverrides`; so a
-  replica that has not yet seen a cron change does not fire the replaced chain); a replica receiving a newer
-  chain's tick follows it. Re-registering a job with its current cron schedules nothing; a different cron
+  shared state — a trigger the manifest no longer declares, or a tick whose cron differs from the persisted
+  cron override (`PersistOverrides`; so a replica that has not yet seen a cron change does not fire the
+  replaced chain); a replica receiving a newer chain's tick follows it. A tick for a disabled flow, or for a
+  schedule paused on any replica, starts **no run but keeps its chain alive** (it schedules its successor):
+  ending the chain left a resume or re-enable that landed on another replica — one that still held the job,
+  saw "same cron, chain alive" and seeded nothing — with no chain at all, and the schedule never fired again
+  (2.0 stress run, pause on one replica and resume on another; the same held for disable and re-enable).
+  `Remove` (pause, disable) therefore forgets the job on that replica without cancelling its pending tick,
+  and registering a job a replica does not hold after startup peeks the cron queue and adopts the job's
+  live tick instead of seeding a second chain. A muted job is not listed by the inspector; the dashboard
+  shows it from the persisted pause state, as on every other runtime. Re-registering a job with its current cron schedules nothing; a different cron
   cancels the known pending tick and seeds a newer chain. A recurring tick's message id carries its chain
   epoch (`{flowId}:{triggerKey}:{fireAt}:{epochTicks}`; one-off fires keep `{flowId}:{triggerKey}:{fireAt}`),
   so a new chain whose first tick falls on the instant of the replaced chain's pending tick — e.g. `* * * * *`
@@ -677,9 +684,10 @@ where one provider behaved differently from the others.
   the 2.0 pre-release stress run caught exactly that, the schedule going silent after a cron change. At startup the hub peeks the cron queue once and adopts the surviving tick instead of seeding
   a duplicate, and the consumer starts processing only after `ApplicationStarted` (the startup sync has
   registered every job). An unparseable cron now throws `ArgumentException` with the job untouched. Logs
-  moved to `LoggerMessage` (EventIds 3140-3154). **Read before upgrading:** saving a schedule again with
+  moved to `LoggerMessage` (EventIds 3140-3155). **Read before upgrading:** saving a schedule again with
   the cron it already runs no longer schedules an extra tick; a chain that died (its tick dead-lettered
-  after `MaxDeliveryCount` failures) is re-seeded by the next restart.
+  after `MaxDeliveryCount` failures) is re-seeded by the next restart; a paused job, or a disabled flow's
+  cron trigger, keeps one scheduled message per tick on the cron queue (no run is started).
 - **Dashboard schedule Resume no longer fails on an override an older version persisted unvalidated.** It
   falls back to the manifest cron and clears the override (as startup sync does), and registers with the
   runtime before saving the state, instead of answering `500` on every attempt.
