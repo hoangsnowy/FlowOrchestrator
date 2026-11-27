@@ -160,6 +160,16 @@ internal sealed class CronChangeTickHandler : IStepHandler
     /// <inheritdoc/>
     public ValueTask<object?> ExecuteAsync(IExecutionContext context, IFlowDefinition flow, IStepInstance step)
     {
+        RecordInvocation();
+        return ValueTask.FromResult<object?>(null);
+    }
+
+    /// <summary>
+    /// Counts one invocation across every handler instance (DI creates one per step) and releases the
+    /// waiters whose target is reached. Static on purpose: the count is shared by all instances.
+    /// </summary>
+    private static void RecordInvocation()
+    {
         lock (Gate)
         {
             var count = Interlocked.Increment(ref _count);
@@ -171,7 +181,5 @@ internal sealed class CronChangeTickHandler : IStepHandler
                 }
             }
         }
-
-        return ValueTask.FromResult<object?>(null);
     }
 }
