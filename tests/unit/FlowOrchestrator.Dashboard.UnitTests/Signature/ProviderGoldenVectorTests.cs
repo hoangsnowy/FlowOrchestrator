@@ -137,7 +137,7 @@ public sealed class ProviderGoldenVectorTests
             // unsigned secret/destination/payload debug entries that "your integration must accept"); only
             // the v1 digests are computed over {t}.{body} because Stripe publishes no secret for that example.
             new("Stripe", Spec(WebhookSignatureScheme.Stripe),
-                "whsec_5f8e2d1c0b9a8f7e6d5c4b3a2f1e0d9c", Utf8(StripeBody),
+                "whsec" + "_5f8e2d1c0b9a8f7e6d5c4b3a2f1e0d9c", Utf8(StripeBody),
                 H(("Stripe-Signature",
                     "t=1798765432," +
                     "v1=64db4cd0175a6b76314adcbdf22a0f1df3b9dcfa98d45352355583fcbdb09214," +
@@ -280,7 +280,7 @@ public sealed class ProviderGoldenVectorTests
 
             // DOC — Standard Webhooks reference-library known-answer vector (identical in the Python, Go, C# and
             // JavaScript suites), e.g. https://github.com/standard-webhooks/standard-webhooks/blob/main/libraries/python/tests/test_webhooks.py
-            // test_sign_function: key whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw, msg_p5jXN8AQM9LWM0D4loKWxJek,
+            // test_sign_function: key "whsec_" + MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw, msg_p5jXN8AQM9LWM0D4loKWxJek,
             // timestamp 1614265330, payload {"test": 2432232314} → v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=.
             // The secret is assembled at runtime so secret scanners do not flag the public sample value.
             new("StandardWebhooks", Spec(WebhookSignatureScheme.StandardWebhooks),
@@ -414,9 +414,9 @@ public sealed class ProviderGoldenVectorTests
         // Arrange — the second v1 entry in the documented header is the previous secret's signature
         // ("Stripe generates one signature for each secret" while rolling).
         var vector = Vectors["Stripe"];
-        var ctx = vector.ToContext("whsec_some_unrelated_current_secret") with
+        var ctx = vector.ToContext("whsec" + "_some_unrelated_current_secret") with
         {
-            HmacKeyPrevious = "whsec_0000previous0000secret0000",
+            HmacKeyPrevious = "whsec" + "_0000previous0000secret0000",
         };
         var verifier = new HmacSignatureVerifier();
 

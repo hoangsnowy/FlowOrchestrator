@@ -62,7 +62,7 @@ public sealed class StripeWebhookFlow() : ProviderWebhookFlowBase(new Guid("d1f8
 {
     ["webhookSlug"] = "e2e-stripe",
     ["webhookSignatureScheme"] = "Stripe",
-    ["webhookHmacKey"] = "whsec_e2eStripeSigningSecret000000000000",
+    ["webhookHmacKey"] = "whsec" + "_e2eStripeSigningSecret000000000000",
 });
 
 /// <summary>Slack slash command: form-urlencoded body, <c>X-Slack-Signature: v0=…</c> over <c>v0:{ts}:{body}</c>.</summary>

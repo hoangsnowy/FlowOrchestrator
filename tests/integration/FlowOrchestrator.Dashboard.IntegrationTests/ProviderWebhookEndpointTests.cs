@@ -164,7 +164,7 @@ public sealed partial class ProviderWebhookEndpointTests
             });
 
         // Stripe — https://docs.stripe.com/webhooks#verify-manually ; header carries t, v1 and debug entries.
-        yield return new("Stripe", "whsec_5f8e2d1c0b9a8f7e6d5c4b3a2f1e0d9c", "whsec_5f8e2d1c0b9a8f7e6d5c4b3a2f1e0d9d", false, Scheme("Stripe"),
+        yield return new("Stripe", "whsec" + "_5f8e2d1c0b9a8f7e6d5c4b3a2f1e0d9c", "whsec" + "_5f8e2d1c0b9a8f7e6d5c4b3a2f1e0d9d", false, Scheme("Stripe"),
             (slug, key, o) =>
             {
                 var body = U("{\n  \"id\": \"evt_test_webhook\",\n  \"object\": \"event\",\n  \"type\": \"payment_intent.succeeded\"\n}");

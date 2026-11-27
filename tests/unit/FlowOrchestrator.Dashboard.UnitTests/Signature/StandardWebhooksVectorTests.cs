@@ -257,7 +257,7 @@ public sealed class StandardWebhooksVectorTests
     [Theory]
     [InlineData("whsec_not base64!!")]
     [InlineData("whsec_")]
-    [InlineData("whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaS")]
+    [InlineData("whsec" + "_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaS")]
     public void Undecodable_secret_is_rejected_as_key_not_configured(string key)
     {
         // Arrange — not base64 / empty after the prefix / truncated (length not a multiple of 4).

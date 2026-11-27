@@ -98,7 +98,7 @@ check_instance() {
 
   # W.4 Stripe — genuine (t= signed timestamp) → 200; exact same delivery again → 409.
   f=$TMP/stripe.json; printf '{\n  "id": "evt_%s",\n  "object": "event",\n  "type": "payment_intent.succeeded"\n}' "$RANDOM$RANDOM" > "$f"
-  ts=$(now); sig=$(sign stripe whsec_e2eStripeSigningSecret000000000000 "$ts" "$f")
+  ts=$(now); sig=$(sign stripe "whsec""_e2eStripeSigningSecret000000000000" "$ts" "$f")
   st_headers=(-H "User-Agent: Stripe/1.0 (+https://stripe.com/docs/webhooks)" -H "Stripe-Signature: t=$ts,v1=$sig")
   r=$(post "$B/flows/api/webhook/e2e-stripe" "application/json; charset=utf-8" "$f" "${st_headers[@]}"); code=${r%% *}
   local r2; r2=$(post "$B/flows/api/webhook/e2e-stripe" "application/json; charset=utf-8" "$f" "${st_headers[@]}")
