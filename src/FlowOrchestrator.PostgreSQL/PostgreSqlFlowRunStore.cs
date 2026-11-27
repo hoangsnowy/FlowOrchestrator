@@ -800,7 +800,7 @@ public sealed class PostgreSqlFlowRunStore :
                 """,
                 args, tx).ConfigureAwait(false);
 
-            if (current is { } c)
+            if (current is not null)
             {
                 var terminal = await conn.ExecuteScalarAsync<int?>(
                     """

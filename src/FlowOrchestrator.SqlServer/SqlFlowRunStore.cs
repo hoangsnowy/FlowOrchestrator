@@ -927,10 +927,11 @@ public sealed class SqlFlowRunStore :
         var renewed = new List<StepLease>(leases.Count);
         await using var conn = new SqlConnection(_connectionString);
         const int perBatch = 500;   // 3 parameters each, well below SQL Server's 2100
+        var sql = new System.Text.StringBuilder(Math.Min(perBatch, leases.Count) * 200);
         for (var start = 0; start < leases.Count; start += perBatch)
         {
             var count = Math.Min(perBatch, leases.Count - start);
-            var sql = new System.Text.StringBuilder(count * 200);
+            sql.Clear();
             var parameters = new DynamicParameters();
             parameters.Add("LeaseMs", LeaseMilliseconds(duration));
             sql.Append("DECLARE @Renewed TABLE (RunId UNIQUEIDENTIFIER, StepKey NVARCHAR(256), Fence BIGINT);\n");

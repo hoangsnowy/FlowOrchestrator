@@ -901,15 +901,13 @@ public sealed class InMemoryFlowRunStore :
         lock (_leaseGate)
         {
             var expiresAt = Clock.GetUtcNow() + duration;
-            foreach (var lease in leases)
+            // Renewal cadence (every RenewInterval), not a step-completion path: the Where reads clearer here.
+            foreach (var (lease, state) in leases
+                .Select(l => (Lease: l, State: _leases.GetValueOrDefault((l.RunId, l.StepKey))))
+                .Where(x => x.State is { ExpiresAt: not null } s && s.Fence == x.Lease.Fence))
             {
-                if (_leases.TryGetValue((lease.RunId, lease.StepKey), out var state)
-                    && state.Fence == lease.Fence
-                    && state.ExpiresAt is not null)
-                {
-                    state.ExpiresAt = expiresAt;
-                    renewed.Add(lease);
-                }
+                state!.ExpiresAt = expiresAt;
+                renewed.Add(lease);
             }
         }
 
