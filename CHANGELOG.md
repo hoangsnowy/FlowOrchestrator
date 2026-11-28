@@ -1161,6 +1161,8 @@ package: packages can be mixed at different 2.x versions, so no internal is a cr
   from 2.0.1 on it checks against the 2.0.0 API baseline.
 - `publish.yml` runs restore, build, tests and pack in a job with no credential; only the separate push job
   can mint the Trusted Publishing key.
+- New [Extending](docs/articles/extending.md) guide: what a custom store must guarantee, and how to write a
+  custom runtime (`IStepDispatcher`, the worker loop, cron triggers) against public API only.
 - New [Support and Release Policy](docs/articles/support-policy.md): 2.x is current; 1.34.x gets security
   and critical fixes for six months after 2.0.0; target frameworks are dropped only in a major, timed to
   Microsoft's end of support; `[Obsolete]` for at least one minor before a removal.

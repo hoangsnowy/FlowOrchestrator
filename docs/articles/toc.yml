@@ -61,5 +61,8 @@
 - name: Production Checklist
   href: production-checklist.md
 
+- name: Extending (custom storage and runtimes)
+  href: extending.md
+
 - name: Support and Release Policy
   href: support-policy.md
