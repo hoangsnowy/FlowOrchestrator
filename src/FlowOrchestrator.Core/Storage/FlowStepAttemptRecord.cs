@@ -33,6 +33,13 @@ public sealed class FlowStepAttemptRecord
     /// <summary>Hangfire job ID for this attempt.</summary>
     public string? JobId { get; set; }
 
+    /// <summary>
+    /// The server that ran this attempt (<see cref="FlowServerRecord.ServerId"/>, the step-lease owner id), or
+    /// <see langword="null"/> for an attempt recorded without one: a skip, a store that does not record it, or a row
+    /// written before 2.0.
+    /// </summary>
+    public string? ServerId { get; set; }
+
     /// <summary>UTC timestamp when this attempt started.</summary>
     public DateTimeOffset StartedAt { get; set; }
 

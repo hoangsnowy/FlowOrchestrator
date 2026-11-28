@@ -288,8 +288,29 @@ function renderStepDebugPanels(step, expanded) {
   const errorPanel = renderDetailPanel('Error', step.errorMessage, step.status === 'Failed', 'error', key);
   const inputPanel = renderDetailPanel('Input', step.inputJson, !!expanded, null, key);
   const outputPanel = renderDetailPanel('Output', step.outputJson, !!expanded, null, key);
-  const panels = errorPanel + inputPanel + outputPanel + attemptsPanel;
+  const panels = renderAttemptServers(step) + errorPanel + inputPanel + outputPanel + attemptsPanel;
   return panels ? '<div class="step-panels">' + panels + '</div>' : '';
+}
+// "Ran on <server>" for each attempt that recorded one (FlowStepAttempts.ServerId). Hidden when none did:
+// a custom store, or rows written before 2.0.
+function renderAttemptServers(step) {
+  const all = Array.isArray(step.attempts) ? step.attempts : [];
+  const withServer = all.filter(a => a && a.serverId);
+  if (withServer.length === 0) return '';
+  return '<div class="step-note attempt-servers">' + withServer.map(a =>
+    '<span class="attempt-server">' + (all.length > 1 ? 'Attempt ' + esc(String(a.attempt)) + ' ran on ' : 'Ran on ')
+    + '<code title="' + esc(a.serverId) + '">' + esc(serverLabel(a.serverId)) + '</code></span>').join(' · ') + '</div>';
+}
+// Server ids are "{machine}:{pid}:{guid}"; show the machine and pid with the first 8 hex digits of the guid.
+function serverLabel(id) {
+  const s = String(id || '');
+  const cut = s.lastIndexOf(':');
+  return cut > 0 ? s.slice(0, cut) + ' · ' + shortServerId(s) : shortServerId(s);
+}
+function shortServerId(id) {
+  const s = String(id || '');
+  const tail = s.slice(s.lastIndexOf(':') + 1);
+  return tail.length > 8 ? tail.slice(0, 8) : tail;
 }
 function renderWhyWhenSkippedPanel(step) {
   const traceJson = step && step.evaluationTraceJson;
@@ -647,6 +668,7 @@ function _cmdkBuildItems() {
   items.push({ kind: 'action', label: 'Go to Runs', sub: 'Navigation', action: () => { closeCmdK(); navigate('runs'); } });
   items.push({ kind: 'action', label: 'Go to Schedules', sub: 'Navigation', action: () => { closeCmdK(); navigate('scheduled'); } });
   items.push({ kind: 'action', label: 'Go to Webhooks', sub: 'Navigation', action: () => { closeCmdK(); navigate('webhooks'); } });
+  items.push({ kind: 'action', label: 'Go to Servers', sub: 'Navigation', action: () => { closeCmdK(); navigate('servers'); } });
   return items;
 }
 
@@ -2718,7 +2740,96 @@ async function refresh(opts) {
     }
     if (currentPage === 'scheduled') await loadScheduled({ silent });
     if (currentPage === 'webhooks') await loadWebhooks({ silent });
+    if (currentPage === 'servers') await loadServers({ silent });
   } catch(e) { if (!isAbortError(e)) console.error('refresh', e); }
+}
+
+// ── Servers page ──
+// Every replica's heartbeat row from GET /api/servers. Heartbeats do not travel on the SSE stream, so while
+// the page is open it refreshes itself every serversPollMs on top of the shared refresh() loop.
+const serversPollMs = 5000;
+let serversPollTimer = null;
+let allServers = [];
+
+function ensureServersPolling() {
+  if (serversPollTimer) return;
+  serversPollTimer = setInterval(() => {
+    if (currentPage === 'servers' && autoRefreshEnabled) refresh({ silent: true });
+  }, serversPollMs);
+}
+
+function lastSeenLabel(seconds) {
+  const sec = Math.max(0, Math.round(Number(seconds) || 0));
+  if (sec < 60) return sec + 's ago';
+  const min = Math.round(sec / 60);
+  if (min < 60) return min + 'm ago';
+  const hr = Math.round(min / 60);
+  return hr < 48 ? hr + 'h ago' : Math.round(hr / 24) + 'd ago';
+}
+
+function serverStatusChip(status) {
+  return status === 'Active'
+    ? '<span class="chip chip--server-active">Active</span>'
+    : '<span class="chip chip--server-stale" title="Missed its heartbeats: crashed, hung, or cannot reach the store">Stale</span>';
+}
+
+function displayVersion(v) {
+  const s = String(v || '');
+  const plus = s.indexOf('+');
+  return plus > 0 ? s.slice(0, plus) : s;
+}
+
+function renderServersTable(data) {
+  if (!data || data.tracked === false) {
+    return '<div class="empty-msg">This storage backend does not track servers. The SQL Server, PostgreSQL and in-memory backends do; a custom backend can implement <code>IFlowServerStore</code>.</div>';
+  }
+  const servers = data.servers || [];
+  if (servers.length === 0) return '<div class="empty-msg">No server has reported a heartbeat yet.</div>';
+  let html = '<table class="recent-table servers-table"><thead><tr>'
+    + '<th>Server</th><th>Machine</th><th class="num">PID</th><th>Runtime</th><th>Version</th>'
+    + '<th>Started</th><th>Last heartbeat</th><th class="num">Active steps</th><th>Status</th>'
+    + '</tr></thead><tbody>';
+  for (const s of servers) {
+    html += '<tr>'
+      + '<td class="cell-mono" title="' + esc(s.serverId) + '">' + esc(shortServerId(s.serverId)) + '</td>'
+      + '<td class="cell-strong">' + esc(s.machineName) + '</td>'
+      + '<td class="cell-mono num">' + esc(String(s.processId)) + '</td>'
+      + '<td>' + esc(s.runtime) + '</td>'
+      + '<td class="cell-mono" title="' + esc(s.version) + '">' + (esc(displayVersion(s.version)) || '\u2014') + '</td>'
+      + '<td class="cell-mono" title="' + esc(fmtDate(s.startedAt)) + '">' + esc(relativeTime(s.startedAt)) + '</td>'
+      + '<td class="cell-mono" title="' + esc(fmtDate(s.lastHeartbeatAt)) + '">' + esc(lastSeenLabel(s.lastSeenSeconds)) + '</td>'
+      + '<td class="cell-mono num">' + esc(String(s.activeStepCount)) + '</td>'
+      + '<td>' + serverStatusChip(s.status) + '</td>'
+      + '</tr>';
+  }
+  return html + '</tbody></table>';
+}
+
+async function loadServers(opts) {
+  const silent = !!(opts && opts.silent);
+  const tableEl = $('servers-table');
+  if (!tableEl) return;
+  if (!silent && !tableEl.innerHTML.trim()) tableEl.innerHTML = skeletonRows(3, 9);
+  ensureServersPolling();
+  const signal = newPageController().signal;
+  try {
+    const data = await fetchJSON(BASE + '/servers', { signal });
+    allServers = (data && data.servers) || [];
+    const active = allServers.filter(s => s.status === 'Active').length;
+    const stale = allServers.length - active;
+    $('servers-count-label').innerHTML = '<span class="num">' + active + '</span>active' + (stale > 0 ? ' · ' + stale + ' stale' : '');
+    $('servers-note').textContent = data && data.tracked !== false
+      ? 'Heartbeat every ' + Math.round(data.heartbeatIntervalSeconds) + ' s; a server is stale after ' + Math.round(data.staleAfterSeconds) + ' s without one.'
+      : '';
+    tableEl.innerHTML = renderServersTable(data);
+  } catch(e) {
+    if (isAbortError(e)) return;
+    console.error('Servers load error', e);
+    if (!silent) {
+      tableEl.innerHTML = '<div class="empty-msg empty-msg--error">Failed to load servers. <button class="btn-retry" onclick="loadServers()">Retry</button></div>';
+      showError('Failed to load servers', e.message);
+    }
+  }
 }
 
 // ── Webhooks page ──
@@ -2973,7 +3084,7 @@ const Router = (function () {
     let view = null;
     if (['timeline','dag','gantt','events'].includes(params.view)) view = params.view;
     const parts = path.split('/');
-    const page = ['overview','flows','runs','scheduled'].includes(parts[0]) ? parts[0] : 'overview';
+    const page = ['overview','flows','runs','scheduled','servers'].includes(parts[0]) ? parts[0] : 'overview';
     if (page !== 'runs') return { page, runId: null, stepKey: null, view: null, params };
     const runId = parts[1] || null;
     const stepKey = (parts[2] === 'steps' && parts[3]) ? decodeURIComponent(parts[3]) : null;

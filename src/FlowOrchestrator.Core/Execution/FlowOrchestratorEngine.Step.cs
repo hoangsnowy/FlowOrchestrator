@@ -148,7 +148,7 @@ internal sealed partial class FlowOrchestratorEngine
             try
             {
                 var inputJson = SafeSerialize(step.Inputs);
-                await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId)
+                await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId, _serverId)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

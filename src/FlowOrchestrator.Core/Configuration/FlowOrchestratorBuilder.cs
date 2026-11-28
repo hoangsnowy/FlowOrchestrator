@@ -39,6 +39,9 @@ public sealed class FlowOrchestratorBuilder
     /// <summary>Signal options for <c>WaitForSignal</c> parking and resume-nudge dispatch.</summary>
     public FlowSignalOptions Signals { get; } = new();
 
+    /// <summary>Server-registry options: heartbeat interval, stale threshold and purge age of the Servers view.</summary>
+    public FlowServerOptions Servers { get; } = new();
+
     /// <summary>Options for the opt-in run-search token index; see <see cref="UseRunSearchIndex"/>.</summary>
     public RunSearchIndexOptions RunSearchIndex { get; } = new();
 

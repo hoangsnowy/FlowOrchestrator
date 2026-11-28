@@ -68,7 +68,11 @@ internal sealed class PostgreSqlFlowRunStore :
     /// next <c>MAX(attempt_no)</c> read always sees prior attempts. The lock is released
     /// automatically when the transaction commits or rolls back.
     /// </remarks>
-    public async Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
+    public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
+        => RecordStepStartAsync(runId, stepKey, stepType, inputJson, jobId, serverId: null);
+
+    /// <inheritdoc/>
+    public async Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId, string? serverId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
@@ -89,10 +93,10 @@ internal sealed class PostgreSqlFlowRunStore :
 
         await conn.ExecuteAsync(
             """
-            INSERT INTO flow_step_attempts (run_id, step_key, attempt_no, step_type, status, input_json, job_id, started_at)
-            VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, NOW())
+            INSERT INTO flow_step_attempts (run_id, step_key, attempt_no, step_type, status, input_json, job_id, started_at, server_id)
+            VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, NOW(), @ServerId)
             """,
-            new { RunId = runId, StepKey = stepKey, AttemptNo = attemptNo, StepType = stepType, InputJson = inputJson, JobId = jobId }, tx);
+            new { RunId = runId, StepKey = stepKey, AttemptNo = attemptNo, StepType = stepType, InputJson = inputJson, JobId = jobId, ServerId = serverId }, tx);
 
         await conn.ExecuteAsync(
             """
@@ -407,7 +411,7 @@ internal sealed class PostgreSqlFlowRunStore :
                    input_json AS "InputJson", output_json AS "OutputJson",
                    error_message AS "ErrorMessage", job_id AS "JobId",
                    started_at AS "StartedAt", completed_at AS "CompletedAt",
-                   evaluation_trace_json AS "EvaluationTraceJson"
+                   evaluation_trace_json AS "EvaluationTraceJson", server_id AS "ServerId"
             FROM flow_step_attempts
             WHERE run_id = @RunId
             ORDER BY step_key, attempt_no
@@ -1199,7 +1203,7 @@ internal sealed class PostgreSqlFlowRunStore :
     /// 2.0 the skip was a start, a completion and a trace write in up to three transactions, and a crash
     /// between them left a claim with no <c>Skipped</c> row, which the completion gate reads as in-flight
     /// work for ever. The attempt number is allocated under the same advisory lock as
-    /// <see cref="RecordStepStartAsync"/>; a <see langword="null"/> trace keeps the row's previous trace.
+    /// <see cref="RecordStepStartAsync(Guid, string, string, string?, string?, string?)"/>; a <see langword="null"/> trace keeps the row's previous trace.
     /// </para>
     /// </remarks>
     public async Task RecordSkippedStepAsync(Guid runId, string stepKey, string stepType, string? reason, string? evaluationTraceJson)
@@ -1446,7 +1450,7 @@ internal sealed class PostgreSqlFlowRunStore :
     /// snapshot and run that step before the latch commits. The transaction therefore first takes the stale
     /// run's <b>run gate</b> (<see cref="RunGateExclusiveSql"/>) exclusively. Every writer of a
     /// <c>flow_step_dispatches</c> or <c>flow_steps</c> row holds the same gate <i>shared</i> until it commits
-    /// (<see cref="TryRecordDispatchAsync"/>, <see cref="RecordStepStartAsync"/>,
+    /// (<see cref="TryRecordDispatchAsync"/>, <see cref="RecordStepStartAsync(Guid, string, string, string?, string?, string?)"/>,
     /// <see cref="RecordSkippedStepAsync(Guid, string, string, string?, string?)"/>). A writer already holding
     /// it makes the takeover wait until its row is committed, and the check-and-swap then runs as a separate
     /// statement whose snapshot sees it. A writer arriving later waits until the latch is committed. The gate

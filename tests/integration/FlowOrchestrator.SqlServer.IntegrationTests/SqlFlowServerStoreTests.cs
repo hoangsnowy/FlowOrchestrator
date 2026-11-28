@@ -1,0 +1,186 @@
+using Dapper;
+using FlowOrchestrator.Core.Storage;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace FlowOrchestrator.SqlServer.Tests;
+
+/// <summary>
+/// The server registry (<see cref="SqlFlowServerStore"/>) and the attempt server id on a real SQL Server: upsert /
+/// list / remove / purge, a re-run of the migration, and the <c>FlowStepAttempts.ServerId</c> round trip.
+/// </summary>
+/// <remarks>
+/// Ageing a server is simulated by moving its <c>LastHeartbeatAt</c> back on the database clock, so no test waits
+/// for wall time. Every test uses server ids of its own; the class's tests run one after the other.
+/// </remarks>
+public sealed class SqlFlowServerStoreTests : IClassFixture<SqlServerFixture>
+{
+    private readonly string _connectionString;
+    private readonly SqlFlowServerStore _store;
+
+    public SqlFlowServerStoreTests(SqlServerFixture fixture)
+    {
+        _connectionString = fixture.ConnectionString;
+        _store = new SqlFlowServerStore(fixture.ConnectionString);
+    }
+
+    [Fact]
+    public async Task Upsert_inserts_then_updates_every_column_but_the_start_time()
+    {
+        // Arrange
+        var id = NewId();
+        await _store.UpsertServerAsync(Server(id, activeSteps: 1, flows: 2));
+        var inserted = await FindAsync(id);
+        await BackdateAsync(id, TimeSpan.FromMinutes(1));
+
+        // Act
+        await _store.UpsertServerAsync(Server(id, activeSteps: 5, flows: 3) with { StartedAt = DateTimeOffset.MinValue, Runtime = "ServiceBus" });
+        var updated = await FindAsync(id);
+
+        // Assert
+        Assert.Equal(inserted.StartedAt.AddMinutes(-1), updated.StartedAt);
+        Assert.True(updated.LastHeartbeatAt > updated.StartedAt);
+        Assert.Equal(5, updated.ActiveStepCount);
+        Assert.Equal(3, updated.FlowCount);
+        Assert.Equal("ServiceBus", updated.Runtime);
+        Assert.Equal("host-a", updated.MachineName);
+        Assert.Equal(4242, updated.ProcessId);
+        Assert.Equal("2.0.0+abc", updated.Version);
+    }
+
+    [Fact]
+    public async Task GetServers_lists_the_most_recent_heartbeat_first()
+    {
+        // Arrange
+        var older = NewId();
+        var newer = NewId();
+        await _store.UpsertServerAsync(Server(older));
+        await _store.UpsertServerAsync(Server(newer));
+        await BackdateAsync(older, TimeSpan.FromMinutes(2));
+
+        // Act
+        var servers = await _store.GetServersAsync();
+
+        // Assert
+        var ids = servers.Select(s => s.ServerId).ToList();
+        Assert.True(ids.IndexOf(newer) < ids.IndexOf(older));
+    }
+
+    [Fact]
+    public async Task Remove_reports_whether_a_row_was_removed()
+    {
+        // Arrange
+        var id = NewId();
+        await _store.UpsertServerAsync(Server(id));
+
+        // Act
+        var first = await _store.RemoveServerAsync(id);
+        var second = await _store.RemoveServerAsync(id);
+
+        // Assert
+        Assert.True(first);
+        Assert.False(second);
+        Assert.DoesNotContain(await _store.GetServersAsync(), s => s.ServerId == id);
+    }
+
+    [Fact]
+    public async Task Purge_removes_only_servers_silent_for_longer_than_the_age()
+    {
+        // Arrange
+        var gone = NewId();
+        var alive = NewId();
+        await _store.UpsertServerAsync(Server(gone));
+        await _store.UpsertServerAsync(Server(alive));
+        await BackdateAsync(gone, TimeSpan.FromHours(2));
+        await BackdateAsync(alive, TimeSpan.FromMinutes(30));
+
+        // Act
+        var removed = await _store.PurgeServersAsync(TimeSpan.FromHours(1));
+
+        // Assert
+        Assert.Equal(1, removed);
+        var ids = (await _store.GetServersAsync()).Select(s => s.ServerId).ToList();
+        Assert.DoesNotContain(gone, ids);
+        Assert.Contains(alive, ids);
+    }
+
+    [Fact]
+    public async Task Migration_runs_again_without_error_and_keeps_the_rows()
+    {
+        // Arrange
+        var id = NewId();
+        await _store.UpsertServerAsync(Server(id));
+        var migrator = new FlowOrchestratorSqlMigrator(_connectionString, NullLogger<FlowOrchestratorSqlMigrator>.Instance);
+
+        // Act
+        await migrator.StartAsync(CancellationToken.None);
+        await migrator.StartAsync(CancellationToken.None);
+        await migrator.BackgroundIndexBuild;
+
+        // Assert
+        await using var conn = new SqlConnection(_connectionString);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.columns WHERE Name = N'ServerId' AND Object_ID = Object_ID(N'[FlowStepAttempts]')"));
+        Assert.Contains(await _store.GetServersAsync(), s => s.ServerId == id);
+    }
+
+    [Fact]
+    public async Task Attempt_server_id_round_trips_and_the_five_parameter_overload_records_none()
+    {
+        // Arrange
+        var runs = new SqlFlowRunStore(_connectionString);
+        var runId = Guid.NewGuid();
+        await runs.StartRunAsync(Guid.NewGuid(), "ServerFlow", runId, "manual", null, null);
+
+        // Act
+        await runs.RecordStepStartAsync(runId, "a", "Work", null, "job-1", "host-a:4242:abc");
+        await runs.RecordStepCompleteAsync(runId, "a", "Failed", null, "boom");
+        await runs.RecordStepStartAsync(runId, "a", "Work", null, "job-2");
+        var detail = await runs.GetRunDetailAsync(runId);
+
+        // Assert
+        var attempts = Assert.Single(detail!.Steps!).Attempts!;
+        Assert.Equal(2, attempts.Count);
+        Assert.Equal("host-a:4242:abc", attempts[0].ServerId);
+        Assert.Null(attempts[1].ServerId);
+    }
+
+    private static string NewId() => $"host-a:4242:{Guid.NewGuid():N}";
+
+    private static FlowServerRecord Server(string id, int activeSteps = 0, int flows = 1) => new()
+    {
+        ServerId = id,
+        MachineName = "host-a",
+        ProcessId = 4242,
+        Runtime = "Hangfire",
+        Version = "2.0.0+abc",
+        ActiveStepCount = activeSteps,
+        FlowCount = flows,
+    };
+
+    private async Task<FlowServerRecord> FindAsync(string id)
+        => Assert.Single(await _store.GetServersAsync(), s => s.ServerId == id);
+
+    private async Task BackdateAsync(string id, TimeSpan age)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.ExecuteAsync(
+            "UPDATE FlowServers SET LastHeartbeatAt = DATEADD(SECOND, -@Seconds, LastHeartbeatAt), StartedAt = DATEADD(SECOND, -@Seconds, StartedAt) WHERE ServerId = @Id",
+            new { Id = id, Seconds = (int)age.TotalSeconds });
+    }
+
+    [Fact]
+    public async Task GetServers_reports_the_database_clock_it_read_the_rows_with()
+    {
+        // Arrange
+        var id = NewId();
+        await _store.UpsertServerAsync(Server(id));
+
+        // Act
+        var row = Assert.Single(await _store.GetServersAsync(), s => s.ServerId == id);
+
+        // Assert — same clock as LastHeartbeatAt, read after it was written.
+        Assert.NotNull(row.ObservedAt);
+        Assert.True(row.ObservedAt >= row.LastHeartbeatAt, $"ObservedAt {row.ObservedAt:O} precedes LastHeartbeatAt {row.LastHeartbeatAt:O}");
+    }
+}

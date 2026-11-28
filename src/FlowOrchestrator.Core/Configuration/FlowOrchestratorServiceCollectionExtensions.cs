@@ -90,6 +90,8 @@ public static class FlowOrchestratorServiceCollectionExtensions
         services.AddSingleton(builder.Observability);
         services.AddSingleton(builder.Signals);
         services.AddSingleton(builder.RunSearchIndex);
+        builder.Servers.Validate();
+        services.AddSingleton(builder.Servers);
 
         // The one flow registry, built once from every AddFlow<T>() registration on first resolve.
         services.TryAddSingleton(sp => new FlowRegistry(sp.GetServices<IFlowDefinition>()));
@@ -115,6 +117,9 @@ public static class FlowOrchestratorServiceCollectionExtensions
         // sweep redelivers steps whose lease expired because the worker running them died.
         services.TryAddSingleton<StepLeaseKeeper>();
         services.AddHostedService<FlowStepLeaseHostedService>();
+        // Server registry: this process's heartbeat row for the dashboard's Servers view. No-op without an
+        // IFlowServerStore (a custom storage backend) or with Servers.Enabled = false.
+        services.AddHostedService<FlowServerHeartbeatHostedService>();
 
         services.AddSingleton<IFlowGraphPlanner, FlowGraphPlanner>();
         services.AddTransient<IStepExecutor, DefaultStepExecutor>();

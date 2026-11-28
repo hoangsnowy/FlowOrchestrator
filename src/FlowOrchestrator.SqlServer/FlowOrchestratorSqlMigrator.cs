@@ -761,5 +761,27 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         BEGIN
             EXEC('CREATE INDEX IX_FlowRuns_SourceRunId ON [FlowRuns]([SourceRunId]) WHERE [SourceRunId] IS NOT NULL');
         END
+
+        -- Server registry (2.0): one heartbeat row per live FlowOrchestrator process, for the dashboard's
+        -- Servers view. ServerId is the step-lease owner id (FlowStepLeases.Owner). Small: no secondary index.
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowServers')
+        BEGIN
+            CREATE TABLE [FlowServers] (
+                [ServerId]         NVARCHAR(128)  NOT NULL,
+                [MachineName]      NVARCHAR(256)  NOT NULL,
+                [ProcessId]        INT            NOT NULL,
+                [Runtime]          NVARCHAR(64)   NOT NULL,
+                [Version]          NVARCHAR(128)  NULL,
+                [StartedAt]        DATETIMEOFFSET NOT NULL,
+                [LastHeartbeatAt]  DATETIMEOFFSET NOT NULL,
+                [ActiveStepCount]  INT            NOT NULL DEFAULT 0,
+                [FlowCount]        INT            NOT NULL DEFAULT 0,
+                CONSTRAINT PK_FlowServers PRIMARY KEY ([ServerId])
+            );
+        END
+
+        -- The server that ran each attempt (2.0); NULL on skips and on rows written before the column existed.
+        IF COL_LENGTH(N'FlowStepAttempts', N'ServerId') IS NULL
+            ALTER TABLE [FlowStepAttempts] ADD [ServerId] NVARCHAR(128) NULL;
         """;
 }

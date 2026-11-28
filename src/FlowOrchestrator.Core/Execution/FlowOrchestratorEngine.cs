@@ -52,6 +52,7 @@ internal sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTi
     private readonly IFlowEventNotifier _eventNotifier;
     private readonly IFlowSignalStore? _signalStore;
     private readonly StepLeaseKeeper? _leaseKeeper;
+    private readonly string? _serverId;
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     /// <remarks>
@@ -108,6 +109,8 @@ internal sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTi
         _eventNotifier = eventNotifier;
         _signalStore = signalStore;
         _leaseKeeper = leaseKeeper is { Duration: not null } ? leaseKeeper : null;
+        // Stamped on every attempt this process starts, leases on or off: maps the attempt to its server.
+        _serverId = leaseKeeper?.OwnerId;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
     }
 
