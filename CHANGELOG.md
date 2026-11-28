@@ -1152,6 +1152,19 @@ package: packages can be mixed at different 2.x versions, so no internal is a cr
   Publishing policy on nuget.org (owner `thelastsnow`, workflow `publish.yml`). The old key had
   expired and failed the push for `155e14c` with a 403.
 
+### Added — verifiable packages: symbols, SourceLink, SBOM and build provenance
+- Every package ships a `.snupkg` on the nuget.org symbol server, and SourceLink points the debugger at the
+  exact commit, so FlowOrchestrator code can be stepped into without a local clone.
+- Each `.nupkg` embeds an SPDX 2.2 SBOM (`_manifest/spdx_2.2/manifest.spdx.json`) and has a signed build
+  provenance attestation: `gh attestation verify <package>.nupkg -R hoangsnowy/FlowOrchestrator`.
+- CI builds are reproducible (`ContinuousIntegrationBuild`) and package validation runs at pack time;
+  from 2.0.1 on it checks against the 2.0.0 API baseline.
+- `publish.yml` runs restore, build, tests and pack in a job with no credential; only the separate push job
+  can mint the Trusted Publishing key.
+- New [Support and Release Policy](docs/articles/support-policy.md): 2.x is current; 1.34.x gets security
+  and critical fixes for six months after 2.0.0; target frameworks are dropped only in a major, timed to
+  Microsoft's end of support; `[Obsolete]` for at least one minor before a removal.
+
 ### Changed — **breaking:** targets .NET 10 and .NET 11; .NET 8 and .NET 9 dropped
 
 - Every package now ships `net10.0` (LTS) and `net11.0` (STS). `net8.0` and `net9.0` were removed:

@@ -60,3 +60,6 @@
 
 - name: Production Checklist
   href: production-checklist.md
+
+- name: Support and Release Policy
+  href: support-policy.md
