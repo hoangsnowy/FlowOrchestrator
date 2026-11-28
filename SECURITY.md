@@ -6,16 +6,16 @@ The FlowOrchestrator maintainers take security seriously. This document explains
 
 ## Supported versions
 
-We provide security fixes for the **latest minor release** on the `1.x` line. Older minor versions receive fixes only when the issue is critical and a back-port is straightforward.
+We provide security fixes for the **latest minor release** of each supported line. The full policy is in
+[Support and Release Policy](docs/articles/support-policy.md).
 
-| Version    | Status              | Security fixes |
-| ---------- | ------------------- | -------------- |
-| `1.29.x`   | Current             | ✅ Yes         |
-| `1.28.x`   | Previous            | ⚠️ Critical only |
-| `< 1.28`   | End of life         | ❌ No          |
-| `2.x`      | Planned (in design) | ✅ Pre-release |
+| Version    | Runtimes              | Status       | Security fixes |
+| ---------- | --------------------- | ------------ | -------------- |
+| `2.x`      | .NET 10, .NET 11      | Current      | ✅ Yes         |
+| `1.34.x`   | .NET 8, .NET 9, .NET 10 | Maintenance, until six months after the 2.0.0 release | ✅ Security and critical fixes |
+| `< 1.34`   | —                     | End of life  | ❌ No          |
 
-If you depend on a version no longer supported, the recommended action is to upgrade to the current minor — patch releases are non-breaking by SemVer.
+If you depend on a version no longer supported, the recommended action is to upgrade to the latest minor of a supported line — patch and minor releases are non-breaking by SemVer.
 
 ---
 
