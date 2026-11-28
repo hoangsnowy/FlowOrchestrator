@@ -41,6 +41,29 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
+  <!-- ── Packaging & supply chain ─────────────────────────────────────────────
+       Symbols: a .snupkg beside every .nupkg (pushed to the nuget.org symbol server).
+       SourceLink: built into the .NET SDK; PublishRepositoryUrl + EmbedUntrackedSources make the
+       PDBs point at the exact GitHub commit. ContinuousIntegrationBuild normalises paths on CI so
+       the build is reproducible (Deterministic is the SDK default). Package validation checks every
+       package's TFM assets against each other; from 2.0.x on, PackageValidationBaselineVersion pins
+       the shipped 2.0.0 API so a minor can no longer break callers. GenerateSBOM embeds an SPDX 2.2
+       SBOM (Microsoft.Sbom.Targets) in each package under _manifest/. Properties are harmless on the
+       non-packable projects; they only act during `dotnet pack`. -->
+  <PropertyGroup>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <GenerateSBOM>true</GenerateSBOM>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <PackageReference Include="Microsoft.Sbom.Targets" PrivateAssets="all" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
