@@ -8,7 +8,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// Bridges between the manifest's template keys and the runtime keys produced by
 /// loop / foreach iteration (e.g. <c>"loop.0.child"</c> vs <c>"loop.child"</c>).
 /// </summary>
-public sealed partial class FlowGraphPlanner
+internal sealed partial class FlowGraphPlanner
 {
     /// <summary>Longest composed <c>"{scope}.{child}"</c> key built on the stack rather than the heap.</summary>
     private const int StackKeyBufferLength = 256;

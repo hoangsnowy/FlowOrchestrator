@@ -40,7 +40,7 @@ namespace FlowOrchestrator.Core.Hosting;
 /// startup loop and active-run iteration.
 /// </para>
 /// </remarks>
-public sealed class FlowRunRecoveryHostedService : IHostedService
+internal sealed class FlowRunRecoveryHostedService : IHostedService
 {
     private readonly IFlowRunStore _runStore;
     private readonly IFlowRunRuntimeStore _runtimeStore;

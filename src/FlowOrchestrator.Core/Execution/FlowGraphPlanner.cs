@@ -13,7 +13,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// <c>FlowGraphPlanner.Validation.cs</c>, and key/scope resolution helpers
 /// live in <c>FlowGraphPlanner.KeyResolution.cs</c>.
 /// </remarks>
-public sealed partial class FlowGraphPlanner : IFlowGraphPlanner
+internal sealed partial class FlowGraphPlanner : IFlowGraphPlanner
 {
     /// <summary>
     /// Cached pre-sorted manifest step keys per flow definition.

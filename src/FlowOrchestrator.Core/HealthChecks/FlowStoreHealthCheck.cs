@@ -14,7 +14,7 @@ namespace FlowOrchestrator.Core.HealthChecks;
 /// Returns <see cref="HealthStatus.Healthy"/> with a <c>flow_count</c> data entry on success,
 /// <see cref="HealthStatus.Unhealthy"/> on timeout or any thrown exception.
 /// </remarks>
-public sealed class FlowStoreHealthCheck : IHealthCheck
+internal sealed class FlowStoreHealthCheck : IHealthCheck
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
 

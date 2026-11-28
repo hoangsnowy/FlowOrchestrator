@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Core.Observability;
 /// <c>exception.type</c>, <c>exception.message</c>, <c>exception.stacktrace</c> tags) matches the
 /// OpenTelemetry semantic convention so APMs treat it identically.
 /// </remarks>
-public static class ActivityExtensions
+internal static class ActivityExtensions
 {
     /// <summary>
     /// Records <paramref name="ex"/> on the activity following the OpenTelemetry exception

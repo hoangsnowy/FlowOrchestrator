@@ -36,7 +36,7 @@ namespace FlowOrchestrator.Core.Expressions;
 /// <see langword="false"/>; <c>||</c> does not evaluate the RHS when the LHS is <see langword="true"/>.
 /// </para>
 /// </remarks>
-public sealed class BooleanExpressionEvaluator
+internal sealed class BooleanExpressionEvaluator
 {
     /// <summary>
     /// Resolves a left-hand-side expression token (e.g. <c>@steps('x').output.amount</c>) to a

@@ -10,7 +10,7 @@ namespace FlowOrchestrator.Core.Serialization;
 /// and manually deserializes base <see cref="StepMetadata"/> properties otherwise to avoid
 /// re-entering this converter recursively.
 /// </summary>
-public sealed class StepMetadataJsonConverter : JsonConverter<StepMetadata>
+internal sealed class StepMetadataJsonConverter : JsonConverter<StepMetadata>
 {
     /// <summary>
     /// Reads a <see cref="StepMetadata"/> or <see cref="LoopStepMetadata"/> from JSON.

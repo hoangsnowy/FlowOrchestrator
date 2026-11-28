@@ -14,7 +14,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// blocked-step propagation, loop admission and settling, and the run-completion gate whose terminal status
 /// comes from <see cref="RunTerminationClassifier"/>.
 /// </summary>
-public sealed partial class FlowOrchestratorEngine
+internal sealed partial class FlowOrchestratorEngine
 {
     /// <summary>Key of the synthetic step the trigger path continues from when every entry step was When-skipped.</summary>
     internal const string RunLevelStepKey = "__run";

@@ -6,7 +6,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// Validation surface of <see cref="FlowGraphPlanner"/> — manifest sanity checks,
 /// step-key shape checks, missing-dependency detection, and DFS cycle detection.
 /// </summary>
-public sealed partial class FlowGraphPlanner
+internal sealed partial class FlowGraphPlanner
 {
     /// <inheritdoc/>
     public FlowGraphValidationResult Validate(IFlowDefinition flow)

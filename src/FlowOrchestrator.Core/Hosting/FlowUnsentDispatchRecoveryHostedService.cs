@@ -30,7 +30,7 @@ namespace FlowOrchestrator.Core.Hosting;
 /// <see langword="null"/> or non-positive.
 /// </para>
 /// </remarks>
-public sealed class FlowUnsentDispatchRecoveryHostedService : BackgroundService
+internal sealed class FlowUnsentDispatchRecoveryHostedService : BackgroundService
 {
     /// <summary>Longest interval between two passes, whatever the timeout.</summary>
     internal static readonly TimeSpan MaxSweepInterval = TimeSpan.FromSeconds(30);

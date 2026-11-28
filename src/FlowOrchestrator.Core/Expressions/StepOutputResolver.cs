@@ -23,7 +23,7 @@ internal readonly record struct ParsedStepExpression(string StepKey, string Prop
 /// step key so that multiple expressions referencing the same prior step incur only one
 /// <see cref="IOutputsRepository.GetStepOutputAsync"/> call.
 /// </remarks>
-public sealed class StepOutputResolver
+internal sealed class StepOutputResolver
 {
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 

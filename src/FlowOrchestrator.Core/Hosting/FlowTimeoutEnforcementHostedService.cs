@@ -18,7 +18,7 @@ namespace FlowOrchestrator.Core.Hosting;
 /// or non-positive. The enforcer (<see cref="IRunTimeoutEnforcer"/>) is resolved from a fresh scope on
 /// every tick because the engine depends on scoped services (e.g. the execution-context accessor).
 /// </remarks>
-public sealed class FlowTimeoutEnforcementHostedService : BackgroundService
+internal sealed class FlowTimeoutEnforcementHostedService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly FlowRunControlOptions _options;

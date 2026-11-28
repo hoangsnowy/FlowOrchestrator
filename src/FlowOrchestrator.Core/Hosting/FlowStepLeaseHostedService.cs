@@ -30,7 +30,7 @@ namespace FlowOrchestrator.Core.Hosting;
 /// <see langword="null"/> or non-positive). A failed pass is logged and retried on the next tick.
 /// </para>
 /// </remarks>
-public sealed class FlowStepLeaseHostedService : BackgroundService
+internal sealed class FlowStepLeaseHostedService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly StepLeaseKeeper _keeper;

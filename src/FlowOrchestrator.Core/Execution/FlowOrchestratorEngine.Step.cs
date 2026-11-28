@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// <see cref="RunStepAsync"/>, <see cref="RetryStepAsync"/>, claim guards, control-store
 /// termination check, handler dispatch, and dispatch-hint fan-out.
 /// </summary>
-public sealed partial class FlowOrchestratorEngine
+internal sealed partial class FlowOrchestratorEngine
 {
     /// <inheritdoc/>
     public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, CancellationToken ct = default)

@@ -7,7 +7,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// evaluating input expressions, invoking the handler, and persisting the output.
 /// Implemented by <c>DefaultStepExecutor</c> in the Hangfire layer.
 /// </summary>
-public interface IStepExecutor
+internal interface IStepExecutor
 {
     /// <summary>
     /// Executes the step described by <paramref name="step"/> within the given flow and context,

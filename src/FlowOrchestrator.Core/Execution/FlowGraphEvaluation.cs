@@ -4,7 +4,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// Snapshot of a flow run's DAG evaluation at a point in time,
 /// produced by <see cref="IFlowGraphPlanner.Evaluate"/>.
 /// </summary>
-public sealed class FlowGraphEvaluation
+internal sealed class FlowGraphEvaluation
 {
     /// <summary>
     /// Step keys whose dependencies are all satisfied and that can be enqueued immediately.
@@ -28,7 +28,7 @@ public sealed class FlowGraphEvaluation
 /// Result of <see cref="IFlowGraphPlanner.Validate"/>, listing any structural errors
 /// found in the flow manifest's step dependency graph.
 /// </summary>
-public sealed class FlowGraphValidationResult
+internal sealed class FlowGraphValidationResult
 {
     /// <summary>Human-readable descriptions of validation failures. Empty when the graph is valid.</summary>
     public IReadOnlyList<string> Errors { get; init; } = [];

@@ -13,7 +13,7 @@ namespace FlowOrchestrator.ServiceBus;
 /// <summary>
 /// Single-class implementation of <see cref="IRecurringTriggerDispatcher"/> and
 /// <see cref="IRecurringTriggerInspector"/> for the Service Bus runtime; effective-cron resolution
-/// is Core's <see cref="RecurringTriggerSync"/>, which calls <see cref="RegisterOrUpdate"/> /
+/// is Core's <c>RecurringTriggerSync</c>, which calls <see cref="RegisterOrUpdate"/> /
 /// <see cref="Remove(string)"/>. Schedules cron-trigger fires as
 /// <see cref="ServiceBusMessage.ScheduledEnqueueTime">scheduled messages</see>
 /// on the cron queue; the consumer (<see cref="ServiceBusCronProcessorHostedService"/>)

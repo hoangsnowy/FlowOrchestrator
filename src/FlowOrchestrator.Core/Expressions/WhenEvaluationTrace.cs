@@ -10,7 +10,7 @@ namespace FlowOrchestrator.Core.Expressions;
 /// with each LHS reference replaced by its actual resolved value, so a reader can see
 /// exactly why the condition failed (e.g. <c>500 &gt; 1000</c>).
 /// </remarks>
-public sealed class WhenEvaluationTrace
+internal sealed class WhenEvaluationTrace
 {
     /// <summary>The original expression text from the flow manifest.</summary>
     public string Expression { get; set; } = string.Empty;

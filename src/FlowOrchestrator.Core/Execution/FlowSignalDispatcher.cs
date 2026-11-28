@@ -38,7 +38,7 @@ public interface IFlowSignalDispatcher
 /// (<c>BackgroundJobServerOptions.SchedulePollingInterval</c>, 15 seconds by default). Always delaying
 /// therefore turned a 500 ms intent into up to 15 seconds of observed resume latency.
 /// </remarks>
-public sealed class FlowSignalDispatcher : IFlowSignalDispatcher
+internal sealed class FlowSignalDispatcher : IFlowSignalDispatcher
 {
     private static readonly TimeSpan ResumeDelay = TimeSpan.FromMilliseconds(500);
 
