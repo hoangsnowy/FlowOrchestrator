@@ -87,7 +87,7 @@ public sealed class DashboardServersEndpointTests
         // Arrange
         var store = Substitute.For<IFlowServerStore>();
         store.GetServersAsync(Arg.Any<CancellationToken>()).Returns(Enumerable.Range(0, 20)
-            .Select(i => Server($"host-{i}:{i}:{Guid.NewGuid():N}", $"host-{i}", Now.AddSeconds(-i * 5)))
+            .Select(i => Server($"host-{i}:{i}:{Guid.NewGuid():N}", $"host-{i}", Now.AddSeconds(-5.0 * i)))
             .ToArray());
         using var server = CreateServer(store);
 

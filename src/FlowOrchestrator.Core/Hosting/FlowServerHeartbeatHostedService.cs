@@ -274,9 +274,14 @@ internal sealed class FlowServerHeartbeatHostedService : BackgroundService
                 await store.RemoveServerAsync(_keeper.OwnerId, linked.Token).ConfigureAwait(false);
             }
         }
-        catch (Exception ex)
+        // Never out of StopAsync: a row left behind turns Stale and is purged by another replica.
+        catch (OperationCanceledException ex)
         {
-            // Never out of StopAsync, cancellation included: a stale row is purged by another replica.
+            // The remove timed out, or the host's stop token fired.
+            ServerRegistryLog.RemoveOnShutdownFailed(_logger, ex, _keeper.OwnerId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
             ServerRegistryLog.RemoveOnShutdownFailed(_logger, ex, _keeper.OwnerId);
         }
     }
