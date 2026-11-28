@@ -10,7 +10,7 @@ namespace FlowOrchestrator.InMemory;
 /// Uses <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/> for concurrent access.
 /// All data is held in process memory and lost on restart.
 /// </summary>
-public sealed class InMemoryFlowRunStore :
+internal sealed class InMemoryFlowRunStore :
     IFlowRunStore,
     IFlowRunRuntimeStore,
     IFlowRunControlStore,

@@ -10,7 +10,7 @@ namespace FlowOrchestrator.SqlServer;
 /// Persists DLQ + accepted-delivery rows in the <c>WebhookRejections</c> table
 /// created by <see cref="FlowOrchestratorSqlMigrator"/>.
 /// </summary>
-public sealed class SqlWebhookRejectionStore : IWebhookRejectionStore
+internal sealed class SqlWebhookRejectionStore : IWebhookRejectionStore
 {
     private readonly string _connectionString;
 

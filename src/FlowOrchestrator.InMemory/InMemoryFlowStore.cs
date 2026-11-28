@@ -7,7 +7,7 @@ namespace FlowOrchestrator.InMemory;
 /// In-memory implementation of <see cref="IFlowStore"/> that stores <see cref="FlowDefinitionRecord"/>
 /// instances in a thread-safe dictionary. All state is lost on process restart.
 /// </summary>
-public sealed class InMemoryFlowStore : IFlowStore
+internal sealed class InMemoryFlowStore : IFlowStore
 {
     private readonly ConcurrentDictionary<Guid, FlowDefinitionRecord> _flows = new();
 

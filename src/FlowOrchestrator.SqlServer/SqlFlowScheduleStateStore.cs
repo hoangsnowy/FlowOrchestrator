@@ -8,7 +8,7 @@ namespace FlowOrchestrator.SqlServer;
 /// SQL Server implementation of <see cref="IFlowScheduleStateStore"/> that persists cron overrides
 /// and pause state in the <c>FlowScheduleStates</c> table using MERGE (upsert) semantics.
 /// </summary>
-public sealed class SqlFlowScheduleStateStore : IFlowScheduleStateStore
+internal sealed class SqlFlowScheduleStateStore : IFlowScheduleStateStore
 {
     private readonly string _connectionString;
 

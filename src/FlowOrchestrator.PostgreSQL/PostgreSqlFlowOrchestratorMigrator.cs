@@ -67,10 +67,10 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     /// logged and retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not bulk-load
+    /// For the library's own tests and benchmarks, which run the migrator outside a host and must not bulk-load
     /// <c>flow_runs</c> while the build is still running.
     /// </remarks>
-    public Task BackgroundIndexBuild => _backgroundIndexBuild;
+    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>Applies the schema; starts the background run-search index build when <c>pg_trgm</c> is available.</summary>
     /// <param name="cancellationToken">Host start-up cancellation.</param>

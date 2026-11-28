@@ -9,7 +9,7 @@ namespace FlowOrchestrator.PostgreSQL;
 /// Dapper-based PostgreSQL implementation of all run storage interfaces.
 /// Uses PostgreSQL's <c>INSERT ... ON CONFLICT DO NOTHING</c> for atomic step claim deduplication.
 /// </summary>
-public sealed class PostgreSqlFlowRunStore :
+internal sealed class PostgreSqlFlowRunStore :
     IFlowRunStore,
     IFlowRunRuntimeStore,
     IFlowRunControlStore,

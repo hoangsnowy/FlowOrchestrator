@@ -13,7 +13,7 @@ namespace FlowOrchestrator.SqlServer;
 /// Step claim deduplication uses a <c>MERGE WITH (HOLDLOCK, UPDLOCK)</c> insert-if-absent, so concurrent
 /// claimers of one step get exactly one <see langword="true"/> and never a duplicate-key error.
 /// </summary>
-public sealed class SqlFlowRunStore :
+internal sealed class SqlFlowRunStore :
     IFlowRunStore,
     IFlowRunRuntimeStore,
     IFlowRunControlStore,

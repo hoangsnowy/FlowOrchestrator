@@ -42,7 +42,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     /// Largest <c>FlowRuns</c> row count for which the search indexes are built synchronously and offline
     /// on an edition without online index builds (roughly ten seconds of startup on such a table).
     /// </summary>
-    public const long OfflineIndexBuildRowLimit = 2_000_000;
+    internal const long OfflineIndexBuildRowLimit = 2_000_000;
 
     private readonly string _connectionString;
     private readonly ILogger<FlowOrchestratorSqlMigrator> _logger;
@@ -75,10 +75,10 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     /// retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not write to
+    /// For the library's own tests and benchmarks, which run the migrator outside a host and must not write to
     /// <c>FlowRuns</c> while the online build is still running.
     /// </remarks>
-    public Task BackgroundIndexBuild => _backgroundIndexBuild;
+    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>
     /// Test seam: overrides the edition check that picks the online (background) or offline (synchronous)

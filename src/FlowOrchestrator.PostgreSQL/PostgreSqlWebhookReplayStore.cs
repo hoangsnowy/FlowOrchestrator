@@ -9,7 +9,7 @@ namespace FlowOrchestrator.PostgreSQL;
 /// Persists nonces in the <c>webhook_replay_nonces</c> table created by
 /// <see cref="PostgreSqlFlowOrchestratorMigrator"/>.
 /// </summary>
-public sealed class PostgreSqlWebhookReplayStore : IWebhookReplayStore
+internal sealed class PostgreSqlWebhookReplayStore : IWebhookReplayStore
 {
     private readonly string _connectionString;
 
