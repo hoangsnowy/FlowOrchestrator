@@ -64,6 +64,25 @@
     <PackageReference Include="Microsoft.Sbom.Targets" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- Public API tracking (RS0016/RS0017 are errors under TreatWarningsAsErrors): every public or protected
+       member of a package must be listed in its PublicAPI.Unshipped.txt (new since the last release) or
+       PublicAPI.Shipped.txt (in a released version). Adding API means adding a line; removing or changing a
+       shipped line is a breaking change and needs a major. At each release the Unshipped lines move to
+       Shipped in the release commit. -->
+  <!-- RS0026/RS0027 (overloads with optional parameters) are API-design advice, not tracking. The existing
+       overload pairs (GetRunsPageAsync, TryRegisterAsync, AddFlowDashboard, ToMermaid…) are deliberate:
+       the short form is the original contract and the long form adds parameters with a default
+       implementation. Tracking (RS0016 new API, RS0017 removed API) stays on as an error. -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);RS0026;RS0027</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)/PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)/PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />

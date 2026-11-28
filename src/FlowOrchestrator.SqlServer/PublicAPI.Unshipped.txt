@@ -1,0 +1,10 @@
+#nullable enable
+FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator
+FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator.Dispose() -> void
+FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator.FlowOrchestratorSqlMigrator(string! connectionString, Microsoft.Extensions.Logging.ILogger<FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator!>! logger) -> void
+FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator.FlowOrchestratorSqlMigrator(string! connectionString, Microsoft.Extensions.Logging.ILogger<FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator!>! logger, bool runSearchIndexEnabled) -> void
+FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator.StartAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+FlowOrchestrator.SqlServer.FlowOrchestratorSqlMigrator.StopAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+FlowOrchestrator.SqlServer.SqlServerServiceCollectionExtensions
+static FlowOrchestrator.SqlServer.SqlServerServiceCollectionExtensions.AddSqlServerWebhookHardening(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder, string! connectionString) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!
+static FlowOrchestrator.SqlServer.SqlServerServiceCollectionExtensions.UseSqlServer(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder, string! connectionString) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!
