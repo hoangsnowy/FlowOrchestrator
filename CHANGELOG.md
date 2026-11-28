@@ -86,11 +86,6 @@ status rows per iteration at 1 000 items on SQL Server). Now (RFC 2.0 §3.5,
   Set either explicitly in the connection string or through the AppContext switch to keep 7.x behaviour. See the
   [SqlClient 8.0 release notes](https://github.com/dotnet/SqlClient/releases/tag/v8.0.0).
 
-### Changed — migrator background index build is awaitable
-
-- `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
-  are now public, for code that runs a migrator outside a host and must wait for its background index build.
-
 ### Added — per-signal authorization and bearer-token access for `WaitForSignal`
 
 - **Restricted signals.** A `WaitForSignal` step can name who may deliver its signal with two new static
@@ -1063,6 +1058,53 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
   (`ForEachStepHandler.cs`, the project-local `IRecurringTriggerSync` global-using alias), and the
   dead `is not null` guards on the engine's and signal dispatcher's always-present runtime and
   run-control stores.
+
+### Changed — **breaking:** implementation types are internal
+
+Types that were public only because a public constructor or registration needed them are now
+`internal`, so they can change in a 2.x minor without breaking anyone. Everything they did is still
+reached through `AddFlowOrchestrator(o => …)` and the public interfaces; see
+[Migrating to 2.0 — Step 6](docs/articles/migrating-to-2.0.md#step-6--update-custom-extensions).
+Internals are visible to the library's own test and benchmark projects only, never to another
+package: packages can be mixed at different 2.x versions, so no internal is a cross-package contract.
+
+- **`FlowOrchestrator.Core`** — `FlowOrchestratorEngine`, `IFlowGraphPlanner` / `FlowGraphPlanner`,
+  `FlowGraphEvaluation`, `FlowGraphValidationResult`, `IStepExecutor` / `DefaultStepExecutor`,
+  `IRunTimeoutEnforcer`, `StepLeaseKeeper`, `ExecutionContextAccessor`, `FlowSignalDispatcher`,
+  `RecurringTriggerSync`, `FlowRunRecoveryHostedService`, `FlowStepLeaseHostedService`,
+  `FlowTimeoutEnforcementHostedService`, `FlowUnsentDispatchRecoveryHostedService`,
+  `FlowStoreHealthCheck`, `BooleanExpressionEvaluator`, `WhenClauseEvaluator`, `WhenEvaluationTrace`,
+  `StepOutputResolver`, `EngineLogScope`, `RunAfterCollectionJsonConverter`,
+  `RunAfterConditionJsonConverter`, `StepMetadataJsonConverter`, `MetadataInputExtensions`,
+  `ActivityExtensions`. Inject `IFlowOrchestrator` instead of the engine, and `IExecutionContextAccessor`,
+  `IFlowSignalDispatcher`, `IRecurringTriggerSync` instead of their implementations; add the store
+  health check with `AddFlowOrchestratorHealthChecks()`. This supersedes the constructor changes
+  listed above: an engine can no longer be built by hand — tests use `FlowOrchestrator.Testing`'s
+  `FlowTestHost`.
+- **`FlowOrchestrator.Hangfire`** — `HangfireFlowOrchestrator`, and the
+  `HangfireStepEnvelope.From` / `ToExecutionContext` / `ToStepInstance` helpers. The job contracts
+  Hangfire serialises (`IHangfireStepRunner`, `IHangfireFlowTrigger`, `HangfireStepEnvelope`) stay
+  public, so queued jobs are unaffected. `UseHangfire()` registers the job runner.
+- **`FlowOrchestrator.InMemory`** — `InMemoryFlowStore`, `InMemoryFlowRunStore`,
+  `InMemoryOutputsRepository`, `InMemoryFlowSignalStore`. Use `UseInMemory()`.
+- **`FlowOrchestrator.SqlServer`** — `SqlFlowStore`, `SqlFlowRunStore`, `SqlFlowScheduleStateStore`,
+  `SqlServerRunSearchTokenIndex`, `SqlWebhookRejectionStore`, `SqlWebhookReplayStore`, and
+  `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` / `OfflineIndexBuildRowLimit` (the migrator
+  itself stays public). Use `UseSqlServer(cs)` and `AddSqlServerWebhookHardening(cs)`.
+- **`FlowOrchestrator.PostgreSQL`** — `PostgreSqlFlowStore`, `PostgreSqlFlowRunStore`,
+  `PostgreSqlOutputsRepository`, `PostgreSqlFlowScheduleStateStore`, `PostgreSqlFlowSignalStore`,
+  `PostgreSqlWebhookRejectionStore`, `PostgreSqlWebhookReplayStore`, and
+  `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild` (the migrator itself stays public). Use
+  `UsePostgreSql(cs)` and `AddPostgreSqlWebhookHardening(cs)`.
+- **`FlowOrchestrator.Dashboard`** — `SseConnection`, `SseEndpointHandler`, `SseFlowEventBroadcaster`,
+  `InMemoryWebhookRejectionStore`, `InMemoryWebhookReplayStore`, `TokenBucketWebhookRateLimiter`,
+  `ReplayProtectionGate`, `WebhookReplayJanitor`, `WebhookReplayRegistration`, `HmacSignatureVerifier`,
+  `WebhookCustomVerifierRegistry`, `WebhookSignatureSpecResolver`, `WebhookRequestBuffer`,
+  `WebhookSecurityPipeline`, `KeycloakRoleClaimsTransformation`, `CidrMatcher`, and the
+  `WebhookSecurityOptionsBuilder` constructor (the builder is handed to you by
+  `FlowDashboardOptions.UseWebhookSecurity(…)`). `AddFlowDashboard()` registers all of them; custom
+  rate limiters and stores still plug in through `IWebhookRateLimiter`, `IWebhookReplayStore` and
+  `IWebhookRejectionStore`.
 
 ### Removed — **breaking:** legacy sequential execution path and its shims
 
