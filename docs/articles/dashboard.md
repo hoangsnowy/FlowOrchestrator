@@ -124,6 +124,43 @@ Actions per job:
 - **Pause / Resume** — suspends or resumes the recurring schedule
 - **Edit Cron** — inline cron expression editor (persisted when `Scheduler.PersistOverrides = true`)
 
+### Servers
+
+Lists every FlowOrchestrator process (replica) sharing the storage, whatever the runtime — Hangfire, in-memory
+or Service Bus. Each process writes a heartbeat row to `IFlowServerStore` on start and then every
+`HeartbeatInterval`; the tab shows, per server: a short server id (hover for the full one), machine, process id,
+runtime, FlowOrchestrator version, when it started, how long ago its last heartbeat arrived, the number of steps
+executing on it, and a status chip.
+
+- **Active** — the latest heartbeat is at most `StaleAfter` old.
+- **Stale** — the server missed `MissedHeartbeatsBeforeStale` heartbeats in a row: it crashed, hangs, or cannot
+  reach the store. A process that stops gracefully removes its own row instead; a stale row is deleted by any
+  replica once it has been silent for `PurgeAfter`.
+
+The server id is the step-lease owner id (`FlowStepLeases.Owner`), and every step attempt records it, so the
+step detail of a run shows which server ran each attempt (`FlowStepAttemptRecord.ServerId`; empty for attempts
+written before 2.0).
+
+SQL Server, PostgreSQL and in-memory storage track servers (`FlowServers` / `flow_servers`, created by the
+migrators). A custom storage backend that does not register an `IFlowServerStore` keeps working: no heartbeat
+is written and the tab says the storage does not track servers. The in-memory store is process-local, so it only
+ever lists the process it lives in.
+
+```csharp
+builder.Services.AddFlowOrchestrator(options =>
+{
+    options.UseSqlServer(connectionString);
+    options.UseHangfire();
+    options.Servers.HeartbeatInterval = TimeSpan.FromSeconds(15);   // default 15 s, 1 s .. 10 min
+    options.Servers.MissedHeartbeatsBeforeStale = 3;                 // default 3 (2 .. 100): stale after 45 s
+    options.Servers.PurgeAfter = TimeSpan.FromHours(1);              // default 1 h, must exceed StaleAfter
+    // options.Servers.Enabled = false;                              // opt this process out of the registry
+});
+```
+
+Timestamps come from the database clock, so replicas with skewed clocks are aged against one clock; the
+dashboard computes the status against the host's `TimeProvider`. The tab polls every 5 s while it is open.
+
 ---
 
 ## REST API Reference
@@ -224,6 +261,38 @@ Custom realtime consumers (log sinks, custom UIs, Slack notifiers) can
 implement `IFlowEventNotifier` from `FlowOrchestrator.Core.Notifications`
 and replace the dashboard's broadcaster registration. The default
 `NoopFlowEventNotifier` makes apps without the dashboard pay zero overhead.
+
+### Servers
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/flows/api/servers` | Every recorded server with `status` `Active` / `Stale`; `tracked: false` when the storage registers no `IFlowServerStore` |
+
+```json
+{
+  "tracked": true,
+  "heartbeatIntervalSeconds": 15,
+  "staleAfterSeconds": 45,
+  "serverTime": "2026-11-28T12:00:00+00:00",
+  "servers": [
+    {
+      "serverId": "web-1:4242:0f8c2e6d9b1a4c7e8d3f5a6b7c8d9e0f",
+      "machineName": "web-1",
+      "processId": 4242,
+      "runtime": "Hangfire",
+      "version": "2.0.0",
+      "startedAt": "2026-11-28T11:00:00+00:00",
+      "lastHeartbeatAt": "2026-11-28T11:59:52+00:00",
+      "lastSeenSeconds": 8,
+      "activeStepCount": 3,
+      "flowCount": 12,
+      "status": "Active"
+    }
+  ]
+}
+```
+
+A read API: viewers may call it. Brotli / Gzip per `Accept-Encoding`, like every dashboard JSON endpoint.
 
 ### Schedule Management
 

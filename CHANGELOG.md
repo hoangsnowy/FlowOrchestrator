@@ -10,6 +10,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
 
+### Added — Servers view: every replica and which one ran each attempt
+
+With several replicas running, the dashboard showed no servers at all; only Hangfire's own `/hangfire` page had
+a Servers list, and only for the Hangfire runtime. Now every process registers itself, whatever the runtime:
+
+- **Heartbeat registry.** A new optional storage contract, `IFlowServerStore` (upsert / list / remove / purge of
+  `FlowServerRecord`: server id, machine, process id, runtime, FlowOrchestrator version, started, last heartbeat,
+  active steps, flows). A hosted service registers the process on start, heartbeats every 15 s, removes its row
+  on graceful shutdown and purges rows silent for an hour. The server id is the step-lease owner id, so
+  `FlowStepLeases.Owner` maps to a server; active steps are the leases the process holds. Implemented by SQL
+  Server (`FlowServers`), PostgreSQL (`flow_servers`) and in-memory storage, with database-clock timestamps.
+  A custom backend without the interface keeps working: nothing is written and the dashboard says so.
+- **Options.** `options.Servers` (`FlowServerOptions`): `HeartbeatInterval` (15 s), `MissedHeartbeatsBeforeStale`
+  (3, so stale after 45 s), `PurgeAfter` (1 h, must exceed the stale threshold), `Enabled`, `RuntimeName`.
+- **Which server ran each attempt.** `FlowStepAttemptRecord.ServerId`, written when the attempt starts in the
+  same insert as before (`FlowStepAttempts.ServerId` / `flow_step_attempts.server_id`, additive nullable column).
+  `IFlowRunStore` gains a six-parameter `RecordStepStartAsync(..., string? serverId)` whose default
+  implementation forwards to the five-parameter one, so a custom run store compiles and runs unchanged and
+  simply records no server.
+- **Dashboard.** `GET {base}/api/servers` (viewer role, compressed) and a **Servers** tab with an Active / Stale
+  chip per replica; the step detail shows the server of each attempt.
+
 ### Changed — the continuation reads the frontier, not the whole run (#189 P0-1)
 
 The engine runs its continuation on every step completion, and that continuation used to read every status
