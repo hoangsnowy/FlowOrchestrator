@@ -6,15 +6,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-## [2.0.0] - 2026-11-28
-
-Major release (.NET 10 / 11). Durable execution on every runtime: a worker killed mid-step no longer
-leaves its run `Running` (step execution leases), a trigger killed after registering its idempotency key
-no longer loses the delivery, the storage providers share one tested contract, and the engine continuation
-reads the run frontier instead of the whole run. Breaking: .NET 8 / 9 are dropped, Hangfire becomes an
-opt-in runtime, webhook security defaults to `Enforce`, persisted run events and dead API are removed,
-and step keys must be storage-safe. Pending re-checks queued by 1.17 – 1.34.8 run on a 2.0 Hangfire worker.
-
 > **Upgrading from 1.x?** Follow [Migrating to 2.0](docs/articles/migrating-to-2.0.md): package
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
