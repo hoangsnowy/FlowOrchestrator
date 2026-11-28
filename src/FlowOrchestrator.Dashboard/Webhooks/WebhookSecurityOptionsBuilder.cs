@@ -14,7 +14,7 @@ public sealed class WebhookSecurityOptionsBuilder
 
     /// <summary>Wraps an existing options instance.</summary>
     /// <param name="options">Mutable options instance to populate.</param>
-    public WebhookSecurityOptionsBuilder(WebhookSecurityOptions options)
+    internal WebhookSecurityOptionsBuilder(WebhookSecurityOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
     }

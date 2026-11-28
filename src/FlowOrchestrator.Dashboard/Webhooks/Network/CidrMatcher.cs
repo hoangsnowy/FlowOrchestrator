@@ -17,7 +17,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Network;
 /// </list>
 /// Mix and match in any combination. Per-request matching is allocation-free.
 /// </summary>
-public sealed class CidrMatcher
+internal sealed class CidrMatcher
 {
     private readonly Entry[] _entries;
 

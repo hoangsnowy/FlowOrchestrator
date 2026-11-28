@@ -22,7 +22,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks;
 /// phases plug rate-limit, IP-allowlist, and DLQ persistence into the same
 /// pipeline.
 /// </summary>
-public sealed class WebhookSecurityPipeline
+internal sealed class WebhookSecurityPipeline
 {
     private readonly IWebhookSignatureVerifier _verifier;
     private readonly ReplayProtectionGate? _replayGate;

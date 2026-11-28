@@ -17,7 +17,7 @@ namespace FlowOrchestrator.Dashboard.Security;
 /// so it marks the identity and skips one it already expanded. Register it with
 /// <see cref="DashboardSecurityServiceCollectionExtensions.AddFlowDashboardKeycloakRoles"/>.
 /// </remarks>
-public sealed class KeycloakRoleClaimsTransformation : IClaimsTransformation
+internal sealed class KeycloakRoleClaimsTransformation : IClaimsTransformation
 {
     private const string MarkerClaimType = "flow_dashboard_keycloak_roles";
     private readonly string? _clientId;

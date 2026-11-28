@@ -8,7 +8,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Signature;
 /// from individual manifest fields, (4) <see langword="null"/> when no signing
 /// is requested.
 /// </summary>
-public static class WebhookSignatureSpecResolver
+internal static class WebhookSignatureSpecResolver
 {
     /// <summary>
     /// Returns the spec to use for the trigger or <see langword="null"/> when

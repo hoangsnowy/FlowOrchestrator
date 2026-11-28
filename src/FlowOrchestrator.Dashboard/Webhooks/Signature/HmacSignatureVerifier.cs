@@ -15,7 +15,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Signature;
 /// boolean is returned. Short-circuiting would expose which candidate matched
 /// (or that the previous key was used) through wall-clock timing.
 /// </remarks>
-public sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
+internal sealed class HmacSignatureVerifier : IWebhookSignatureVerifier
 {
     private readonly IReadOnlyDictionary<string, Func<WebhookSignatureContext, byte[]>>? _customStrategies;
 

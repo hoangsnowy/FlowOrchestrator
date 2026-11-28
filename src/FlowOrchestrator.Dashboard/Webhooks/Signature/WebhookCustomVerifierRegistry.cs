@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Signature;
 /// whether the manifest's <c>webhookSignatureScheme</c> value should dispatch
 /// to a DI-registered verifier.
 /// </remarks>
-public sealed class WebhookCustomVerifierRegistry
+internal sealed class WebhookCustomVerifierRegistry
 {
     private readonly HashSet<string> _schemes = new(StringComparer.OrdinalIgnoreCase);
 

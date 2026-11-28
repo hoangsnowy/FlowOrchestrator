@@ -20,7 +20,7 @@ namespace FlowOrchestrator.Dashboard.Notifications;
 /// stalls the engine; instead, its connection's bounded channel drops the oldest events.
 /// </para>
 /// </remarks>
-public sealed class SseFlowEventBroadcaster : IFlowEventNotifier
+internal sealed class SseFlowEventBroadcaster : IFlowEventNotifier
 {
     private readonly ConcurrentDictionary<Guid, SseConnection> _connections = new();
 

@@ -16,7 +16,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.RateLimit;
 /// with. The dictionary grows monotonically with the active key set; bound it
 /// with the <c>PerIp</c> opt-in only when that's actually needed.
 /// </remarks>
-public sealed class TokenBucketWebhookRateLimiter : IWebhookRateLimiter, IDisposable
+internal sealed class TokenBucketWebhookRateLimiter : IWebhookRateLimiter, IDisposable
 {
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new();
 

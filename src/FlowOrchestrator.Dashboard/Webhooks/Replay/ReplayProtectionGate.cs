@@ -10,7 +10,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Replay;
 /// timestamp-skew check + nonce registration; persistence is delegated to
 /// <see cref="IWebhookReplayStore"/>.
 /// </summary>
-public sealed class ReplayProtectionGate
+internal sealed class ReplayProtectionGate
 {
     private readonly IWebhookReplayStore _store;
     private readonly TimeProvider _clock;

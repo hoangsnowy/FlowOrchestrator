@@ -14,7 +14,7 @@ namespace FlowOrchestrator.Dashboard.Notifications;
 /// the capacity drop the oldest events first; the dashboard tolerates this because every event
 /// has an idempotent refetch path on the client.
 /// </remarks>
-public sealed class SseConnection
+internal sealed class SseConnection
 {
     /// <summary>Default per-connection channel capacity.</summary>
     public const int DefaultCapacity = 256;

@@ -23,7 +23,7 @@ namespace FlowOrchestrator.Dashboard.Notifications;
 /// and to drive the client-side watchdog that activates polling fallback when the stream stalls.
 /// </para>
 /// </remarks>
-public static class SseEndpointHandler
+internal static class SseEndpointHandler
 {
     /// <summary>Default heartbeat cadence — chosen to beat nginx's 60s default keep-alive.</summary>
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);

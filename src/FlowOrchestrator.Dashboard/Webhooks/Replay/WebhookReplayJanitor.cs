@@ -8,7 +8,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Replay;
 /// Hosted service that periodically purges expired replay-nonce entries from
 /// the active <see cref="IWebhookReplayStore"/>. Runs once per minute by default.
 /// </summary>
-public sealed class WebhookReplayJanitor : BackgroundService
+internal sealed class WebhookReplayJanitor : BackgroundService
 {
     private readonly IWebhookReplayStore _store;
     private readonly TimeProvider _clock;
