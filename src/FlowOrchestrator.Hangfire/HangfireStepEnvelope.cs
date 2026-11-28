@@ -64,7 +64,7 @@ public sealed class HangfireStepEnvelope
     /// <param name="flowId">The flow that owns the step.</param>
     /// <param name="step">The step to run; its inputs are serialised with System.Text.Json.</param>
     /// <returns>A new envelope ready to hand to <c>IBackgroundJobClient</c>.</returns>
-    public static HangfireStepEnvelope From(IExecutionContext context, Guid flowId, IStepInstance step)
+    internal static HangfireStepEnvelope From(IExecutionContext context, Guid flowId, IStepInstance step)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(step);
@@ -85,7 +85,7 @@ public sealed class HangfireStepEnvelope
     /// <summary>Rebuilds the execution context; trigger data and headers are left for the engine to load from the store.</summary>
     /// <param name="jobId">The Hangfire background-job id, recorded on the context for diagnostics.</param>
     /// <returns>A fresh mutable execution context.</returns>
-    public Core.Execution.ExecutionContext ToExecutionContext(string? jobId) => new()
+    internal Core.Execution.ExecutionContext ToExecutionContext(string? jobId) => new()
     {
         RunId = RunId,
         PrincipalId = PrincipalId,
@@ -95,7 +95,7 @@ public sealed class HangfireStepEnvelope
     /// <summary>Rebuilds the step instance, materialising <see cref="InputsJson"/> into plain CLR values.</summary>
     /// <returns>A fresh mutable step instance.</returns>
     /// <exception cref="JsonException"><see cref="InputsJson"/> is not a JSON object.</exception>
-    public StepInstance ToStepInstance()
+    internal StepInstance ToStepInstance()
     {
         var step = new StepInstance(StepKey, StepType)
         {

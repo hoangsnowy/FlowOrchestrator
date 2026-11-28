@@ -17,7 +17,7 @@ namespace FlowOrchestrator.Hangfire;
 /// run's stored trigger data, so neither the manifest nor user payloads go through Hangfire's
 /// Newtonsoft.Json argument store.
 /// </remarks>
-public sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireStepRunner
+internal sealed class HangfireFlowOrchestrator : IHangfireFlowTrigger, IHangfireStepRunner
 {
     private readonly IFlowOrchestrator _engine;
     private readonly FlowRegistry _flows;
