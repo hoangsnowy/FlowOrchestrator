@@ -403,6 +403,14 @@ on SQL Server + Hangfire, 10 on PostgreSQL + Hangfire, 9 on Service Bus, with 6 
   stored trigger data), lets the engine recompute `__loopItem`, and drops the destroyed poll bookkeeping, so
   such a poll starts a fresh attempt count and `pollTimeoutSeconds` window. Found by the 1.34.7 → 2.0
   upgrade rehearsal (`tests/upgrade`); see [Migrating to 2.0 → Step 4](docs/articles/migrating-to-2.0.md#step-4--move-the-hangfire-queue-across-hangfire-hosts-only).
+- **A re-check queued by 1.34.8 keeps its inputs and poll bookkeeping on 2.0.** 1.34.8 fixed the loss on
+  its own side by carrying a re-check's `JsonElement` inputs as one System.Text.Json string under the
+  reserved input key `__hangfireJsonInputs`. Nothing in such a job is destroyed, so the repair above left
+  it alone and the step ran without those inputs: a poll lost every carried value the manifest does not
+  hold (a `pollMinAttempts` or input written back by a typed handler, its attempt count and
+  `pollTimeoutSeconds` window). The legacy overload now decodes the key, so the
+  re-check runs exactly as it would have on 1.34.8. The upgrade rehearsal now starts from 1.34.8 and checks
+  that the queue holds such a job and that the poll's attempt counter carries on rising across the upgrade.
 
 ### Fixed — a signal sent after a `WaitForSignal` timeout no longer resumes the step
 
@@ -1152,6 +1160,51 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
     and PostgreSQL.
   - `InMemoryFlowRunStore` run search no longer formats `run.Id.ToString()` for each candidate run. A
     search over 10k runs drops from 1,016 KB to 79 KB.
+
+## [1.34.8] - 2026-11-27
+
+Bug-fix release for the 1.34 line (.NET 8 / 9 / 10). PostgreSQL hosts that restart or roll beside running
+ones should upgrade (a starting host no longer locks the hot tables), as should Hangfire hosts with polling
+steps, `ForEach` loops over polling children, or `WaitForSignal` steps (their re-checks no longer run
+with destroyed inputs). No API change and no manual migration step.
+
+### Fixed
+
+- **PostgreSQL: a host starting beside running hosts no longer locks the hot tables.** The start-up
+  migration ran `CREATE INDEX IF NOT EXISTS` and `ALTER TABLE … ADD COLUMN IF NOT EXISTS` on every start,
+  and PostgreSQL takes the table lock of those statements (SHARE and ACCESS EXCLUSIVE) *before* it checks
+  the name. A host started during a rolling deployment or a restart therefore queued behind any in-flight
+  write, autovacuum or index build on `flow_runs`, `flow_steps`, `flow_events` and the other tables; every
+  later write to that table queued behind the starting host; and a start that waited past the 30 s command
+  timeout failed. Every index and column statement now runs behind a catalog check that takes no table
+  lock, so a start on an up-to-date schema requests none. The resulting schema is identical (same indexes,
+  columns and definitions as 1.34.7); no manual step is needed. Affects `UsePostgreSql()` only.
+- **Hangfire: a `Pending` step's re-check no longer runs with destroyed inputs.** A step that returns
+  `Pending` is re-dispatched with the inputs its attempt resolved, which are `System.Text.Json.JsonElement`
+  values — an expression such as `@triggerBody()?.shipmentId` resolves to one, and a typed handler
+  (`IStepHandler<TInput>`, so every `PollableStepHandler<T>` and `WaitForSignal`) writes *all* of its inputs
+  back as one, literals included. Hangfire stores job arguments with Newtonsoft.Json, which keeps only a
+  `JsonElement`'s `ValueKind`, so from the second attempt on the step ran with `default(JsonElement)` inputs:
+  - **polling steps** saw every input as `null` / default — `pollEnabled` read `false`, so the first re-check
+    returned `Succeeded` with whatever it fetched, ignoring `pollConditionPath`, `pollMinAttempts` and
+    `pollTimeoutSeconds` (a poll shaped like the sample's `ShipmentTrackingFlow` — literal inputs,
+    `pollMinAttempts = 3` — succeeded on its second attempt);
+  - **`ForEach` children that poll** failed with `InvalidOperationException: Operation is not valid due to
+    the current state of the object` (the destroyed `__loopItem` could not be serialised), failing the loop
+    and the run;
+  - **`WaitForSignal`** re-checks (the `timeoutSeconds` deadline check, and the periodic re-park of a wait
+    without a timeout) failed with `WaitForSignal step requires a non-empty 'signalName' input` instead of
+    timing out or parking again.
+
+  The Hangfire dispatcher now carries every input that holds a `JsonElement` as one System.Text.Json string
+  (reserved input key `__hangfireJsonInputs`, removed again on the worker), so the job argument holds only
+  strings and primitives and inputs, `__loopItem` and poll bookkeeping (`__pollAttempt`,
+  `__pollStartedAtUtc`) come back exactly as resolved on every re-check.
+  Re-check jobs **already queued by an earlier release (1.34.7 and before)** are repaired when they run:
+  destroyed inputs are restored from the manifest (expressions resolve again from the run's stored trigger
+  data), `__loopItem` is recomputed, and a poll's destroyed bookkeeping restarts, so such a poll begins a
+  fresh attempt count and `pollTimeoutSeconds` window. The job method signature is unchanged. Affects the
+  Hangfire runtime only; InMemory and Service Bus never serialised inputs through Newtonsoft.Json.
 
 ## [1.34.7] - 2026-11-24
 

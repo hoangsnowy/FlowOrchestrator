@@ -35,7 +35,7 @@ param(
     # Combinations on which the Rollback section (2.0 -> 1.34) is rehearsed after the upgrade.
     [string[]] $RollbackOn = @('hangfire-sqlserver', 'servicebus-sqlserver'),
 
-    [string] $FromVersion = '1.34.7',
+    [string] $FromVersion = '1.34.8',
 
     [string] $WorkDir = (Join-Path ([IO.Path]::GetTempPath()) 'fo-upgrade-rehearsal'),
 
@@ -161,8 +161,8 @@ function Build-CustomerApp([string] $Version) {
         try { Invoke-Native git @('apply', '-p1', '--whitespace=nowarn', (Join-Path $Here 'upgrade-to-2.0.patch')) | Out-Null }
         finally { Pop-Location }
     }
-    elseif ($FromVersion -ne '1.34.7') {
-        (Get-Content (Join-Path $dir 'CustomerApp.csproj') -Raw).Replace('<FlowOrchestratorVersion>1.34.7<', "<FlowOrchestratorVersion>$FromVersion<") |
+    elseif ($FromVersion -ne '1.34.8') {
+        (Get-Content (Join-Path $dir 'CustomerApp.csproj') -Raw).Replace('<FlowOrchestratorVersion>1.34.8<', "<FlowOrchestratorVersion>$FromVersion<") |
             Set-Content (Join-Path $dir 'CustomerApp.csproj') -NoNewline
     }
     $out = Join-Path $C.Root "out-$Version"
@@ -544,6 +544,17 @@ function Invoke-GuidePreflight {
             : "SELECT j.id, j.statename, j.createdat FROM hangfire.job AS j WHERE j.statename IN ('Enqueued', 'Scheduled', 'Processing', 'Awaiting') AND j.invocationdata::text LIKE '%IFlowDefinition%';"
         $rows = Invoke-Db $q -AllowFailure
         Check 'Step 4.1 query runs as written and finds no <= 1.16 job' ($LASTEXITCODE -eq 0 -and $rows.Count -eq 0) (Short ($rows -join ' / '))
+
+        # From 1.34.8 a Pending re-check carries its inputs as one System.Text.Json string under
+        # __hangfireJsonInputs. Prove the queue really holds such a job, so the 2.0 checks below exercise
+        # the decode (LegacyStepJobRepair) and not only the 1.34.7 manifest repair.
+        if ([version]$FromVersion -ge [version]'1.34.8') {
+            $q = $C.Storage -eq 'sqlserver' `
+                ? "SELECT COUNT(*) FROM HangFire.Job AS j WHERE j.StateName IN ('Enqueued', 'Scheduled') AND j.Arguments LIKE '%[_][_]hangfireJsonInputs%';" `
+                : "SELECT COUNT(*) FROM hangfire.job AS j WHERE j.statename IN ('Enqueued', 'Scheduled') AND j.arguments::text LIKE '%\_\_hangfireJsonInputs%';"
+            $carried = Invoke-Db $q
+            Check "queued $FromVersion re-checks carry __hangfireJsonInputs" ([int]($carried | Select-Object -First 1) -ge 1) "jobs: $($carried -join '')"
+        }
     }
 
     $C.PreSchema = Get-SchemaSnapshot
@@ -600,7 +611,17 @@ function Invoke-UpgradeTo2 {
     $repolled = Wait-Until -TimeoutSec 60 { @(Get-PollLines 'S1' | Where-Object { $_ -match "fo=2\." }).Count -ge 1 }
     Check 'Pending poll from 1.34 keeps polling on 2.0' $repolled "$before -> $((Get-PollLines 'S1').Count) polls; last: $((Get-PollLines 'S1') | Select-Object -Last 1)"
     $attempts = @(Get-PollLines 'S1' | ForEach-Object { if ($_ -match 'attempt=(\d+)') { [int]$Matches[1] } })
-    Note 'poll attempt counter across the upgrade' "attempts: $($attempts -join ',')"
+    # Hangfire up to 1.34.7 stored the re-check's poll bookkeeping through Newtonsoft, which destroyed it, so
+    # its first 2.0 attempt restarts the count (guide, Step 4). 1.34.8 carries it intact and Service Bus never
+    # lost it: there the count must go on rising across the upgrade.
+    if ($C.Name -like 'hangfire-*' -and [version]$FromVersion -lt [version]'1.34.8') {
+        Note 'poll attempt counter across the upgrade (restarts: queued by Hangfire <= 1.34.7)' "attempts: $($attempts -join ',')"
+    }
+    else {
+        $rising = $attempts.Count -ge 2
+        for ($i = 1; $i -lt $attempts.Count; $i++) { if ($attempts[$i] -le $attempts[$i - 1]) { $rising = $false } }
+        Check 'poll attempt counter carries on across the upgrade' $rising "attempts: $($attempts -join ',')"
+    }
     Set-Delivered 'S1'
     Check 'shipment S1 completes on 2.0' (Wait-RunStatus $st.Ship1 @('Succeeded') 60) $LastRun.status
     Set-Delivered 'B2'; Set-Delivered 'B3'

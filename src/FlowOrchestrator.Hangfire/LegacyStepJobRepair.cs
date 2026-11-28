@@ -29,15 +29,28 @@ namespace FlowOrchestrator.Hangfire;
 /// fresh attempt count and timeout window on its first 2.0 run. Destroyed trigger data is cleared and
 /// reloaded by the engine from the run's stored trigger data.
 /// </para>
+/// <para>
+/// 1.34.8 stopped the destruction on its own side: it moves every input holding a
+/// <see cref="JsonElement"/> into one System.Text.Json document carried as a string under
+/// <see cref="EncodedInputsKey"/>, and its worker decodes them again. A job queued by 1.34.8 and run here
+/// therefore has no destroyed input but is missing those inputs until the reserved key is decoded, which
+/// this repair does too (the 1.34.8 values are exact, so nothing is taken from the manifest for them).
+/// </para>
 /// <para>Complexity: O(input leaves) per legacy job, once; new 2.0 jobs never come through here.</para>
 /// </remarks>
 internal static class LegacyStepJobRepair
 {
+    /// <summary>
+    /// Reserved input key under which FlowOrchestrator 1.34.8 carries the System.Text.Json text of the inputs
+    /// that held <see cref="JsonElement"/> values.
+    /// </summary>
+    internal const string EncodedInputsKey = "__hangfireJsonInputs";
+
     /// <summary>Repairs <paramref name="ctx"/> and <paramref name="step"/> in place.</summary>
     /// <param name="ctx">The execution context deserialised from the legacy job.</param>
     /// <param name="step">The step instance deserialised from the legacy job.</param>
     /// <param name="flow">The registered flow the step belongs to, whose manifest supplies replacements.</param>
-    /// <returns>The number of inputs that were replaced or dropped.</returns>
+    /// <returns>The number of inputs that were replaced, dropped or decoded.</returns>
     public static int Repair(IExecutionContext ctx, IStepInstance step, IFlowDefinition flow)
     {
         if (IsDestroyed(ctx.TriggerData))
@@ -63,30 +76,49 @@ internal static class LegacyStepJobRepair
                 (damaged ??= []).Add(key);
             }
         }
-        if (damaged is null)
+        var hasEncoded = inputs.TryGetValue(EncodedInputsKey, out var encodedValue);
+        if (damaged is null && !hasEncoded)
         {
             return 0;
         }
 
-        var manifestInputs = flow.Manifest.Steps.FindStep(step.Key)?.Inputs;
         var repaired = new Dictionary<string, object?>(inputs, StringComparer.Ordinal);
-        foreach (var key in damaged)
+        var changed = 0;
+
+        if (damaged is not null)
         {
-            if (TryGetManifestValue(manifestInputs, key, out var manifestKey, out var manifestValue))
+            var manifestInputs = flow.Manifest.Steps.FindStep(step.Key)?.Inputs;
+            foreach (var key in damaged)
             {
-                // Re-key under the manifest's spelling: the resolver matches manifest text by key, and a
-                // typed handler wrote its inputs back under its serializer's property names.
                 repaired.Remove(key);
-                repaired[manifestKey] = manifestValue;
+                if (TryGetManifestValue(manifestInputs, key, out var manifestKey, out var manifestValue))
+                {
+                    // Re-key under the manifest's spelling: the resolver matches manifest text by key, and a
+                    // typed handler wrote its inputs back under its serializer's property names.
+                    repaired[manifestKey] = manifestValue;
+                }
             }
-            else
+
+            changed += damaged.Count;
+        }
+
+        if (hasEncoded)
+        {
+            // A 1.34.8 job: put back the exact JsonElement values its dispatcher resolved.
+            repaired.Remove(EncodedInputsKey);
+            if (encodedValue is string json && json.Length > 0)
             {
-                repaired.Remove(key);
+                using var document = JsonDocument.Parse(json);
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    repaired[property.Name] = property.Value.Clone();
+                    changed++;
+                }
             }
         }
 
         step.Inputs = repaired;
-        return damaged.Count;
+        return changed;
     }
 
     /// <summary>
