@@ -35,6 +35,7 @@ public static class PostgreSqlServiceCollectionExtensions
         builder.Services.AddSingleton<IFlowSignalStore>(_ => new PostgreSqlFlowSignalStore(connectionString));
 
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new PostgreSqlFlowScheduleStateStore(connectionString));
+        builder.Services.AddSingleton<IFlowServerStore>(_ => new PostgreSqlFlowServerStore(connectionString));
         builder.Services.AddHostedService(sp =>
             new PostgreSqlFlowOrchestratorMigrator(
                 connectionString,

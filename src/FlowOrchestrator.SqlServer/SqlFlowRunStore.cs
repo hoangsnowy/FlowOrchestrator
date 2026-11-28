@@ -107,7 +107,11 @@ public sealed class SqlFlowRunStore :
         return rows.AsList();
     }
 
-    public async Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
+    public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
+        => RecordStepStartAsync(runId, stepKey, stepType, inputJson, jobId, serverId: null);
+
+    /// <inheritdoc/>
+    public async Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId, string? serverId)
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.ExecuteAsync("""
@@ -118,8 +122,8 @@ public sealed class SqlFlowRunStore :
             FROM FlowStepAttempts WITH (UPDLOCK, HOLDLOCK)
             WHERE RunId = @RunId AND StepKey = @StepKey;
 
-            INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, InputJson, JobId, StartedAt)
-            VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET());
+            INSERT INTO FlowStepAttempts (RunId, StepKey, AttemptNo, StepType, Status, InputJson, JobId, StartedAt, ServerId)
+            VALUES (@RunId, @StepKey, @AttemptNo, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET(), @ServerId);
 
             MERGE FlowSteps WITH (HOLDLOCK, UPDLOCK) AS target
             USING (SELECT @RunId AS RunId, @StepKey AS StepKey) AS source
@@ -139,7 +143,7 @@ public sealed class SqlFlowRunStore :
                 VALUES (@RunId, @StepKey, @StepType, 'Running', @InputJson, @JobId, SYSDATETIMEOFFSET());
 
             COMMIT TRANSACTION;
-            """, new { RunId = runId, StepKey = stepKey, StepType = stepType, InputJson = inputJson, JobId = jobId });
+            """, new { RunId = runId, StepKey = stepKey, StepType = stepType, InputJson = inputJson, JobId = jobId, ServerId = serverId });
     }
 
     public async Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage)
@@ -500,7 +504,7 @@ public sealed class SqlFlowRunStore :
             .AsList();
 
         var attempts = (await conn.QueryAsync<FlowStepAttemptRecord>(
-            "SELECT RunId, StepKey, AttemptNo AS Attempt, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt, EvaluationTraceJson FROM FlowStepAttempts WHERE RunId = @RunId ORDER BY StepKey, AttemptNo",
+            "SELECT RunId, StepKey, AttemptNo AS Attempt, StepType, Status, InputJson, OutputJson, ErrorMessage, JobId, StartedAt, CompletedAt, EvaluationTraceJson, ServerId FROM FlowStepAttempts WHERE RunId = @RunId ORDER BY StepKey, AttemptNo",
             new { RunId = runId })
             ).AsList();
 
@@ -1323,7 +1327,7 @@ public sealed class SqlFlowRunStore :
     /// <summary>
     /// The skip as one transaction: a new attempt row born <c>Skipped</c>, and the step row upserted to
     /// <c>Skipped</c> — the same rows the old start + complete + trace sequence produced. The attempt
-    /// number is allocated under <c>UPDLOCK, HOLDLOCK</c>, as in <see cref="RecordStepStartAsync"/>.
+    /// number is allocated under <c>UPDLOCK, HOLDLOCK</c>, as in <see cref="RecordStepStartAsync(Guid, string, string, string?, string?, string?)"/>.
     /// A <see langword="null"/> trace keeps the step row's previous trace, as the old sequence did.
     /// </summary>
     private const string RecordSkippedStepSql = """

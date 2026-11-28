@@ -40,6 +40,7 @@ public static class SqlServerServiceCollectionExtensions
         builder.Services.AddSingleton<IFlowSignalStore>(_ => new SqlFlowSignalStore(connectionString));
 
         builder.Services.AddSingleton<IFlowScheduleStateStore>(_ => new SqlFlowScheduleStateStore(connectionString));
+        builder.Services.AddSingleton<IFlowServerStore>(_ => new SqlFlowServerStore(connectionString));
         builder.Services.AddHostedService(sp =>
             new FlowOrchestratorSqlMigrator(
                 connectionString,
