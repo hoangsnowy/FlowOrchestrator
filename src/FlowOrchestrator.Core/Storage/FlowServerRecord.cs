@@ -46,4 +46,16 @@ public sealed record FlowServerRecord
 
     /// <summary>Flows the process registered with <c>AddFlow&lt;T&gt;()</c>.</summary>
     public int FlowCount { get; init; }
+
+    /// <summary>
+    /// The store's clock at the moment <see cref="IFlowServerStore.GetServersAsync"/> read the row, or
+    /// <see langword="null"/> when the store does not report it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="LastHeartbeatAt"/> is stamped by the store's clock, so a heartbeat's age must be measured
+    /// against the same clock: comparing it with the reading host's clock turns any skew between that host
+    /// and the database straight into a wrong Active / Stale status. Readers fall back to their own clock when
+    /// this is <see langword="null"/>. Ignored on <see cref="IFlowServerStore.UpsertServerAsync"/>.
+    /// </remarks>
+    public DateTimeOffset? ObservedAt { get; init; }
 }

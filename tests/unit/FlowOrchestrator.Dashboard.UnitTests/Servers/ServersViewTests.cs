@@ -130,4 +130,36 @@ public sealed class ServersViewTests
         StartedAt = lastHeartbeat,
         LastHeartbeatAt = lastHeartbeat,
     };
+
+    [Theory]
+    [InlineData(10)]   // dashboard host 10 min ahead of the database
+    [InlineData(-10)]  // dashboard host 10 min behind the database
+    public void Build_ages_a_heartbeat_by_the_store_clock_not_the_host_clock(int hostAheadMinutes)
+    {
+        // Arrange — heartbeat stamped by the database 5 s before the database read the list.
+        var dbNow = _time.GetUtcNow();
+        var server = Server("live", "m1", dbNow.AddSeconds(-5)) with { ObservedAt = dbNow };
+        var hostNow = dbNow.AddMinutes(hostAheadMinutes);
+
+        // Act
+        var row = Assert.Single(ServersView.Build([server], hostNow, _options).Servers);
+
+        // Assert
+        Assert.Equal(ServersView.Active, row.Status);
+        Assert.Equal(5, row.LastSeenSeconds);
+    }
+
+    [Fact]
+    public void Build_ages_a_dead_server_by_the_store_clock_even_when_the_host_clock_is_behind()
+    {
+        // Arrange — the database last heard from it 10 min ago; the host clock lags the database by 10 min.
+        var dbNow = _time.GetUtcNow();
+        var server = Server("dead", "m1", dbNow.AddMinutes(-10)) with { ObservedAt = dbNow };
+
+        // Act
+        var row = Assert.Single(ServersView.Build([server], dbNow.AddMinutes(-10), _options).Servers);
+
+        // Assert
+        Assert.Equal(ServersView.Stale, row.Status);
+    }
 }

@@ -37,7 +37,13 @@ internal sealed class InMemoryFlowServerStore : IFlowServerStore
     /// <inheritdoc/>
     public Task<IReadOnlyList<FlowServerRecord>> GetServersAsync(CancellationToken cancellationToken = default)
     {
+        var observedAt = _clock.GetUtcNow();
         var servers = _servers.Values.ToArray();
+        for (var i = 0; i < servers.Length; i++)
+        {
+            servers[i] = servers[i] with { ObservedAt = observedAt };
+        }
+
         Array.Sort(servers, static (a, b) => b.LastHeartbeatAt.CompareTo(a.LastHeartbeatAt));
         return Task.FromResult<IReadOnlyList<FlowServerRecord>>(servers);
     }

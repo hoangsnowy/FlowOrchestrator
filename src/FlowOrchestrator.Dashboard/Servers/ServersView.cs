@@ -67,7 +67,7 @@ internal static class ServersView
 
     /// <summary>Computes each server's status against <paramref name="now"/> and orders the rows.</summary>
     /// <param name="servers">The rows from <see cref="IFlowServerStore.GetServersAsync"/>.</param>
-    /// <param name="now">The current instant.</param>
+    /// <param name="now">This host's current instant; used only for rows whose store reports no <see cref="FlowServerRecord.ObservedAt"/>.</param>
     /// <param name="options">Supplies <see cref="FlowServerOptions.StaleAfter"/>.</param>
     /// <returns>The tracked response.</returns>
     public static ServersResponse Build(IReadOnlyList<FlowServerRecord> servers, DateTimeOffset now, FlowServerOptions options)
@@ -77,7 +77,10 @@ internal static class ServersView
         for (var i = 0; i < rows.Length; i++)
         {
             var s = servers[i];
-            var lastSeen = now - s.LastHeartbeatAt;
+            // Age by the clock that stamped the heartbeat (the store's), not this host's: see
+            // FlowServerRecord.ObservedAt.
+            var observedAt = s.ObservedAt ?? now;
+            var lastSeen = observedAt - s.LastHeartbeatAt;
             rows[i] = new ServerView(
                 s.ServerId,
                 s.MachineName,
@@ -89,7 +92,7 @@ internal static class ServersView
                 lastSeen > TimeSpan.Zero ? (long)lastSeen.TotalSeconds : 0,
                 s.ActiveStepCount,
                 s.FlowCount,
-                StatusFor(s.LastHeartbeatAt, now, staleAfter));
+                StatusFor(s.LastHeartbeatAt, observedAt, staleAfter));
         }
 
         Array.Sort(rows, static (a, b) =>

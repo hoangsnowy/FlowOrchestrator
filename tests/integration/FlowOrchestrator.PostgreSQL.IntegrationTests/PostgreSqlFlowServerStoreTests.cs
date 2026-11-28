@@ -168,4 +168,19 @@ public sealed class PostgreSqlFlowServerStoreTests : IClassFixture<PostgreSqlFix
             "UPDATE flow_servers SET last_heartbeat_at = last_heartbeat_at - @Age, started_at = started_at - @Age WHERE server_id = @Id",
             new { Id = id, Age = age });
     }
+
+    [Fact]
+    public async Task GetServers_reports_the_database_clock_it_read_the_rows_with()
+    {
+        // Arrange
+        var id = NewId();
+        await _store.UpsertServerAsync(Server(id));
+
+        // Act
+        var row = Assert.Single(await _store.GetServersAsync(), s => s.ServerId == id);
+
+        // Assert — same clock as LastHeartbeatAt, read after it was written.
+        Assert.NotNull(row.ObservedAt);
+        Assert.True(row.ObservedAt >= row.LastHeartbeatAt, $"ObservedAt {row.ObservedAt:O} precedes LastHeartbeatAt {row.LastHeartbeatAt:O}");
+    }
 }

@@ -66,7 +66,7 @@ internal sealed class PostgreSqlFlowServerStore : IFlowServerStore
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         var rows = await conn.QueryAsync<FlowServerRecord>(new CommandDefinition(
-            $"SELECT {Columns} FROM flow_servers ORDER BY last_heartbeat_at DESC, server_id",
+            $"SELECT {Columns}, now() AS \"ObservedAt\" FROM flow_servers ORDER BY last_heartbeat_at DESC, server_id",
             cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();
     }

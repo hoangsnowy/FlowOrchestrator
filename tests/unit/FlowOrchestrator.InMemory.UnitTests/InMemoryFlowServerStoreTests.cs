@@ -128,4 +128,18 @@ public sealed class InMemoryFlowServerStoreTests
         ActiveStepCount = activeSteps,
         FlowCount = 3,
     };
+
+    [Fact]
+    public async Task GetServers_reports_the_clock_it_read_the_rows_with()
+    {
+        // Arrange
+        await _sut.UpsertServerAsync(Server("s1", activeSteps: 0));
+        _clock.Advance(TimeSpan.FromSeconds(20));
+
+        // Act
+        var server = Assert.Single(await _sut.GetServersAsync());
+
+        // Assert
+        Assert.Equal(_clock.GetUtcNow(), server.ObservedAt);
+    }
 }

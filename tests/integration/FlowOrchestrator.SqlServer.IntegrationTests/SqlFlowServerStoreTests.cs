@@ -168,4 +168,19 @@ public sealed class SqlFlowServerStoreTests : IClassFixture<SqlServerFixture>
             "UPDATE FlowServers SET LastHeartbeatAt = DATEADD(SECOND, -@Seconds, LastHeartbeatAt), StartedAt = DATEADD(SECOND, -@Seconds, StartedAt) WHERE ServerId = @Id",
             new { Id = id, Seconds = (int)age.TotalSeconds });
     }
+
+    [Fact]
+    public async Task GetServers_reports_the_database_clock_it_read_the_rows_with()
+    {
+        // Arrange
+        var id = NewId();
+        await _store.UpsertServerAsync(Server(id));
+
+        // Act
+        var row = Assert.Single(await _store.GetServersAsync(), s => s.ServerId == id);
+
+        // Assert — same clock as LastHeartbeatAt, read after it was written.
+        Assert.NotNull(row.ObservedAt);
+        Assert.True(row.ObservedAt >= row.LastHeartbeatAt, $"ObservedAt {row.ObservedAt:O} precedes LastHeartbeatAt {row.LastHeartbeatAt:O}");
+    }
 }

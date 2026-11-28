@@ -64,7 +64,7 @@ internal sealed class SqlFlowServerStore : IFlowServerStore
     {
         await using var conn = new SqlConnection(_connectionString);
         var rows = await conn.QueryAsync<FlowServerRecord>(new CommandDefinition(
-            $"SELECT {Columns} FROM [FlowServers] ORDER BY LastHeartbeatAt DESC, ServerId",
+            $"SELECT {Columns}, SYSDATETIMEOFFSET() AS ObservedAt FROM [FlowServers] ORDER BY LastHeartbeatAt DESC, ServerId",
             cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();
     }

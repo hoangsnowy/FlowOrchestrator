@@ -158,8 +158,10 @@ builder.Services.AddFlowOrchestrator(options =>
 });
 ```
 
-Timestamps come from the database clock, so replicas with skewed clocks are aged against one clock; the
-dashboard computes the status against the host's `TimeProvider`. The tab polls every 5 s while it is open.
+Heartbeats are stamped and aged by the database's clock (the store returns its current time with the list),
+so clock skew between replicas, or between the dashboard host and the database, never changes a server's
+status. A custom `IFlowServerStore` that leaves `FlowServerRecord.ObservedAt` unset is aged against the
+dashboard host's clock instead. The tab polls every 5 s while it is open.
 
 ---
 
