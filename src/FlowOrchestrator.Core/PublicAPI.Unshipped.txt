@@ -1,36 +1,4 @@
 #nullable enable
-abstract FlowOrchestrator.Core.Execution.PollableStepHandler<TInput>.FetchAsync(FlowOrchestrator.Core.Execution.IExecutionContext! ctx, FlowOrchestrator.Core.Abstractions.IFlowDefinition! flow, FlowOrchestrator.Core.Execution.IStepInstance<TInput>! step) -> System.Threading.Tasks.ValueTask<(System.Text.Json.JsonElement Result, bool IsJson)>
-abstract FlowOrchestrator.Core.Notifications.FlowLifecycleEvent.<Clone>$() -> FlowOrchestrator.Core.Notifications.FlowLifecycleEvent!
-abstract FlowOrchestrator.Core.Notifications.FlowLifecycleEvent.Type.get -> string!
-const FlowOrchestrator.Core.Execution.RecurringTriggerJobId.Prefix = "flow-" -> string!
-const FlowOrchestrator.Core.Execution.WaitForSignalHandler.StepTypeName = "WaitForSignal" -> string!
-const FlowOrchestrator.Core.HealthChecks.FlowOrchestratorHealthCheckExtensions.DefaultName = "flow-orchestrator-storage" -> string!
-const FlowOrchestrator.Core.Observability.FlowOrchestratorTelemetry.SourceName = "FlowOrchestrator" -> string!
-const FlowOrchestrator.Core.Observability.InboundTraceContext.TraceparentHeaderName = "traceparent" -> string!
-const FlowOrchestrator.Core.Observability.InboundTraceContext.TracestateHeaderName = "tracestate" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.RunCompleted = "run.completed" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.RunStarted = "run.started" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepCompleted = "step.completed" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepFailed = "step.failed" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepPending = "step.pending" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepSkipped = "step.skipped" -> string!
-const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepStarted = "step.started" -> string!
-const FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.DigestPrefix = "sha256:" -> string!
-const FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.MaxStoredLength = 256 -> int
-const FlowOrchestrator.Core.Storage.RunSearchCursor.MaxEncodedLength = 64 -> int
-const FlowOrchestrator.Core.Storage.RunSearchQuery.MinRunIdPrefixLength = 4 -> int
-const FlowOrchestrator.Core.Storage.RunSearchTokenizer.DefaultMaxTokensPerDocument = 256 -> int
-const FlowOrchestrator.Core.Storage.RunSearchTokenizer.MaxTokenLength = 64 -> int
-const FlowOrchestrator.Core.Storage.RunSearchTokenizer.MinTokenLength = 2 -> int
-const FlowOrchestrator.Core.Storage.RunStatusNames.Cancelled = "Cancelled" -> string!
-const FlowOrchestrator.Core.Storage.RunStatusNames.Failed = "Failed" -> string!
-const FlowOrchestrator.Core.Storage.RunStatusNames.Running = "Running" -> string!
-const FlowOrchestrator.Core.Storage.RunStatusNames.Skipped = "Skipped" -> string!
-const FlowOrchestrator.Core.Storage.RunStatusNames.Succeeded = "Succeeded" -> string!
-const FlowOrchestrator.Core.Storage.RunStatusNames.TimedOut = "TimedOut" -> string!
-const FlowOrchestrator.Core.Storage.StepSkipReasons.PrerequisitesUnmet = "Prerequisite status did not satisfy runAfter conditions." -> string!
-const FlowOrchestrator.Core.Storage.WebhookReplayNonceStorage.DigestPrefix = "sha256:" -> string!
-const FlowOrchestrator.Core.Storage.WebhookReplayNonceStorage.MaxStoredLength = 256 -> int
 FlowOrchestrator.Core.Abstractions.FlowManifest
 FlowOrchestrator.Core.Abstractions.FlowManifest.FlowManifest() -> void
 FlowOrchestrator.Core.Abstractions.FlowManifest.Steps.get -> FlowOrchestrator.Core.Abstractions.StepCollection!
@@ -112,6 +80,7 @@ FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.Retention.get -> Flo
 FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.RunControl.get -> FlowOrchestrator.Core.Configuration.FlowRunControlOptions!
 FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.RunSearchIndex.get -> FlowOrchestrator.Core.Configuration.RunSearchIndexOptions!
 FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.Scheduler.get -> FlowOrchestrator.Core.Configuration.FlowSchedulerOptions!
+FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.Servers.get -> FlowOrchestrator.Core.Configuration.FlowServerOptions!
 FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.Signals.get -> FlowOrchestrator.Core.Configuration.FlowSignalOptions!
 FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder.UseRunSearchIndex(System.Action<FlowOrchestrator.Core.Configuration.RunSearchIndexOptions!>? configure = null) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!
@@ -145,6 +114,19 @@ FlowOrchestrator.Core.Configuration.FlowSchedulerOptions
 FlowOrchestrator.Core.Configuration.FlowSchedulerOptions.FlowSchedulerOptions() -> void
 FlowOrchestrator.Core.Configuration.FlowSchedulerOptions.PersistOverrides.get -> bool
 FlowOrchestrator.Core.Configuration.FlowSchedulerOptions.PersistOverrides.set -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions
+FlowOrchestrator.Core.Configuration.FlowServerOptions.Enabled.get -> bool
+FlowOrchestrator.Core.Configuration.FlowServerOptions.Enabled.set -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions.FlowServerOptions() -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions.HeartbeatInterval.get -> System.TimeSpan
+FlowOrchestrator.Core.Configuration.FlowServerOptions.HeartbeatInterval.set -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions.MissedHeartbeatsBeforeStale.get -> int
+FlowOrchestrator.Core.Configuration.FlowServerOptions.MissedHeartbeatsBeforeStale.set -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions.PurgeAfter.get -> System.TimeSpan
+FlowOrchestrator.Core.Configuration.FlowServerOptions.PurgeAfter.set -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions.RuntimeName.get -> string?
+FlowOrchestrator.Core.Configuration.FlowServerOptions.RuntimeName.set -> void
+FlowOrchestrator.Core.Configuration.FlowServerOptions.StaleAfter.get -> System.TimeSpan
 FlowOrchestrator.Core.Configuration.FlowSignalOptions
 FlowOrchestrator.Core.Configuration.FlowSignalOptions.FlowSignalOptions() -> void
 FlowOrchestrator.Core.Configuration.FlowSignalOptions.IndefiniteParkInterval.get -> System.TimeSpan
@@ -273,10 +255,10 @@ FlowOrchestrator.Core.Execution.IStepResult.FailedReason.get -> string?
 FlowOrchestrator.Core.Execution.IStepResult.FailedReason.set -> void
 FlowOrchestrator.Core.Execution.IStepResult.Key.get -> string!
 FlowOrchestrator.Core.Execution.IStepResult.Key.set -> void
-FlowOrchestrator.Core.Execution.IStepResult.Result.get -> object?
-FlowOrchestrator.Core.Execution.IStepResult.Result.set -> void
 FlowOrchestrator.Core.Execution.IStepResult.ReThrow.get -> bool
 FlowOrchestrator.Core.Execution.IStepResult.ReThrow.set -> void
+FlowOrchestrator.Core.Execution.IStepResult.Result.get -> object?
+FlowOrchestrator.Core.Execution.IStepResult.Result.set -> void
 FlowOrchestrator.Core.Execution.IStepResult.Status.get -> FlowOrchestrator.Core.Abstractions.StepStatus
 FlowOrchestrator.Core.Execution.IStepResult.Status.set -> void
 FlowOrchestrator.Core.Execution.ITrigger
@@ -366,10 +348,10 @@ FlowOrchestrator.Core.Execution.StepResult.FailedReason.get -> string?
 FlowOrchestrator.Core.Execution.StepResult.FailedReason.set -> void
 FlowOrchestrator.Core.Execution.StepResult.Key.get -> string!
 FlowOrchestrator.Core.Execution.StepResult.Key.set -> void
-FlowOrchestrator.Core.Execution.StepResult.Result.get -> object?
-FlowOrchestrator.Core.Execution.StepResult.Result.set -> void
 FlowOrchestrator.Core.Execution.StepResult.ReThrow.get -> bool
 FlowOrchestrator.Core.Execution.StepResult.ReThrow.set -> void
+FlowOrchestrator.Core.Execution.StepResult.Result.get -> object?
+FlowOrchestrator.Core.Execution.StepResult.Result.set -> void
 FlowOrchestrator.Core.Execution.StepResult.Status.get -> FlowOrchestrator.Core.Abstractions.StepStatus
 FlowOrchestrator.Core.Execution.StepResult.Status.set -> void
 FlowOrchestrator.Core.Execution.StepResult.StepResult() -> void
@@ -382,10 +364,10 @@ FlowOrchestrator.Core.Execution.StepResult<T>.FailedReason.get -> string?
 FlowOrchestrator.Core.Execution.StepResult<T>.FailedReason.set -> void
 FlowOrchestrator.Core.Execution.StepResult<T>.Key.get -> string!
 FlowOrchestrator.Core.Execution.StepResult<T>.Key.set -> void
-FlowOrchestrator.Core.Execution.StepResult<T>.Result.get -> object?
-FlowOrchestrator.Core.Execution.StepResult<T>.Result.set -> void
 FlowOrchestrator.Core.Execution.StepResult<T>.ReThrow.get -> bool
 FlowOrchestrator.Core.Execution.StepResult<T>.ReThrow.set -> void
+FlowOrchestrator.Core.Execution.StepResult<T>.Result.get -> object?
+FlowOrchestrator.Core.Execution.StepResult<T>.Result.set -> void
 FlowOrchestrator.Core.Execution.StepResult<T>.Status.get -> FlowOrchestrator.Core.Abstractions.StepStatus
 FlowOrchestrator.Core.Execution.StepResult<T>.Status.set -> void
 FlowOrchestrator.Core.Execution.StepResult<T>.StepResult() -> void
@@ -634,6 +616,30 @@ FlowOrchestrator.Core.Storage.FlowScheduleState.TriggerKey.get -> string!
 FlowOrchestrator.Core.Storage.FlowScheduleState.TriggerKey.set -> void
 FlowOrchestrator.Core.Storage.FlowScheduleState.UpdatedAtUtc.get -> System.DateTimeOffset
 FlowOrchestrator.Core.Storage.FlowScheduleState.UpdatedAtUtc.set -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord
+FlowOrchestrator.Core.Storage.FlowServerRecord.<Clone>$() -> FlowOrchestrator.Core.Storage.FlowServerRecord!
+FlowOrchestrator.Core.Storage.FlowServerRecord.ActiveStepCount.get -> int
+FlowOrchestrator.Core.Storage.FlowServerRecord.ActiveStepCount.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.Equals(FlowOrchestrator.Core.Storage.FlowServerRecord? other) -> bool
+FlowOrchestrator.Core.Storage.FlowServerRecord.FlowCount.get -> int
+FlowOrchestrator.Core.Storage.FlowServerRecord.FlowCount.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.FlowServerRecord() -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.LastHeartbeatAt.get -> System.DateTimeOffset
+FlowOrchestrator.Core.Storage.FlowServerRecord.LastHeartbeatAt.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.MachineName.get -> string!
+FlowOrchestrator.Core.Storage.FlowServerRecord.MachineName.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.ObservedAt.get -> System.DateTimeOffset?
+FlowOrchestrator.Core.Storage.FlowServerRecord.ObservedAt.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.ProcessId.get -> int
+FlowOrchestrator.Core.Storage.FlowServerRecord.ProcessId.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.Runtime.get -> string!
+FlowOrchestrator.Core.Storage.FlowServerRecord.Runtime.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.ServerId.get -> string!
+FlowOrchestrator.Core.Storage.FlowServerRecord.ServerId.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.StartedAt.get -> System.DateTimeOffset
+FlowOrchestrator.Core.Storage.FlowServerRecord.StartedAt.init -> void
+FlowOrchestrator.Core.Storage.FlowServerRecord.Version.get -> string?
+FlowOrchestrator.Core.Storage.FlowServerRecord.Version.init -> void
 FlowOrchestrator.Core.Storage.FlowSignalWaiter
 FlowOrchestrator.Core.Storage.FlowSignalWaiter.CreatedAt.get -> System.DateTimeOffset
 FlowOrchestrator.Core.Storage.FlowSignalWaiter.CreatedAt.set -> void
@@ -668,6 +674,8 @@ FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.OutputJson.get -> string?
 FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.OutputJson.set -> void
 FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.RunId.get -> System.Guid
 FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.RunId.set -> void
+FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.ServerId.get -> string?
+FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.ServerId.set -> void
 FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.StartedAt.get -> System.DateTimeOffset
 FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.StartedAt.set -> void
 FlowOrchestrator.Core.Storage.FlowStepAttemptRecord.Status.get -> string!
@@ -704,7 +712,6 @@ FlowOrchestrator.Core.Storage.FlowStepRecord.StepKey.get -> string!
 FlowOrchestrator.Core.Storage.FlowStepRecord.StepKey.set -> void
 FlowOrchestrator.Core.Storage.FlowStepRecord.StepType.get -> string!
 FlowOrchestrator.Core.Storage.FlowStepRecord.StepType.set -> void
-FlowOrchestrator.Core.Storage.IdempotencyKeyStorage
 FlowOrchestrator.Core.Storage.IFlowRetentionStore
 FlowOrchestrator.Core.Storage.IFlowRetentionStore.CleanupAsync(System.DateTimeOffset cutoffUtc, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IFlowRunControlStore
@@ -745,16 +752,17 @@ FlowOrchestrator.Core.Storage.IFlowRunStore.GetDerivedRunsAsync(System.Guid sour
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetDispatchedStepKeysAsync(System.Guid runId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlySet<string!>!>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunAsync(System.Guid runId) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowRunRecord?>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunDetailAsync(System.Guid runId) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowRunRecord?>!
+FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunTimeseriesAsync(FlowOrchestrator.Core.Storage.RunTimeseriesGranularity granularity, System.DateTimeOffset since, System.DateTimeOffset until, System.Guid? flowId = null) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.RunTimeseriesBucket!>!>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunsAsync(System.Guid? flowId = null, int skip = 0, int take = 50) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowRunRecord!>!>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunsPageAsync(System.Guid? flowId = null, string? status = null, int skip = 0, int take = 50, string? search = null) -> System.Threading.Tasks.Task<(System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowRunRecord!>! Runs, int TotalCount)>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunsPageAsync(System.Guid? flowId, string? status, int skip, int take, string? search, bool deepSearch, System.DateTimeOffset? startedFrom = null, System.DateTimeOffset? startedTo = null) -> System.Threading.Tasks.Task<(System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowRunRecord!>! Runs, int TotalCount)>!
-FlowOrchestrator.Core.Storage.IFlowRunStore.GetRunTimeseriesAsync(FlowOrchestrator.Core.Storage.RunTimeseriesGranularity granularity, System.DateTimeOffset since, System.DateTimeOffset until, System.Guid? flowId = null) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.RunTimeseriesBucket!>!>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetStatisticsAsync() -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.DashboardStatistics!>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.GetStepAsync(System.Guid runId, string! stepKey) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowStepRecord?>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.IsStepDispatchedAsync(System.Guid runId, string! stepKey) -> System.Threading.Tasks.Task<bool>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.LeaseUnsentDispatchesAsync(System.TimeSpan minimumAge, int maxCount, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.UnsentDispatch!>!>!
 FlowOrchestrator.Core.Storage.IFlowRunStore.RecordStepCompleteAsync(System.Guid runId, string! stepKey, string! status, string? outputJson, string? errorMessage) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IFlowRunStore.RecordStepStartAsync(System.Guid runId, string! stepKey, string! stepType, string? inputJson, string? jobId) -> System.Threading.Tasks.Task!
+FlowOrchestrator.Core.Storage.IFlowRunStore.RecordStepStartAsync(System.Guid runId, string! stepKey, string! stepType, string? inputJson, string? jobId, string? serverId) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IFlowRunStore.ReleaseDispatchAsync(System.Guid runId, string! stepKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IFlowRunStore.ResetCascadeSkippedDependentsAsync(System.Guid runId, System.Collections.Generic.IReadOnlyCollection<string!>! stepKeys) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IFlowRunStore.RetryStepAsync(System.Guid runId, string! stepKey) -> System.Threading.Tasks.Task<bool>!
@@ -767,6 +775,11 @@ FlowOrchestrator.Core.Storage.IFlowScheduleStateStore.DeleteAsync(string! jobId)
 FlowOrchestrator.Core.Storage.IFlowScheduleStateStore.GetAllAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowScheduleState!>!>!
 FlowOrchestrator.Core.Storage.IFlowScheduleStateStore.GetAsync(string! jobId) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowScheduleState?>!
 FlowOrchestrator.Core.Storage.IFlowScheduleStateStore.SaveAsync(FlowOrchestrator.Core.Storage.FlowScheduleState! state) -> System.Threading.Tasks.Task!
+FlowOrchestrator.Core.Storage.IFlowServerStore
+FlowOrchestrator.Core.Storage.IFlowServerStore.GetServersAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowServerRecord!>!>!
+FlowOrchestrator.Core.Storage.IFlowServerStore.PurgeServersAsync(System.TimeSpan notSeenFor, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
+FlowOrchestrator.Core.Storage.IFlowServerStore.RemoveServerAsync(string! serverId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+FlowOrchestrator.Core.Storage.IFlowServerStore.UpsertServerAsync(FlowOrchestrator.Core.Storage.FlowServerRecord! server, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IFlowSignalStore
 FlowOrchestrator.Core.Storage.IFlowSignalStore.DeliverSignalAsync(System.Guid runId, string! signalName, string! payloadJson, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<FlowOrchestrator.Core.Storage.SignalDeliveryResult>
 FlowOrchestrator.Core.Storage.IFlowSignalStore.GetWaiterAsync(System.Guid runId, string! stepKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<FlowOrchestrator.Core.Storage.FlowSignalWaiter?>
@@ -778,13 +791,6 @@ FlowOrchestrator.Core.Storage.IFlowStore.GetAllAsync() -> System.Threading.Tasks
 FlowOrchestrator.Core.Storage.IFlowStore.GetByIdAsync(System.Guid id) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowDefinitionRecord?>!
 FlowOrchestrator.Core.Storage.IFlowStore.SaveAsync(FlowOrchestrator.Core.Storage.FlowDefinitionRecord! record) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowDefinitionRecord!>!
 FlowOrchestrator.Core.Storage.IFlowStore.SetEnabledAsync(System.Guid id, bool enabled) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowDefinitionRecord!>!
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.DeleteAsync(string! jobId) -> System.Threading.Tasks.Task!
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.GetAllAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowScheduleState!>!>!
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.GetAsync(string! jobId) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowScheduleState?>!
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.InMemoryFlowScheduleStateStore() -> void
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.InMemoryFlowScheduleStateStore(System.TimeProvider! timeProvider) -> void
-FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.SaveAsync(FlowOrchestrator.Core.Storage.FlowScheduleState! state) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.IOutputsRepository
 FlowOrchestrator.Core.Storage.IOutputsRepository.GetStepOutputAsync(System.Guid runId, string! stepKey) -> System.Threading.Tasks.ValueTask<object?>
 FlowOrchestrator.Core.Storage.IOutputsRepository.GetTriggerDataAsync(System.Guid runId) -> System.Threading.Tasks.ValueTask<object?>
@@ -809,6 +815,14 @@ FlowOrchestrator.Core.Storage.IWebhookReplayStore.PurgeExpiredAsync(System.DateT
 FlowOrchestrator.Core.Storage.IWebhookReplayStore.TryForgetAsync(System.Guid flowId, string! triggerKey, string! nonce, System.Guid registrationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 FlowOrchestrator.Core.Storage.IWebhookReplayStore.TryRegisterAsync(System.Guid flowId, string! triggerKey, string! nonce, System.DateTimeOffset expiresAt, System.Guid registrationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 FlowOrchestrator.Core.Storage.IWebhookReplayStore.TryRegisterAsync(System.Guid flowId, string! triggerKey, string! nonce, System.DateTimeOffset expiresAt, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+FlowOrchestrator.Core.Storage.IdempotencyKeyStorage
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.DeleteAsync(string! jobId) -> System.Threading.Tasks.Task!
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.GetAllAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowScheduleState!>!>!
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.GetAsync(string! jobId) -> System.Threading.Tasks.Task<FlowOrchestrator.Core.Storage.FlowScheduleState?>!
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.InMemoryFlowScheduleStateStore() -> void
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.InMemoryFlowScheduleStateStore(System.TimeProvider! timeProvider) -> void
+FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore.SaveAsync(FlowOrchestrator.Core.Storage.FlowScheduleState! state) -> System.Threading.Tasks.Task!
 FlowOrchestrator.Core.Storage.OutputsRepositoryTypedExtensions
 FlowOrchestrator.Core.Storage.RunSearchCapabilities
 FlowOrchestrator.Core.Storage.RunSearchCapabilities.None = 0 -> FlowOrchestrator.Core.Storage.RunSearchCapabilities
@@ -886,9 +900,9 @@ FlowOrchestrator.Core.Storage.RunSearchPage.HasMore.get -> bool
 FlowOrchestrator.Core.Storage.RunSearchPage.HasMore.init -> void
 FlowOrchestrator.Core.Storage.RunSearchPage.NextCursor.get -> FlowOrchestrator.Core.Storage.RunSearchCursor?
 FlowOrchestrator.Core.Storage.RunSearchPage.NextCursor.init -> void
+FlowOrchestrator.Core.Storage.RunSearchPage.RunSearchPage(System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowRunRecord!>! Runs, bool HasMore, int? TotalCount) -> void
 FlowOrchestrator.Core.Storage.RunSearchPage.Runs.get -> System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowRunRecord!>!
 FlowOrchestrator.Core.Storage.RunSearchPage.Runs.init -> void
-FlowOrchestrator.Core.Storage.RunSearchPage.RunSearchPage(System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowRunRecord!>! Runs, bool HasMore, int? TotalCount) -> void
 FlowOrchestrator.Core.Storage.RunSearchPage.TotalCount.get -> int?
 FlowOrchestrator.Core.Storage.RunSearchPage.TotalCount.init -> void
 FlowOrchestrator.Core.Storage.RunSearchPage.TotalIsLowerBound.get -> bool
@@ -924,13 +938,13 @@ FlowOrchestrator.Core.Storage.RunSearchQuery.Text.get -> string?
 FlowOrchestrator.Core.Storage.RunSearchQuery.Text.init -> void
 FlowOrchestrator.Core.Storage.RunSearchQuery.TotalCountCap.get -> int?
 FlowOrchestrator.Core.Storage.RunSearchQuery.TotalCountCap.init -> void
-FlowOrchestrator.Core.Storage.RunSearchTokenizer
 FlowOrchestrator.Core.Storage.RunSearchTokenSource
 FlowOrchestrator.Core.Storage.RunSearchTokenSource.Error = 4 -> FlowOrchestrator.Core.Storage.RunSearchTokenSource
 FlowOrchestrator.Core.Storage.RunSearchTokenSource.Payload = 5 -> FlowOrchestrator.Core.Storage.RunSearchTokenSource
 FlowOrchestrator.Core.Storage.RunSearchTokenSource.Run = 1 -> FlowOrchestrator.Core.Storage.RunSearchTokenSource
 FlowOrchestrator.Core.Storage.RunSearchTokenSource.StepKey = 3 -> FlowOrchestrator.Core.Storage.RunSearchTokenSource
 FlowOrchestrator.Core.Storage.RunSearchTokenSource.Trigger = 2 -> FlowOrchestrator.Core.Storage.RunSearchTokenSource
+FlowOrchestrator.Core.Storage.RunSearchTokenizer
 FlowOrchestrator.Core.Storage.RunStatusNames
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.Cancelled.get -> int
@@ -941,9 +955,9 @@ FlowOrchestrator.Core.Storage.RunTimeseriesBucket.P50DurationMs.get -> double?
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.P50DurationMs.set -> void
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.P95DurationMs.get -> double?
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.P95DurationMs.set -> void
+FlowOrchestrator.Core.Storage.RunTimeseriesBucket.RunTimeseriesBucket() -> void
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.Running.get -> int
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.Running.set -> void
-FlowOrchestrator.Core.Storage.RunTimeseriesBucket.RunTimeseriesBucket() -> void
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.Succeeded.get -> int
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.Succeeded.set -> void
 FlowOrchestrator.Core.Storage.RunTimeseriesBucket.Timestamp.get -> System.DateTimeOffset
@@ -1076,6 +1090,39 @@ FlowOrchestrator.Core.Storage.WebhookRejectionRecord.TriggerKey.init -> void
 FlowOrchestrator.Core.Storage.WebhookRejectionRecord.WebhookRejectionRecord() -> void
 FlowOrchestrator.Core.Storage.WebhookReplayNonceStorage
 Microsoft.Extensions.DependencyInjection.FlowOrchestratorServiceCollectionExtensions
+abstract FlowOrchestrator.Core.Execution.PollableStepHandler<TInput>.FetchAsync(FlowOrchestrator.Core.Execution.IExecutionContext! ctx, FlowOrchestrator.Core.Abstractions.IFlowDefinition! flow, FlowOrchestrator.Core.Execution.IStepInstance<TInput>! step) -> System.Threading.Tasks.ValueTask<(System.Text.Json.JsonElement Result, bool IsJson)>
+abstract FlowOrchestrator.Core.Notifications.FlowLifecycleEvent.<Clone>$() -> FlowOrchestrator.Core.Notifications.FlowLifecycleEvent!
+abstract FlowOrchestrator.Core.Notifications.FlowLifecycleEvent.Type.get -> string!
+const FlowOrchestrator.Core.Configuration.FlowServerOptions.DefaultMissedHeartbeatsBeforeStale = 3 -> int
+const FlowOrchestrator.Core.Execution.RecurringTriggerJobId.Prefix = "flow-" -> string!
+const FlowOrchestrator.Core.Execution.WaitForSignalHandler.StepTypeName = "WaitForSignal" -> string!
+const FlowOrchestrator.Core.HealthChecks.FlowOrchestratorHealthCheckExtensions.DefaultName = "flow-orchestrator-storage" -> string!
+const FlowOrchestrator.Core.Observability.FlowOrchestratorTelemetry.SourceName = "FlowOrchestrator" -> string!
+const FlowOrchestrator.Core.Observability.InboundTraceContext.TraceparentHeaderName = "traceparent" -> string!
+const FlowOrchestrator.Core.Observability.InboundTraceContext.TracestateHeaderName = "tracestate" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.RunCompleted = "run.completed" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.RunStarted = "run.started" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepCompleted = "step.completed" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepFailed = "step.failed" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepPending = "step.pending" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepSkipped = "step.skipped" -> string!
+const FlowOrchestrator.Core.Storage.FlowRunTimeline.StepStarted = "step.started" -> string!
+const FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.DigestPrefix = "sha256:" -> string!
+const FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.MaxStoredLength = 256 -> int
+const FlowOrchestrator.Core.Storage.RunSearchCursor.MaxEncodedLength = 64 -> int
+const FlowOrchestrator.Core.Storage.RunSearchQuery.MinRunIdPrefixLength = 4 -> int
+const FlowOrchestrator.Core.Storage.RunSearchTokenizer.DefaultMaxTokensPerDocument = 256 -> int
+const FlowOrchestrator.Core.Storage.RunSearchTokenizer.MaxTokenLength = 64 -> int
+const FlowOrchestrator.Core.Storage.RunSearchTokenizer.MinTokenLength = 2 -> int
+const FlowOrchestrator.Core.Storage.RunStatusNames.Cancelled = "Cancelled" -> string!
+const FlowOrchestrator.Core.Storage.RunStatusNames.Failed = "Failed" -> string!
+const FlowOrchestrator.Core.Storage.RunStatusNames.Running = "Running" -> string!
+const FlowOrchestrator.Core.Storage.RunStatusNames.Skipped = "Skipped" -> string!
+const FlowOrchestrator.Core.Storage.RunStatusNames.Succeeded = "Succeeded" -> string!
+const FlowOrchestrator.Core.Storage.RunStatusNames.TimedOut = "TimedOut" -> string!
+const FlowOrchestrator.Core.Storage.StepSkipReasons.PrerequisitesUnmet = "Prerequisite status did not satisfy runAfter conditions." -> string!
+const FlowOrchestrator.Core.Storage.WebhookReplayNonceStorage.DigestPrefix = "sha256:" -> string!
+const FlowOrchestrator.Core.Storage.WebhookReplayNonceStorage.MaxStoredLength = 256 -> int
 override FlowOrchestrator.Core.Execution.FlowTriggerResult.Equals(object? obj) -> bool
 override FlowOrchestrator.Core.Execution.FlowTriggerResult.GetHashCode() -> int
 override FlowOrchestrator.Core.Execution.FlowTriggerResult.ToString() -> string!
@@ -1117,6 +1164,9 @@ override FlowOrchestrator.Core.Notifications.StepRetriedEvent.Type.get -> string
 override FlowOrchestrator.Core.Storage.ExpiredStepLease.Equals(object? obj) -> bool
 override FlowOrchestrator.Core.Storage.ExpiredStepLease.GetHashCode() -> int
 override FlowOrchestrator.Core.Storage.ExpiredStepLease.ToString() -> string!
+override FlowOrchestrator.Core.Storage.FlowServerRecord.Equals(object? obj) -> bool
+override FlowOrchestrator.Core.Storage.FlowServerRecord.GetHashCode() -> int
+override FlowOrchestrator.Core.Storage.FlowServerRecord.ToString() -> string!
 override FlowOrchestrator.Core.Storage.RunSearchCursor.GetHashCode() -> int
 override FlowOrchestrator.Core.Storage.RunSearchDocument.Equals(object? obj) -> bool
 override FlowOrchestrator.Core.Storage.RunSearchDocument.GetHashCode() -> int
@@ -1196,15 +1246,17 @@ static FlowOrchestrator.Core.Observability.InboundTraceContext.TryParse(string? 
 static FlowOrchestrator.Core.Storage.ExpiredStepLease.operator !=(FlowOrchestrator.Core.Storage.ExpiredStepLease? left, FlowOrchestrator.Core.Storage.ExpiredStepLease? right) -> bool
 static FlowOrchestrator.Core.Storage.ExpiredStepLease.operator ==(FlowOrchestrator.Core.Storage.ExpiredStepLease? left, FlowOrchestrator.Core.Storage.ExpiredStepLease? right) -> bool
 static FlowOrchestrator.Core.Storage.FlowRunTimeline.Build(FlowOrchestrator.Core.Storage.FlowRunRecord! run) -> System.Collections.Generic.IReadOnlyList<FlowOrchestrator.Core.Storage.FlowEventRecord!>!
+static FlowOrchestrator.Core.Storage.FlowServerRecord.operator !=(FlowOrchestrator.Core.Storage.FlowServerRecord? left, FlowOrchestrator.Core.Storage.FlowServerRecord? right) -> bool
+static FlowOrchestrator.Core.Storage.FlowServerRecord.operator ==(FlowOrchestrator.Core.Storage.FlowServerRecord? left, FlowOrchestrator.Core.Storage.FlowServerRecord? right) -> bool
 static FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.Normalize(string! idempotencyKey) -> string!
 static FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.TakenOverCancelReason(System.Guid newRunId) -> string!
 static FlowOrchestrator.Core.Storage.IdempotencyKeyStorage.ToStorageForm(string? idempotencyKey) -> string?
 static FlowOrchestrator.Core.Storage.OutputsRepositoryTypedExtensions.GetStepOutputAsync<T>(this FlowOrchestrator.Core.Storage.IOutputsRepository! outputsRepository, System.Guid runId, string! stepKey, System.Text.Json.JsonSerializerOptions? options = null) -> System.Threading.Tasks.ValueTask<T?>
 static FlowOrchestrator.Core.Storage.OutputsRepositoryTypedExtensions.GetTriggerDataAsync<T>(this FlowOrchestrator.Core.Storage.IOutputsRepository! outputsRepository, System.Guid runId, System.Text.Json.JsonSerializerOptions? options = null) -> System.Threading.Tasks.ValueTask<T?>
 static FlowOrchestrator.Core.Storage.RunSearchCursor.After(FlowOrchestrator.Core.Storage.FlowRunRecord! run) -> FlowOrchestrator.Core.Storage.RunSearchCursor
+static FlowOrchestrator.Core.Storage.RunSearchCursor.TryParse(System.ReadOnlySpan<char> value, out FlowOrchestrator.Core.Storage.RunSearchCursor cursor) -> bool
 static FlowOrchestrator.Core.Storage.RunSearchCursor.operator !=(FlowOrchestrator.Core.Storage.RunSearchCursor left, FlowOrchestrator.Core.Storage.RunSearchCursor right) -> bool
 static FlowOrchestrator.Core.Storage.RunSearchCursor.operator ==(FlowOrchestrator.Core.Storage.RunSearchCursor left, FlowOrchestrator.Core.Storage.RunSearchCursor right) -> bool
-static FlowOrchestrator.Core.Storage.RunSearchCursor.TryParse(System.ReadOnlySpan<char> value, out FlowOrchestrator.Core.Storage.RunSearchCursor cursor) -> bool
 static FlowOrchestrator.Core.Storage.RunSearchDocument.operator !=(FlowOrchestrator.Core.Storage.RunSearchDocument? left, FlowOrchestrator.Core.Storage.RunSearchDocument? right) -> bool
 static FlowOrchestrator.Core.Storage.RunSearchDocument.operator ==(FlowOrchestrator.Core.Storage.RunSearchDocument? left, FlowOrchestrator.Core.Storage.RunSearchDocument? right) -> bool
 static FlowOrchestrator.Core.Storage.RunSearchHit.operator !=(FlowOrchestrator.Core.Storage.RunSearchHit left, FlowOrchestrator.Core.Storage.RunSearchHit right) -> bool
@@ -1245,6 +1297,10 @@ static readonly FlowOrchestrator.Core.Configuration.FlowRunControlOptions.Defaul
 static readonly FlowOrchestrator.Core.Configuration.FlowRunControlOptions.DefaultStepLeaseDuration -> System.TimeSpan
 static readonly FlowOrchestrator.Core.Configuration.FlowRunControlOptions.DefaultStepLeaseRenewInterval -> System.TimeSpan
 static readonly FlowOrchestrator.Core.Configuration.FlowRunControlOptions.DefaultUnsentDispatchTimeout -> System.TimeSpan
+static readonly FlowOrchestrator.Core.Configuration.FlowServerOptions.DefaultHeartbeatInterval -> System.TimeSpan
+static readonly FlowOrchestrator.Core.Configuration.FlowServerOptions.DefaultPurgeAfter -> System.TimeSpan
+static readonly FlowOrchestrator.Core.Configuration.FlowServerOptions.MaxHeartbeatInterval -> System.TimeSpan
+static readonly FlowOrchestrator.Core.Configuration.FlowServerOptions.MinHeartbeatInterval -> System.TimeSpan
 static readonly FlowOrchestrator.Core.Configuration.FlowSignalOptions.DefaultIndefiniteParkInterval -> System.TimeSpan
 static readonly FlowOrchestrator.Core.Configuration.FlowSignalOptions.MaxIndefiniteParkInterval -> System.TimeSpan
 static readonly FlowOrchestrator.Core.Notifications.NoopFlowEventNotifier.Instance -> FlowOrchestrator.Core.Notifications.NoopFlowEventNotifier!
@@ -1265,8 +1321,8 @@ static readonly FlowOrchestrator.Core.Observability.LogEvents.ResumedSignalDeliv
 static readonly FlowOrchestrator.Core.Observability.LogEvents.RetryRestoreFailed -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.RunCompleted -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.RunFailed -> Microsoft.Extensions.Logging.EventId
-static readonly FlowOrchestrator.Core.Observability.LogEvents.RunStarted -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.RunStartTrackingFailed -> Microsoft.Extensions.Logging.EventId
+static readonly FlowOrchestrator.Core.Observability.LogEvents.RunStarted -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.SignalRecheckFailed -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StaleReservationRunCompletionFailed -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StaleScheduleRejected -> Microsoft.Extensions.Logging.EventId
@@ -1277,10 +1333,10 @@ static readonly FlowOrchestrator.Core.Observability.LogEvents.StepLeaseLost -> M
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StepLeasePinFailed -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StepLeaseTakenOver -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StepPending -> Microsoft.Extensions.Logging.EventId
-static readonly FlowOrchestrator.Core.Observability.LogEvents.StepSkipped -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StepSkipTrackingFailed -> Microsoft.Extensions.Logging.EventId
-static readonly FlowOrchestrator.Core.Observability.LogEvents.StepStarted -> Microsoft.Extensions.Logging.EventId
+static readonly FlowOrchestrator.Core.Observability.LogEvents.StepSkipped -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.StepStartTrackingFailed -> Microsoft.Extensions.Logging.EventId
+static readonly FlowOrchestrator.Core.Observability.LogEvents.StepStarted -> Microsoft.Extensions.Logging.EventId
 static readonly FlowOrchestrator.Core.Observability.LogEvents.WhenEvaluationFailed -> Microsoft.Extensions.Logging.EventId
 virtual FlowOrchestrator.Core.Notifications.FlowLifecycleEvent.EqualityContract.get -> System.Type!
 virtual FlowOrchestrator.Core.Notifications.FlowLifecycleEvent.Equals(FlowOrchestrator.Core.Notifications.FlowLifecycleEvent? other) -> bool
