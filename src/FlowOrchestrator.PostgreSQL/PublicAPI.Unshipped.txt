@@ -1,10 +1,1 @@
 #nullable enable
-FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator
-FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator.Dispose() -> void
-FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator.PostgreSqlFlowOrchestratorMigrator(string! connectionString, Microsoft.Extensions.Logging.ILogger<FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator!>! logger) -> void
-FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator.PostgreSqlFlowOrchestratorMigrator(string! connectionString, Microsoft.Extensions.Logging.ILogger<FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator!>! logger, bool runSearchIndexRequested) -> void
-FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator.StartAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
-FlowOrchestrator.PostgreSQL.PostgreSqlFlowOrchestratorMigrator.StopAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
-FlowOrchestrator.PostgreSQL.PostgreSqlServiceCollectionExtensions
-static FlowOrchestrator.PostgreSQL.PostgreSqlServiceCollectionExtensions.AddPostgreSqlWebhookHardening(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder, string! connectionString) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!
-static FlowOrchestrator.PostgreSQL.PostgreSqlServiceCollectionExtensions.UsePostgreSql(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder, string! connectionString) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!

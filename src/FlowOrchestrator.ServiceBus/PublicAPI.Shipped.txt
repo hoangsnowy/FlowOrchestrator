@@ -1,1 +1,21 @@
 #nullable enable
+FlowOrchestrator.ServiceBus.FlowOrchestratorBuilderServiceBusExtensions
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.AutoCreateTopology.get -> bool
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.AutoCreateTopology.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.ConnectionString.get -> string!
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.ConnectionString.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.CronQueueName.get -> string!
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.CronQueueName.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.DuplicateDetectionWindow.get -> System.TimeSpan
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.DuplicateDetectionWindow.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.MaxConcurrentCallsPerSubscription.get -> int
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.MaxConcurrentCallsPerSubscription.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.MaxDeliveryCount.get -> int
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.MaxDeliveryCount.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.ServiceBusRuntimeOptions() -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.StepTopicName.get -> string!
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.StepTopicName.set -> void
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.SubscriptionPrefix.get -> string!
+FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions.SubscriptionPrefix.set -> void
+static FlowOrchestrator.ServiceBus.FlowOrchestratorBuilderServiceBusExtensions.UseAzureServiceBusRuntime(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder, System.Action<FlowOrchestrator.ServiceBus.ServiceBusRuntimeOptions!>! configure) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!

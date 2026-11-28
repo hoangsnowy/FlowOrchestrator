@@ -1,1 +1,4 @@
 #nullable enable
+FlowOrchestrator.InMemory.InMemoryServiceCollectionExtensions
+static FlowOrchestrator.InMemory.InMemoryServiceCollectionExtensions.UseInMemory(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!
+static FlowOrchestrator.InMemory.InMemoryServiceCollectionExtensions.UseInMemoryRuntime(this FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder! builder) -> FlowOrchestrator.Core.Configuration.FlowOrchestratorBuilder!
