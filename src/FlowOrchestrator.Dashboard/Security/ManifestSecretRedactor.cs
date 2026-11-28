@@ -173,6 +173,7 @@ internal static class ManifestSecretRedactor
             OutputJson = RedactJson(a.OutputJson),
             ErrorMessage = a.ErrorMessage,
             JobId = a.JobId,
+            ServerId = a.ServerId,
             StartedAt = a.StartedAt,
             CompletedAt = a.CompletedAt,
             EvaluationTraceJson = RedactEvaluationTrace(a.EvaluationTraceJson),

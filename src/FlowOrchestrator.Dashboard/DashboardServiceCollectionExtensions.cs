@@ -641,6 +641,25 @@ public static class DashboardServiceCollectionExtensions
             }
         }).AddEndpointFilter(ClientDisconnectFilter);
 
+        // Servers view: every replica's heartbeat row with an Active / Stale status. A read API, so viewers may
+        // call it. Every service is optional — the integration test host and custom storage register none — and
+        // an untracked store answers { tracked: false } rather than an error. Polled by the SPA refresh loop.
+        group.MapGet("/api/servers", async (HttpContext http) =>
+        {
+            var services = http.RequestServices;
+            var serverOptions = services.GetService<FlowOrchestrator.Core.Configuration.FlowServerOptions>() ?? new FlowOrchestrator.Core.Configuration.FlowServerOptions();
+            var clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
+            var serverStore = services.GetService<IFlowServerStore>();
+            if (serverStore is null)
+            {
+                await WriteJsonAsync(http.Response, FlowOrchestrator.Dashboard.Servers.ServersView.NotTracked(serverOptions, clock.GetUtcNow()));
+                return;
+            }
+
+            var servers = await serverStore.GetServersAsync(http.RequestAborted);
+            await WriteJsonAsync(http.Response, FlowOrchestrator.Dashboard.Servers.ServersView.Build(servers, clock.GetUtcNow(), serverOptions));
+        });
+
         group.MapGet("/api/handlers", (HttpContext http, IEnumerable<IStepHandlerMetadata> handlers) =>
         {
             var list = handlers.Select(h => new { type = h.Type }).ToList();
