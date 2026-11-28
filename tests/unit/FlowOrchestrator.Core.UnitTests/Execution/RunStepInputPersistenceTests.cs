@@ -43,7 +43,7 @@ public sealed class RunStepInputPersistenceTests
         // Assert — the executor owns the "{key}:input" row; the unresolved form is still recorded on
         // the step row via RecordStepStartAsync.
         await _outputs.DidNotReceive().SaveStepInputAsync(Arg.Any<IExecutionContext>(), Arg.Any<IFlowDefinition>(), Arg.Any<IStepInstance>());
-        await _runStore.Received(1).RecordStepStartAsync(_runId, "a", "Work", Arg.Is<string?>(json => json!.Contains("@triggerBody().x")), Arg.Any<string?>());
+        await _runStore.Received(1).RecordStepStartAsync(_runId, "a", "Work", Arg.Is<string?>(json => json!.Contains("@triggerBody().x")), Arg.Any<string?>(), Arg.Any<string?>());
     }
 
     [Fact]

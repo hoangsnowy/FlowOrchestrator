@@ -47,6 +47,7 @@ public static class FlowOrchestratorBuilderServiceBusExtensions
         builder.Services.TryAddSingleton<ServiceBusTopologyManager>();
 
         builder.Services.TryAddSingleton<IStepDispatcher, ServiceBusStepDispatcher>();
+        builder.Servers.RuntimeName ??= "ServiceBus"; // the first runtime selected keeps the dispatcher slot, and the name
 
         builder.Services.AddScoped<IServiceBusFlowRunner, ServiceBusFlowOrchestrator>();
 

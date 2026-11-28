@@ -43,6 +43,7 @@ public static class HangfireFlowOrchestratorBuilderExtensions
         var services = builder.Services;
 
         services.TryAddSingleton<IStepDispatcher, HangfireStepDispatcher>();
+        builder.Servers.RuntimeName ??= "Hangfire"; // the first runtime selected keeps the dispatcher slot, and the name
         services.TryAddSingleton<IRecurringTriggerDispatcher, HangfireRecurringTriggerDispatcher>();
         services.TryAddSingleton<IRecurringTriggerInspector, HangfireRecurringTriggerInspector>();
 

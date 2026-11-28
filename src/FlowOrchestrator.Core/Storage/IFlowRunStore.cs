@@ -34,6 +34,25 @@ public interface IFlowRunStore
     Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId);
 
     /// <summary>
+    /// Records the start of a step attempt like <see cref="RecordStepStartAsync(Guid, string, string, string?, string?)"/>,
+    /// and stamps the new attempt row with the server that runs it (<see cref="FlowStepAttemptRecord.ServerId"/>).
+    /// </summary>
+    /// <param name="runId">The run owning the step.</param>
+    /// <param name="stepKey">The step (manifest key or runtime loop path).</param>
+    /// <param name="stepType">The step's handler type name.</param>
+    /// <param name="inputJson">JSON-serialised unresolved inputs, or <see langword="null"/>.</param>
+    /// <param name="jobId">Runtime job id, or <see langword="null"/>.</param>
+    /// <param name="serverId">The process's server id (<see cref="FlowServerRecord.ServerId"/>), or <see langword="null"/> when unknown.</param>
+    /// <returns>A task that completes when the start is durable.</returns>
+    /// <remarks>
+    /// The engine calls this overload. The default implementation drops <paramref name="serverId"/> and calls the
+    /// five-parameter overload, so a custom store written before 2.0 keeps working and simply records no server.
+    /// The built-in stores write it into the same attempt insert — no extra round trip.
+    /// </remarks>
+    Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId, string? serverId)
+        => RecordStepStartAsync(runId, stepKey, stepType, inputJson, jobId);
+
+    /// <summary>
     /// Records the outcome of a step attempt: updates status, persists output JSON, and sets error message on failure.
     /// </summary>
     Task RecordStepCompleteAsync(Guid runId, string stepKey, string status, string? outputJson, string? errorMessage);
