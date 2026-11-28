@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Hangfire;
 /// </summary>
 /// <remarks>
 /// Effective-cron resolution (pause state, persisted overrides) lives in Core's
-/// <see cref="RecurringTriggerSync"/>, which calls <see cref="RegisterOrUpdate"/> / <see cref="Remove"/>.
+/// <c>RecurringTriggerSync</c>, which calls <see cref="RegisterOrUpdate"/> / <see cref="Remove"/>.
 /// </remarks>
 internal sealed partial class HangfireRecurringTriggerDispatcher : IRecurringTriggerDispatcher
 {

@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// dispatch-ledger guard, run completion, run-control termination resolution, and the
 /// safe lifecycle-event publishers.
 /// </summary>
-public sealed partial class FlowOrchestratorEngine
+internal sealed partial class FlowOrchestratorEngine
 {
     /// <summary>
     /// Returns <see langword="true"/> when any key in <paramref name="keys"/> has no status row yet.

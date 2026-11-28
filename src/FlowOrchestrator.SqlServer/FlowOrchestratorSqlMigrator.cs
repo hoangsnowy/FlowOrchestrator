@@ -42,7 +42,7 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     /// Largest <c>FlowRuns</c> row count for which the search indexes are built synchronously and offline
     /// on an edition without online index builds (roughly ten seconds of startup on such a table).
     /// </summary>
-    public const long OfflineIndexBuildRowLimit = 2_000_000;
+    internal const long OfflineIndexBuildRowLimit = 2_000_000;
 
     private readonly string _connectionString;
     private readonly ILogger<FlowOrchestratorSqlMigrator> _logger;
@@ -75,10 +75,10 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
     /// retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not write to
+    /// For the library's own tests and benchmarks, which run the migrator outside a host and must not write to
     /// <c>FlowRuns</c> while the online build is still running.
     /// </remarks>
-    public Task BackgroundIndexBuild => _backgroundIndexBuild;
+    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>
     /// Test seam: overrides the edition check that picks the online (background) or offline (synchronous)
@@ -761,5 +761,27 @@ public sealed partial class FlowOrchestratorSqlMigrator : IHostedService, IDispo
         BEGIN
             EXEC('CREATE INDEX IX_FlowRuns_SourceRunId ON [FlowRuns]([SourceRunId]) WHERE [SourceRunId] IS NOT NULL');
         END
+
+        -- Server registry (2.0): one heartbeat row per live FlowOrchestrator process, for the dashboard's
+        -- Servers view. ServerId is the step-lease owner id (FlowStepLeases.Owner). Small: no secondary index.
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FlowServers')
+        BEGIN
+            CREATE TABLE [FlowServers] (
+                [ServerId]         NVARCHAR(128)  NOT NULL,
+                [MachineName]      NVARCHAR(256)  NOT NULL,
+                [ProcessId]        INT            NOT NULL,
+                [Runtime]          NVARCHAR(64)   NOT NULL,
+                [Version]          NVARCHAR(128)  NULL,
+                [StartedAt]        DATETIMEOFFSET NOT NULL,
+                [LastHeartbeatAt]  DATETIMEOFFSET NOT NULL,
+                [ActiveStepCount]  INT            NOT NULL DEFAULT 0,
+                [FlowCount]        INT            NOT NULL DEFAULT 0,
+                CONSTRAINT PK_FlowServers PRIMARY KEY ([ServerId])
+            );
+        END
+
+        -- The server that ran each attempt (2.0); NULL on skips and on rows written before the column existed.
+        IF COL_LENGTH(N'FlowStepAttempts', N'ServerId') IS NULL
+            ALTER TABLE [FlowStepAttempts] ADD [ServerId] NVARCHAR(128) NULL;
         """;
 }

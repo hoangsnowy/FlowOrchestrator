@@ -302,6 +302,24 @@ step succeeded on attempt **2** — and the old two-condition check passed regar
 Healthy trace: `check_shipment_status` goes `Running → Pending → Pending → Succeeded`, then
 `log_shipment_confirmed` runs and the run completes `Succeeded` (~15–20 s).
 
+#### 5.11 Servers view (all instances)
+
+Every process registers a heartbeat row in `IFlowServerStore` on start (SQL Server, PostgreSQL and in-memory
+storage all implement it) and refreshes it every 15 s; `/flows/api/servers` lists the rows with a computed
+`Active` / `Stale` status.
+
+```bash
+curl -fsS -u admin:admin "http://localhost:$port/flows/api/servers" \
+  | jq '{tracked, active: [.servers[] | select(.status == "Active")] | length, runtimes: [.servers[].runtime] | unique}'
+# tracked == true and active >= 1
+```
+
+Assert `tracked == true` and **at least one** `Active` server. Do not assert an exact count: on the two
+database instances a previous process that was killed rather than stopped leaves its row behind, shown `Stale` until it is
+purged an hour later, and a scaled-out deployment lists one row per replica. The runtime of the Active row is
+`Hangfire` on 5101 / 5102, `InMemory` on 5103 and `ServiceBus` on 5104 — worth eyeballing, not asserted.
+`tracked == false` means the instance's storage registered no `IFlowServerStore`: a wiring regression.
+
 ### Phase 6 — Tear down
 
 Stop the AppHost task by ID (TaskStop or equivalent). Wait up to 30 s for graceful exit, then force. Aspire shuts containers gracefully on SIGINT.
@@ -322,6 +340,7 @@ One block per instance, one row per check. Use ✓ ✗ ⊘ (skipped) ⏱ (timeou
   ✓ 5.8 Hangfire dashboard
   ✓ 5.9 SQL-only OrderFulfillmentFlow
   ✓ 5.10 polling Pending → Succeeded
+  ✓ 5.11 servers view
 
 === flow-postgresql (5102) storage=postgresql runtime=hangfire ===
   ✓ 5.1 …
@@ -339,9 +358,9 @@ One block per instance, one row per check. Use ✓ ✗ ⊘ (skipped) ⏱ (timeou
   …
 ```
 
-End with a one-line verdict: `RESULT: 40/40 passed` or `RESULT: 38/40 passed — 2 failures listed above`.
-The denominator is 10 checks × 4 instances; ⊘ rows count toward it (3 of them: `5.9` on the
-three non-SQL instances), so a fully healthy run executes 37 checks and skips 3.
+End with a one-line verdict: `RESULT: 44/44 passed` or `RESULT: 42/44 passed — 2 failures listed above`.
+The denominator is 11 checks × 4 instances; ⊘ rows count toward it (3 of them: `5.9` on the
+three non-SQL instances), so a fully healthy run executes 41 checks and skips 3.
 
 If any instance failed Phase 4 readiness:
 ```

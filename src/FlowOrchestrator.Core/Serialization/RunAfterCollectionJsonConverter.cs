@@ -10,7 +10,7 @@ namespace FlowOrchestrator.Core.Serialization;
 /// Each value may be the legacy array shape (<c>["Succeeded"]</c>) or the new object shape
 /// (<c>{ "statuses": [...], "when": "..." }</c>); see <see cref="RunAfterConditionJsonConverter"/>.
 /// </summary>
-public sealed class RunAfterCollectionJsonConverter : JsonConverter<RunAfterCollection>
+internal sealed class RunAfterCollectionJsonConverter : JsonConverter<RunAfterCollection>
 {
     /// <inheritdoc/>
     public override RunAfterCollection? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)

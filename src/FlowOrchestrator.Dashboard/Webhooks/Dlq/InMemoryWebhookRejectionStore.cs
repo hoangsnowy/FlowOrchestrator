@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Dlq;
 /// Multi-replica + long-retention storage requires a Sql / Postgres backend.
 /// The interface stays unchanged so the upgrade is a pure DI swap.
 /// </remarks>
-public sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
+internal sealed class InMemoryWebhookRejectionStore : IWebhookRejectionStore
 {
     /// <summary>Default ring-buffer capacity.</summary>
     public const int DefaultMaxEntries = 1_000;

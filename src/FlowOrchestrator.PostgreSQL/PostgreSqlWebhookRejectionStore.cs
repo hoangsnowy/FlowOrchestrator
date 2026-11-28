@@ -10,7 +10,7 @@ namespace FlowOrchestrator.PostgreSQL;
 /// Persists DLQ + accepted-delivery rows in the <c>webhook_rejections</c> table
 /// created by <see cref="PostgreSqlFlowOrchestratorMigrator"/>.
 /// </summary>
-public sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
+internal sealed class PostgreSqlWebhookRejectionStore : IWebhookRejectionStore
 {
     private readonly string _connectionString;
 

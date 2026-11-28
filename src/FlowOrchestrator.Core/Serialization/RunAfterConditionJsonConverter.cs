@@ -9,7 +9,7 @@ namespace FlowOrchestrator.Core.Serialization;
 /// (<c>["Succeeded","Skipped"]</c>) or the new object shape
 /// (<c>{ "statuses": [...], "when": "..." }</c>), and always writes the new shape.
 /// </summary>
-public sealed class RunAfterConditionJsonConverter : JsonConverter<RunAfterCondition>
+internal sealed class RunAfterConditionJsonConverter : JsonConverter<RunAfterCondition>
 {
     /// <inheritdoc/>
     public override RunAfterCondition? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)

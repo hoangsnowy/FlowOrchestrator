@@ -11,4 +11,4 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Replay;
 /// Owner token generated for this request only (<see cref="Guid.NewGuid"/>). Holding it is what entitles the
 /// request to release the entry; it is never derived from request data and never leaves the process.
 /// </param>
-public readonly record struct WebhookReplayRegistration(Guid FlowId, string TriggerKey, string Nonce, Guid RegistrationId);
+internal readonly record struct WebhookReplayRegistration(Guid FlowId, string TriggerKey, string Nonce, Guid RegistrationId);

@@ -1,0 +1,300 @@
+#nullable enable
+const FlowOrchestrator.Dashboard.FlowDashboardOptions.DefaultRunListTotalCountCap = 10000 -> int
+const FlowOrchestrator.Dashboard.FlowDashboardOptions.DefaultSectionName = "FlowDashboard" -> string!
+FlowOrchestrator.Dashboard.DashboardSecurityServiceCollectionExtensions
+FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes.get -> string![]?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.AdditionalAuthenticationSchemes.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.AuthenticationScheme.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.AuthenticationScheme.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.ChallengeScheme.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.ChallengeScheme.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.FlowDashboardAuthorizationOptions() -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.IsEnabled.get -> bool
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.OperatePolicy.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.OperatePolicy.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.OperatorRoles.get -> string![]?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.OperatorRoles.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.UnregisteredFlowSignals.get -> FlowOrchestrator.Dashboard.UnregisteredFlowSignalMode
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.UnregisteredFlowSignals.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.ViewerRoles.get -> string![]?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.ViewerRoles.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.ViewPolicy.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions.ViewPolicy.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.FlowDashboardBasicAuthOptions() -> void
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.IsEnabled.get -> bool
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.Password.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.Password.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.Realm.get -> string!
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.Realm.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.Username.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions.Username.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.FlowDashboardBrandingOptions() -> void
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.LogoUrl.get -> string?
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.LogoUrl.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.Subtitle.get -> string!
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.Subtitle.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.Title.get -> string!
+FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions.Title.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions
+FlowOrchestrator.Dashboard.FlowDashboardOptions.AllowAnonymousOperators.get -> bool
+FlowOrchestrator.Dashboard.FlowDashboardOptions.AllowAnonymousOperators.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.Authorization.get -> FlowOrchestrator.Dashboard.FlowDashboardAuthorizationOptions!
+FlowOrchestrator.Dashboard.FlowDashboardOptions.Authorization.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.BasicAuth.get -> FlowOrchestrator.Dashboard.FlowDashboardBasicAuthOptions!
+FlowOrchestrator.Dashboard.FlowDashboardOptions.BasicAuth.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.Branding.get -> FlowOrchestrator.Dashboard.FlowDashboardBrandingOptions!
+FlowOrchestrator.Dashboard.FlowDashboardOptions.Branding.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.FlowDashboardOptions() -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.RunListTotalCountCap.get -> int
+FlowOrchestrator.Dashboard.FlowDashboardOptions.RunListTotalCountCap.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.RunSearchWindow.get -> System.TimeSpan
+FlowOrchestrator.Dashboard.FlowDashboardOptions.RunSearchWindow.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.TrustedOrigins.get -> string![]?
+FlowOrchestrator.Dashboard.FlowDashboardOptions.TrustedOrigins.set -> void
+FlowOrchestrator.Dashboard.FlowDashboardOptions.UseWebhookSecurity(System.Action<FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!>! configure) -> FlowOrchestrator.Dashboard.FlowDashboardOptions!
+FlowOrchestrator.Dashboard.FlowDashboardOptions.WebhookSecurity.get -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions!
+FlowOrchestrator.Dashboard.FlowDashboardOptions.WebhookSecurity.set -> void
+FlowOrchestrator.Dashboard.UnregisteredFlowSignalMode
+FlowOrchestrator.Dashboard.UnregisteredFlowSignalMode.Deny = 0 -> FlowOrchestrator.Dashboard.UnregisteredFlowSignalMode
+FlowOrchestrator.Dashboard.UnregisteredFlowSignalMode.OperatorRule = 1 -> FlowOrchestrator.Dashboard.UnregisteredFlowSignalMode
+FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.IWebhookRateLimiter
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.IWebhookRateLimiter.TryAcquire(string! key, FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions! options) -> FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.Allowed.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.Allowed.init -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.Deconstruct(out bool Allowed, out System.TimeSpan RetryAfter) -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.Equals(FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision other) -> bool
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.RateLimitDecision() -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.RateLimitDecision(bool Allowed, System.TimeSpan RetryAfter) -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.RetryAfter.get -> System.TimeSpan
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.RetryAfter.init -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.BurstSize.get -> int?
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.BurstSize.set -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.IsEnabled.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.PerIp.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.PerIp.set -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.PermitsPerSecond.get -> double
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.PermitsPerSecond.set -> void
+FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions.WebhookRateLimitOptions() -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm.Sha1 = 0 -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm.Sha256 = 1 -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm.Sha384 = 2 -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm.Sha512 = 3 -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacKeyEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacKeyEncoding.Base64 = 1 -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacKeyEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.HmacKeyEncoding.Utf8 = 0 -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacKeyEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.IWebhookSignatureVerifier
+FlowOrchestrator.Dashboard.Webhooks.Signature.IWebhookSignatureVerifier.Verify(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext! context) -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult
+FlowOrchestrator.Dashboard.Webhooks.Signature.PartnerSchemeRegistry
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding.Base64 = 2 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding.Base64Url = 3 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding.HexLower = 0 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding.HexUpper = 1 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.ColonDelimited = 2 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.Custom = 6 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.MessageIdTimestampBody = 7 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.RawBody = 0 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.TimestampDotBody = 1 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.TimestampPlusToken = 5 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.UrlPlusBody = 4 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy.UrlPlusSortedForm = 3 -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.<Clone>$() -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext!
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.AbsoluteUrl.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.AbsoluteUrl.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.AllowLegacySha1.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.AllowLegacySha1.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Body.get -> System.ReadOnlyMemory<byte>
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Body.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Equals(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext? other) -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.FormFields.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.FormFields.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Headers.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.HmacKey.get -> string!
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.HmacKey.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.HmacKeyPrevious.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.HmacKeyPrevious.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Spec.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Spec.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.WebhookSignatureContext() -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.AbsoluteUrlRequired = 9 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.AlgorithmNotAllowed = 5 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.DigestMismatch = 10 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.InvalidEncoding = 4 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.InvalidTimestamp = 7 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.KeyNotConfigured = 8 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.MalformedHeader = 2 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.MissingHeader = 1 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.MissingTimestamp = 6 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.None = 0 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason.UnsupportedVersion = 3 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.AuthenticatedNonce.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.AuthenticatedNonce.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.AuthenticatedTimestamp.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.AuthenticatedTimestamp.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Deconstruct(out bool IsValid, out FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason Reason, out bool UsedRotationKey) -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Equals(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult other) -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.IsValid.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.IsValid.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Reason.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Reason.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.UsedRotationKey.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.UsedRotationKey.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.WebhookSignatureResult() -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.WebhookSignatureResult(bool IsValid, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason Reason, bool UsedRotationKey) -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Atlassian = 15 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Bitbucket = 4 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Calendly = 16 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Custom = 17 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Dropbox = 12 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Generic = 1 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.GitHub = 2 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.GitHubLegacy = 3 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Linear = 11 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Mailgun = 13 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.MicrosoftTeams = 14 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.None = 0 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Shopify = 7 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Slack = 6 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Square = 9 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.StandardWebhooks = 18 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Stripe = 5 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Twilio = 8 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme.Zoom = 10 -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.<Clone>$() -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec!
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.AcceptedVersions.get -> System.Collections.Generic.IReadOnlyList<string!>?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.AcceptedVersions.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.AcceptMultipleSignatures.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.AcceptMultipleSignatures.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Algorithm.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacAlgorithm
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Algorithm.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.CustomStrategyName.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.CustomStrategyName.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Encoding.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignatureEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Encoding.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Equals(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec? other) -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.HeaderName.get -> string!
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.HeaderName.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.HeaderValuePrefix.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.HeaderValuePrefix.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.IgnoreMalformedEntries.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.IgnoreMalformedEntries.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.KeyEncoding.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.HmacKeyEncoding
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.KeyEncoding.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.KeyValueSeparator.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.KeyValueSeparator.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.MessageIdHeaderName.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.MessageIdHeaderName.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.MultiValueDelimiter.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.MultiValueDelimiter.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Prefix.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Prefix.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.RequireTimestamp.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.RequireTimestamp.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignatureValueKey.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignatureValueKey.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignedPayloadDelimiter.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignedPayloadDelimiter.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignedPayloadStrategy.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.SignedPayloadStrategy
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignedPayloadStrategy.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignedPayloadVersion.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.SignedPayloadVersion.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.TimestampHeaderName.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.TimestampHeaderName.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.TimestampValueKey.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.TimestampValueKey.init -> void
+FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.WebhookSignatureSpec() -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode
+FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode.Audit = 1 -> FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode
+FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode.Enforce = 2 -> FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode
+FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode.Off = 0 -> FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.AllowLegacySha1.get -> bool
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.AllowLegacySha1.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.CustomSchemes.get -> System.Collections.Generic.IDictionary<string!, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec!>!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.CustomSignatureStrategies.get -> System.Collections.Generic.IDictionary<string!, System.Func<FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext!, byte[]!>!>!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.DefaultNonceHeader.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.DefaultNonceHeader.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.DefaultTimestampHeader.get -> string?
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.DefaultTimestampHeader.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.EnforcementMode.get -> FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.EnforcementMode.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.ForwardedHeaderDepth.get -> int
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.ForwardedHeaderDepth.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.MaxBodyBytes.get -> long
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.MaxBodyBytes.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.RateLimit.get -> FlowOrchestrator.Dashboard.Webhooks.RateLimit.WebhookRateLimitOptions!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.RateLimit.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.ReplayToleranceSeconds.get -> int
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.ReplayToleranceSeconds.set -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions.WebhookSecurityOptions() -> void
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.AddCustomSignatureStrategy(string! name, System.Func<FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext!, byte[]!>! builder) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.AllowLegacySha1() -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.Options.get -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptions!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.RegisterScheme(string! name, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec! spec) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.UseEnforcementMode(FlowOrchestrator.Dashboard.Webhooks.WebhookEnforcementMode mode) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.UseForwardedHeaders(int depth) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.UseMaxBodyBytes(long bytes) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.UseRateLimit(double permitsPerSecond, int? burstSize = null, bool perIp = false) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder.UseReplayProtection(int toleranceSeconds = 300, string? timestampHeader = null, string? nonceHeader = null) -> FlowOrchestrator.Dashboard.Webhooks.WebhookSecurityOptionsBuilder!
+override FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.GetHashCode() -> int
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.Equals(object? obj) -> bool
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.GetHashCode() -> int
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.ToString() -> string!
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.GetHashCode() -> int
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.Equals(object? obj) -> bool
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.GetHashCode() -> int
+override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.ToString() -> string!
+static FlowOrchestrator.Dashboard.DashboardSecurityServiceCollectionExtensions.AddFlowDashboardKeycloakRoles(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string? clientId = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions.AddFlowDashboard(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions.AddFlowDashboard(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration, string! sectionName = "FlowDashboard") -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions.AddFlowDashboard(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration, System.Action<FlowOrchestrator.Dashboard.FlowDashboardOptions!>! configureOptions, string! sectionName = "FlowDashboard") -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions.AddFlowDashboard(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FlowOrchestrator.Dashboard.FlowDashboardOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions.AddWebhookSignatureVerifier<TVerifier>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! schemeName) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static FlowOrchestrator.Dashboard.DashboardServiceCollectionExtensions.MapFlowDashboard(this Microsoft.AspNetCore.Routing.IEndpointRouteBuilder! endpoints, string! basePath = "/flows") -> Microsoft.AspNetCore.Routing.IEndpointRouteBuilder!
+static FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.All.get -> System.Collections.Generic.IReadOnlyList<string!>!
+static FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.TryGet(string! name) -> System.Collections.Generic.IReadOnlyList<string!>?
+static FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.operator !=(FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision left, FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.operator ==(FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision left, FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.Signature.PartnerSchemeRegistry.KnownSchemes.get -> System.Collections.Generic.IReadOnlyCollection<FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme>!
+static FlowOrchestrator.Dashboard.Webhooks.Signature.PartnerSchemeRegistry.TryGet(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureScheme scheme) -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec?
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.operator !=(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext? left, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext? right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext.operator ==(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext? left, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureContext? right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Failure(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureFailureReason reason) -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.operator !=(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult left, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.operator ==(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult left, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Success.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.SuccessWithRotation.get -> FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.operator !=(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec? left, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec? right) -> bool
+static FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec.operator ==(FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec? left, FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureSpec? right) -> bool
+static readonly FlowOrchestrator.Dashboard.FlowDashboardOptions.DefaultRunSearchWindow -> System.TimeSpan
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Atlassian -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Bitbucket -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.GitHub -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.LocalNetworks -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Mailgun -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Shopify -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Slack -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Square -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Stripe -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Twilio -> System.Collections.Generic.IReadOnlyList<string!>!
+static readonly FlowOrchestrator.Dashboard.Webhooks.Network.KnownPublisherCidrs.Zoom -> System.Collections.Generic.IReadOnlyList<string!>!
+~override FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.Equals(object obj) -> bool
+~override FlowOrchestrator.Dashboard.Webhooks.RateLimit.RateLimitDecision.ToString() -> string
+~override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.Equals(object obj) -> bool
+~override FlowOrchestrator.Dashboard.Webhooks.Signature.WebhookSignatureResult.ToString() -> string

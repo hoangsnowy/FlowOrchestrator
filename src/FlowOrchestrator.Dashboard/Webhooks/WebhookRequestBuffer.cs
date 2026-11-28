@@ -16,7 +16,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks;
 /// becomes a JSON object for the trigger: each field name maps to its value as a string, and a field
 /// that repeats maps to an array of its values in request order.
 /// </remarks>
-public static class WebhookRequestBuffer
+internal static class WebhookRequestBuffer
 {
     private const string FormMediaType = "application/x-www-form-urlencoded";
 

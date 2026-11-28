@@ -17,7 +17,7 @@ namespace FlowOrchestrator.InMemory;
 /// longer holds, mirroring the SQL backends, which delete <c>FlowOutputs</c> rows together with
 /// their run. Without it the repository grew for the lifetime of the process.
 /// </remarks>
-public sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowRetentionStore
+internal sealed class InMemoryOutputsRepository : IOutputsRepository, IFlowRetentionStore
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 

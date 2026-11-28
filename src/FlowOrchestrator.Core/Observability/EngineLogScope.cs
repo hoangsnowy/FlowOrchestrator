@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Core.Observability;
 /// carries the run-level correlation. Logging providers that honour scopes (Serilog, NLog, OpenTelemetry
 /// Logs, Application Insights) surface these as searchable properties.
 /// </remarks>
-public static class EngineLogScope
+internal static class EngineLogScope
 {
     /// <summary>
     /// Begins a logger scope tagged with the run-level correlation IDs.

@@ -26,7 +26,7 @@ namespace FlowOrchestrator.Core.Execution;
 ///         instead, so a bad persisted value can never abort host startup.</item>
 /// </list>
 /// </remarks>
-public sealed class RecurringTriggerSync : IRecurringTriggerSync
+internal sealed class RecurringTriggerSync : IRecurringTriggerSync
 {
     private readonly FlowRegistry _flows;
     private readonly IRecurringTriggerDispatcher _dispatcher;

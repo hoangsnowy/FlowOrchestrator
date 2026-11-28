@@ -8,7 +8,7 @@ namespace FlowOrchestrator.Core.Abstractions;
 /// Handles both strongly-typed CLR values and <see cref="JsonElement"/> representations,
 /// which occur when inputs are deserialized from JSON manifests.
 /// </summary>
-public static class MetadataInputExtensions
+internal static class MetadataInputExtensions
 {
     /// <summary>
     /// Tries to read a string value from <paramref name="inputs"/> at <paramref name="key"/>,

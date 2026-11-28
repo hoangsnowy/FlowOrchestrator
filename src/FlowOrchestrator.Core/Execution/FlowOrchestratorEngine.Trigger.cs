@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// <see cref="TriggerAsync"/>, <see cref="TriggerByScheduleAsync"/>, idempotency-key handling,
 /// and run-timeout resolution.
 /// </summary>
-public sealed partial class FlowOrchestratorEngine
+internal sealed partial class FlowOrchestratorEngine
 {
     /// <inheritdoc/>
     public async ValueTask<object?> TriggerAsync(ITriggerContext triggerContext, CancellationToken ct = default)

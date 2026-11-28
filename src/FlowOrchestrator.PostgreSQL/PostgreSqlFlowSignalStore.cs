@@ -8,7 +8,7 @@ namespace FlowOrchestrator.PostgreSQL;
 /// Dapper-based PostgreSQL implementation of <see cref="IFlowSignalStore"/>.
 /// Persists waiters in the <c>flow_signal_waiters</c> table created by <see cref="PostgreSqlFlowOrchestratorMigrator"/>.
 /// </summary>
-public sealed class PostgreSqlFlowSignalStore : IFlowSignalStore
+internal sealed class PostgreSqlFlowSignalStore : IFlowSignalStore
 {
     /// <summary>
     /// Upper bound on update / re-read rounds in <see cref="DeliverSignalAsync"/>. Each extra round only

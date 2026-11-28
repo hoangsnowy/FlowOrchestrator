@@ -12,7 +12,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// <see cref="RunStepAsync"/>, <see cref="RetryStepAsync"/>, claim guards, control-store
 /// termination check, handler dispatch, and dispatch-hint fan-out.
 /// </summary>
-public sealed partial class FlowOrchestratorEngine
+internal sealed partial class FlowOrchestratorEngine
 {
     /// <inheritdoc/>
     public async ValueTask<object?> RunStepAsync(IExecutionContext ctx, IFlowDefinition flow, IStepInstance step, CancellationToken ct = default)
@@ -148,7 +148,7 @@ public sealed partial class FlowOrchestratorEngine
             try
             {
                 var inputJson = SafeSerialize(step.Inputs);
-                await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId)
+                await _runStore.RecordStepStartAsync(ctx.RunId, step.Key, step.Type, inputJson, ctx.JobId, _serverId)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

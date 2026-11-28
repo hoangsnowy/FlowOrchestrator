@@ -76,7 +76,7 @@ public class FlowGraphPlannerLoopBenchmarks
 
     /// <summary>One <c>Evaluate</c> call over the expanded loop key space.</summary>
     [Benchmark(Description = "Evaluate (loop run, expanded iteration keys)")]
-    public FlowGraphEvaluation Evaluate() => _planner.Evaluate(_flow, _statuses);
+    public object Evaluate() => _planner.Evaluate(_flow, _statuses);
 
     private sealed class BenchFlow(FlowManifest manifest) : IFlowDefinition
     {

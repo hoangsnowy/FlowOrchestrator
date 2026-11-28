@@ -13,7 +13,7 @@ namespace FlowOrchestrator.Core.Expressions;
 /// Reuses <see cref="StepOutputResolver"/> for <c>@steps()</c> resolution and
 /// <see cref="TriggerExpressionResolver"/> for <c>@triggerBody()</c>/<c>@triggerHeaders()</c>.
 /// </remarks>
-public sealed class WhenClauseEvaluator
+internal sealed class WhenClauseEvaluator
 {
     private readonly IOutputsRepository _outputsRepository;
     private readonly IFlowRunStore _runStore;

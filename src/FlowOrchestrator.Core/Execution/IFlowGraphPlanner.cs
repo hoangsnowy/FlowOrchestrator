@@ -6,7 +6,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// Analyses a flow's step dependency graph (DAG) to determine execution order,
 /// validate structural correctness, and evaluate runtime state.
 /// </summary>
-public interface IFlowGraphPlanner
+internal interface IFlowGraphPlanner
 {
     /// <summary>
     /// Returns all entry steps (steps with no <c>runAfter</c> dependencies) as

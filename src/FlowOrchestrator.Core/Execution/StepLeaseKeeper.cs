@@ -25,7 +25,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// carrying every held lease, only while at least one is held.
 /// </para>
 /// </remarks>
-public sealed class StepLeaseKeeper
+internal sealed class StepLeaseKeeper
 {
     private readonly ConcurrentDictionary<StepLease, Handle> _held = new();
 

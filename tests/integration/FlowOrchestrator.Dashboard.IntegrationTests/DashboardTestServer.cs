@@ -171,7 +171,7 @@ public sealed class DashboardTestServer : IDisposable
     /// Resolved SSE broadcaster — tests use this to publish events into the dashboard's
     /// realtime channel without going through the engine. Registered by <c>AddFlowDashboard()</c>.
     /// </summary>
-    public SseFlowEventBroadcaster Broadcaster => _app.Services.GetRequiredService<SseFlowEventBroadcaster>();
+    internal SseFlowEventBroadcaster Broadcaster => _app.Services.GetRequiredService<SseFlowEventBroadcaster>();
 
     public void Dispose()
     {

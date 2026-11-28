@@ -24,7 +24,7 @@ namespace FlowOrchestrator.SqlServer;
 /// <see cref="RunSearchTokenizer"/>). The run's own columns are not tokenized: they are matched as
 /// substrings through <c>RunSearchText</c>.</para>
 /// </remarks>
-public sealed class SqlServerRunSearchTokenIndex : IRunSearchIndex
+internal sealed class SqlServerRunSearchTokenIndex : IRunSearchIndex
 {
     private readonly string _connectionString;
 

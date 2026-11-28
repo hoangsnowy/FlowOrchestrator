@@ -10,7 +10,7 @@ namespace FlowOrchestrator.InMemory;
 /// Uses <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/> for concurrent access.
 /// All data is held in process memory and lost on restart.
 /// </summary>
-public sealed class InMemoryFlowRunStore :
+internal sealed class InMemoryFlowRunStore :
     IFlowRunStore,
     IFlowRunRuntimeStore,
     IFlowRunControlStore,
@@ -119,6 +119,10 @@ public sealed class InMemoryFlowRunStore :
     }
 
     public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId)
+        => RecordStepStartAsync(runId, stepKey, stepType, inputJson, jobId, serverId: null);
+
+    /// <inheritdoc/>
+    public Task RecordStepStartAsync(Guid runId, string stepKey, string stepType, string? inputJson, string? jobId, string? serverId)
     {
         var key = (runId, stepKey);
         var attempt = _stepAttemptCounters.AddOrUpdate(key, 1, static (_, current) => current + 1);
@@ -133,6 +137,7 @@ public sealed class InMemoryFlowRunStore :
             Status = "Running",
             InputJson = inputJson,
             JobId = jobId,
+            ServerId = serverId,
             StartedAt = startedAt
         };
 
@@ -1660,6 +1665,7 @@ public sealed class InMemoryFlowRunStore :
         OutputJson = attempt.OutputJson,
         ErrorMessage = attempt.ErrorMessage,
         JobId = attempt.JobId,
+        ServerId = attempt.ServerId,
         StartedAt = attempt.StartedAt,
         CompletedAt = attempt.CompletedAt,
         EvaluationTraceJson = attempt.EvaluationTraceJson

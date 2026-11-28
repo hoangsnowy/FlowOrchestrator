@@ -114,6 +114,10 @@
       to the SqlServer / PostgreSQL / ServiceBus integration-test projects.
     -->
     <PackageVersion Include="SSH.NET" Version="2026.0.1" />
+    <!-- Build-time only: records each package's public API in PublicAPI.Shipped/Unshipped.txt. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
+    <!-- Build-time only (PrivateAssets=all): embeds an SPDX SBOM in each package. -->
+    <PackageVersion Include="Microsoft.Sbom.Targets" Version="4.1.13" />
     <PackageVersion Include="coverlet.collector" Version="10.1.1" />
     <!--
       xunit v3, VSTest flavour. `xunit.v3` 4.x pulls in Microsoft Testing Platform v2, which no

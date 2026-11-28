@@ -1,0 +1,15 @@
+#nullable enable
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryExtensions
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ConfigureLogging.get -> System.Action<OpenTelemetry.Logs.OpenTelemetryLoggerOptions!>?
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ConfigureLogging.set -> void
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ConfigureMetrics.get -> System.Action<OpenTelemetry.Metrics.MeterProviderBuilder!>?
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ConfigureMetrics.set -> void
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ConfigureTracing.get -> System.Action<OpenTelemetry.Trace.TracerProviderBuilder!>?
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ConfigureTracing.set -> void
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.FlowOrchestratorOpenTelemetryOptions() -> void
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ServiceName.get -> string?
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.ServiceName.set -> void
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.UseOtlpExporter.get -> bool?
+FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions.UseOtlpExporter.set -> void
+static FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryExtensions.AddFlowOrchestratorOpenTelemetry<TBuilder>(this TBuilder builder, System.Action<FlowOrchestrator.Core.Observability.FlowOrchestratorOpenTelemetryOptions!>? configure = null) -> TBuilder

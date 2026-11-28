@@ -67,10 +67,10 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
     /// logged and retried on the next start).
     /// </summary>
     /// <remarks>
-    /// For code that runs the migrator outside a host (tests, benchmarks, tooling) and must not bulk-load
+    /// For the library's own tests and benchmarks, which run the migrator outside a host and must not bulk-load
     /// <c>flow_runs</c> while the build is still running.
     /// </remarks>
-    public Task BackgroundIndexBuild => _backgroundIndexBuild;
+    internal Task BackgroundIndexBuild => _backgroundIndexBuild;
 
     /// <summary>Applies the schema; starts the background run-search index build when <c>pg_trgm</c> is available.</summary>
     /// <param name="cancellationToken">Host start-up cancellation.</param>
@@ -587,6 +587,23 @@ public sealed partial class PostgreSqlFlowOrchestratorMigrator : IHostedService,
         {EnsureIndex("webhook_rejections", "ix_webhook_rejections_flow_received", "(flow_id, received_at DESC)")}
         {EnsureIndex("webhook_rejections", "ix_webhook_rejections_reason", "(reason)")}
         {EnsureIndex("webhook_rejections", "ix_webhook_rejections_received_at", "(received_at DESC)")}
+
+        -- Server registry (2.0): one heartbeat row per live FlowOrchestrator process, for the dashboard's
+        -- Servers view. server_id is the step-lease owner id (flow_step_leases.owner). Small: no secondary index.
+        CREATE TABLE IF NOT EXISTS flow_servers (
+            server_id         VARCHAR(128) NOT NULL PRIMARY KEY,
+            machine_name      VARCHAR(256) NOT NULL,
+            process_id        INT          NOT NULL,
+            runtime           VARCHAR(64)  NOT NULL,
+            version           VARCHAR(128) NULL,
+            started_at        TIMESTAMPTZ  NOT NULL,
+            last_heartbeat_at TIMESTAMPTZ  NOT NULL,
+            active_step_count INT          NOT NULL DEFAULT 0,
+            flow_count        INT          NOT NULL DEFAULT 0
+        );
+
+        -- The server that ran each attempt (2.0); NULL on skips and on rows written before the column existed.
+        {EnsureColumn("flow_step_attempts", "server_id", "VARCHAR(128) NULL")}
         """;
 
     // Trigram (pg_trgm) GIN indexes for substring run-search acceleration. Run separately

@@ -38,6 +38,9 @@ public static class InMemoryServiceCollectionExtensions
         builder.Services.AddSingleton<IFlowSignalStore>(sp => sp.GetRequiredService<InMemoryFlowSignalStore>());
         builder.Services.AddSingleton<IFlowRetentionStore>(sp => sp.GetRequiredService<InMemoryFlowSignalStore>());
 
+        // Server registry for the dashboard's Servers view; process-local like everything here.
+        builder.Services.AddSingleton<IFlowServerStore>(sp => new InMemoryFlowServerStore(sp.GetService<TimeProvider>() ?? TimeProvider.System));
+
         // Schedule state (dashboard pause / cron override) falls back to Core's process-local
         // InMemoryFlowScheduleStateStore, registered by AddFlowOrchestrator.
         return builder;
@@ -72,6 +75,7 @@ public static class InMemoryServiceCollectionExtensions
 
         // Step dispatcher — writes step envelopes to the channel.
         builder.Services.TryAddSingleton<IStepDispatcher, InMemoryStepDispatcher>();
+        builder.Servers.RuntimeName ??= "InMemory"; // the first runtime selected keeps the dispatcher slot, and the name
 
         // Recurring-trigger dispatcher: a single PeriodicTimer-backed implementation that serves as
         // both dispatcher and inspector and runs as a hosted service. Effective-cron resolution is

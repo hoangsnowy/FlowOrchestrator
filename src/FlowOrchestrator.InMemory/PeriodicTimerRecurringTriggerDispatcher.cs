@@ -20,7 +20,7 @@ namespace FlowOrchestrator.InMemory;
 /// A single <see cref="PeriodicTimer"/> ticks every second; on each tick, due jobs are fired by
 /// invoking <see cref="IFlowOrchestrator.TriggerByScheduleAsync"/> within a fresh DI scope.
 /// Job state lives in process memory and is rebuilt on each start-up by <c>FlowSyncHostedService</c>
-/// through Core's <see cref="RecurringTriggerSync"/>, which resolves the effective cron (pause state,
+/// through Core's <c>RecurringTriggerSync</c>, which resolves the effective cron (pause state,
 /// persisted override) and calls <see cref="RegisterOrUpdate"/> / <see cref="Remove"/>.
 /// </remarks>
 internal sealed partial class PeriodicTimerRecurringTriggerDispatcher

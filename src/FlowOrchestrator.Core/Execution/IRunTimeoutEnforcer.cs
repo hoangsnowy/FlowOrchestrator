@@ -9,7 +9,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// enforcement entry point without coupling to the full orchestration surface, and so runtime shims
 /// are unaffected.
 /// </remarks>
-public interface IRunTimeoutEnforcer
+internal interface IRunTimeoutEnforcer
 {
     /// <summary>
     /// Scans every active run and marks those whose timeout deadline has already passed as

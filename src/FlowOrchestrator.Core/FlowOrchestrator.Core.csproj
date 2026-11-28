@@ -26,13 +26,25 @@
 
   <ItemGroup>
     <!--
-      Expose internals to the benchmark harness so it can measure performance
-      of the internal expression resolvers without forcing them into the public
-      API surface. Tests should rely on the public API; only benchmarks need
-      this access.
+      Expose internals to the benchmark harness and the test suites only. The engine, planner,
+      step executor and hosted services are internal since 2.0; tests and benchmarks drive them
+      directly. Never add another src package here: packages can be mixed at different 2.x
+      versions, so an internal must never become a cross-package contract.
     -->
     <InternalsVisibleTo Include="FlowOrchestrator.Benchmarks" />
     <InternalsVisibleTo Include="FlowOrchestrator.Core.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.Hangfire.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.InMemory.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.ServiceBus.UnitTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.Hangfire.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.InMemory.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.PostgreSQL.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.ServiceBus.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.SqlServer.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.Testing.IntegrationTests" />
+    <InternalsVisibleTo Include="FlowOrchestrator.RegressionTests" />
+    <!-- NSubstitute (Castle DynamicProxy) emits its proxies of internal interfaces such as IStepExecutor here. -->
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
 </Project>

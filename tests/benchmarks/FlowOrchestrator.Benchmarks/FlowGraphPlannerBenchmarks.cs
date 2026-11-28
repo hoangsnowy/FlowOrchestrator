@@ -53,8 +53,9 @@ public class FlowGraphPlannerBenchmarks
         }
     }
 
+    // Returned as object: FlowGraphEvaluation is internal since 2.0 and a [Benchmark] method must be public.
     [Benchmark(Description = "Evaluate (linear flow, half complete)")]
-    public FlowGraphEvaluation Evaluate()
+    public object Evaluate()
     {
         return _planner.Evaluate(_flow, _statuses);
     }

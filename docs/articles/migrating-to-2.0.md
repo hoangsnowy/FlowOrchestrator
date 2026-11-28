@@ -67,7 +67,7 @@ message or a schema change, it is the one the rehearsal ran or observed.
 - [ ] **Inventory your extension points.** Run this from the solution root; each hit has a section below:
 
   ```bash
-  grep -rnE --include='*.cs' 'IFlowRepository|FlowRepositoryExtensions|IFlowExecutor|FlowExecutor\b|new FlowOrchestratorEngine\(|IFlowRunStore|IFlowRunRuntimeStore|IFlowRunControlStore|IOutputsRepository|IStepInstance([^<]|$)|IRecurringTriggerSync|SyncTriggers\(|FlowOrchestratorOptions|AddFlowOrchestratorSqlServer|AddFlowOrchestratorPostgreSql|ScopeMoveNext|EndScopeAsync|AllKnownStepKeys|FindParentStep|FindNextStep|ShouldExecute|HangfireEnabled|FlowSignalDispatcher\(|EnableEventPersistence|IFlowEventReader|RecordEventAsync|GetRunEventsAsync|FlowEvent\b|FlowEvents|flow_events' .
+  grep -rnE --include='*.cs' 'IFlowRepository|FlowRepositoryExtensions|IFlowExecutor|FlowExecutor\b|FlowOrchestratorEngine|FlowGraphPlanner|FlowGraphEvaluation|IStepExecutor|DefaultStepExecutor|ExecutionContextAccessor|InMemory(FlowRunStore|FlowStore|OutputsRepository|FlowSignalStore)|(Sql|PostgreSql)(FlowRunStore|FlowStore|OutputsRepository)|HangfireFlowOrchestrator|IFlowRunStore|IFlowRunRuntimeStore|IFlowRunControlStore|IOutputsRepository|IStepInstance([^<]|$)|IRecurringTriggerSync|SyncTriggers\(|FlowOrchestratorOptions|AddFlowOrchestratorSqlServer|AddFlowOrchestratorPostgreSql|ScopeMoveNext|EndScopeAsync|AllKnownStepKeys|FindParentStep|FindNextStep|ShouldExecute|HangfireEnabled|\bFlowSignalDispatcher\b|EnableEventPersistence|IFlowEventReader|RecordEventAsync|GetRunEventsAsync|FlowEvent\b|FlowEvents|flow_events' .
   ```
 
   ```powershell
@@ -412,8 +412,8 @@ Skip this step if the [Step 0 inventory](#step-0--before-you-start) found nothin
 |---|---|---|
 | `IFlowRepository`, `FlowRepositoryExtensions.FindById`, `InMemoryFlowRepository` | **`FlowRegistry`** (`FlowOrchestrator.Core.Abstractions`) | Inject `FlowRegistry`; use `TryGetFlow(id, out var flow)` / `Find(id)` / `Flows`. Do not register a flow repository in custom backends |
 | `IFlowExecutor`, `FlowExecutor` | removed (never called) | Delete registrations and constructor arguments |
-| `FlowOrchestratorEngine(…, IFlowExecutor, …, IFlowEventNotifier? eventNotifier = null)` | no executor parameter; `eventNotifier` **required** | Hand-built engines: drop the executor, pass `NoopFlowEventNotifier.Instance` |
-| `FlowSignalDispatcher(…, telemetry, …)` | takes `IEnumerable<IFlowRunRuntimeStore> runtimeStores` **before** the optional `telemetry` | Callers passing arguments by position reorder them |
+| `new FlowOrchestratorEngine(…)` (hand-built engine) | **internal** — the engine cannot be constructed outside the library | Register with `AddFlowOrchestrator(o => …)` and inject `IFlowOrchestrator`; in tests use `FlowOrchestrator.Testing`'s `FlowTestHost` ([below](#hand-built-engines-and-tests)) |
+| `new FlowSignalDispatcher(…)` | **internal** | Inject `IFlowSignalDispatcher`, which `AddFlowOrchestrator()` registers |
 | `IRecurringTriggerSync.SyncTriggers(Guid, bool)` | `SyncTriggersAsync(Guid, bool, CancellationToken)` | `await` it; one Core implementation (`RecurringTriggerSync`) serves every runtime |
 | hand-built `$"flow-{id}-{key}"` job ids | **`RecurringTriggerJobId`** | Build and parse with it |
 | `EphemeralFlowScheduleStateStore` (Hangfire), `InMemory.InMemoryFlowScheduleStateStore` | `FlowOrchestrator.Core.Storage.InMemoryFlowScheduleStateStore` | Update the namespace; it now stores and returns copies |
@@ -424,7 +424,9 @@ Skip this step if the [Step 0 inventory](#step-0--before-you-start) found nothin
 | `IStepInstance.ScopeMoveNext` | removed | Delete the property from custom `IStepInstance` implementations |
 | `StepMetadata.ShouldExecute`, `StepCollection.FindNextStep` | removed (legacy sequential mode) | Use the DAG planner's evaluation; there is no per-successor API any more |
 | `StepCollection.FindParentStep` | removed | Walk `IScopedStep.Steps` yourself if you need it |
-| `FlowGraphEvaluation.AllKnownStepKeys` | removed | Use `ReadyStepKeys` / `BlockedStepKeys` / `WaitingStepKeys` |
+| `FlowGraphPlanner` / `IFlowGraphPlanner`, `FlowGraphEvaluation` (incl. `AllKnownStepKeys`), `FlowGraphValidationResult` | **internal** | The planner is an engine detail. Startup still fails an invalid manifest; read a run's step state through `IFlowRunStore.GetRunDetailAsync` |
+| Other implementation types: `IStepExecutor` / `DefaultStepExecutor`, `ExecutionContextAccessor`, `StepLeaseKeeper`, `RecurringTriggerSync`, `IRunTimeoutEnforcer`, the Core hosted services (`FlowRunRecoveryHostedService`, `FlowStepLeaseHostedService`, `FlowTimeoutEnforcementHostedService`, `FlowUnsentDispatchRecoveryHostedService`), `FlowStoreHealthCheck`, the expression evaluators, the manifest JSON converters, `ActivityExtensions` | **internal** | Registered by `AddFlowOrchestrator()`. Depend on the public interface where one exists (`IExecutionContextAccessor`, `IRecurringTriggerSync`, `IFlowSignalDispatcher`); add the health check with `AddFlowOrchestratorHealthChecks()` |
+| Built-in stores: `InMemoryFlowStore` / `InMemoryFlowRunStore` / `InMemoryOutputsRepository` / `InMemoryFlowSignalStore`, `SqlFlowStore` / `SqlFlowRunStore` / `SqlFlowScheduleStateStore` / `SqlWebhook*Store`, `PostgreSqlFlowStore` / `PostgreSqlFlowRunStore` / `PostgreSqlOutputsRepository` / `PostgreSqlFlowScheduleStateStore` / `PostgreSqlFlowSignalStore` / `PostgreSqlWebhook*Store`; and `HangfireFlowOrchestrator` | **internal** | Select them with `UseInMemory()` / `UseSqlServer(cs)` / `UsePostgreSql(cs)` / `UseHangfire()` (and `Add…WebhookHardening(cs)`), then resolve `IFlowStore` / `IFlowRunStore` / `IOutputsRepository` from DI. To decorate a store, wrap the interface registration |
 | `IHangfireStepRunner.RunStepAsync(ctx, IFlowDefinition, step)` | removed (≤ 1.16 jobs) | See [Step 4](#step-4--move-the-hangfire-queue-across-hangfire-hosts-only) |
 | `FlowSyncHostedService`, `FlowRetentionHostedService` (internal, in the Hangfire package) | internal, in `FlowOrchestrator.Core.Hosting` | Registered by `AddFlowOrchestrator()`; do not register them yourself |
 | `FlowObservabilityOptions.EnableEventPersistence` | removed (run events are no longer persisted) | Delete the assignment |
@@ -547,10 +549,16 @@ Then check your implementation against the 1.34.3 storage fixes, which define th
 
 ### Hand-built engines and tests
 
-If tests or tools construct `FlowOrchestratorEngine` directly, update the constructor call (no
-`IFlowExecutor`, a `FlowRegistry` instead of `IFlowRepository`, a non-null `IFlowEventNotifier`, and
-non-empty runtime and control store sequences). Prefer `FlowOrchestrator.Testing`'s `FlowTestHost`,
-which builds the engine through `AddFlowOrchestrator()` and no longer needs Hangfire.
+`FlowOrchestratorEngine`, its planner and step executor, and the built-in stores are `internal` in 2.0, so
+tests and tools can no longer construct them. Build them through DI instead:
+
+- **Flow tests** — use `FlowOrchestrator.Testing`'s `FlowTestHost.For<TFlow>()…BuildAsync()`
+  ([Testing](testing.md)). It wires the in-memory storage and runtime through `AddFlowOrchestrator()` and
+  needs no Hangfire.
+- **Tools and custom hosts** — call
+  `services.AddFlowOrchestrator(o => { o.UseInMemory(); o.UseInMemoryRuntime(); o.AddFlow<MyFlow>(); })`
+  (or your production storage and runtime), build the provider, and resolve `IFlowOrchestrator`,
+  `IFlowStore`, `IFlowRunStore` and `IOutputsRepository` from it.
 
 ---
 

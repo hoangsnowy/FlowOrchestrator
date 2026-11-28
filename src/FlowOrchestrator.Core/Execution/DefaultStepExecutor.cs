@@ -14,7 +14,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// injects the enclosing ForEach iteration context via <see cref="LoopScopeInputs"/>,
 /// and delegates execution to the registered handler.
 /// </summary>
-public sealed class DefaultStepExecutor : IStepExecutor
+internal sealed class DefaultStepExecutor : IStepExecutor
 {
     private readonly FrozenDictionary<string, IStepHandlerMetadata> _handlersByType;
     private readonly IServiceProvider _serviceProvider;

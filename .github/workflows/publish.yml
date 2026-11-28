@@ -6,7 +6,10 @@ on:
     tags: ['v*.*.*']
 
 jobs:
-  publish:
+  # Build, test and pack run WITHOUT any publish credential: they execute the test suites and every
+  # restored package's build logic, so they must not be able to mint a NuGet key. Only the `publish`
+  # job below holds id-token / packages / attestations permissions, and it runs no repository code.
+  build:
     # The `create` trigger used to fire on every dependabot branch creation
     # because `on.create` does not support tag/branch filters — that's why
     # this workflow ran with an empty NuGet key on `dependabot/*` branches.
@@ -17,10 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      # NuGet.org Trusted Publishing: the job exchanges a GitHub OIDC token for a
-      # one-hour NuGet API key, so no long-lived NUGET_API_KEY secret is stored.
-      id-token: write
 
     steps:
       - uses: actions/checkout@v7
@@ -81,14 +80,57 @@ jobs:
           --output ./nupkgs
           -p:VersionPrefix=${{ steps.version.outputs.version_prefix }}
 
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: nupkgs
+          path: |
+            ./nupkgs/*.nupkg
+            ./nupkgs/*.snupkg
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Build provenance attestation (Sigstore) for every package pushed.
+      attestations: write
+      # NuGet.org Trusted Publishing: the job exchanges a GitHub OIDC token for a
+      # one-hour NuGet API key, so no long-lived NUGET_API_KEY secret is stored.
+      # The same OIDC token signs the provenance attestation.
+      id-token: write
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: nupkgs
+          path: ./nupkgs
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 11.0.x
+
+      # Each .nupkg carries an SPDX SBOM (Microsoft.Sbom.Targets, _manifest/spdx_2.2/) and the
+      # attestation binds the exact package bytes to this workflow run and commit.
+      # `gh attestation verify <pkg>.nupkg -R hoangsnowy/FlowOrchestrator` checks it.
+      - name: Attest build provenance
+        # Pinned to the v4.2.2 commit: this step signs with the job's OIDC token.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: './nupkgs/*.nupkg'
+
       - name: Push to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # GitHub Packages has no symbol server; the .snupkg files go to nuget.org only.
         run: |
-          dotnet nuget push "./nupkgs/*.nupkg" \
-            --api-key "$GITHUB_TOKEN" \
-            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
-            --skip-duplicate
+          dotnet nuget push "./nupkgs/*.nupkg"             --api-key "$GITHUB_TOKEN"             --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"             --no-symbols             --skip-duplicate
 
       # Requested right before the push: the temporary key is valid for 1 hour.
       # Needs a Trusted Publishing policy on nuget.org for owner `thelastsnow`,
@@ -101,11 +143,9 @@ jobs:
         with:
           user: thelastsnow   # nuget.org profile name of the package owner, not an email
 
+      # Pushing a .nupkg also pushes the .snupkg beside it to the nuget.org symbol server.
       - name: Push to NuGet.org
         env:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
-          dotnet nuget push "./nupkgs/*.nupkg" \
-            --api-key "$NUGET_API_KEY" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+          dotnet nuget push "./nupkgs/*.nupkg"             --api-key "$NUGET_API_KEY"             --source https://api.nuget.org/v3/index.json             --skip-duplicate

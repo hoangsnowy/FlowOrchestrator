@@ -9,7 +9,7 @@ namespace FlowOrchestrator.SqlServer;
 /// Persists nonces in the <c>WebhookReplayNonces</c> table created by
 /// <see cref="FlowOrchestratorSqlMigrator"/>.
 /// </summary>
-public sealed class SqlWebhookReplayStore : IWebhookReplayStore
+internal sealed class SqlWebhookReplayStore : IWebhookReplayStore
 {
     private readonly string _connectionString;
 

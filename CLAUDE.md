@@ -161,7 +161,10 @@ publish workflow packs and pushes packages, it never creates a GitHub Release.
 3. **Release commit** — `chore(release): <version>`, containing exactly two edits:
    `Directory.Build.props` `<VersionPrefix>`, and `CHANGELOG.md` with `## [Unreleased]` left empty
    above a new `## [<version>] - <YYYY-MM-DD>` section. Justify major/minor/patch in the message
-   body. If `<VersionPrefix>` already equals `<version>` (it is bumped at the start of each cycle,
+   body. Since 2.0 the release commit also moves every line of each
+   `src/*/PublicAPI.Unshipped.txt` to the end of that project's `PublicAPI.Shipped.txt` (leaving
+   only `#nullable enable` in Unshipped), and after 2.0.0 ships, `PackageValidationBaselineVersion`
+   in `Directory.Build.props` is set to the last released version in the next-cycle commit (step 9). If `<VersionPrefix>` already equals `<version>` (it is bumped at the start of each cycle,
    see step 9), the release commit only edits `CHANGELOG.md`. Push to `main`; the main-push publish
    run stamps a `<version>-alpha.<run_number>` package, which is a usable artifact and worth naming
    when someone is blocked.

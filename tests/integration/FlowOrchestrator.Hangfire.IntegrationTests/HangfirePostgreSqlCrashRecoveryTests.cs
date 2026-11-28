@@ -97,13 +97,17 @@ public sealed class HangfirePostgreSqlCrashRecoveryTests : IClassFixture<Hangfir
         var ran = ProbeJob.Expect(token);
         var jobId = new BackgroundJobClient(storage).Enqueue<ProbeJob>(j => j.Run(token));
         await KillWorkerInsideStateChangeAsync(schema, jobId, lockTimeout: Invisibility);
+        var orphanAcquired = await GetStateLockAcquiredAsync(schema, jobId);
 
         // Act
         StartServer(storage);
 
-        // Assert
+        // Assert — the orphaned row is gone. The survivor takes the same state lock again for its own
+        // Processing → Succeeded change after the job body has run, so a row may legitimately exist at
+        // this point; only one acquired no later than the kill would be the orphan.
         await ran.WaitAsync(TimeSpan.FromSeconds(60));
-        Assert.Equal(0, await CountStateLocksAsync(schema, jobId));
+        Assert.NotNull(orphanAcquired);
+        Assert.Equal(0, await CountStateLocksAcquiredAtOrBeforeAsync(schema, jobId, orphanAcquired.Value));
     }
 
     [Fact]
@@ -199,6 +203,26 @@ public sealed class HangfirePostgreSqlCrashRecoveryTests : IClassFixture<Hangfir
         await admin.OpenAsync();
         await using var count = new NpgsqlCommand($"SELECT count(*) FROM \"{schema}\".\"lock\" WHERE \"resource\" = @resource", admin);
         count.Parameters.AddWithValue("resource", $"{schema}:job:{jobId}:state-lock");
+        return (long)(await count.ExecuteScalarAsync())!;
+    }
+
+    private async Task<DateTime?> GetStateLockAcquiredAsync(string schema, string jobId)
+    {
+        await using var admin = new NpgsqlConnection(_fixture.ConnectionString);
+        await admin.OpenAsync();
+        await using var read = new NpgsqlCommand($"SELECT max(\"acquired\") FROM \"{schema}\".\"lock\" WHERE \"resource\" = @resource", admin);
+        read.Parameters.AddWithValue("resource", $"{schema}:job:{jobId}:state-lock");
+        return await read.ExecuteScalarAsync() is DateTime acquired ? acquired : null;
+    }
+
+    private async Task<long> CountStateLocksAcquiredAtOrBeforeAsync(string schema, string jobId, DateTime acquired)
+    {
+        await using var admin = new NpgsqlConnection(_fixture.ConnectionString);
+        await admin.OpenAsync();
+        await using var count = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{schema}\".\"lock\" WHERE \"resource\" = @resource AND \"acquired\" <= @acquired", admin);
+        count.Parameters.AddWithValue("resource", $"{schema}:job:{jobId}:state-lock");
+        count.Parameters.AddWithValue("acquired", acquired);
         return (long)(await count.ExecuteScalarAsync())!;
     }
 

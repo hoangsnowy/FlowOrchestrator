@@ -8,7 +8,7 @@ namespace FlowOrchestrator.PostgreSQL;
 /// PostgreSQL implementation of <see cref="IFlowScheduleStateStore"/> that persists cron overrides
 /// and pause state in the <c>flow_schedule_states</c> table using upsert semantics.
 /// </summary>
-public sealed class PostgreSqlFlowScheduleStateStore : IFlowScheduleStateStore
+internal sealed class PostgreSqlFlowScheduleStateStore : IFlowScheduleStateStore
 {
     private readonly string _connectionString;
 

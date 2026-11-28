@@ -32,7 +32,7 @@ namespace FlowOrchestrator.Core.Execution;
 /// (<c>FlowOrchestratorEngine.Control.cs</c>).
 /// </para>
 /// </remarks>
-public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTimeoutEnforcer
+internal sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTimeoutEnforcer
 {
     private readonly IStepDispatcher _dispatcher;
     private readonly IFlowGraphPlanner _graphPlanner;
@@ -52,6 +52,7 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
     private readonly IFlowEventNotifier _eventNotifier;
     private readonly IFlowSignalStore? _signalStore;
     private readonly StepLeaseKeeper? _leaseKeeper;
+    private readonly string? _serverId;
 
     /// <summary>Initialises the engine with all required and optional dependencies.</summary>
     /// <remarks>
@@ -108,6 +109,8 @@ public sealed partial class FlowOrchestratorEngine : IFlowOrchestrator, IRunTime
         _eventNotifier = eventNotifier;
         _signalStore = signalStore;
         _leaseKeeper = leaseKeeper is { Duration: not null } ? leaseKeeper : null;
+        // Stamped on every attempt this process starts, leases on or off: maps the attempt to its server.
+        _serverId = leaseKeeper?.OwnerId;
         _whenEvaluator = new WhenClauseEvaluator(outputsRepository, runStore);
     }
 

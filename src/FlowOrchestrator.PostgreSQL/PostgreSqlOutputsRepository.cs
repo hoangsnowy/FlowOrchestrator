@@ -11,7 +11,7 @@ namespace FlowOrchestrator.PostgreSQL;
 /// Dapper-based PostgreSQL implementation of <see cref="IOutputsRepository"/>.
 /// Persists step inputs/outputs and trigger data to the <c>flow_outputs</c> table.
 /// </summary>
-public sealed class PostgreSqlOutputsRepository : IOutputsRepository
+internal sealed class PostgreSqlOutputsRepository : IOutputsRepository
 {
     private static readonly JsonSerializerOptions _webOptions = new(JsonSerializerDefaults.Web);
 

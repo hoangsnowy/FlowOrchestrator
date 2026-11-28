@@ -6,18 +6,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-## [2.0.0] - 2026-11-28
-
-Major release (.NET 10 / 11). Durable execution on every runtime: a worker killed mid-step no longer
-leaves its run `Running` (step execution leases), a trigger killed after registering its idempotency key
-no longer loses the delivery, the storage providers share one tested contract, and the engine continuation
-reads the run frontier instead of the whole run. Breaking: .NET 8 / 9 are dropped, Hangfire becomes an
-opt-in runtime, webhook security defaults to `Enforce`, persisted run events and dead API are removed,
-and step keys must be storage-safe. Pending re-checks queued by 1.17 – 1.34.8 run on a 2.0 Hangfire worker.
-
 > **Upgrading from 1.x?** Follow [Migrating to 2.0](docs/articles/migrating-to-2.0.md): package
 > matrix per runtime, Hangfire queue rollout, new startup checks, removed API with replacements,
 > verification and rollback.
+
+### Added — Servers view: every replica and which one ran each attempt
+
+With several replicas running, the dashboard showed no servers at all; only Hangfire's own `/hangfire` page had
+a Servers list, and only for the Hangfire runtime. Now every process registers itself, whatever the runtime:
+
+- **Heartbeat registry.** A new optional storage contract, `IFlowServerStore` (upsert / list / remove / purge of
+  `FlowServerRecord`: server id, machine, process id, runtime, FlowOrchestrator version, started, last heartbeat,
+  active steps, flows). A hosted service registers the process on start, heartbeats every 15 s, removes its row
+  on graceful shutdown and purges rows silent for an hour. The server id is the step-lease owner id, so
+  `FlowStepLeases.Owner` maps to a server; active steps are the leases the process holds. Implemented by SQL
+  Server (`FlowServers`), PostgreSQL (`flow_servers`) and in-memory storage, with database-clock timestamps.
+  A custom backend without the interface keeps working: nothing is written and the dashboard says so.
+- **Options.** `options.Servers` (`FlowServerOptions`): `HeartbeatInterval` (15 s), `MissedHeartbeatsBeforeStale`
+  (3, so stale after 45 s), `PurgeAfter` (1 h, must exceed the stale threshold), `Enabled`, `RuntimeName`.
+- **Which server ran each attempt.** `FlowStepAttemptRecord.ServerId`, written when the attempt starts in the
+  same insert as before (`FlowStepAttempts.ServerId` / `flow_step_attempts.server_id`, additive nullable column).
+  `IFlowRunStore` gains a six-parameter `RecordStepStartAsync(..., string? serverId)` whose default
+  implementation forwards to the five-parameter one, so a custom run store compiles and runs unchanged and
+  simply records no server.
+- **Dashboard.** `GET {base}/api/servers` (viewer role, compressed) and a **Servers** tab with an Active / Stale
+  chip per replica; the step detail shows the server of each attempt.
 
 ### Changed — the continuation reads the frontier, not the whole run (#189 P0-1)
 
@@ -94,11 +107,6 @@ status rows per iteration at 1 000 items on SQL Server). Now (RFC 2.0 §3.5,
 
   Set either explicitly in the connection string or through the AppContext switch to keep 7.x behaviour. See the
   [SqlClient 8.0 release notes](https://github.com/dotnet/SqlClient/releases/tag/v8.0.0).
-
-### Changed — migrator background index build is awaitable
-
-- `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` and `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild`
-  are now public, for code that runs a migrator outside a host and must wait for its background index build.
 
 ### Added — per-signal authorization and bearer-token access for `WaitForSignal`
 
@@ -1073,6 +1081,53 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
   dead `is not null` guards on the engine's and signal dispatcher's always-present runtime and
   run-control stores.
 
+### Changed — **breaking:** implementation types are internal
+
+Types that were public only because a public constructor or registration needed them are now
+`internal`, so they can change in a 2.x minor without breaking anyone. Everything they did is still
+reached through `AddFlowOrchestrator(o => …)` and the public interfaces; see
+[Migrating to 2.0 — Step 6](docs/articles/migrating-to-2.0.md#step-6--update-custom-extensions).
+Internals are visible to the library's own test and benchmark projects only, never to another
+package: packages can be mixed at different 2.x versions, so no internal is a cross-package contract.
+
+- **`FlowOrchestrator.Core`** — `FlowOrchestratorEngine`, `IFlowGraphPlanner` / `FlowGraphPlanner`,
+  `FlowGraphEvaluation`, `FlowGraphValidationResult`, `IStepExecutor` / `DefaultStepExecutor`,
+  `IRunTimeoutEnforcer`, `StepLeaseKeeper`, `ExecutionContextAccessor`, `FlowSignalDispatcher`,
+  `RecurringTriggerSync`, `FlowRunRecoveryHostedService`, `FlowStepLeaseHostedService`,
+  `FlowTimeoutEnforcementHostedService`, `FlowUnsentDispatchRecoveryHostedService`,
+  `FlowStoreHealthCheck`, `BooleanExpressionEvaluator`, `WhenClauseEvaluator`, `WhenEvaluationTrace`,
+  `StepOutputResolver`, `EngineLogScope`, `RunAfterCollectionJsonConverter`,
+  `RunAfterConditionJsonConverter`, `StepMetadataJsonConverter`, `MetadataInputExtensions`,
+  `ActivityExtensions`. Inject `IFlowOrchestrator` instead of the engine, and `IExecutionContextAccessor`,
+  `IFlowSignalDispatcher`, `IRecurringTriggerSync` instead of their implementations; add the store
+  health check with `AddFlowOrchestratorHealthChecks()`. This supersedes the constructor changes
+  listed above: an engine can no longer be built by hand — tests use `FlowOrchestrator.Testing`'s
+  `FlowTestHost`.
+- **`FlowOrchestrator.Hangfire`** — `HangfireFlowOrchestrator`, and the
+  `HangfireStepEnvelope.From` / `ToExecutionContext` / `ToStepInstance` helpers. The job contracts
+  Hangfire serialises (`IHangfireStepRunner`, `IHangfireFlowTrigger`, `HangfireStepEnvelope`) stay
+  public, so queued jobs are unaffected. `UseHangfire()` registers the job runner.
+- **`FlowOrchestrator.InMemory`** — `InMemoryFlowStore`, `InMemoryFlowRunStore`,
+  `InMemoryOutputsRepository`, `InMemoryFlowSignalStore`. Use `UseInMemory()`.
+- **`FlowOrchestrator.SqlServer`** — `SqlFlowStore`, `SqlFlowRunStore`, `SqlFlowScheduleStateStore`,
+  `SqlServerRunSearchTokenIndex`, `SqlWebhookRejectionStore`, `SqlWebhookReplayStore`, and
+  `FlowOrchestratorSqlMigrator.BackgroundIndexBuild` / `OfflineIndexBuildRowLimit` (the migrator
+  itself stays public). Use `UseSqlServer(cs)` and `AddSqlServerWebhookHardening(cs)`.
+- **`FlowOrchestrator.PostgreSQL`** — `PostgreSqlFlowStore`, `PostgreSqlFlowRunStore`,
+  `PostgreSqlOutputsRepository`, `PostgreSqlFlowScheduleStateStore`, `PostgreSqlFlowSignalStore`,
+  `PostgreSqlWebhookRejectionStore`, `PostgreSqlWebhookReplayStore`, and
+  `PostgreSqlFlowOrchestratorMigrator.BackgroundIndexBuild` (the migrator itself stays public). Use
+  `UsePostgreSql(cs)` and `AddPostgreSqlWebhookHardening(cs)`.
+- **`FlowOrchestrator.Dashboard`** — `SseConnection`, `SseEndpointHandler`, `SseFlowEventBroadcaster`,
+  `InMemoryWebhookRejectionStore`, `InMemoryWebhookReplayStore`, `TokenBucketWebhookRateLimiter`,
+  `ReplayProtectionGate`, `WebhookReplayJanitor`, `WebhookReplayRegistration`, `HmacSignatureVerifier`,
+  `WebhookCustomVerifierRegistry`, `WebhookSignatureSpecResolver`, `WebhookRequestBuffer`,
+  `WebhookSecurityPipeline`, `KeycloakRoleClaimsTransformation`, `CidrMatcher`, and the
+  `WebhookSecurityOptionsBuilder` constructor (the builder is handed to you by
+  `FlowDashboardOptions.UseWebhookSecurity(…)`). `AddFlowDashboard()` registers all of them; custom
+  rate limiters and stores still plug in through `IWebhookRateLimiter`, `IWebhookReplayStore` and
+  `IWebhookRejectionStore`.
+
 ### Removed — **breaking:** legacy sequential execution path and its shims
 
 - The "no runtime store" fallback is gone. Before, a host without an `IFlowRunRuntimeStore` ran in
@@ -1118,6 +1173,23 @@ re-verified as unused across `src/`, `tests/`, `samples/` and `docs/` before rem
   OIDC token for a one-hour key through `NuGet/login@v1` (`id-token: write`), backed by a Trusted
   Publishing policy on nuget.org (owner `thelastsnow`, workflow `publish.yml`). The old key had
   expired and failed the push for `155e14c` with a 403.
+
+### Added — verifiable packages: symbols, SourceLink, SBOM and build provenance
+- Every package ships a `.snupkg` on the nuget.org symbol server, and SourceLink points the debugger at the
+  exact commit, so FlowOrchestrator code can be stepped into without a local clone.
+- Each `.nupkg` embeds an SPDX 2.2 SBOM (`_manifest/spdx_2.2/manifest.spdx.json`) and has a signed build
+  provenance attestation: `gh attestation verify <package>.nupkg -R hoangsnowy/FlowOrchestrator`.
+- CI builds are reproducible (`ContinuousIntegrationBuild`) and package validation runs at pack time;
+  from 2.0.1 on it checks against the 2.0.0 API baseline.
+- Each package's public API is recorded in `PublicAPI.Shipped.txt` / `PublicAPI.Unshipped.txt`
+  (PublicApiAnalyzers); adding, changing or removing public API without updating them fails the build.
+- `publish.yml` runs restore, build, tests and pack in a job with no credential; only the separate push job
+  can mint the Trusted Publishing key.
+- New [Extending](docs/articles/extending.md) guide: what a custom store must guarantee, and how to write a
+  custom runtime (`IStepDispatcher`, the worker loop, cron triggers) against public API only.
+- New [Support and Release Policy](docs/articles/support-policy.md): 2.x is current; 1.34.x gets security
+  and critical fixes for six months after 2.0.0; target frameworks are dropped only in a major, timed to
+  Microsoft's end of support; `[Obsolete]` for at least one minor before a removal.
 
 ### Changed — **breaking:** targets .NET 10 and .NET 11; .NET 8 and .NET 9 dropped
 

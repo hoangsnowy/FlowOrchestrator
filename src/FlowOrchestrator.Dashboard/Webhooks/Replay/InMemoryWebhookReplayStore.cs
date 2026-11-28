@@ -13,7 +13,7 @@ namespace FlowOrchestrator.Dashboard.Webhooks.Replay;
 /// must be called on a schedule (the <see cref="WebhookReplayJanitor"/>
 /// background service drives this once per minute).
 /// </remarks>
-public sealed class InMemoryWebhookReplayStore : IWebhookReplayStore
+internal sealed class InMemoryWebhookReplayStore : IWebhookReplayStore
 {
     private readonly ConcurrentDictionary<NonceKey, Entry> _entries = new();
 

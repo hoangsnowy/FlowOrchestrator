@@ -13,7 +13,7 @@ namespace FlowOrchestrator.InMemory;
 /// <c>FlowSignalWaiters</c> rows together with their run. Before #189 nothing removed a waiter, so the
 /// store grew for the lifetime of the process.
 /// </remarks>
-public sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionStore
+internal sealed class InMemoryFlowSignalStore : IFlowSignalStore, IFlowRetentionStore
 {
     private readonly ConcurrentDictionary<(Guid RunId, string StepKey), FlowSignalWaiter> _waiters = new();
 
